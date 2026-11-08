@@ -1,6 +1,7 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
+import { checkBudgets, type BudgetCaps } from './budget.js';
 
 /** A preset (ORC-187): typed steps chained by `next`, every way back bounded by a counter. */
 export interface Preset {
@@ -47,7 +48,7 @@ interface BaseStep {
 interface AgentFields {
   model: string;
   effort: Effort;
-  /** Turn cap of the step: the budget ceiling until token caps exist (ORC-216). */
+  /** Turn cap of the step; its cap in tokens is `budgets.per_step_tokens` of factory.yml (ORC-216). */
   maxTurns: number;
   network: NetworkLevel;
 }
@@ -64,6 +65,11 @@ export type Step =
 export interface CompileOptions {
   /** Network level chosen by the repository; a step can only narrow it. */
   repoNetwork?: NetworkLevel;
+  /**
+   * The budgets to check the invariant « budget caps » against (ORC-216): a cap to set, or a worst case over the
+   * ticket's, refuses the preset. Absent, as the daemon loads it: the caps are still to calibrate, the structure alone is checked.
+   */
+  budgets?: BudgetCaps;
 }
 
 export interface CompiledPreset {
@@ -110,7 +116,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
       if (NETWORK_RANK[s.network] > NETWORK_RANK['claude-api']) violations.push(`${where}: a review step runs with network claude-api at most`);
     }
     if (s.type === 'agent_step' && !s.writes) violations.push(`${where}: an agent step must declare what it writes`);
-    if ((s.type === 'agent_step' || s.type === 'fix' || s.type === 'review') && !isPositiveInt(s.maxTurns)) {
+    if (isAgentStep(s) && !isPositiveInt(s.maxTurns)) {
       violations.push(`${where}: maxTurns must be a positive integer`);
     }
   }
@@ -130,6 +136,8 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
     if (s.type === 'publish' && s.mode === 'merge' && ungated.has(s.id)) violations.push(`step ${s.id}: reachable from written code without a merge gate`);
   }
 
+  // The worst case walks the graph: only on a preset whose structure holds.
+  if (violations.length === 0 && options.budgets) violations.push(...checkBudgets(preset, options.budgets).violations);
   if (violations.length > 0) throw new PresetError(violations);
   return { preset, hash: hashCanonical(preset) };
 
@@ -143,12 +151,21 @@ function isPositiveInt(n: number): boolean {
   return Number.isInteger(n) && n > 0;
 }
 
-function edges(s: Step, preset: Preset): string[] {
-  const out = s.next === null ? [] : [s.next];
-  if (s.onFailure) out.push(s.onFailure.goto);
+/** A step an agent runs: it has a model, an effort and a cap of turns. */
+export function isAgentStep(s: Step): s is Extract<Step, { maxTurns: number }> {
+  return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
+}
+
+/** The ways back a step can take: its own failure edge, the red CI's and the conflict's (ORC-146). */
+export function failureEdges(s: Step, preset: Preset): FailureEdge[] {
+  const out = s.onFailure ? [s.onFailure] : [];
   // A red CI fails a push, and reaches the merge gate while the PR waits there, as a conflict does; a merged PR has no way back.
-  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi.goto, preset.conflict.goto);
+  if ((s.type === 'publish' && s.mode === 'push') || (s.type === 'human_gate' && s.gate === 'merge')) out.push(preset.redCi, preset.conflict);
   return out;
+}
+
+function edges(s: Step, preset: Preset): string[] {
+  return [...(s.next === null ? [] : [s.next]), ...failureEdges(s, preset).map((e) => e.goto)];
 }
 
 /** Steps reachable from `starts` by success and failure edges, never entering a step that `stops` matches. */

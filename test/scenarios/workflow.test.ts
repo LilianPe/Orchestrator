@@ -30,9 +30,9 @@ describe('standard workflow', () => {
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).toEqual(['In Progress', 'Human Review']);
     const acts = h.tracker.activities('ls-1');
-    // Live, what the agent does in the factory's words; the summary composed from its `submit_result`, never its last text (ORC-214).
+    // Live, what the agent does in the factory's words; the recap composed from its `submit_result`, never its last text (ORC-214, ORC-195).
     expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
-    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists' });
+    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists\n\n**Tests added**\n- `src/export.test.ts`\n\n**Work**: 1 attempt, 1 turn, tokens not reported, 0 s.' });
     expect(JSON.stringify(acts)).not.toMatch(/npm test|PR ouverte/);
   });
 
@@ -79,12 +79,12 @@ describe('standard workflow', () => {
     expect(await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
-  it('fires a timer at +24 h and another at +72 h each once through the inbox, decided without effect until their rules (ORC-161)', async () => {
+  it('fires a timer at +24 h and another at +72 h each once through the inbox, without effect when no clarify question waits (ORC-161)', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);
     const start = h.clock.now();
     const HOUR = 3_600_000;
-    // The clarify rules that arm them are ORC-210's: the timers are put as its decision would write them.
+    // Put by hand on a ticket in review: no question of theirs waits (ORC-210), so they change nothing.
     await h.store.putTimer({ key: 'REL-1:clarify.remind', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.remind', payload: { linearSessionId: 'ls-1' }, fireAt: start + 24 * HOUR });
     await h.store.putTimer({ key: 'REL-1:clarify.expire', projectId: 'p', ticketId: 'REL-1', kind: 'clarify.expire', payload: { linearSessionId: 'ls-1' }, fireAt: start + 72 * HOUR });
     const before = await h.ticket();
@@ -124,7 +124,8 @@ describe('standard workflow', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
-    expect(h.runner.requests[1]!.prompt).toContain('Max review rounds: 5');
+    // The preset's review loop, its count shared with red CI (ORC-216, ORC-184): 2, not the pack's former 5.
+    expect(h.runner.requests[1]!.prompt).toContain('Max review rounds: 2');
     expect((await h.ticket()).logical).toBe('human_review');
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });

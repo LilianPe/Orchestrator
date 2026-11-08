@@ -16,7 +16,8 @@ function verified(opts: Parameters<typeof createHarness>[0] = {}): Harness {
   const h = createHarness(opts);
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   h.workspaces.heads.set(WORKTREE, SHA);
-  h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'SECRET_LAST_MESSAGE' }] });
+  // What the run submits is not its last message: the PR's description is composed from the first, never the second (ORC-195).
+  h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'SECRET_LAST_MESSAGE' }], output: { status: 'done', summary: 'Audits export to CSV from their list.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] } });
   return h;
 }
 
@@ -65,6 +66,7 @@ describe('the factory publishes (ORC-125)', () => {
     await delegate(h);
     const [pr] = h.forge.opened;
     expect(pr!.title).toBe('REL-1 Export CSV');
+    expect(pr!.body).toContain('Audits export to CSV from their list.');
     expect(JSON.stringify(pr)).not.toContain('SECRET_LAST_MESSAGE');
   });
 

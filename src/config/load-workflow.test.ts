@@ -71,8 +71,15 @@ on:
     expect(wf.jobs['fix-ci']!.skill).toBe('factory:fix-ci');
     expect(wf.jobs['fix-ci']!.session).toBe('resume');
     expect(wf.jobs['remember']!.workspace).toBe('knowledge');
-    expect(wf.jobs['ask']!.limits.usd).toBe(0.5);
+    // No dollars (ORC-216): a budget is tokens and turns.
+    expect(wf.jobs['ask']!.limits).toEqual({ turns: 30, durationMs: 5 * 60_000 });
     expect(wf.jobs['dev']!.limits.turns).toBe(150);
+  });
+
+  it('loads a project file that still caps a run in dollars, without the cap: nothing reads it (ORC-216)', () => {
+    const wf = loadWorkflow({ packDir, projectFile: projectFile('version: 1\nlimits:\n  per_run: { usd: 9 }\njobs:\n  dev: { limits: { usd: 2 } }\n') });
+    expect(wf.limits.perRun).toEqual({ turns: 150, durationMs: 90 * 60_000 });
+    expect(wf.jobs['dev']!.limits).not.toHaveProperty('usd');
   });
 
   describe('the preset step of a job (ORC-136)', () => {

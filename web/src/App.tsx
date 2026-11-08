@@ -130,7 +130,7 @@ export function App() {
             <span>Slots {snap.capacity.dev.used}/{snap.capacity.dev.total}</span>
             <span>Questions {snap.capacity.questions.used}/{snap.capacity.questions.total}</span>
             <span>Queue {snap.queue.length}</span>
-            <span>Today’s cost ${snap.costTodayUsd.toFixed(2)}{snap.budgetUsd ? ` / $${snap.budgetUsd.toFixed(2)}` : ''}</span>
+            <span>Today’s cost ${snap.costTodayUsd.toFixed(2)}</span>
             <span className={s.connected ? 'live on' : 'live'}>{s.connected ? 'live' : 'disconnected'}</span>
             {!snap.linearConnected && <a className="button primary" href="/oauth/start">Connect Linear</a>}
             <button onClick={() => post(snap.paused ? '/api/control/resume' : '/api/control/pause')}>{snap.paused ? 'Resume' : 'Pause'}</button>

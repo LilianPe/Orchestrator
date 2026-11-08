@@ -1,5 +1,5 @@
 import type { RunLimits } from '../../config/workflow-schema.js';
-import type { RunOutcome, Stagnation, TokenUsage } from '../../core/types.js';
+import type { OverBudget, RunOutcome, Stagnation, TokenUsage } from '../../core/types.js';
 
 /** The bounds of the stagnation detector (ORC-136), of the frozen workflow: absent, a version without them, nothing is watched. */
 export interface StagnationBounds {
@@ -58,6 +58,8 @@ export interface RunResult {
   stagnation?: Stagnation;
   /** The subscription's usage limit stopped it (ORC-340); `resetAt` (ms) when the CLI told it. */
   usageLimit?: { resetAt?: number };
+  /** The cap of its budget that stopped it (ORC-216): `outcome` is then `limit`. Absent for its duration cap and the detector. */
+  overBudget?: OverBudget;
 }
 
 export interface RunHandle {

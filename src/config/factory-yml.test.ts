@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeClaudeToken, claudeToken, FactoryYmlError, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
+import { activeClaudeToken, claudeToken, FactoryYmlError, loadFactoryBudgets, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -172,5 +172,16 @@ describe('factory.yml (ORC-209, part B)', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     writeFileSync(join(home, 'factory.yml'), 'concurrency: 2\n');
     expect(loadFactoryYml(home, ENV)).toEqual({ concurrency: 2 });
+  });
+
+  it('gives factory validate its budgets alone, the secrets of the file left unresolved (ORC-216)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    expect(loadFactoryBudgets(home)).toBeUndefined();
+    writeFileSync(join(home, 'factory.yml'), 'linear:\n  client_secret: env:NOT_IN_THIS_SHELL\nbudgets:\n  per_ticket_tokens: 1000\n  per_step_tokens: { build: 10 }\n');
+    expect(loadFactoryBudgets(home)).toEqual({ perTicketTokens: 1000, perStepTokens: { build: 10 } });
+    writeFileSync(join(home, 'factory.yml'), 'budgets:\n  per_ticket_tokens: -1\n');
+    expect(() => loadFactoryBudgets(home)).toThrow(FactoryYmlError);
+    writeFileSync(join(home, 'factory.yml'), 'linear: {}\n');
+    expect(loadFactoryBudgets(home)).toBeUndefined();
   });
 });

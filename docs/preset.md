@@ -47,11 +47,11 @@ A red CI is the failure of a push: as long as the PR is open, including during t
 | `review` | Opus | high | 25 | Claude API |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | (factory check) | | | None |
 
-The turns of steps the MVP doc does not quantify reuse the old `per_run.turns: 150`. Token caps remain to be set (ORC-216): none by default.
+The turns of steps the MVP doc does not quantify reuse the old `per_run.turns: 150`. Token caps remain to be calibrated: none by default, and `factory validate` refuses until each agent step has its `per_step_tokens` and the ticket its `per_ticket_tokens` (ORC-216).
 
-A workflow job names its step (`step`, ORC-136): `dev` is `build`, `tests` is `tests`, `dev-feedback` and `fix-ci` are `fix`, `review` is `review`. Loading derives from it the effort, passed to `claude --effort` and recorded in the attempt's labels, and the turns. `factory.yml` can change a step's effort (`claude.effort.per_step`), lower its turns (`budgets.max_turns`) and give it a token cap (`budgets.per_step_tokens`). Like the whole workflow, these values are frozen with the ticket's version: a ticket already started keeps its own, and a version frozen before ORC-136 has neither effort nor tokens.
+A workflow job names its step (`step`, ORC-136): `dev` is `build`, `tests` is `tests`, `dev-feedback` and `fix-ci` are `fix`, `review` is `review`, `rebase` is `rebase` (ORC-146). Loading derives from it the effort, passed to `claude --effort` and recorded in the attempt's labels, and the turns. `factory.yml` can change a step's effort (`claude.effort.per_step`), lower its turns (`budgets.max_turns`) and give it a token cap (`budgets.per_step_tokens`). Like the whole workflow, these values are frozen with the ticket's version: a ticket already started keeps its own, and a version frozen before ORC-136 has neither effort nor tokens.
 
-A token cap counts `input + output + cache_creation` of the attempt's messages, not cache reads. When exceeded, the run stops as on a turn cap: `limit`, ticket Blocked.
+A token cap counts `input + output + cache_creation` of the attempt's messages, not cache reads. When exceeded, the run stops as on a turn cap: `limit`, and the runner says which cap (`overBudget: tokens | turns`, journaled on `run.finished`): the ticket is Blocked with the kind `budget` and the standard comment (ORC-216). A run stopped at its duration, or one journaled before ORC-216, blocks with the kind `limit` as before. The subscription's usage limit is no overrun: the run waits for the reset (`on_usage_limit: wait`, ORC-340).
 
 The network level is chosen per repository (Limited by default); a step can only tighten it. A step declared above the repository's level makes compilation fail.
 
@@ -114,7 +114,7 @@ The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the reposit
 | `size` | `xs`, `s`, `m`, `l`, `xl` |
 | `risk` | `low`, `medium`, `high` |
 | `complete` | whether a developer can build it without asking anything |
-| `missing` | the questions to answer: at least one when not complete, at most 3 |
+| `missing` | the questions to answer: at least one when not complete, at most 3; each `{ question, options }` (2 to 5 hypotheses), or a bare question when the agent sees none (ORC-210) |
 | `screen` | whether the ticket changes something a user sees |
 
 Before the ticket's first run (no Claude session yet), the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
@@ -127,7 +127,7 @@ At its end, `decide` records the assessment in the ticket's state:
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
 `intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
 
@@ -135,14 +135,33 @@ Then the guard before In Progress: a failed deterministic check or an incomplete
 
 A ticket « blocked by » a Linear ticket that is not done waits instead of starting. Done is a status of Linear's `completed` type; a cancelled blocker delivered nothing and still holds; a deleted one (in Linear's trash), or one the factory's token cannot read, holds nothing. The blockers are read with the ticket (`blockedBy` of the [tracker port](ports/tracker.md)), before its first run, where the pickup checks run:
 
-- **`intake` on**: they are an input of its guard, journaled with its end (`blockedBy` of `run.finished`). A ticket incomplete or failing a check is blocked on its questions first: the human has something to answer. A complete one waits, and what `intake` would start (`on_success.run`, `dev`) is the start it waits for; an `on_success.post` is posted at once, an `on_success.move` is not made (the start moves the ticket itself).
+- **`intake` on**: they are an input of its guard, journaled with its end (`blockedBy` of `run.finished`). A ticket incomplete or failing a check is asked its questions first (`clarify`, below): the human has something to answer; `intake` runs again after the last answer, and the wait comes then. A complete one waits, and what `intake` would start (`on_success.run`, `dev`) is the start it waits for; an `on_success.post` is posted at once, an `on_success.move` is not made (the start moves the ticket itself).
 - **`intake` off** (the pack): the guard lives at the launch of the job with `pickup: true` (`dev`), in the orchestrator, after the pickup checks: a failed check still blocks; else, an open blocker makes that very start wait, as it was decided (its input, its restrictions).
 
 The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer. The session gets a thought naming the blockers and their status. `/status` says it. The ticket stays where it is (Todo): nothing moves to In Progress. While it waits, a reply, a move or a debounced reply starts no dev work; a message stays in `humanInbox` for the run that starts later. A delegation again keeps the wait. A stop (a block), an undelegation or a dev run started all the same end it.
 
 **The resume comes from the reconciliation**, every 5 minutes ([Linear](linear.md)): it reads each waiting ticket's relations again and, when none is open (blockers done, or a relation taken off), sends `blockers.done`; `decide` makes the start it waited for, and the session hears it, unless a human moved the ticket meanwhile out of Todo and In Progress: then the wait only ends. Not a webhook: the blocker's move to Done comes on another issue, maybe of a team the factory does not follow, and a relation taken off sends no webhook the factory reads; the reconciliation already reads these tickets each pass, so the wait costs no extra call. The price is up to 5 minutes before the resume. `dev` reads the blockers again at its launch: one reopened meanwhile makes it wait again.
 
-**Not yet**: `clarify`'s questions with choices, reminder and expiry (ORC-210); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
+**Not yet**: the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
+
+## `clarify`: questions, reminder and expiry (ORC-210)
+
+`clarify` runs no agent of its own: the questions are `intake`'s (`missing`), the separate intent agent being EVP 1's ([decision](decisions/ORC-210.md)). At the guard, the factory asks at most 3 of them in the ticket's Linear session, one `elicitation` activity each, one at a time (the next once one is answered: Linear sends a picked option back as a plain reply, so the list on screen is the question it answers): with Linear's `select` signal and the question's options when it has some, a free answer always possible (Linear lets the human type instead of picking). A failed deterministic check comes first, as a free question asking to complete the ticket; past 3, the last of intake's are dropped, and intake asks them again on its next pass.
+
+The ticket then waits, **not blocked** (`TicketState.clarify`): nothing moves, the `Blocked` label stays off. Two timers are armed (ORC-161), on the decision's clock:
+
+| After | If questions are still open |
+| -- | -- |
+| 24 h (`clarify.remind`) | the question on screen is asked again, prefixed « Reminder » |
+| 72 h (`clarify.expire`) | the ticket is blocked on `intake` at step `clarify`, cause « question », the open questions in the blocking comment; a reply relaunches `intake` (ORC-196) |
+
+A timer only acts on the round that armed it (`at`): a round answered, asked again, or ended by whatever moves the ticket on (a block, an undelegation, a delegation again, a dev run, a move: the same events as the usage-limit wait) does nothing.
+
+**Answers.** A reply in the ticket's session is checked against the matrix (`answer_clarify`: the requester or a team member, ORC-186); refused, it is traced, answered in the session and counts for nothing. Accepted, it is kept in `humanInbox` as any reply (ORC-180) and answers the question on screen, a picked option or free text alike; any other authorized reply in the session counts too (a « +1 » included). A command (`/status`) answers none, nor does a question back (classified `question`): it is answered by `ask`, the question stays. A comment on the ticket is not read while it waits (`ticket.commented` awaits only a block's reply, and the matrix keeps `answer_clarify` to the session): the questions say to answer here. Once every question has its answer, `intake` starts again with the inbox as feedback, reads the ticket again and judges it anew: complete, `dev` starts; otherwise it asks again.
+
+**Decisions.** Each accepted answer, signed (I12), is recorded on the ticket (`decisions`: question, answer, author, time). Every later run of the dev queue but intake (which reads them as its feedback) gets them in its prompt (« Decisions », as data), so the `tests` step writes them as tests; the freeze after `red` and `/refreeze` hold the ticket's decisions as they are then (`frozenTests.decisions`). Nothing clears them yet: a ticket delegated again keeps them.
+
+**Not yet**: resuming intake's Claude session (`--resume`) after the answer: `intake` runs in a session of its own, not the ticket's (ORC-217, ORC-254), so it starts afresh with the answers; the `Questions` step of the session plan stays canceled (ORC-171); a `knowledge.candidate` event per answer (ORC-258); not asking again what was already decided (ORC-254).
 
 ## Attempt stagnation (ORC-136)
 
@@ -231,7 +250,7 @@ Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`
 
 ## Compilation and version
 
-`compilePreset(preset, { repoNetwork })` checks the core invariants and returns the preset's hash, or throws a `PresetError` listing all violations:
+`compilePreset(preset, { repoNetwork, budgets })` checks the core invariants and returns the preset's hash, or throws a `PresetError` listing all violations:
 
 - **bounded cycles**: `next` links alone form no cycle, and every step back names a declared counter, with a positive integer limit;
 - **tests frozen before the build**: no step that writes code (`fix`, or `agent_step` with `writes: code`) is reachable without going through a `verify` in `freeze` mode;
@@ -239,6 +258,8 @@ Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`
 - **read-only reviewer**: every `review` step is read-only, Claude API network at most;
 - **offline checks**: every `verify` step runs without network;
 - **network**: no step at Full (reserved for `setup`), none above the repository's level;
-- **budget cap**: every agent step has a maximum number of turns.
+- **budget caps**: every agent step has a maximum number of turns; given `budgets` (`factory validate` gives them, the daemon does not yet: the values are to calibrate), every agent step has its `per_step_tokens`, the ticket its `per_ticket_tokens`, and the worst case stays under it (ORC-216).
+
+**Worst case** (`src/presets/budget.ts`): from the entry, the run follows `next` and, at each step with a failure edge (red CI and conflict included) whose counter is not spent, may take it instead. The worst case is the exact maximum over these runs of Σ cap of each agent step run, in tokens (`per_step_tokens`) and in turns (`maxTurns`, lowered by `max_turns`). A `verify` step that passes refills its own counter, as the engine's `verify.passed` resets `verifyAttempts` and `redAttempts`: each entry into a checked loop gets all its retries. A way back that refills the counter it spends has no bound, and is refused. On `factory/default` that is 41 agent attempts at most: `spec_draft` 5, `tests` 3, `build` 4, `fix` 20 (5 entries, the review loop twice and the human one three times, each with its 3 retries of `verify`), `review` 6, the others once. A conflict spends the same `review_ci` as a red CI, and its way back (`rebase`, 60 turns, through `verify_rebase` with its 3 retries) weighs what `fix`'s does with equal caps: the worst case takes `rebase` instead where its `per_step_tokens` is higher, up to 8 attempts (2 entries × 4) in place of 8 of `fix`, and `factory validate` needs `per_step_tokens.rebase` like any agent step's (ORC-146). Not counted: the count of red CI and rebases the engine resets on a green CI (ORC-270), which the preset bounds per run (`review_ci`, shared with the review loop, ORC-184); a human relaunch, which gives every bound back and is the ticket's `per_ticket_tokens` to bound at run time; and what an attempt spends past its cap before it is stopped (the cap is checked as each message reports its usage). With the review loop at 5 rounds, the worst case was almost twice the cap per ticket of the MVP doc: it is 2 (`review_ci`), the count shared with red CI, and `limits.review_rounds` (« Max review rounds » of the review prompt) defaults to it.
 
 The hash is the sha256 of the preset's canonical JSON (sorted keys): it does not depend on key order and changes as soon as a bound, a model or a step changes. Each run will be frozen on the hash it started with (`workflow_versions` table, ORC-149).
