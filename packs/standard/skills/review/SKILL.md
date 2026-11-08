@@ -49,7 +49,7 @@ Before declaring the loop converged, run the repository's type check (and the li
 
 ## 3. Has the base moved?
 
-1. `factory-agent pr` (what arrived on the PR and its base since your run started), then `git log --oneline HEAD..origin/<base>`: what arrived on the base since the branch started. A human pushed to the PR meanwhile (`origin/<branch>` has commits your branch lacks): those commits are not reviewed yet. With a round left in "Max review rounds": `git merge --ff-only origin/<branch>` (if it fails, diverged: stop and say so, force nothing), then review them as a targeted round (step 2, its commits are `git log --oneline <your head before the merge>..HEAD`), and come back here. No round left: do not merge them. Nothing of this run is then published (the factory refuses a commit that lacks the forge's head of the branch) and the PR's head is not recorded as reviewed: say both in your last message, with your fixes' commits, so the next review takes them up.
+1. `factory-agent pr` (what arrived on the PR and its base since your run started), then `git log --oneline HEAD..origin/<base>`: what arrived on the base since the branch started. A human pushed to the PR meanwhile (`origin/<branch>` has commits your branch lacks): those commits are not reviewed yet. With a round left in "Max review rounds": `git merge --ff-only origin/<branch>` (if it fails, diverged: stop and say so, force nothing), then review them as a targeted round (step 2, its commits are `git log --oneline <your head before the merge>..HEAD`), and come back here. No round left: do not merge them, and ask a human (section 5, `factory-agent ask`): the factory refuses to publish a commit that lacks the forge's head of the branch, so your fixes stay unpublished until they decide to bring their push in (for a review of its own) or to drop your fixes. The question names the human's commits and your fix commits.
 2. A commit there that invalidates a premise of a fix (a timeout, a quota, a contract cited in a commit message) is a finding like any other.
 3. Never integrate the base: no merge, no rebase, even on a conflict or a mergeable status at `BEHIND`. A conflict is the factory's: it starts its own `factory:rebase` step on it, after your run.
 
@@ -59,7 +59,7 @@ Commit everything, then end your turn. You do not push and you do not wait for t
 
 ## 5. When to ask a human
 
-A point **to decide** that may be a defect, or a blocking defect still open at the cap: ask ONE question with `factory-agent ask`. It blocks the ticket: it does not move to "ready to merge" and your summary **is not published**. So the question carries the synthesis: rounds done, what is fixed, and the point to decide with its options and the key's history.
+A point **to decide** that may be a defect, a blocking defect still open at the cap, a conflict in one of the three stop cases, a human's push with no round left to review it (step 3.1): ask ONE question with `factory-agent ask`. It blocks the ticket: it does not move to "ready to merge" and your summary **is not published**. So the question carries the synthesis: rounds done, what is fixed, and the point to decide with its options and the key's history.
 
 Points to decide that are only trade-offs or preferences, minor, out of scope: no question, they go into the summary.
 
