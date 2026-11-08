@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../../core/types.js';
-import type { ModelVerdict } from '../../../core/human-message.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest } from './ingest.js';
 import { loadWorkflow } from '../../../config/load-workflow.js';
@@ -188,40 +187,72 @@ describe('mapLinearWebhook', () => {
       body.agentSession.comment.body = text;
       return mapLinearWebhook(body, 'd', c);
     };
-    /** A fake small model: says `verdict`, and records what it was asked. */
-    const model = (verdict: ModelVerdict | (() => Promise<ModelVerdict>)) => {
+    /** Through the ingest, with a fake small model that answers `verdict` (or rejects) and records what it was asked. */
+    const model = (verdict: 'instruction' | 'question' | Error) => {
       const asked: string[] = [];
-      const c: MapContext = { ...ctx(), classify: async (b) => (asked.push(b), typeof verdict === 'function' ? verdict() : verdict) };
-      return { c, asked };
+      const logs: string[] = [];
+      const accepted: FactoryEvent[] = [];
+      const ingest = createLinearIngest({
+        secret: () => 'sec',
+        ctx: ctx(),
+        accept: async (e) => void accepted.push(e),
+        log: (m) => void logs.push(m),
+        classify: async (b) => {
+          asked.push(b);
+          if (verdict instanceof Error) throw verdict;
+          return verdict;
+        },
+      });
+      const send = async (body: any) => {
+        const raw = JSON.stringify({ ...body, webhookTimestamp: 5000 });
+        accepted.length = 0;
+        expect(await ingest(raw, { 'linear-signature': createHmac('sha256', 'sec').update(raw).digest('hex') })).toEqual({ status: 200 });
+        return accepted;
+      };
+      const sendReply = (text: string) => {
+        const body = fx('session-prompted');
+        body.agentActivity.content.body = text;
+        body.agentActivity.id = `act-${asked.length}-${text.length}`;
+        return send(body);
+      };
+      const sendMention = (text: string) => {
+        const body = fx('session-created-mention');
+        body.agentSession.comment.body = text;
+        return send(body);
+      };
+      return { asked, logs, send, reply: sendReply, mention: sendMention };
     };
 
     it.each(['Le tri doit être décroissant', 'Please switch the sort to descending'])('an instruction without a verb of a list, %j, is one when the model says so', async (text) => {
-      const { c, asked } = model('instruction');
-      expect((await reply(text, c))[0]).toMatchObject({ payload: { body: text, ack: true, kind: 'instruction' } });
-      expect(asked).toEqual([text]);
+      const m = model('instruction');
+      expect((await m.reply(text))[0]).toMatchObject({ payload: { body: text, ack: true, kind: 'instruction' } });
+      expect(m.asked).toEqual([text]);
     });
 
     it('an instruction with a question mark is one when the model says so', async () => {
-      const { c } = model('instruction');
-      expect((await reply('corrige le tri, ok ?', c))[0]).toMatchObject({ payload: { kind: 'instruction' } });
-      expect((await mention('[@factory](https://linear.app/x/profiles/factory) Could you switch the sort?', c))[0]).toMatchObject({ payload: { kind: 'instruction' } });
+      const m = model('instruction');
+      expect((await m.reply('corrige le tri, ok ?'))[0]).toMatchObject({ payload: { kind: 'instruction' } });
+      expect((await m.mention('[@factory](https://linear.app/x/profiles/factory) Could you switch the sort?'))[0]).toMatchObject({ payload: { kind: 'instruction' } });
+      // Masked and without its mention, as the event carries it.
+      expect(m.asked).toEqual(['corrige le tri, ok ?', 'Could you switch the sort?']);
     });
 
-    it('/stop and /status are commands, the model never asked, nor for a workflow command', async () => {
-      const { c, asked } = model('question');
-      expect((await reply('/stop', c))[0]).toMatchObject({ payload: { kind: 'command' } });
-      expect((await reply('[@factory](https://linear.app/x/profiles/factory) /status', c))[0]).toMatchObject({ payload: { kind: 'command' } });
+    it('/stop, /status, /refreeze and a workflow command are commands, the model never asked', async () => {
+      const m = model('question');
+      expect((await m.reply('/stop'))[0]).toMatchObject({ payload: { kind: 'command' } });
+      expect((await m.reply('[@factory](https://linear.app/x/profiles/factory) /status'))[0]).toMatchObject({ payload: { kind: 'command' } });
+      expect((await m.reply('/refreeze'))[0]).toMatchObject({ type: 'command' });
       const body = fx('session-created-command');
       body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) retiens ceci';
-      expect((await mapLinearWebhook(body, 'd', c))[0]).toMatchObject({ type: 'command', payload: { kind: 'command' } });
-      expect(asked).toEqual([]);
+      expect((await m.send(body))[0]).toMatchObject({ type: 'command', payload: { kind: 'command' } });
+      expect(m.asked).toEqual([]);
     });
 
-    it('a model that fails or says nothing leaves the fallback rule, and the message keeps its ack', async () => {
-      for (const failing of [model(() => Promise.reject(new Error('timeout'))), model(undefined)]) {
-        expect((await reply('corrige le tri, ok ?', failing.c))[0]).toMatchObject({ payload: { ack: true, kind: 'question' } });
-        expect((await reply('Le tri doit être décroissant', failing.c))[0]).toMatchObject({ payload: { ack: true, kind: 'instruction' } });
-      }
+    it('a model that fails leaves the fallback rule, the message keeps its ack, and the reason is logged once', async () => {
+      const m = model(new Error('timed out after 6000 ms'));
+      expect((await m.reply('corrige le tri, ok ?'))[0]).toMatchObject({ payload: { ack: true, kind: 'question' } });
+      expect((await m.reply('Le tri doit être décroissant'))[0]).toMatchObject({ payload: { ack: true, kind: 'instruction' } });
+      expect(m.logs).toEqual([expect.stringContaining('no verdict (timed out after 6000 ms)')]);
     });
 
     it.each([
@@ -507,6 +538,72 @@ describe('ingest', () => {
       ids: async () => (await store.pendingInbox(100)).map((e) => e.id),
     };
   }
+
+  describe('the small model outside the serial turn (ORC-336)', () => {
+    const reply = (id: string, text: string, ticket = 'REL-1') => {
+      const body = fx('session-prompted');
+      body.agentActivity = { ...body.agentActivity, id, content: { type: 'prompt', body: text } };
+      body.agentSession.issue.identifier = ticket;
+      return signed({ ...body, webhookTimestamp: 5000 });
+    };
+    const moved = (ticket: string) => signed({ ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, identifier: ticket, updatedAt: `2026-10-15T10:00:0${ticket.length}.000Z` }, webhookTimestamp: 5000 });
+    const slow = (ms: number, asked: string[] = []) => async (b: string) => {
+      asked.push(b);
+      await new Promise((r) => setTimeout(r, ms));
+      return 'instruction' as const;
+    };
+    const setup = (classify: (b: string) => Promise<'instruction' | 'question'>, more: Partial<Parameters<typeof createLinearIngest>[0]> = {}) => {
+      const accepted: string[] = [];
+      const ingest = createLinearIngest({ secret: () => 'sec', ctx: ctx(), accept: async (e) => void accepted.push(`${e.ticketId} ${e.type}`), log: () => {}, classify, ...more });
+      const send = ({ raw, sig }: { raw: string; sig: string }) => ingest(raw, { 'linear-signature': sig });
+      return { accepted, send };
+    };
+
+    it('two slow classifications run side by side, not one after the other', async () => {
+      const { accepted, send } = setup(slow(300));
+      const t = Date.now();
+      await Promise.all([send(reply('a1', 'premier')), send(reply('a2', 'second'))]);
+      expect(Date.now() - t).toBeLessThan(550);
+      expect(accepted).toEqual(['REL-1 session.prompted', 'REL-1 session.prompted']);
+    });
+
+    it('a webhook of another ticket behind them is not delayed; one of the same ticket keeps its place', async () => {
+      const { accepted, send } = setup(slow(400));
+      const replies = [send(reply('a1', 'premier')), send(reply('a2', 'second'))];
+      const t = Date.now();
+      expect(await send(moved('REL-2'))).toEqual({ status: 200 });
+      expect(Date.now() - t).toBeLessThan(200);
+      expect(accepted).toEqual(['REL-2 status.changed', 'REL-2 label.changed']);
+      await Promise.all([...replies, send(moved('REL-1'))]);
+      expect(accepted.slice(2)).toEqual(['REL-1 session.prompted', 'REL-1 session.prompted', 'REL-1 status.changed', 'REL-1 label.changed']);
+    });
+
+    it('a redelivered webhook asks no model again, nor one sent twice at once', async () => {
+      const asked: string[] = [];
+      const held = new Set(['linear:activity:old']);
+      const { send } = setup(slow(100, asked), { inboxHas: async (id) => held.has(id) });
+      await send(reply('old', 'déjà reçu'));
+      expect(asked).toEqual([]);
+      const twice = reply('new', 'nouveau');
+      await Promise.all([send(twice), send(twice)]);
+      expect(asked).toEqual(['nouveau']);
+    });
+
+    it("takes the event's time at the webhook's arrival, before the model's wait", async () => {
+      let now = 5000;
+      const events: FactoryEvent[] = [];
+      const ingest = createLinearIngest({
+        secret: () => 'sec',
+        ctx: { ...ctx(), now: () => now },
+        accept: async (e) => void events.push(e),
+        log: () => {},
+        classify: async () => ((now = 9000), 'question'),
+      });
+      const { raw, sig } = reply('a1', 'pourquoi');
+      await ingest(raw, { 'linear-signature': sig });
+      expect(events[0]).toMatchObject({ at: 5000, payload: { kind: 'question' } });
+    });
+  });
 
   it('writes a delegation to the inbox, then answers 200; it writes nothing to Linear, the ack is an effect of its decision (ORC-147, ORC-171)', async () => {
     const { store, ids } = inbox();

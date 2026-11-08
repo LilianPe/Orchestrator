@@ -274,6 +274,11 @@ export class PgStore implements AsyncStore {
     });
   }
 
+  async inboxHas(id: string): Promise<boolean> {
+    const result = await this.db.execute(sql`select 1 from inbox where id = ${id}`);
+    return result.rows.length > 0;
+  }
+
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
     const result = await this.db.execute<{ payload: StoredEvent }>(sql`
       select payload from inbox

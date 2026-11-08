@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { linearIngest, signedReply } from '../helpers/linear-webhook.js';
+import type { MessageClassifier } from '../../src/adapters/runner/message-classifier.js';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { createHarness } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -232,10 +233,10 @@ describe('the human inbox (ORC-180)', () => {
   });
 
   describe('the small model at ingestion (ORC-336)', () => {
-    const through = async (classify: (b: string) => Promise<'instruction' | 'question' | undefined>, text: string) => {
+    const through = async (classify: MessageClassifier, text: string) => {
       const h = createHarness();
       await inReview(h);
-      const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now(), ctx: { classify } });
+      const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now(), classify });
       const { raw, headers } = signedReply('ls-1', text, h.clock.now());
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
       expect((await ingest(raw, headers)).status).toBe(200);

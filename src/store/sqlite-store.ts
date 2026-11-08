@@ -179,6 +179,10 @@ export class SqliteStore implements Store {
     return this.appendResult(e);
   }
 
+  async inboxHas(id: string): Promise<boolean> {
+    return this.db.prepare('SELECT 1 FROM inbox WHERE id = ?').get(id) !== undefined;
+  }
+
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
     const skip = new Set(exclude);
     const rows = this.db

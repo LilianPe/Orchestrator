@@ -373,6 +373,8 @@ export interface Store {
    * when an event with this id is already in the inbox, processed or not: the id is the dedup key.
    */
   appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean>;
+  /** Whether the inbox already holds an event with this id, processed or not (ORC-336: a redelivered webhook). */
+  inboxHas(id: string): Promise<boolean>;
   /** Inbox events not processed yet, oldest first, except the ids in `exclude`. */
   pendingInbox(limit: number, exclude?: readonly string[]): Promise<StoredEvent[]>;
   /** Marks an inbox event processed: `pendingInbox` no longer returns it. */

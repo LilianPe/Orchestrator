@@ -85,9 +85,13 @@ A human message that is not a command is classified `instruction` or `question` 
 
 `claude -p` runs with no tool, no MCP server, no settings, no session kept, out of any repository, the message on stdin. The daemon image holds no `claude` (no agent runs in it, ORC-204), hence no Claude account backend with sandboxes. The Messages API call has `max_tokens` 16, thinking off, low effort. With no backend, or one that fails, the fallback rule classifies.
 
-`FACTORY_MESSAGE_MODEL=off` turns the model off: the fallback rule (a `?` outside a URL makes a question, anything else an instruction) classifies alone. The fake runner (`--fake-runner`) never calls it.
+`FACTORY_MESSAGE_MODEL` set to `off`, `0`, `false` or `none` (any case) turns the model off, and any other value is logged as a warning: the fallback rule (a `?` outside a URL makes a question, anything else an instruction) classifies alone. The fake runner (`--fake-runner`) never calls it.
 
-**Bound.** The verdict comes before the event is journaled, so the webhook's answer and the acknowledgement wait for it: Linear marks a session unresponsive when no activity arrives within 10 s. A call is cut at 3 s through the Messages API, 6 s through `claude -p`, and the fallback rule decides. Measured on a developer's machine (Claude Code 2.1.319, low effort): the model itself answers in about 0.9 s (`duration_api_ms`); `claude -p` takes 1.7 to 3.4 s in all, its start included, and about 5 s more without `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, which it is given. The time of a message (`at`, and so `signOfLifeMs`) is taken before the call: the wait shows in the measure.
+**Bound.** The verdict comes before the event is journaled, so the webhook's answer and the acknowledgement wait for it: Linear marks a session unresponsive when no activity arrives within 10 s. A call is cut at 3 s through the Messages API, 6 s through `claude -p`, and the fallback rule decides. Measured on a developer's machine (Claude Code 2.1.319, low effort): the model itself answers in about 0.9 s (`duration_api_ms`); `claude -p` takes 1.7 to 3.4 s in all, its start included, and about 5 s more without `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, which it is given. The time of a message (`at`, and so `signOfLifeMs`) is taken when the webhook arrives, before any wait: the model's shows in the measure.
+
+**Outside the ingest's turn.** Webhooks are mapped and written to the inbox one at a time, in a turn the reconciliation shares. The model is called before that turn, so classifications run side by side and nothing else waits for them: a webhook waits only for the earlier webhooks of its own ticket, to reach the inbox in arrival order. A webhook the inbox already holds (Linear sending it again) asks no model, nor does one that comes twice while its call runs.
+
+**Failures.** Each failure is logged with its reason (`HTTP <status>`, `request failed`, `spawn failed`, `exit <code>`, `timed out after <n> ms`, `unparseable answer`), once per reason every 10 minutes: a model that never answers shows in the log without flooding it.
 
 ## Shutdown, restart and interrupted runs
 

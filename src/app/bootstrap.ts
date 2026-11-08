@@ -284,8 +284,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // One turn for the webhook and the reconciliation around the known labels (ORC-185).
     const labelsTurn = serial();
+    // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
+    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeToken, !sandboxes, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
+      ...(classify ? { classify } : {}),
+      inboxHas: (id) => store.inboxHas(id),
       secret: webhookSecret,
       accept,
       log,
@@ -309,8 +313,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         recordLabels: async (pid, id, labels, at) => {
           if (await store.getTicket(pid, id)) await recordLabels(store, pid, id, labels, at);
         },
-        // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
-        ...(o.fakeRunner ? {} : { classify: messageClassifier(env, () => claudeToken, !sandboxes) }),
       },
     });
 

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLinearIngest } from '../../src/adapters/tracker/linear/ingest.js';
 import type { MapContext } from '../../src/adapters/tracker/linear/webhook.js';
+import type { MessageClassifier } from '../../src/adapters/runner/message-classifier.js';
 import type { FactoryEvent } from '../../src/core/types.js';
 
 /**
@@ -73,8 +74,9 @@ export function signedReply(sessionId: string, body: string, at = NOW): { raw: s
  * The daemon's Linear ingestion for project `p` (team REL), writing through `accept`. `now` as the
  * daemon wires it: the clock (default 1000). `ctx`: what differs from that one project (the team's repos).
  */
-export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, opts: { now?: () => number; ctx?: Partial<MapContext> } = {}) {
+export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, opts: { now?: () => number; ctx?: Partial<MapContext>; classify?: MessageClassifier } = {}) {
   return createLinearIngest({
+    ...(opts.classify ? { classify: opts.classify } : {}),
     secret: () => SECRET,
     accept,
     log: () => {},

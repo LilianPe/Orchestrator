@@ -1,12 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
-import { classifyMessage, isCommand } from '../../../core/human-message.js';
-import type { MessageClassifier } from '../../runner/message-classifier.js';
+import { classifyMessage, isCommand, type ModelVerdict } from '../../../core/human-message.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
 import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
 import { labelChanges, type KnownLabels } from './labels.js';
 import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
-import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type MessageKind, type Taint, type TicketState } from '../../../core/types.js';
+import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
 export function isUsableWebhookSecret(secret: unknown): boolean {
   return typeof secret === 'string' && secret.trim() !== '';
@@ -47,8 +46,6 @@ export interface MapContext {
   knownLabels?(projectId: string, identifier: string): Promise<KnownLabels | undefined>;
   /** Records the ticket's labels as known at `at` (an issue's `updatedAt`), once the webhook's events are in the inbox. */
   recordLabels?(projectId: string, identifier: string, labels: string[], at: number): Promise<void>;
-  /** The small model that classifies a message (ORC-336), bounded by its own timeout; without it, the fallback rule alone. */
-  classify?: MessageClassifier;
 }
 
 export function stripMention(body: string): string {
@@ -122,22 +119,13 @@ function message(text: string): { body: string; masked?: true } {
   return body === text ? { body } : { body, masked: true };
 }
 
-/**
- * A message's class, decided here, before the journal, never on replay (ORC-336). A command never reaches the model;
- * a model that fails or says nothing leaves the fallback rule to decide.
- */
-async function classify(body: string, ctx: MapContext): Promise<MessageKind> {
-  if (isCommand(body) || !ctx.classify) return classifyMessage(body);
-  return classifyMessage(body, await ctx.classify(body).catch(() => undefined));
-}
-
 /** The first word of a comment, without its mention, as a command's name, and the rest as its body. */
 function parseCommand(text: string): { name: string; body: string } {
   const [first = '', ...rest] = text.split(/\s+/);
   return { name: first.toLowerCase(), body: rest.join(' ') };
 }
 
-async function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
+function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext, verdict: ModelVerdict): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
@@ -149,7 +137,7 @@ async function sessionEvents(body: any, author: string, projectId: string, ctx: 
       return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
     }
     const said = message(text);
-    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: await classify(said.body, ctx) } }];
+    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: classifyMessage(said.body, verdict) } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
@@ -159,7 +147,7 @@ async function sessionEvents(body: any, author: string, projectId: string, ctx: 
     if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, kind: 'command' } }];
     const said = message(reply);
     const bare = stripMention(said.body);
-    const kind = await classify(bare, ctx);
+    const kind = classifyMessage(bare, verdict);
     // A command is read by its first word: without the mention it may open with.
     return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
   }
@@ -175,7 +163,7 @@ async function sessionEvents(body: any, author: string, projectId: string, ctx: 
  * is masked and classified as a session's is (ORC-180). A comment outside a block does not enter the human inbox: it is
  * not addressed to the factory, and an agent would read it; a session is how one speaks to the agent at work.
  */
-async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext): Promise<PartialEvent[]> {
+async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext, verdict: ModelVerdict): Promise<PartialEvent[]> {
   const text: unknown = body.data?.body;
   if (body.action !== 'create' || !actor || typeof text !== 'string' || !text.trim() || isEffectComment(text)) return [];
   // A reply in an agent session comes as its `prompted` webhook: its comment is the same message (`deliveryKey` too).
@@ -185,7 +173,7 @@ async function commentEvents(body: any, identifier: string, projectId: string, a
   const ticket = await ctx.ticket(projectId, identifier);
   if (!ticket?.blocked || !ticket.delegated) return [];
   const said = message(text);
-  return [{ type: 'ticket.commented', payload: { ...said, author, kind: await classify(said.body, ctx) } }];
+  return [{ type: 'ticket.commented', payload: { ...said, author, kind: classifyMessage(said.body, verdict) } }];
 }
 
 async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
@@ -258,7 +246,7 @@ async function routeInTeam(body: any, identifier: string, team: string[], ctx: M
   return opener ? { projectId: opener.projectId } : route;
 }
 
-function issueIdentifier(body: any): string | undefined {
+export function issueIdentifier(body: any): string | undefined {
   if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
   if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
   if (body?.type === 'Comment') return body.data?.issue?.identifier;
@@ -311,7 +299,34 @@ export function deliveryKey(body: any): string {
   return `body:${createHash('sha256').update(JSON.stringify({ ...body, webhookTimestamp: undefined })).digest('hex')}`;
 }
 
-export async function mapLinearWebhook(body: any, key: string, ctx: MapContext): Promise<FactoryEvent[]> {
+/**
+ * The message of a webhook the small model is to classify (ORC-336), as `mapLinearWebhook` classifies it: masked,
+ * without its mention. Nothing for what carries no message, for a command (the factory's, a workflow's), and for a
+ * comment that would not be journaled (it needs a blocked, delegated ticket): no model is called for them.
+ */
+export async function messageToClassify(body: any, ctx: MapContext): Promise<string | undefined> {
+  const identifier = issueIdentifier(body);
+  if (!identifier) return undefined;
+  const team = ctx.projectsOfTeam(identifier.split('-')[0]!);
+  let text: string | undefined;
+  if (body?.type === 'AgentSessionEvent' && body.action === 'created' && body.agentSession?.comment) {
+    const said = stripMention(body.agentSession.comment.body ?? '');
+    const commands = [REFREEZE, ...team.flatMap((p) => ctx.commands(p))];
+    text = commands.includes(parseCommand(said).name) ? undefined : message(said).body;
+  } else if (body?.type === 'AgentSessionEvent' && body.action === 'prompted' && body.agentActivity?.signal !== 'stop') {
+    const reply: string = body.agentActivity?.content?.body ?? '';
+    text = parseCommand(stripMention(reply)).name === REFREEZE ? undefined : stripMention(message(reply).body);
+  } else if (body?.type === 'Comment' && body.action === 'create' && typeof body.data?.body === 'string' && signedActor(body).id) {
+    const said: string = body.data.body;
+    const plain = said.trim() && !isEffectComment(said) && !body.data.agentSessionId && !body.data.agentSession && stripMention(said) === said.trim();
+    const waits = plain && parseCommand(said.trim()).name !== REFREEZE && (await Promise.all(team.map((p) => ctx.ticket(p, identifier)))).some((t) => t?.blocked && t.delegated);
+    text = waits ? message(said).body : undefined;
+  }
+  return text === undefined || isCommand(text) ? undefined : text;
+}
+
+/** `at`: when the webhook arrived, before any wait (ORC-336); `verdict`: the small model's on its message. */
+export async function mapLinearWebhook(body: any, key: string, ctx: MapContext, o: { at?: number; verdict?: ModelVerdict } = {}): Promise<FactoryEvent[]> {
   const identifier = issueIdentifier(body);
   if (!identifier) return [];
   const teamKey = identifier.split('-')[0]!;
@@ -319,12 +334,11 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext):
   if (!route) return [];
   const { projectId, repos, waitedIn, noRepo } = route;
   const { id: actor, taint, name } = signedActor(body);
-  // Before the small model's call: the sign of life is measured from here, the wait for the model included (ORC-336).
-  const at = ctx.now();
+  const at = o.at ?? ctx.now();
   let partials: PartialEvent[];
   if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true, noRepo } }];
-  else if (body.type === 'AgentSessionEvent') partials = await sessionEvents(body, name, projectId, ctx);
-  else if (body.type === 'Comment') partials = await commentEvents(body, identifier, projectId, actor, name, ctx);
+  else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx, o.verdict);
+  else if (body.type === 'Comment') partials = await commentEvents(body, identifier, projectId, actor, name, ctx, o.verdict);
   else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
   const routing = { ...(repos ? { repos } : {}), ...(waitedIn ? { waitedIn } : {}) };
