@@ -90,7 +90,7 @@ import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { fastForward, hostWorktree, type bringPrRefs, type InWorktree } from '../adapters/workspace/pr-refs.js';
 import { IN_SANDBOX } from '../publish/extract.js';
-import { PR_TARGET, type PrState } from './pr-state.js';
+import { PR_TARGET, type PrRead, type PrState } from './pr-state.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
@@ -882,7 +882,7 @@ export class Orchestrator {
    * repository, so the agent reaches no forge. What fails is said in the state, never thrown: the review then reads
    * it again with `factory-agent pr`. The forge's and git's messages go to the log, never to the agent: they name host paths.
    */
-  private async readPr(project: ProjectRuntime, branch: string | undefined, worktree: string, runId: string, sandbox: Sandbox | undefined, o: { fetch: boolean; fastForward: boolean }): Promise<PrState | undefined> {
+  private async readPr(project: ProjectRuntime, branch: string | undefined, worktree: string, runId: string, sandbox: Sandbox | undefined, o: { fetch: boolean; fastForward: boolean }): Promise<PrRead | undefined> {
     if (!branch) return undefined;
     const failed = (what: string, err: unknown) => {
       this.log('warn', `PR of ${branch}: ${what} not read: ${(err as Error).message}`);
@@ -893,7 +893,7 @@ export class Orchestrator {
       found = await this.d.forge.findPr(project.repoPath, branch);
     } catch (err) {
       failed('the PR', err);
-      return undefined;
+      return { unreadable: true };
     }
     if (!found) return undefined;
     const pr: PrState = { number: found.number, url: found.url, state: found.state, branch };
@@ -910,9 +910,13 @@ export class Orchestrator {
       try {
         const got = await this.d.prRefs({ repoPath: project.repoPath, branch, base: pr.base, bundleDir: dir, ...(sandbox ? { bundleTarget: PR_TARGET } : {}), inWorktree, fetch: o.fetch });
         Object.assign(pr, { head: got.head, baseSha: got.base });
-        if (o.fastForward) pr.worktree = await fastForward(inWorktree, branch);
       } catch (err) {
         errors.push(failed('its commits', err));
+      }
+      try {
+        if (o.fastForward && pr.head) pr.worktree = await fastForward(inWorktree, branch);
+      } catch (err) {
+        errors.push(failed('the fast-forward of your branch', err));
       } finally {
         if (!sandbox) rmSync(dir, { recursive: true, force: true });
       }
@@ -925,14 +929,24 @@ export class Orchestrator {
    * `factory-agent pr` (ORC-322): a running review's PR read again, its new commits brought by a fetch of the
    * factory's repository. Undefined for a run that is no review, or whose sandbox is gone.
    */
-  async agentPrState(run: RunRecord): Promise<PrState | undefined> {
-    const project = this.d.projects.find((p) => p.id === run.projectId);
-    if (!project?.workflow.jobs[run.job]?.prState) return undefined;
-    const sandbox = this.d.sandboxes && (await this.d.sandboxes.findByAttempt(run.id));
-    if (this.d.sandboxes && !sandbox) return undefined;
-    const t = await this.ticket(project.id, run.ticketId);
-    return this.readPr(project, t.branch, run.cwd, run.id, sandbox || undefined, { fetch: true, fastForward: false });
+  async agentPrState(run: RunRecord): Promise<PrRead | undefined> {
+    // One at a time per run: a second ask while one runs gets its answer, the agent cannot pile up fetches.
+    const inFlight = this.prReads.get(run.id);
+    if (inFlight) return inFlight;
+    const read = (async () => {
+      const project = this.d.projects.find((p) => p.id === run.projectId);
+      if (!project?.workflow.jobs[run.job]?.prState) return undefined;
+      const sandbox = this.d.sandboxes && (await this.d.sandboxes.findByAttempt(run.id));
+      if (this.d.sandboxes && !sandbox) return undefined;
+      const t = await this.ticket(project.id, run.ticketId);
+      return this.readPr(project, t.branch, run.cwd, run.id, sandbox || undefined, { fetch: true, fastForward: false });
+    })().finally(() => this.prReads.delete(run.id));
+    this.prReads.set(run.id, read);
+    return read;
   }
+
+  /** `factory-agent pr` in flight, by run. */
+  private readonly prReads = new Map<string, Promise<PrRead | undefined>>();
 
   private settingsPath(): string {
     return this.d.settingsPath ?? join(this.d.packDir, 'settings.json');

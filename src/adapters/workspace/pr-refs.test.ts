@@ -85,9 +85,48 @@ describe('bringPrRefs (ORC-322)', () => {
     expect(await bringPrRefs({ repoPath: repo, branch: 'factory/rel-1', base: 'main', bundleDir, inWorktree, fetch: false })).toMatchObject({ head: before });
   });
 
+  it('sets a ref the agent already holds the commit of without a bundle: the base fast-forwarded onto the PR head', async () => {
+    const pushed = push(human, 'factory/rel-1', 'human.txt');
+    await bringPrRefs({ repoPath: repo, branch: 'factory/rel-1', base: 'main', bundleDir, inWorktree, fetch: true });
+    // The PR merged into main by a fast-forward: main's new tip is a commit the agent already has.
+    git(human, 'checkout', '--quiet', 'main');
+    git(human, 'merge', '--quiet', '--ff-only', 'factory/rel-1');
+    git(human, 'push', '--quiet', 'origin', 'main');
+    rmSync(join(bundleDir, 'pr.bundle'));
+    expect(await bringPrRefs({ repoPath: repo, branch: 'factory/rel-1', base: 'main', bundleDir, inWorktree, fetch: true })).toEqual({ head: pushed, base: pushed });
+    expect(git(agent, 'rev-parse', 'refs/remotes/origin/main')).toBe(pushed);
+    expect(readdirSync(bundleDir)).toEqual([]);
+  });
+
+  it('follows a force-pushed branch', async () => {
+    git(human, 'checkout', '--quiet', 'factory/rel-1');
+    git(human, 'reset', '--quiet', '--hard', 'main');
+    writeFileSync(join(human, 'rewritten.txt'), 'x');
+    git(human, 'add', 'rewritten.txt');
+    git(human, 'commit', '--quiet', '-m', 'rewritten');
+    git(human, 'push', '--quiet', '--force', 'origin', 'factory/rel-1');
+    const rewritten = git(human, 'rev-parse', 'HEAD');
+    expect(await bringPrRefs({ repoPath: repo, branch: 'factory/rel-1', base: 'main', bundleDir, inWorktree, fetch: true })).toMatchObject({ head: rewritten });
+    expect(git(agent, 'rev-parse', 'refs/remotes/origin/factory/rel-1')).toBe(rewritten);
+  });
+
+  it("brings everything to an agent's repository without origin refs", async () => {
+    git(agent, 'update-ref', '-d', 'refs/remotes/origin/main');
+    git(agent, 'update-ref', '-d', 'refs/remotes/origin/factory/rel-1');
+    const got = await bringPrRefs({ repoPath: repo, branch: 'factory/rel-1', base: 'main', bundleDir, inWorktree, fetch: true });
+    expect(git(agent, 'rev-parse', 'refs/remotes/origin/main')).toBe(got.base);
+    expect(git(agent, 'rev-parse', 'refs/remotes/origin/factory/rel-1')).toBe(got.head);
+  });
+
+  it('takes a branch name git allows, beyond ASCII', async () => {
+    git(human, 'checkout', '--quiet', '-b', 'feature/café+1', 'main');
+    const tip = push(human, 'feature/café+1', 'cafe.txt');
+    expect(await bringPrRefs({ repoPath: repo, branch: 'feature/café+1', base: 'main', bundleDir, inWorktree, fetch: true })).toMatchObject({ head: tip });
+  });
+
   it('refuses a branch name git would read as an option or a range', async () => {
-    for (const branch of ['--upload-pack=x', 'a..b', 'a b']) {
-      await expect(bringPrRefs({ repoPath: repo, branch, base: 'main', bundleDir, inWorktree })).rejects.toThrow(/branch name/);
+    for (const branch of ['--upload-pack=x', 'a..b', 'a b', '@{-1}', 'main']) {
+      await expect(bringPrRefs({ repoPath: repo, branch, base: 'main', bundleDir, inWorktree })).rejects.toThrow(/branch name|is its base/);
     }
   });
 });

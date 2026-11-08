@@ -9,7 +9,7 @@ import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { causeOf } from '../core/block-cause.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
-import type { PrState } from '../core/pr-state.js';
+import { isUnreadable, type PrRead } from '../core/pr-state.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
@@ -36,7 +36,7 @@ export interface ServerDeps {
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
   knowledgeSearch?: (q: string) => Promise<{ file: string; line: number; text: string }[]>;
   /** A running review's PR read again, its new commits brought into its worktree (ORC-322): `factory-agent pr`. */
-  prState?: (run: RunRecord) => Promise<PrState | undefined>;
+  prState?: (run: RunRecord) => Promise<PrRead | undefined>;
   capacity: () => { dev: { used: number; total: number }; questions: { used: number; total: number } };
   transcriptsDir: string;
   webDir?: string;
@@ -301,7 +301,8 @@ export function createApp(d: ServerDeps): Hono {
   // A read for the agent, even if it writes the PR's refs into its own repository: it reaches no forge itself.
   agent.get('/pr', async (c) => {
     const pr = d.prState ? await d.prState(c.get('run')) : undefined;
-    return pr ? c.json(pr) : c.json({ error: 'this run has no PR to read' }, 404);
+    if (!pr) return c.json({ error: 'this run has no PR to read' }, 404);
+    return isUnreadable(pr) ? c.json({ error: 'the forge did not answer, ask again later' }, 503) : c.json(pr);
   });
   agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.

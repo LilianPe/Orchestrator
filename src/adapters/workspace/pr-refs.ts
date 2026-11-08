@@ -23,8 +23,6 @@ export interface PrRefsRequest {
 
 const BUNDLE = 'pr.bundle';
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
-/** A branch name git cannot read as an option, a range or a revision expression. */
-const BRANCH = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]+$/;
 const FETCH_DEADLINE_MS = 2 * 60_000;
 
 /**
@@ -34,14 +32,18 @@ const FETCH_DEADLINE_MS = 2 * 60_000;
  * Returns the shas `origin/<branch>` and `origin/<base>` now name there.
  */
 export async function bringPrRefs(o: PrRefsRequest): Promise<{ head: string; base: string }> {
-  for (const name of [o.branch, o.base]) if (!BRANCH.test(name)) throw new Error(`invalid branch name: ${JSON.stringify(name)}`);
   const exec = o.exec ?? execCmd;
+  const run = (args: string[], opts: { timeoutMs?: number; env?: Record<string, string> } = {}) => exec('git', [...HARDENING.flatMap((c) => ['-c', c]), '-C', o.repoPath, ...args], opts);
   const host = async (args: string[], opts: { timeoutMs?: number; env?: Record<string, string> } = {}) => {
-    const all = [...HARDENING.flatMap((c) => ['-c', c]), '-C', o.repoPath, ...args];
-    const r = await exec('git', all, opts);
-    if (r.code !== 0) throw execFailure('git', all, r);
+    const r = await run(args, opts);
+    if (r.code !== 0) throw execFailure('git', args, r);
     return r.stdout.trim();
   };
+  // Git's own rules, and never an option: the names come from the forge.
+  for (const name of [o.branch, o.base]) {
+    if (name.startsWith('-') || name.includes('@{') || (await run(['check-ref-format', '--branch', name])).code !== 0) throw new Error(`invalid branch name: ${JSON.stringify(name)}`);
+  }
+  if (o.branch === o.base) throw new Error(`the PR's branch ${o.branch} is its base`);
   if (o.fetch) await host(['fetch', '--quiet', 'origin'], { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: o.fetchTimeoutMs ?? FETCH_DEADLINE_MS });
 
   const refs = [o.branch, o.base].map((b) => `refs/remotes/origin/${b}`);
@@ -50,7 +52,7 @@ export async function bringPrRefs(o: PrRefsRequest): Promise<{ head: string; bas
   const moved = refs.filter((_, i) => want[i] !== have[i]);
   if (moved.length) {
     // The agent's shas are only prerequisites, and only those the factory has: a bundle the agent's repository cannot read fails its fetch, nothing else.
-    const known = await Promise.all(have.map(async (sha) => (sha && (await exec('git', ['-C', o.repoPath, 'cat-file', '-e', `${sha}^{commit}`])).code === 0 ? sha : undefined)));
+    const known = await Promise.all(have.map(async (sha) => (sha && (await run(['cat-file', '-e', `${sha}^{commit}`])).code === 0 ? sha : undefined)));
     const prereqs = [...new Set(known.filter((s): s is string => !!s))];
     // A ref already reachable from a prerequisite is left out of a bundle: the agent has its commit, the ref is set directly.
     const direct: string[] = [];
@@ -58,7 +60,7 @@ export async function bringPrRefs(o: PrRefsRequest): Promise<{ head: string; bas
     for (const ref of moved) {
       const tip = want[refs.indexOf(ref)]!;
       let reachable = false;
-      for (const p of prereqs) if ((await exec('git', ['-C', o.repoPath, 'merge-base', '--is-ancestor', tip, p])).code === 0) reachable = true;
+      for (const p of prereqs) if ((await run(['merge-base', '--is-ancestor', tip, p])).code === 0) reachable = true;
       (reachable ? direct : bundled).push(ref);
     }
     for (const ref of direct) await agent(o.inWorktree, ['update-ref', ref, want[refs.indexOf(ref)]!]);

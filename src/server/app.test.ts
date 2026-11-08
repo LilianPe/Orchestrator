@@ -261,6 +261,8 @@ describe('server', () => {
     expect(asked).toEqual(['r1']);
     const none = await (await setup({ prState: async () => undefined })).app.request('/agent/pr', { headers: { authorization: 'Bearer tok' } });
     expect(none.status).toBe(404);
+    const down = await (await setup({ prState: async () => ({ unreadable: true as const }) })).app.request('/agent/pr', { headers: { authorization: 'Bearer tok' } });
+    expect(down.status).toBe(503);
   });
 
   it('agent ask journals the question, and tells nothing itself: `decide` blocks and the outbox writes it', async () => {

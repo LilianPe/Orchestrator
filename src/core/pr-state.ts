@@ -21,6 +21,15 @@ export interface PrState {
   error?: string;
 }
 
+/** The forge did not answer: not the same as a ticket without a PR. */
+export interface PrUnreadable {
+  unreadable: true;
+}
+
+export type PrRead = PrState | PrUnreadable;
+
+export const isUnreadable = (pr: PrRead): pr is PrUnreadable => 'unreadable' in pr;
+
 const short = (sha: string) => sha.slice(0, 12);
 
 const WORKTREE: Record<NonNullable<PrState['worktree']>, string> = {
@@ -30,7 +39,8 @@ const WORKTREE: Record<NonNullable<PrState['worktree']>, string> = {
 };
 
 /** The PR as text, the same in the prompt and from `factory-agent pr`. */
-export function formatPrState(pr: PrState): string {
+export function formatPrState(pr: PrRead): string {
+  if (isUnreadable(pr)) return "The factory could not read the PR: the forge did not answer (the factory's log says why).";
   const lines = [`#${pr.number} — ${pr.state}${pr.base ? ` — base \`${pr.base}\`` : ''}${pr.mergeable ? ` — mergeable: ${pr.mergeable}${pr.mergeState ? ` (${pr.mergeState})` : ''}` : ''}`, `URL: ${pr.url}`];
   if (pr.head && pr.baseSha && pr.base) {
     lines.push(`In your worktree, \`origin/${pr.branch}\` at ${short(pr.head)}, \`origin/${pr.base}\` at ${short(pr.baseSha)}${pr.worktree ? `; ${WORKTREE[pr.worktree]}` : '.'}`);

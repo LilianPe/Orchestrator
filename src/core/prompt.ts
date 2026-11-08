@@ -1,7 +1,7 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { logExcerpt } from '../checks/log-excerpt.js';
-import { formatPrState, type PrState } from './pr-state.js';
+import { formatPrState, type PrRead } from './pr-state.js';
 import type { ClarifyAnswer, FeedbackItem, InputKind, VerifyFailure } from './types.js';
 
 export interface PromptIssue {
@@ -17,7 +17,7 @@ export interface PromptInput {
   branch?: string;
   prUrl?: string;
   /** A review's PR, read and brought into the worktree by the factory before the run (ORC-322). */
-  pr?: PrState;
+  pr?: PrRead;
   promptContext?: string;
   /** The answers to the `clarify` questions (ORC-210): decided by the humans, to hold the work to. */
   decisions?: readonly Pick<ClarifyAnswer, 'question' | 'answer' | 'author'>[];
