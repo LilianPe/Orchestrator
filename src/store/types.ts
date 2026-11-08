@@ -531,6 +531,8 @@ export interface Store {
   /** The deliveries kept, in the order received: what a restart writes to the inbox. */
   pendingDeliveries(): Promise<{ key: string; value: string }[]>;
   deleteDelivery(key: string): Promise<void>;
+  /** Moves a kept delivery that will not be written aside, under `delivery-aside:`: no longer pending, kept for an operator. */
+  asideDelivery(key: string): Promise<void>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;
 }

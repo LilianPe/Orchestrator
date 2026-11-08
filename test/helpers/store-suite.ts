@@ -165,6 +165,13 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.deleteDelivery('activity:b');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
     expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBe(true);
+    // Set aside: no longer pending, its value kept for an operator; the key may be kept again.
+    await s.asideDelivery('activity:a');
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"again"}' }]);
+    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"1"}');
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    await s.asideDelivery('activity:a');
+    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"new"}');
   });
 
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {

@@ -41,7 +41,7 @@ describe('the small model of messages (ORC-336)', () => {
     const notJson = (async () => ({ ok: true, status: 200, json: async () => JSON.parse('<html>') })) as unknown as typeof fetch;
     await expect(apiClassifier('k', { fetch: notJson })('x')).rejects.toThrow('unparseable answer');
     const refused = (async () => Promise.reject(new TypeError('fetch failed'))) as unknown as typeof fetch;
-    await expect(apiClassifier('k', { fetch: refused })('x')).rejects.toThrow('request failed: fetch failed');
+    await expect(apiClassifier('k', { fetch: refused })('x')).rejects.toThrow('request failed: TypeError');
     // Headers came, the body stalls: the same bound cuts it.
     const stalls = ((_u: string, init: RequestInit) =>
       Promise.resolve({ ok: true, status: 200, json: () => new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason))) })) as unknown as typeof fetch;
@@ -63,6 +63,10 @@ describe('the small model of messages (ORC-336)', () => {
     const t = Date.now();
     await expect(cli('setTimeout(() => {}, 10_000)', 200)('x')).rejects.toThrow('timed out after 200 ms');
     expect(Date.now() - t).toBeLessThan(5_000);
+  });
+
+  it.skipIf(process.platform === 'win32')('claude -p: a signal from outside is reported by its name, never with the command line', async () => {
+    await expect(cli("process.kill(process.pid, 'SIGTERM')")('the prompt')).rejects.toThrow(/^killed by SIGTERM$/);
   });
 
   it('claude -p: the bound holds even when a grandchild keeps the pipe open', async () => {

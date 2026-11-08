@@ -752,6 +752,11 @@ export class SqliteStore implements Store {
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(`delivery:${key}`);
   }
 
+  async asideDelivery(key: string): Promise<void> {
+    this.db.prepare('INSERT OR REPLACE INTO meta (key, value) SELECT ?, value FROM meta WHERE key = ?').run(`delivery-aside:${key}`, `delivery:${key}`);
+    this.db.prepare('DELETE FROM meta WHERE key = ?').run(`delivery:${key}`);
+  }
+
   async close(): Promise<void> {
     this.db.close();
   }

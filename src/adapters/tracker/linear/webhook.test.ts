@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
-import { createLinearIngest } from './ingest.js';
+import { createLinearIngest, type RetryPolicy } from './ingest.js';
 import { loadWorkflow } from '../../../config/load-workflow.js';
 import { FakeClock } from '../../../core/clock.js';
 import { unroutedReason } from '../../../core/routing.js';
@@ -556,7 +556,11 @@ describe('ingest', () => {
       await new Promise((r) => setTimeout(r, ms));
       return 'instruction' as const;
     };
-    const setup = (classify: (b: string) => Promise<'instruction' | 'question'>, o: { store?: SqliteStore; accept?: (e: FactoryEvent) => Promise<unknown>; c?: MapContext } = {}) => {
+    const fast = { baseMs: 5, maxMs: 20, horizonMs: 200 };
+    const setup = (
+      classify: (b: string) => Promise<'instruction' | 'question'>,
+      o: { store?: SqliteStore; accept?: (e: FactoryEvent) => Promise<unknown>; c?: MapContext; retry?: RetryPolicy } = {},
+    ) => {
       const accepted: string[] = [];
       const logs: string[] = [];
       const store = o.store ?? new SqliteStore(':memory:');
@@ -567,6 +571,7 @@ describe('ingest', () => {
         log: (m) => void logs.push(m),
         classify,
         deliveries: store,
+        retry: o.retry ?? fast,
       });
       const send = ({ raw, sig }: { raw: string; sig: string }) => ingest(raw, { 'linear-signature': sig });
       return { accepted, logs, send, ingest, store };
@@ -659,8 +664,8 @@ describe('ingest', () => {
       expect(await store.pendingDeliveries()).toEqual([]);
     });
 
-    it('a write that fails is tried again, the delivery kept until it is written', async () => {
-      let fails = 1;
+    it('a write that fails is tried again with backoff, the delivery kept until it is written', async () => {
+      let fails = 3;
       const events: string[] = [];
       const { send, ingest, store, logs } = setup(async () => 'instruction', {
         accept: async (e) => {
@@ -671,8 +676,100 @@ describe('ingest', () => {
       await send(reply('a1', 'corrige'));
       await ingest.settled();
       expect(events).toEqual(['linear:activity:a1']);
-      expect(logs).toEqual([expect.stringContaining('not written to the inbox (try 1 of 5): disk')]);
+      expect(logs).toEqual([1, 2, 3].map((k) => expect.stringContaining(`inbox write failed (try ${k})`)));
       expect(await store.pendingDeliveries()).toEqual([]);
+    });
+
+    it('a blip of the store on the inbox lookup or the kept row removal strands nothing', async () => {
+      const inner = new SqliteStore(':memory:');
+      let blips = 2;
+      const blip = <T>(f: () => Promise<T>) => () => (blips-- > 0 ? Promise.reject(new Error('connection reset')) : f());
+      const store = Object.assign(Object.create(inner) as SqliteStore, {
+        inboxHas: (id: string) => blip(() => inner.inboxHas(id))(),
+        deleteDelivery: (key: string) => blip(() => inner.deleteDelivery(key))(),
+      });
+      const { send, ingest, accepted, logs } = setup(async () => 'instruction', { store });
+      await send(reply('a1', 'corrige'));
+      await ingest.settled();
+      expect(accepted).toEqual(['REL-1 session.prompted']);
+      expect(logs.some((l) => l.includes('inbox lookup failed'))).toBe(true);
+      expect(await inner.pendingDeliveries()).toEqual([]);
+    });
+
+    it('past the horizon a delivery is set aside, loudly, and a redelivery of it is written', async () => {
+      let down = true;
+      const events: string[] = [];
+      const { send, ingest, store, logs } = setup(async () => 'instruction', {
+        accept: async (e) => {
+          if (down) throw new Error('disk');
+          events.push(e.id);
+        },
+      });
+      const once = reply('a1', 'corrige');
+      await send(once);
+      await ingest.settled();
+      expect(events).toEqual([]);
+      expect(logs.at(-1)).toMatch(/^ERROR: webhook activity:a1 set aside/);
+      expect(await store.pendingDeliveries()).toEqual([]);
+      expect(await store.getMeta('delivery-aside:activity:a1')).toContain('corrige');
+      // Linear sends it again: no longer kept, so taken afresh.
+      down = false;
+      await send(once);
+      await ingest.settled();
+      expect(events).toEqual(['linear:activity:a1']);
+    });
+
+    it('a redelivery of a row still kept but not being delivered delivers it again, timed at its first arrival', async () => {
+      const store = new SqliteStore(':memory:');
+      const { raw } = reply('a1', 'corrige');
+      await store.receiveDelivery('activity:a1', JSON.stringify({ raw, at: 4000 }));
+      const events: FactoryEvent[] = [];
+      const { send, ingest } = setup(async () => 'question', { store, accept: async (e) => void events.push(e) });
+      expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
+      await ingest.settled();
+      expect(events).toMatchObject([{ id: 'linear:activity:a1', at: 4000, payload: { kind: 'question' } }]);
+    });
+
+    it('resume sets an unreadable row aside and goes on with the others', async () => {
+      const store = new SqliteStore(':memory:');
+      await store.receiveDelivery('bad', '{not json');
+      await store.receiveDelivery('activity:a1', JSON.stringify({ raw: reply('a1', 'corrige').raw, at: 5000 }));
+      const { ingest, accepted, logs } = setup(async () => 'instruction', { store });
+      expect(await ingest.resume()).toBe(2);
+      await ingest.settled();
+      expect(accepted).toEqual(['REL-1 session.prompted']);
+      expect(logs).toEqual([expect.stringMatching(/^ERROR: webhook bad set aside.*unreadable/)]);
+      expect(await store.pendingDeliveries()).toEqual([]);
+      expect(await store.getMeta('delivery-aside:bad')).toBe('{not json');
+    });
+
+    it('resumed deliveries wait for a slot instead of taking the fallback rule', async () => {
+      const store = new SqliteStore(':memory:');
+      for (const k of [1, 2, 3, 4, 5, 6]) {
+        await store.receiveDelivery(`activity:a${k}`, JSON.stringify({ raw: reply(`a${k}`, `message ${k} ?`, { id: `u${k}`, identifier: `REL-${k}` }).raw, at: 5000 }));
+      }
+      const asked: string[] = [];
+      const kinds: unknown[] = [];
+      const { ingest } = setup(slow(50, asked), { store, accept: async (e) => void kinds.push((e.payload as { kind?: string }).kind) });
+      await ingest.resume();
+      await ingest.settled();
+      expect(asked).toHaveLength(6);
+      expect(kinds).toEqual(Array(6).fill('instruction'));
+    });
+
+    it('once closed, a webhook gets 503 and the retries stop short, what is not written left kept', async () => {
+      const { send, ingest, store } = setup(async () => 'instruction', {
+        accept: async () => Promise.reject(new Error('disk')),
+        retry: { baseMs: 10_000, maxMs: 10_000, horizonMs: 3_600_000 },
+      });
+      await send(reply('a1', 'corrige'));
+      await new Promise((r) => setTimeout(r, 50));
+      ingest.close();
+      const t = Date.now();
+      await ingest.settled();
+      expect(Date.now() - t).toBeLessThan(1_000);
+      expect(await store.pendingDeliveries()).toHaveLength(1);
+      expect(await send(reply('a2', 'trop tard'))).toEqual({ status: 503 });
     });
 
     it("takes the event's time at the webhook's arrival, before the model's wait", async () => {

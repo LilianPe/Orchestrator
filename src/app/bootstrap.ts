@@ -379,6 +379,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         : undefined,
     });
 
+    // Webhooks answered before a stop and not written to the inbox yet (ORC-336), set on their way before any new one
+    // is taken: a new webhook of their issue goes behind them. A failure leaves them kept, for the next start.
+    await ingest.resume().then(
+      (n) => n && log(`webhooks: ${n} answered before the stop, written now`),
+      (e: unknown) => log(`webhooks kept before the stop not read: ${(e as Error).message}`),
+    );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
@@ -392,8 +398,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       clearInterval(tickInterval);
       clearInterval(beatInterval);
       clearInterval(purgeInterval);
+      // No webhook taken from here on (503, Linear sends it again), then those answered are written or left kept for
+      // the next start, before anything closes the store (ORC-336).
+      ingest.close();
       relay?.close();
-      // The webhooks answered and not written yet: what is cut stays kept, written at the next start (ORC-336).
       await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
@@ -444,11 +452,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       if (!isUsableWebhookSecret(githubSecret)) poller.start();
       if (await connectLinear()) void reconciler.once();
       else log(`Linear not connected: open ${baseUrl}/oauth/start`);
-      // Webhooks answered before a stop and not written to the inbox yet (ORC-336).
-      ingest.resume().then(
-        (n) => n && log(`webhooks: ${n} answered before the stop, written now`),
-        (e: unknown) => log(`webhooks kept before the stop: ${(e as Error).message}`),
-      );
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
       // every second, for what another process wrote and for leases that expired.

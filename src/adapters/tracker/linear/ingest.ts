@@ -1,15 +1,20 @@
 import type { FactoryEvent } from '../../../core/types.js';
+import type { Store } from '../../../store/types.js';
 import type { MessageClassifier } from '../../runner/message-classifier.js';
 import { serial, type Serial } from './labels.js';
 import { deliveryKey, isFresh, issueKeyOf, mapLinearWebhook, mayCarryMessage, messageToClassify, recordIssueLabels, verifyLinearSignature, withVerdict, type MapContext } from './webhook.js';
 
 /** What the store keeps of a delivery answered before the inbox (ORC-336). */
-export interface DeliveryStore {
-  receiveDelivery(key: string, value: string): Promise<boolean>;
-  pendingDeliveries(): Promise<{ key: string; value: string }[]>;
-  deleteDelivery(key: string): Promise<void>;
-  inboxHas(id: string): Promise<boolean>;
+export type DeliveryStore = Pick<Store, 'receiveDelivery' | 'pendingDeliveries' | 'deleteDelivery' | 'asideDelivery' | 'inboxHas'>;
+
+/** How a kept delivery is tried again: from `baseMs`, doubling up to `maxMs`, until `horizonMs` after its first try. */
+export interface RetryPolicy {
+  baseMs: number;
+  maxMs: number;
+  horizonMs: number;
 }
+
+export const DELIVERY_RETRY: RetryPolicy = { baseMs: 1_000, maxMs: 5 * 60_000, horizonMs: 60 * 60_000 };
 
 export interface IngestDeps {
   secret: () => string;
@@ -26,19 +31,24 @@ export interface IngestDeps {
   classify?: MessageClassifier;
   /** Where a delivery answered before the inbox is kept until written (ORC-336); required with `classify`. */
   deliveries?: DeliveryStore;
+  retry?: RetryPolicy;
 }
 
-/** At most this many classifications at once: past it, a message gets the fallback rule at once, no process queued. */
+/** At most this many classifications at once: past it, a live message gets the fallback rule at once, no process queued. */
 export const MAX_CLASSIFICATIONS = 4;
 /** A classifier failure is logged once per reason in this window, so a model that never answers shows without flooding. */
 const FAILURE_LOG_MS = 10 * 60_000;
-/** Tries of a delivery whose write fails; past them it stays kept, for the next start. */
-const WRITE_TRIES = 5;
-const WRITE_RETRY_MS = 1_000;
 
 interface Delivery {
   raw: string;
   at: number;
+}
+
+/** A kept row that cannot be read back: moved aside, never tried again. */
+function readDelivery(value: string): { delivery: Delivery; body: any } {
+  const delivery = JSON.parse(value) as Delivery;
+  if (typeof delivery?.raw !== 'string' || typeof delivery.at !== 'number') throw new Error('not a kept delivery');
+  return { delivery, body: JSON.parse(delivery.raw) };
 }
 
 /**
@@ -46,8 +56,13 @@ interface Delivery {
  * 200 means written (or already there), 500 that nothing may have been, and Linear sends it again. A webhook that may
  * carry one (ORC-336) is answered as soon as it is kept in the store, and classified and written after: Linear's
  * answer never waits on the model. A restart writes what was kept and not written (`resume`).
+ *
+ * ponytail: one daemon delivers the kept rows. Two daemons on one Postgres could both deliver a row (the meta rows
+ * have no lease); the inbox keeps each event once by its id, so the cost is a second model call, never a second
+ * event. A claim with an owner goes with ORC-129's leases if several daemons ever share a database.
  */
 export function createLinearIngest(d: IngestDeps) {
+  const retry = d.retry ?? DELIVERY_RETRY;
   // Webhooks are mapped and written one at a time, in arrival order: the echo lookup awaits the
   // store, and a later webhook of the same ticket must not reach the inbox first.
   const inTurn = d.serial ?? serial();
@@ -55,8 +70,15 @@ export function createLinearIngest(d: IngestDeps) {
   // messages are classified side by side; those of other issues wait for none of it.
   const mapped = new Map<string, Promise<unknown>>();
   const written = new Map<string, Promise<unknown>>();
+  // The kept deliveries this process is delivering: a redelivery of one of them changes nothing.
+  const active = new Set<string>();
   const failures = new Map<string, number>();
   let classifying = 0;
+  // Resumed deliveries wait for a slot rather than take the fallback rule: at most as many as rows kept.
+  const waiting: (() => void)[] = [];
+  let closed = false;
+  // The retries waiting: `close` cuts them short.
+  const sleepers = new Set<() => void>();
 
   const failed = (reason: string): undefined => {
     const now = Date.now();
@@ -75,29 +97,57 @@ export function createLinearIngest(d: IngestDeps) {
   };
   const after = (p: Promise<unknown> | undefined) => (p ?? Promise.resolve()).catch(() => undefined);
 
-  /** `work` tried again on failure, `WRITE_TRIES` times in all; past them, the delivery stays kept for the next start. */
-  async function tried<T>(key: string, work: () => Promise<T>): Promise<T> {
+  /** Waits `ms`, or less when the ingest closes. */
+  const pause = (ms: number) =>
+    new Promise<void>((r) => {
+      const done = () => {
+        clearTimeout(t);
+        sleepers.delete(done);
+        r();
+      };
+      const t = setTimeout(done, ms);
+      sleepers.add(done);
+    });
+
+  /**
+   * `work` tried again with backoff until the horizon from `since` (the delivery's first try): a blip in Linear or the
+   * store strands nothing. Past it, or once the ingest closes, it throws: the caller moves the row aside, or leaves it
+   * kept for the next start.
+   */
+  async function tried<T>(key: string, since: number, what: string, work: () => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
         return await work();
       } catch (err) {
-        d.log(`webhook ${key} not written to the inbox (try ${attempt} of ${WRITE_TRIES}): ${(err as Error).message}`);
-        if (attempt >= WRITE_TRIES) throw err;
-        await new Promise((r) => setTimeout(r, WRITE_RETRY_MS * 2 ** (attempt - 1)));
+        const delay = Math.min(retry.baseMs * 2 ** (attempt - 1), retry.maxMs);
+        if (closed || Date.now() + delay - since > retry.horizonMs) throw err;
+        d.log(`webhook ${key}: ${what} failed (try ${attempt}), tried again in ${Math.round(delay / 1000)} s: ${(err as Error).message}`);
+        await pause(delay);
       }
     }
   }
 
-  /** The model's verdict on an event's message, if it has one, the inbox does not hold it yet, and a slot is free. */
-  async function classified(e: FactoryEvent): Promise<FactoryEvent> {
-    const text = messageToClassify(e);
-    if (text === undefined || !d.classify || (await d.deliveries?.inboxHas(e.id))) return e;
-    if (classifying >= MAX_CLASSIFICATIONS) return failed(`${MAX_CLASSIFICATIONS} classifications already running`) ?? e;
+  async function slot(wait: boolean): Promise<boolean> {
+    if (classifying < MAX_CLASSIFICATIONS) return (classifying++, true);
+    if (!wait) return false;
+    await new Promise<void>((r) => waiting.push(r));
     classifying++;
+    return true;
+  }
+  const release = () => {
+    classifying--;
+    waiting.shift()?.();
+  };
+
+  /** The model's verdict on an event's message, if it has one and the inbox does not hold it yet. */
+  async function classified(e: FactoryEvent, key: string, since: number, resumed: boolean): Promise<FactoryEvent> {
+    const text = messageToClassify(e);
+    if (text === undefined || !d.classify || (await tried(key, since, 'inbox lookup', () => d.deliveries!.inboxHas(e.id)))) return e;
+    if (!(await slot(resumed))) return failed(`${MAX_CLASSIFICATIONS} classifications already running`) ?? e;
     try {
       return withVerdict(e, await d.classify(text).catch((err: Error) => failed(err.message)));
     } finally {
-      classifying--;
+      release();
     }
   }
 
@@ -107,27 +157,41 @@ export function createLinearIngest(d: IngestDeps) {
     await recordIssueLabels(body, d.ctx).catch((err: Error) => d.log(`labels not recorded: ${err.message}`));
   }
 
+  /** Moves a row that will not be written aside: logged, kept for an operator, no longer tried at each start. */
+  async function aside(key: string, why: string): Promise<void> {
+    d.log(`ERROR: webhook ${key} set aside, not written to the inbox (${why}): its row stays under delivery-aside:${key}`);
+    await d.deliveries!.asideDelivery(key).catch((err: Error) => d.log(`ERROR: webhook ${key} not set aside: ${err.message}`));
+  }
+
   /**
    * A kept delivery: mapped in the turn after the issue's earlier maps, classified out of any turn, written in the turn
    * after the issue's earlier writes, then let go. A webhook with no message waits for the earlier writes before it is
    * mapped, as when it is written before its answer: what it reads (labels known, echoes) is theirs.
    */
-  function deliver(key: string, { raw, at }: Delivery): Promise<void> {
-    const body = JSON.parse(raw);
+  function deliver(key: string, { delivery: { at }, body }: { delivery: Delivery; body: any }, resumed = false): Promise<void> {
     const issue = issueKeyOf(body) ?? '';
     const message = mayCarryMessage(body);
-    const map = after(message ? mapped.get(issue) : written.get(issue)).then(() => tried(key, () => inTurn(() => mapLinearWebhook(body, key, d.ctx, { at }))));
-    const events = map.then((list) => Promise.all(list.map(classified)));
+    const since = Date.now();
+    active.add(key);
+    const map = after(message ? mapped.get(issue) : written.get(issue)).then(() => tried(key, since, 'mapping', () => inTurn(() => mapLinearWebhook(body, key, d.ctx, { at }))));
+    const events = map.then((list) => Promise.all(list.map((e) => classified(e, key, since, resumed))));
     const done = Promise.all([events, after(written.get(issue))]).then(async ([list]) => {
-      await tried(key, () => inTurn(() => write(body, list)));
-      await d.deliveries!.deleteDelivery(key);
+      await tried(key, since, 'inbox write', () => inTurn(() => write(body, list)));
+      await tried(key, since, 'kept row removal', () => d.deliveries!.deleteDelivery(key));
     });
     settle(mapped, issue, message ? map : done);
     settle(written, issue, done);
-    return done.catch(() => undefined);
+    return done
+      .catch(async (err: Error) => {
+        // Closing: left kept, the next start writes it.
+        if (!closed) await aside(key, `retried for ${Math.round(retry.horizonMs / 60_000)} min: ${err.message}`);
+      })
+      .finally(() => active.delete(key));
   }
 
   const ingest = async (raw: string, headers: Record<string, string | undefined>): Promise<{ status: number }> => {
+    // Stopping: Linear sends it again, to the next start.
+    if (closed) return { status: 503 };
     if (!verifyLinearSignature(raw, headers['linear-signature'], d.secret())) return { status: 401 };
     let body: any;
     try {
@@ -144,8 +208,13 @@ export function createLinearIngest(d: IngestDeps) {
     // such a webhook goes the same way, so that the answer never waits on the model.
     if (d.classify && d.deliveries && (mayCarryMessage(body) || written.has(issue))) {
       try {
-        // Kept already: answered, written once by the first.
-        if (await d.deliveries.receiveDelivery(key, JSON.stringify({ raw, at } satisfies Delivery))) void deliver(key, { raw, at });
+        if (await d.deliveries.receiveDelivery(key, JSON.stringify({ raw, at } satisfies Delivery))) void deliver(key, { delivery: { raw, at }, body });
+        // Kept already and no longer being delivered here (a write that failed until it gave up): delivered again,
+        // timed at its first arrival.
+        else if (!active.has(key)) {
+          const kept = (await d.deliveries.pendingDeliveries()).find((r) => r.key === key);
+          if (kept) void deliver(key, readDelivery(kept.value));
+        }
       } catch (err) {
         d.log(`webhook not kept: ${(err as Error).message}`);
         return { status: 500 };
@@ -165,15 +234,32 @@ export function createLinearIngest(d: IngestDeps) {
   };
 
   return Object.assign(ingest, {
-    /** At start: writes the deliveries kept and not written before a stop, in the order received. */
+    /**
+     * At start, before webhooks are taken: sets the deliveries kept and not written before a stop on their way, in
+     * the order received, so that a new webhook of their issue goes behind them. A row that cannot be read is set aside.
+     */
     async resume(): Promise<number> {
       const kept = (await d.deliveries?.pendingDeliveries()) ?? [];
-      for (const { key, value } of kept) void deliver(key, JSON.parse(value) as Delivery);
+      for (const { key, value } of kept) {
+        let row: { delivery: Delivery; body: any };
+        try {
+          row = readDelivery(value);
+        } catch (err) {
+          await aside(key, `unreadable: ${(err as Error).message}`);
+          continue;
+        }
+        void deliver(key, row, true);
+      }
       return kept.length;
     },
-    /** Resolves once every webhook taken so far is written, or given up: for tests and a clean stop. */
+    /** Resolves once every webhook taken so far is written, given up, or left kept by `close`. */
     async settled(): Promise<void> {
       while (written.size) await Promise.allSettled([...written.values()]);
+    },
+    /** Stops taking webhooks (503: Linear sends them again) and cuts the retries short: what is not written stays kept. */
+    close(): void {
+      closed = true;
+      for (const done of [...sleepers]) done();
     },
   });
 }

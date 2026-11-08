@@ -1256,6 +1256,14 @@ export class PgStore implements AsyncStore {
     await this.db.execute(sql`delete from workflow_versions where id = ${metaId(`delivery:${key}`)}`);
   }
 
+  async asideDelivery(key: string): Promise<void> {
+    const aside = metaId(`delivery-aside:${key}`);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`delete from workflow_versions where id = ${aside}`);
+      await tx.execute(sql`update workflow_versions set id = ${aside} where id = ${metaId(`delivery:${key}`)}`);
+    });
+  }
+
   async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end();
   }

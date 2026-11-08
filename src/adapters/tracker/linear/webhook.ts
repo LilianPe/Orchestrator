@@ -246,7 +246,7 @@ async function routeInTeam(body: any, identifier: string, team: string[], ctx: M
   return opener ? { projectId: opener.projectId } : route;
 }
 
-export function issueIdentifier(body: any): string | undefined {
+function issueIdentifier(body: any): string | undefined {
   if (body?.type === 'AgentSessionEvent') return body.agentSession?.issue?.identifier;
   if (body?.type === 'Issue') return body.data?.identifier ?? (body.data?.team?.key ? `${body.data.team.key}-${body.data.number}` : undefined);
   if (body?.type === 'Comment') return body.data?.issue?.identifier;

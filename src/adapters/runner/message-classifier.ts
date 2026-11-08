@@ -64,7 +64,8 @@ export function apiClassifier(apiKey: string, o: { fetch?: typeof fetch; timeout
       if (e.name === 'TimeoutError' || e.name === 'AbortError') throw new Error(`timed out after ${timeoutMs} ms`, { cause: err });
       if (e instanceof SyntaxError) throw new Error('unparseable answer', { cause: err });
       if (/^(HTTP \d+|unparseable answer)$/.test(e.message)) throw e;
-      throw new Error(`request failed: ${e.message}`, { cause: err });
+      // A fixed reason, the cause's code when it has one: so that the log's deduplication holds.
+      throw new Error(`request failed: ${(e.cause as { code?: string } | undefined)?.code ?? e.name}`, { cause: err });
     }
   };
 }
@@ -93,7 +94,11 @@ export function cliClassifier(o: { command?: string[]; env: NodeJS.ProcessEnv; c
         if (err) {
           const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
           if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new Error('output too large'));
-          return reject(new Error(e.killed ? `timed out after ${timeoutMs} ms` : typeof e.code === 'number' ? `exit ${e.code}` : `spawn failed: ${e.code ?? e.message}`));
+          // Short, fixed reasons: never execFile's message, which carries the command line and so the prompt.
+          if (e.killed) return reject(new Error(`timed out after ${timeoutMs} ms`));
+          const signal = (err as { signal?: string | null }).signal;
+          if (signal) return reject(new Error(`killed by ${signal}`));
+          return reject(new Error(typeof e.code === 'number' ? `exit ${e.code}` : `spawn failed: ${e.code ?? 'unknown'}`));
         }
         try {
           const r = JSON.parse(stdout) as { is_error?: boolean; result?: unknown };

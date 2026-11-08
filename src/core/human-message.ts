@@ -8,7 +8,7 @@ const STATUS_COMMAND = '/status';
 export const commandOf = (body: string): string | undefined => body.trim().toLowerCase().split(/\s+/, 1)[0];
 
 /** `/stop` and `/status`, read by the first word, answered by the factory itself: they never reach a model. */
-export const isCommand = (body: string): boolean => {
+const isCommand = (body: string): boolean => {
   const first = commandOf(body);
   return first === STOP_COMMAND || first === STATUS_COMMAND;
 };
