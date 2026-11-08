@@ -1,5 +1,7 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
+import { isRecord } from '../graphql-pages.js';
+import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, type Forge, type PrInfo } from './types.js';
 
@@ -39,17 +41,21 @@ export const excerpt = (out: string) => {
   return JSON.stringify(head) + more;
 };
 
+/** The JSON in `out`, `undefined` when it is none. */
+function parseJson(out: string): unknown {
+  try {
+    return JSON.parse(out);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The checks `gh pr checks --json name,bucket` lists. Output that is not such a list throws, never reads as
  * `none`, a PR without CI, for which the PR poller sends no checks event (ORC-305). It logs the error and retries.
  */
 function parseChecks(args: string[], r: ExecResult): Check[] {
-  let list: unknown;
-  try {
-    list = JSON.parse(r.stdout);
-  } catch {
-    list = undefined;
-  }
+  const list = parseJson(r.stdout);
   if (Array.isArray(list) && list.every(isCheck)) return list;
   const stderr = cut(r.stderr.trim());
   const exit = r.code === 0 && !stderr.head ? '' : ` (exit ${r.code}${stderr.head && `: ${stderr.head}${stderr.more}`})`;
@@ -64,10 +70,6 @@ export function toRepoPermission(dto: { permission?: string; role_name?: string 
   const known = (v: string | undefined) => REPO_PERMISSIONS.find((p) => p === v);
   return known(dto?.role_name) ?? known(dto?.permission) ?? 'none';
 }
-
-const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes {
-    isResolved comments(first: 1) { nodes { author { login } body createdAt path line } } } } } } }`;
 
 export class GhCliForge implements Forge, RepoPermissions {
   constructor(private exec: Exec = execCmd) {}
@@ -133,26 +135,16 @@ export class GhCliForge implements Forge, RepoPermissions {
       owner: { login: string };
       name: string;
     };
-    const out = await mustExec(
-      this.exec,
-      'gh',
-      ['api', 'graphql', '-f', `query=${THREADS_QUERY}`, '-F', `owner=${repo.owner.login}`, '-F', `name=${repo.name}`, '-F', `number=${prNumber}`],
-      { cwd: repoPath },
-    );
-    const nodes = (JSON.parse(out) as any).data.repository.pullRequest.reviewThreads.nodes as {
-      isResolved: boolean;
-      comments: { nodes: { author: { login: string } | null; body: string; createdAt: string; path: string; line: number | null }[] };
-    }[];
-    return nodes
-      .filter((t) => !t.isResolved && t.comments.nodes[0])
-      .map((t) => {
-        const c = t.comments.nodes[0]!;
-        return {
-          author: c.author?.login ?? 'inconnu',
-          body: `${c.path}${c.line ? `:${c.line}` : ''} — ${c.body}`,
-          at: Date.parse(c.createdAt),
-          source: 'review' as const,
-        };
-      });
+    // Every page of threads and of their comments (ORC-347). A cursor or a name goes as a string (`-f`): `-F` would
+    // turn `null`, `true` or digits into JSON. GraphQL errors make gh exit non-zero.
+    const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
+      const fields = Object.entries(variables).flatMap(([k, v]) => (v === null ? [] : [typeof v === 'number' ? '-F' : '-f', `${k}=${String(v)}`]));
+      const out = await mustExec(this.exec, 'gh', ['api', 'graphql', '-f', `query=${query}`, ...fields], { cwd: repoPath });
+      const answer = parseJson(out);
+      const data = isRecord(answer) ? answer.data : undefined;
+      if (!isData(data)) throw new Error(`gh api graphql: unreadable output, not ${what}: ${excerpt(out)}`);
+      return data;
+    };
+    return unresolvedReviewFeedback(gql, repo.owner.login, repo.name, prNumber);
   }
 }

@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { REFREEZE } from '../../src/checks/freeze.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
 import type { Role } from '../../src/core/authz.js';
+import type { Effect } from '../../src/core/decision.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
+  higherRisk,
   newTicketState,
   TRUSTED,
   type EventPayloads,
@@ -49,8 +51,11 @@ const delegated = (logical: 'todo' | 'dev' = 'todo') => [
   sh({ type: 'session.linked', linearSessionId: DEV_SESSION }),
 ];
 const pr = { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' };
-const runStarted = () => sh({ type: 'run.started', runId: 'r1', job: 'dev', queue: 'dev', claudeSessionId: 'claude-1' });
-const runFinished = (outcome: 'success' | 'failure') => ext('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 0.5, turns: 3, lastText: 'fini' });
+const runStarted = (job = 'dev', runId = 'r1') => sh({ type: 'run.started', runId, job, queue: 'dev', claudeSessionId: 'claude-1' });
+const runFinished = (outcome: 'success' | 'failure', job = 'dev', runId = 'r1') => ext('run.finished', { runId, job, outcome, costUsd: 0.5, turns: 3, lastText: 'fini' });
+const verifyFailed = (job = 'dev', runId = 'r1') => ext('verify.failed', { runId, job, failures: VERIFY_FAILURES });
+/** A run of `job` that ends, then its verification fails. */
+const failedAttempt = (job: string, runId: string) => [runStarted(job, runId), runFinished('success', job, runId), verifyFailed(job, runId)];
 const reply = (taint: 'trusted' | 'untrusted' = 'trusted') => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }, taint);
 
 /** Every property gets the same generator; `examples` are tried first, before the random sequences. */
@@ -73,6 +78,23 @@ const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
 /** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
 const starts = (step: Step) => stepEffects(step).filter((e) => e.kind === 'start_run');
+
+/**
+ * I5 on one loop: between two resets of its `counter`, the runner gets at most `bound - 1` of its relaunches, counted as it
+ * gets them (`launches`, ORC-360: a relaunch kept pending counts once, when it starts, by a decision or by `settle`); and the
+ * `failure` that reaches the bound is decided with no relaunch and a block.
+ */
+function loopBounded(r: Run, counter: 'verifyAttempts' | 'redAttempts', bound: number, relaunch: (e: Effect) => boolean, failure: (e: FactoryEvent) => boolean): void {
+  let relaunches = 0;
+  for (const step of r.steps) {
+    if (step.kind === 'decided' && step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch[counter] === 0)) relaunches = 0;
+    relaunches += launches(step).filter(relaunch).length;
+    expect(relaunches).toBeLessThanOrEqual(bound - 1);
+    if (step.kind !== 'decided' || !failure(step.event) || isFenced(step.decision) || (step.before?.[counter] ?? 0) + 1 < bound) continue;
+    expect(step.decision.effects.filter(relaunch)).toEqual([]);
+    expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
+  }
+}
 
 describe('decide — properties over generated sequences (ORC-173)', () => {
   it(
@@ -241,7 +263,30 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     it.todo('I3 on the writes: no write effect targets a frozen file (the agent writes in its sandbox; checked by factory/tests-gelés, ORC-151)');
   });
-  it.todo('I4 — the risk of a run never goes down (no risk in the state yet: recorded by intake, ORC-206)');
+  describe('I4 — the risk of a run never goes down', () => {
+    // intake assesses a high risk, then a later intake proposes a low one.
+    const assessedRisk = (id: string, risk: 'low' | 'high') => [
+      sh({ type: 'run.started', runId: id, job: 'intake', queue: 'dev', claudeSessionId: `claude-${id}` }),
+      ext('run.finished', {
+        runId: id, job: 'intake', outcome: 'success', costUsd: 0.1, turns: 3, lastText: 'lu', attempt: 'succeeded',
+        output: { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], intake: { size: 'm', risk, complete: true, missing: [], screen: false } },
+      }),
+    ];
+    const lowered = seq(...delegated(), ...assessedRisk('r1', 'high'), ...assessedRisk('r2', 'low'));
+    it(
+      'once assessed, the risk stays and never goes below what it was; the visual proof, once required, stays required',
+      () => {
+        holds((s) => {
+          for (const step of run(s).steps) {
+            const before = step.before?.risk;
+            if (before) expect(step.after?.risk && higherRisk(before, step.after.risk)).toBe(step.after?.risk);
+            if (step.before?.visualProof) expect(step.after?.visualProof).toBe('required');
+          }
+        }, [lowered]);
+      },
+      TIMEOUT,
+    );
+  });
 
   describe('I5 — every loop has a bounded counter, red CI included', () => {
     it(
@@ -249,28 +294,60 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       () => {
         // Today the bound counts attempts (verify_attempts), the target counts relaunches (ORC-138, point 8):
         // N + 1 attempts here is the target's bound N, until ORC-187 converts the unit.
+        // Counted as the runner gets them (`loopBounded`): a decision that starts a pending job hands over the start an earlier one made.
+        // The relaunch of fix-ci its verify.failed decides waits behind the tests run, which dev's start keeps there.
+        const pendingRelaunch = [
+          ...delegated(),
+          runStarted('fix-ci'),
+          runFinished('success', 'fix-ci'),
+          runStarted('tests'),
+          verifyFailed('fix-ci'),
+          runFinished('success', 'tests'),
+          verifyFailed('tests'),
+        ];
+        // Found by fast-check (ORC-360): the red-CI bound then blocks fix-ci, and a debounce took that block for a pending job
+        // no settle could start: it lifted the block and started the relaunch, in place of its own job.
+        const redCiOnPending = seq(
+          ...pendingRelaunch,
+          ext('status.changed', { from: 'dev', to: 'human_review' }),
+          ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
+          ext('timer.fired', DEBOUNCE),
+        );
+        // ORC-339's own path: the settle dies, the ticket is blocked on the pending relaunch, the debounce starts it, once.
+        const stuckSettle = seq(
+          ...pendingRelaunch,
+          ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
+          ext('timer.fired', DEBOUNCE),
+        );
+        // Found by the count of launches (ORC-360): a relaunch kept pending outlived the green check that started the loop over;
+        // settle then started it, on failures gone, and the new loop still had all its relaunches (attempts 3).
+        const pendingPastGreen = seq(
+          ...delegated(),
+          runStarted(),
+          runFinished('success'),
+          runStarted(),
+          verifyFailed(),
+          runFinished('success'),
+          verifyFailed(),
+          runStarted('dev', 'r2'),
+          runFinished('success', 'dev', 'r2'),
+          ext('verify.passed', { runId: 'r2', job: 'dev' }),
+          ...failedAttempt('dev', 'r3'),
+          ...failedAttempt('dev', 'r4'),
+        );
         fc.assert(
           fc.property(sequences, fc.integer({ min: 1, max: 3 }), (s, attempts) => {
             const w = workflow(attempts);
-            const r = fold(s.withDuplicates, w);
-            let relaunches = 0;
-            for (const step of decided(r)) {
-              const reset = step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.verifyAttempts === 0);
-              if (reset) relaunches = 0;
-              // The red check's returns have their own counter: the next property.
-              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.input === 'verify_failures' && !w.jobs[e.job]?.red);
-              relaunches += resumed.length;
-              expect(relaunches).toBeLessThanOrEqual(attempts - 1);
-              if (step.event.type === 'verify.failed' && !isFenced(step.decision) && !w.jobs[step.event.payload.job]?.red) {
-                const used = step.before?.verifyAttempts ?? 0;
-                if (used + 1 >= attempts) {
-                  expect(resumed).toEqual([]);
-                  expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
-                }
-              }
-            }
+            // The red check's returns have their own counter: the next property.
+            loopBounded(
+              fold(s.withDuplicates, w),
+              'verifyAttempts',
+              attempts,
+              (e) => e.kind === 'start_run' && e.input === 'verify_failures' && !w.jobs[e.job]?.red,
+              (e) => e.type === 'verify.failed' && !w.jobs[e.payload.job]?.red,
+            );
           }),
-          params<[Sequences, number]>(),
+          params<[Sequences, number]>([[redCiOnPending, 2], [stuckSettle, 2], [pendingPastGreen, 3]]),
         );
       },
       TIMEOUT,
@@ -285,17 +362,13 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         const bound = tests.red!.attempts;
         fc.assert(
           fc.property(sequences, (s) => {
-            let relaunches = 0;
-            for (const step of decided(fold(s.withDuplicates, w))) {
-              if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.redAttempts === 0)) relaunches = 0;
-              const resumed = step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === 'tests' && e.input === 'verify_failures');
-              relaunches += resumed.length;
-              expect(relaunches).toBeLessThanOrEqual(bound - 1);
-              if (step.event.type === 'verify.failed' && step.event.payload.job === 'tests' && !isFenced(step.decision) && (step.before?.redAttempts ?? 0) + 1 >= bound) {
-                expect(resumed).toEqual([]);
-                expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
-              }
-            }
+            loopBounded(
+              fold(s.withDuplicates, w),
+              'redAttempts',
+              bound,
+              (e) => e.kind === 'start_run' && e.job === 'tests' && e.input === 'verify_failures',
+              (e) => e.type === 'verify.failed' && e.payload.job === 'tests',
+            );
           }),
           params<[Sequences]>(),
         );

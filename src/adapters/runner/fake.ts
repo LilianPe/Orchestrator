@@ -20,6 +20,8 @@ export interface FakeScript {
   usageLimit?: { resetAt?: number };
   /** `false`: this build never calls `submit_result`. */
   submit?: false;
+  /** What this run hands to `submit_result`, whatever its step (the `intake` assessment, ORC-206), in place of a build's default. */
+  output?: AgentOutput;
 }
 
 interface LiveRun {
@@ -75,8 +77,8 @@ export class FakeRunner implements Runner {
       releaseHold();
     };
     const lastText = [...events].reverse().find((e): e is Extract<RunStreamEvent, { kind: 'text' }> => e.kind === 'text')?.text ?? '';
-    const output: AgentOutput = { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
-    const submitted = this.submit && s.submit !== false && req.prompt.startsWith('/factory:dev\n') ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
+    const output: AgentOutput = s.output ?? { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    const submitted = this.submit && s.submit !== false && (s.output || req.prompt.startsWith('/factory:dev\n')) ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
     const done: Promise<RunResult> = Promise.all([held, submitted]).then(() => {
       ch.close();
       this.live.delete(req.runId);

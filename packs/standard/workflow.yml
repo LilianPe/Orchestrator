@@ -43,6 +43,18 @@ on:
   pr.merged:
     - { move: done, do: cleanup, run: learn }
 jobs:
+  # The `intake` step of factory/default (ORC-206): reads the ticket and the code, returns size, risk, completeness and
+  # screen through `submit_result`. Its end is the guard before In Progress: a complete ticket starts `dev`, an
+  # incomplete one is blocked with its questions. Off until a rule runs it (`ticket.delegated: run: intake`).
+  intake:
+    step: intake
+    queue: dev
+    model: sonnet
+    workspace: worktree
+    session: new
+    skill: "factory:intake"
+    structured_output: true
+    on_success: { run: dev }
   dev:
     # The agent step of factory/default this job runs: its effort, its ceiling of turns (ORC-136).
     step: build

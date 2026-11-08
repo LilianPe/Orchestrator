@@ -5,13 +5,16 @@ export type FetchLike = (
 
 export interface LinearGqlError {
   message: string;
-  extensions?: { userPresentableMessage?: string };
+  /** `code`: `RATELIMITED` for Linear's rate limit, which it answers with a 400 (ORC-343). */
+  extensions?: { userPresentableMessage?: string; code?: string };
 }
 
+/** A refusal of Linear's API: its GraphQL errors, and the HTTP status it came with (`isTransient` reads both, ORC-343). */
 export class LinearApiError extends Error {
   constructor(
     message: string,
     readonly errors: LinearGqlError[] = [],
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -30,9 +33,13 @@ export class LinearApi {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${await this.getToken()}` },
       body: JSON.stringify({ query, variables }),
     });
-    const json = (await res.json()) as { data?: T; errors?: LinearGqlError[] };
-    if (json.errors?.length) throw new LinearApiError(json.errors.map((e) => e.message).join('; '), json.errors);
-    if (!res.ok) throw new LinearApiError(`HTTP ${res.status}`);
+    // A 502 from a proxy in front of Linear has an HTML body: its status still tells what failed.
+    const json = (await res.json().catch((err: unknown) => {
+      if (res.ok) throw err;
+      return {};
+    })) as { data?: T; errors?: LinearGqlError[] };
+    if (json.errors?.length) throw new LinearApiError(json.errors.map((e) => e.message).join('; '), json.errors, res.status);
+    if (!res.ok) throw new LinearApiError(`HTTP ${res.status}`, [], res.status);
     return json.data as T;
   }
 }

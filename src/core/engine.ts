@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, STOPPED } from './block-cause.js';
+import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { BEFORE_ORC_331 } from './legacy-messages.js';
@@ -13,7 +13,7 @@ import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
-import type { EventPayloads, EventType, FactoryEvent, FeedbackItem, InputKind, MessageKind, PendingJob, RunOutcome, Taint, TicketState, VerifyFailure } from './types.js';
+import { higherRisk, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -107,6 +107,32 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 }
 
 /**
+ * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. The risk never goes down
+ * (I4) and the visual proof only hardens to `required`. A ticket not complete enough, by intake's judgement or by the
+ * deterministic checks of its launch, does not start. Until `clarify` asks its questions (ORC-210), it is blocked on
+ * intake with them: a reply relaunches intake, which reads the ticket again, and nothing moves to In Progress meanwhile.
+ */
+function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
+  const a = p.output?.intake;
+  if (!a) {
+    const reason = NO_ASSESSMENT;
+    return block(out, at.workflow, { reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
+  }
+  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
+  const checks = p.pickup ?? [];
+  const gaps = [...checks, ...(a.complete ? [] : a.missing)];
+  if (!gaps.length) return success(out, at, job, p.runId);
+  const reason = `${INCOMPLETE} ${gaps.join(' ')}`;
+  return block(out, at.workflow, {
+    reason,
+    body: `I cannot start this ticket yet:\n${gaps.map((g) => `- ${g}`).join('\n')}\nAnswer here, or complete the ticket and reply, and I will read it again.`,
+    job: job.name,
+    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
+    question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
+  });
+}
+
+/**
  * The `red` check found no red for the right reason (ORC-123). In measure mode the run goes on, and the decision's
  * trace says what the check would have blocked, a step outside the tests (`scope`) included: measuring never blocks.
  * In blocking mode, the job goes back with the verdict, `red.attempts` checks at most, then the ticket is blocked.
@@ -189,6 +215,9 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
   return out;
 }
 
+/** Head of the reason of `stuckPending`'s block: what tells it from another block on the same job (ORC-360). */
+const stuckReason = (job: string): string => `Error: the pending ${job} could not be started: `;
+
 /**
  * A `settle` that died (ORC-339): its retries spent, a pending job with no run would hold the ticket's messages for
  * good, in silence. The ticket is blocked on that job instead; the job stays pending, all of it (its input, its
@@ -197,7 +226,7 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
 function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number): Decision {
   const pending = ticket.pendingJob;
   if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait || ticket.blocked || settledTicket(ticket)) return out;
-  const reason = `Error: the pending ${pending.job} could not be started: ${error}`;
+  const reason = `${stuckReason(pending.job)}${error}`;
   return block(out, workflow, {
     reason,
     body: `${reason} Reply in this thread to start it again.`,
@@ -670,10 +699,11 @@ function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undef
 /**
  * A pending job no run will start (ORC-339): no run or check ahead of it, on a ticket blocked on it (a settle that could
  * not start it, `stuckPending`). Only a reply lifts that block, by starting the job: at once, or when its debounce fires.
+ * Read by its reason: another block on that job (the red-CI bound on a `fix-ci` kept pending) is not lifted (ORC-360).
  */
 function strandedPending(ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
   const pending = ticket?.pendingJob;
-  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait) return undefined;
+  if (!pending || !ticket.blocked || ticket.blockedJob !== pending.job || !ticket.blockReason?.startsWith(stuckReason(pending.job)) || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait) return undefined;
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
@@ -1187,6 +1217,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // A run that ended well on a ticket already blocked (`ask`, then the end of its turn): no output is expected of it, its question stays.
       if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
+        if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
@@ -1237,6 +1268,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const toPublish = publishes(job) ? event.payload.sha : undefined;
       const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
+      // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
+      const pending = ticket?.pendingJob;
+      if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish) {
         const { runId, output, commands } = event.payload;

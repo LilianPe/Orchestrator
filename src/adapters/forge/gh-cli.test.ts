@@ -13,7 +13,11 @@ function fakeExec(map: Record<string, { stdout: string; stderr?: string; code?: 
 }
 
 const pr = (number: number, branch: string) => JSON.stringify([{ number, url: `https://github.test/pr/${number}`, state: 'OPEN', headRefName: branch }]);
-const thread = { isResolved: false, comments: { nodes: [{ author: { login: 'alice' }, body: 'renommer', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 3 }] } };
+/** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
+const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
+const threadsAnswer = (threads: unknown[], next: string | null = null) => JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: conn(threads, next) } } } });
+const comment = (login: string, body: string, at: string, path = 'src/a.ts', line: number | null = 12) => ({ author: { login }, body, createdAt: at, path, line });
+const thread = { id: 'T', isResolved: false, comments: conn([comment('alice', 'renommer', '2026-10-10T10:00:00Z', 'src/a.ts', 3)]) };
 
 describeForgeContract('GhCliForge (scripted gh)', () => ({
   forge: new GhCliForge(
@@ -31,7 +35,7 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
       'gh pr list --head factory/rel-5-v ': { stdout: pr(11, 'factory/rel-5-v') },
       'gh pr checks 11 ': { stdout: JSON.stringify([{ name: 'lint', bucket: 'pass' }, { name: 'deploy', bucket: 'mystery' }, { name: 'docs', bucket: '' }]) },
       'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) },
-      'gh api graphql': { stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [thread] } } } } }) },
+      'gh api graphql': { stdout: threadsAnswer([thread]) },
     }),
   ),
   repoPath: '/repo',
@@ -153,16 +157,56 @@ describe('GhCliForge', () => {
       fakeExec({
         'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) },
         'gh api graphql': {
-          stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [
-            { isResolved: false, comments: { nodes: [{ author: { login: 'lilian' }, body: 'Renomme ça', createdAt: '2026-10-10T10:00:00Z', path: 'src/a.ts', line: 12 }] } },
-            { isResolved: true, comments: { nodes: [{ author: { login: 'x' }, body: 'ok', createdAt: '2026-10-10T10:00:00Z', path: 'b', line: 1 }] } },
-          ] } } } } }),
+          stdout: threadsAnswer([
+            { id: 'T1', isResolved: false, comments: conn([comment('lilian', 'Renomme ça', '2026-10-10T10:00:00Z')]) },
+            { id: 'T2', isResolved: true, comments: conn([comment('x', 'ok', '2026-10-10T10:00:00Z', 'b', 1)]) },
+          ]),
         },
       }),
     );
     expect(await forge.unresolvedReviewComments('/r', 7)).toEqual([
       { author: 'lilian', body: 'src/a.ts:12 — Renomme ça', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' },
     ]);
+  });
+
+  it("reads every thread and every comment of an unresolved thread: a reviewer's reply reaches the agent (ORC-347)", async () => {
+    const asked: string[][] = [];
+    const forge = new GhCliForge(async (_cmd, args) => {
+      if (args[0] === 'repo') return { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }), stderr: '', code: 0 };
+      const fields = args.filter((a, i) => args[i - 1] === '-F' || (args[i - 1] === '-f' && !a.startsWith('query=')));
+      asked.push(fields);
+      const query = args.find((a) => a.startsWith('query='))!;
+      let stdout: string;
+      if (query.includes('reviewThreads')) {
+        stdout = fields.includes('after=threads-1')
+          ? threadsAnswer([{ id: 'T2', isResolved: false, comments: conn([comment('carol', 'renomme', '2026-10-10T12:00:00Z', 'src/b.ts', null)]) }])
+          : threadsAnswer([{ id: 'T1', isResolved: false, comments: conn([comment('alice', 'gère null', '2026-10-10T10:00:00Z')], 'comments-1') }], 'threads-1');
+      } else {
+        stdout = JSON.stringify({ data: { node: { comments: conn([comment('alice', 'toujours faux, gère aussi null', '2026-10-10T11:00:00Z')]) } } });
+      }
+      return { stdout, stderr: '', code: 0 };
+    });
+    expect(await forge.unresolvedReviewComments('/r', 7)).toEqual([
+      { author: 'alice', body: 'src/a.ts:12 — gère null', at: Date.parse('2026-10-10T10:00:00Z'), source: 'review' },
+      { author: 'alice', body: 'src/a.ts:12 — toujours faux, gère aussi null', at: Date.parse('2026-10-10T11:00:00Z'), source: 'review' },
+      { author: 'carol', body: 'src/b.ts — renomme', at: Date.parse('2026-10-10T12:00:00Z'), source: 'review' },
+    ]);
+    expect(asked).toEqual([
+      ['owner=me', 'name=app', 'number=7'],
+      ['owner=me', 'name=app', 'number=7', 'after=threads-1'],
+      ['id=T1', 'after=comments-1'],
+    ]);
+  });
+
+  it.each([
+    ['threads without their pageInfo', JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })],
+    ['no PR', JSON.stringify({ data: { repository: { pullRequest: null } } })],
+    ['not JSON', 'oops'],
+  ])('rejects review threads answered with %s, never reads them as none (ORC-347)', async (_case, stdout) => {
+    const forge = new GhCliForge(fakeExec({ 'gh repo view': { stdout: JSON.stringify({ owner: { login: 'me' }, name: 'app' }) }, 'gh api graphql': { stdout } }));
+    const err = await forge.unresolvedReviewComments('/r', 7).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TypeError);
   });
 });
 

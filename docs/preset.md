@@ -81,7 +81,35 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 | `publish` refused | `dev-feedback`: it writes, goes through `verify` then `publish` again, and the owed move follows (`owedMove`) |
 | dead-letter, dead effect, `stop` | `dev-feedback`, these blocks have no step of their own |
 
-**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the human gates (`spec_review`, `human_review`): this needs an engine that executes the steps (ORC-177). `intake`, `clarify`, `spec_draft`, `spec_check`, `spec_review` and `after_merge` do not have a job yet. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the human gates (`spec_review`, `human_review`): this needs an engine that executes the steps (ORC-177). `clarify`, `spec_draft`, `spec_check`, `spec_review` and `after_merge` do not have a job yet; `intake` has one, which a repository turns on ([below](#intake-step-and-the-guard-before-in-progress-orc-206)). A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+
+## `intake` step and the guard before In Progress (ORC-206)
+
+The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job, in the ticket's worktree) reads the ticket, the repository's architecture docs and decisions, the linked tickets and the code it touches. It writes nothing and does not move the ticket. It hands back, in the `intake` field of `submit_result`:
+
+| Field | Values |
+| -- | -- |
+| `size` | `xs`, `s`, `m`, `l`, `xl` |
+| `risk` | `low`, `medium`, `high` |
+| `complete` | whether a developer can build it without asking anything |
+| `missing` | the questions to answer: at least one when not complete, at most 3 |
+| `screen` | whether the ticket changes something a user sees |
+
+Before the ticket's first run (no Claude session yet), the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
+
+At its end, `decide` records the assessment in the ticket's state:
+
+- `size`, the last assessment's;
+- `risk`, the higher of the ticket's and the proposed one: the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`). Nothing resets it yet, a later run of the ticket included;
+- `visualProof: required` when the ticket speaks of a screen; never lifted: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+
+Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
+
+Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+
+`intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
+
+**Not yet**: the wait on a Linear « blocked by » ticket that is not done (ORC-206, second part); `clarify`'s questions with choices, reminder and expiry (ORC-210); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
 
 ## Attempt stagnation (ORC-136)
 

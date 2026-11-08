@@ -4,6 +4,7 @@ import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
 import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
+import { allNodes, type Connection } from '../../graphql-pages.js';
 import { Q } from './queries.js';
 
 interface IssueNode {
@@ -18,7 +19,8 @@ interface IssueNode {
   /** In the trash: deleted, until Linear purges it 30 days later. */
   trashed?: boolean | null;
   state: { id: string; name: string; type: string };
-  labels: { nodes: LabelNode[] };
+  /** Linear's default page of them: `withAllLabels` reads the rest (ORC-347). */
+  labels: Connection<LabelNode>;
   delegate: { id: string } | null;
   team: { id: string; key: string };
 }
@@ -81,7 +83,7 @@ function toIssue(n: IssueNode): TrackerIssue {
 }
 
 interface MembersPage {
-  teams: { nodes: { members: { nodes: { id: string; active: boolean }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } }[] };
+  teams: { nodes: { members: Connection<{ id: string; active: boolean }> }[] };
 }
 
 export class LinearTracker implements Tracker, TeamDirectory {
@@ -107,7 +109,23 @@ export class LinearTracker implements Tracker, TeamDirectory {
     }
     if (!issue) throw new IssueNotFoundError(`Linear ticket not found: ${identifier}`);
     this.issueIds.set(identifier, issue.id);
-    return issue;
+    return this.withAllLabels(issue);
+  }
+
+  /** Every node of a list `query` reads under `key`, page after page (ORC-347). */
+  private pages<N>(what: string, query: string, vars: Record<string, unknown>, key: string): Promise<N[]> {
+    return allNodes<N>(what, async (after) => (await this.api.gql<Record<string, Connection<N>>>(query, { ...vars, after }))[key]);
+  }
+
+  /**
+   * The issue with every label, those past the page its query read included (ORC-347): cut short, they would read as
+   * removed, by the reconciliation and by `setLabels`.
+   */
+  private async withAllLabels(n: IssueNode): Promise<IssueNode> {
+    const nodes = await allNodes<LabelNode>(`the labels of ${n.identifier}`, async (after) =>
+      after === null ? n.labels : (await this.api.gql<{ issue: { labels: Connection<LabelNode> } }>(Q.issueLabels, { id: n.id, after })).issue.labels,
+    );
+    return { ...n, labels: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } };
   }
 
   private async issueId(identifier: string): Promise<string> {
@@ -129,30 +147,28 @@ export class LinearTracker implements Tracker, TeamDirectory {
    * them a short while, never this adapter. An unknown team is an error, not an empty team.
    */
   async teamMembers(teamKey: string): Promise<string[]> {
-    const ids: string[] = [];
-    let after: string | null = null;
-    for (;;) {
-      const page: MembersPage = await this.api.gql<MembersPage>(Q.teamMembers, { key: teamKey, after });
+    const members = await allNodes<{ id: string; active: boolean }>(`the members of Linear team ${teamKey}`, async (after) => {
+      const page = await this.api.gql<MembersPage>(Q.teamMembers, { key: teamKey, after });
       const team = page.teams.nodes[0];
       if (!team) throw new Error(`Linear team not found: ${teamKey}`);
-      ids.push(...team.members.nodes.filter((m) => m.active).map((m) => m.id));
-      if (!team.members.pageInfo.hasNextPage || !team.members.pageInfo.endCursor) return ids;
-      after = team.members.pageInfo.endCursor;
-    }
+      return team.members;
+    });
+    return members.filter((m) => m.active).map((m) => m.id);
   }
 
   private async teamStates(teamKey: string, refresh = false): Promise<StateNode[]> {
     if (!refresh && this.states.has(teamKey)) return this.states.get(teamKey)!;
-    const { workflowStates } = await this.api.gql<{ workflowStates: { nodes: StateNode[] } }>(Q.teamStates, { teamKey });
-    this.states.set(teamKey, workflowStates.nodes);
-    return workflowStates.nodes;
+    const states = await this.pages<StateNode>(`the states of Linear team ${teamKey}`, Q.teamStates, { teamKey }, 'workflowStates');
+    this.states.set(teamKey, states);
+    return states;
   }
 
   private async teamLabels(teamKey: string, refresh = false): Promise<Map<string, string>> {
     if (!refresh && this.labels.has(teamKey)) return this.labels.get(teamKey)!;
-    const { issueLabels } = await this.api.gql<{ issueLabels: { nodes: LabelNode[] } }>(Q.teamLabels, { teamKey });
-    const map = new Map(issueLabels.nodes.map((l) => [l.name, l.id]));
-    for (const l of issueLabels.nodes) {
+    // Every page: a label missed past the first one would be created again (ORC-347).
+    const labels = await this.pages<LabelNode>(`the labels of Linear team ${teamKey}`, Q.teamLabels, { teamKey }, 'issueLabels');
+    const map = new Map(labels.map((l) => [l.name, l.id]));
+    for (const l of labels) {
       if (l.parent?.id) this.labelGroups.set(l.id, l.parent.id);
       else this.labelGroups.delete(l.id);
     }
@@ -186,11 +202,12 @@ export class LinearTracker implements Tracker, TeamDirectory {
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
-    const { issues } = await this.api.gql<{ issues: { nodes: IssueNode[] } }>(Q.delegated, { teamKey, appUserId: this.appUserId });
+    // Every page: a ticket past the first one got no catch-up from the reconciliation, only a `getIssue` (ORC-347).
+    const issues = await this.pages<IssueNode>(`the tickets of Linear team ${teamKey} delegated to the app`, Q.delegated, { teamKey, appUserId: this.appUserId }, 'issues');
     // A deleted issue is not delegated, as getIssue says, even if the query still lists it from the trash.
-    const live = issues.nodes.filter((n) => !n.trashed);
+    const live = issues.filter((n) => !n.trashed);
     for (const n of live) this.issueIds.set(n.identifier, n.id);
-    return live.map(toIssue);
+    return (await Promise.all(live.map((n) => this.withAllLabels(n)))).map(toIssue);
   }
 
   async search(term: string, teamKey: string): Promise<SearchHit[]> {
