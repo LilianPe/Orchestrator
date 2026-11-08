@@ -30,9 +30,9 @@ describe('standard workflow', () => {
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).toEqual(['In Progress', 'Human Review']);
     const acts = h.tracker.activities('ls-1');
-    // Live, what the agent does in the factory's words; the summary composed from its `submit_result`, never its last text (ORC-214).
+    // Live, what the agent does in the factory's words; the recap composed from its `submit_result`, never its last text (ORC-214, ORC-195).
     expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
-    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists' });
+    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Tests added**\n- `src/export.test.ts`\n\n**Work**: 1 attempt, 1 turn, tokens not reported, 0 s.' });
     expect(JSON.stringify(acts)).not.toMatch(/npm test|PR ouverte/);
   });
 

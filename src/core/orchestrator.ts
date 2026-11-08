@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
-import { prText, PublishRefused, type Publisher } from '../adapters/publisher/types.js';
+import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner, StagnationBounds } from '../adapters/runner/types.js';
 import {
@@ -43,6 +43,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
+import { describePr } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
@@ -52,6 +53,7 @@ import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
+import { runMeasure } from './measures.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -1631,8 +1633,10 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary.
-        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style) }, key);
+        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary, a build's end
+        // its recap with the work of the ticket's attempts (ORC-195).
+        const runs = c.style === 'summary' ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
+        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style, runs) }, key);
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
@@ -1811,7 +1815,7 @@ export class Orchestrator {
       try {
         const mark = await this.untrustedMark(project, t);
         const untrusted = mark ? { untrusted: mark } : {};
-        const text = await this.policy.pr(prText(t));
+        const text = await this.policy.pr(describePr(c.output, { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) }));
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);

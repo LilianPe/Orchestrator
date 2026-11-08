@@ -57,6 +57,8 @@ Never merge. Never push, to any branch, never open or edit a PR: the factory pub
 
 **Always** end with the `mcp__factory__submit_result` tool. The factory reads nothing else: without a valid result, your work counts as a failure, even if finished. If it rejects the result, fix the fields it names and send it again. `summary` carries the message below, which the factory publishes in Linear: nothing else you write is.
 
+The factory writes the PR's description from your other fields, one section each, in this order: `why`, `summary`, `assumptions`, `risks`, `untested`, `trusted`, `review_hints`, then what it verified itself and your `tests_added`. Fill them for the human reviewer, one short entry per item: `trusted` lists what you took as correct without verifying it (libraries, external services, assumed behaviours), starting with the « trusted without verification » section of the approved spec when there is one; `review_hints` names the files to read first, and why.
+
 ## `submit_result` summary (published in Linear)
 
 In English, self-contained, in this format:
