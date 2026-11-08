@@ -18,9 +18,9 @@ describe('buildFlow (ORC-297)', () => {
     it('groups the blocked tickets by cause, oldest wait first, each with its reason', () => {
       const f = flow({
         tickets: [
-          ticket('A', { blocked: true, blockReason: 'Question asked by the agent', updatedAt: 30 }),
-          ticket('B', { blocked: true, blockReason: 'The run dev reached a limit (turns, duration or budget).', updatedAt: 20 }),
-          ticket('C', { blocked: true, blockReason: "Waiting for an answer to the agent's question.", updatedAt: 10 }),
+          ticket('A', { blocked: true, blockKind: 'asked', blockReason: 'Question asked by the agent', updatedAt: 30 }),
+          ticket('B', { blocked: true, blockKind: 'limit', blockReason: 'The run dev reached a limit (turns, duration or budget).', updatedAt: 20 }),
+          ticket('C', { blocked: true, blockKind: 'question', blockReason: "Waiting for an answer to the agent's question.", updatedAt: 10 }),
           ticket('D', { blocked: false }),
         ],
       });
@@ -28,12 +28,27 @@ describe('buildFlow (ORC-297)', () => {
         ['question', ['C', 'A']],
         ['limit', ['B']],
       ]);
-      expect(f.needsYou.blocked[1]!.tickets[0]).toMatchObject({ title: 'Titre B', reason: 'The run dev reached a limit (turns, duration or budget).' });
+      expect(f.needsYou.blocked[1]!.tickets[0]).toMatchObject({ title: 'Titre B', kind: 'limit', reason: 'The run dev reached a limit (turns, duration or budget).' });
+    });
+
+    it('classes a block by its typed kind, never by its reason (ORC-345, criterion 3)', () => {
+      const f = flow({
+        tickets: [
+          ticket('A', { blocked: true, blockKind: 'ci_bound', blockReason: 'Stopped on request', updatedAt: 30 }),
+          ticket('B', { blocked: true, blockKind: 'stopped', blockReason: 'Halted by a human, reworded.', updatedAt: 20 }),
+          ticket('C', { blocked: true, blockKind: 'stuck', blockReason: 'Loop: a sentence of another cause.', updatedAt: 10 }),
+        ],
+      });
+      expect(f.needsYou.blocked).toEqual([
+        { cause: 'infra', tickets: [expect.objectContaining({ ticketId: 'C', kind: 'stuck' })] },
+        { cause: 'limit', tickets: [expect.objectContaining({ ticketId: 'A', kind: 'ci_bound', reason: 'Stopped on request' })] },
+        { cause: 'stopped', tickets: [expect.objectContaining({ ticketId: 'B', kind: 'stopped' })] },
+      ]);
     });
 
     it('keeps a block without a known cause in sight, with its raw reason', () => {
       const f = flow({ tickets: [ticket('A', { blocked: true, blockReason: 'Nouvelle raison.' }), ticket('B', { blocked: true })] });
-      expect(f.needsYou.blocked).toEqual([{ cause: 'other', tickets: [expect.objectContaining({ ticketId: 'A', reason: 'Nouvelle raison.' }), expect.objectContaining({ ticketId: 'B', reason: '' })] }]);
+      expect(f.needsYou.blocked).toEqual([{ cause: 'other', tickets: [expect.objectContaining({ ticketId: 'A', kind: 'other', reason: 'Nouvelle raison.' }), expect.objectContaining({ ticketId: 'B', kind: 'other', reason: '' })] }]);
     });
 
     it('lists the PRs in Human Review, and the merge gate of a workflow that still declares `ready`', () => {

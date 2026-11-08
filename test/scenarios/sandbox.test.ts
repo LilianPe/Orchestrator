@@ -6,7 +6,7 @@ import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { TRUSTED, type EventPayloads } from '../../src/core/types.js';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
@@ -253,7 +253,7 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: true, verifyAttempts: 0 });
-    expect(blockCause(t.blockReason)).toBe('infra');
+    expect(causeOf(t.blockKind)).toBe('infra');
     expect(t.verifyingRunId).toBeUndefined();
     expect(h.tracker.comments('REL-1').at(-1)).toContain('engine down');
   });
@@ -265,7 +265,7 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
     expect(t.blocked).toBe(true);
-    expect(blockCause(t.blockReason)).toBe('infra');
+    expect(causeOf(t.blockKind)).toBe('infra');
     expect(h.tracker.comments('REL-1').at(-1)).toContain('FACTORY_ALLOW_HOST_VERIFY');
   });
 

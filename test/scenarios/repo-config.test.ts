@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { makeRepoConfig } from '../../src/app/repo-variables.js';
 import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
-import { blockCause } from '../../src/core/block-cause.js';
+import { causeOf } from '../../src/core/block-cause.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { createHarness } from '../helpers/harness.js';
 
@@ -109,7 +109,7 @@ describe("the repository's config at the launch", () => {
     expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.comments('REL-1').at(-1)).toMatch(/Reason: Repository configuration to fix: \.factory\/config\.yml refused:[\s\S]*network\.level/);
     // The Flow shows it as the repository's to fix, not as a breakdown of the factory.
-    expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
+    expect(causeOf((await h.ticket()).blockKind)).toBe('repo_config');
   });
 
   it('reads the config again when a member answers the block: still invalid, the same refusal and no agent; fixed, the step starts', async () => {
@@ -126,7 +126,7 @@ describe("the repository's config at the launch", () => {
     expect(h.runner.requests).toEqual([]);
     expect(agents(h)).toEqual([]);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
-    expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
+    expect(causeOf((await h.ticket()).blockKind)).toBe('repo_config');
     expect(h.tracker.comments('REL-1').filter((c) => /Reason: Repository configuration to fix/.test(c))).toHaveLength(2);
     // Fixed on the default branch, then answered: the step starts, at the fixed file's level.
     yaml = 'network: { level: none }\n';
@@ -140,7 +140,7 @@ describe("the repository's config at the launch", () => {
   it('keeps a config the forge could not give as a breakdown, not as a fault of the repository', async () => {
     const h = createHarness({ sandboxed: true, repoConfig: async () => Promise.reject(new Error('the forge no longer responds after 120 s')) });
     await delegate(h);
-    expect(blockCause((await h.ticket()).blockReason)).toBe('infra');
+    expect(causeOf((await h.ticket()).blockKind)).toBe('infra');
   });
 
   it("criterion 5: the agent's change of .factory/config.yml is refused as a forbidden path, and the base's config applies to the next run", async () => {

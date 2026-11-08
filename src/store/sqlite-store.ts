@@ -11,8 +11,8 @@ import {
 } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { claims, holds } from '../core/routing.js';
-import { normalizeTicket, type QueueName, type FactoryEvent, type TicketState } from '../core/types.js';
-import { upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
+import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
+import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
   TicketHeldError,
   decidedOn,

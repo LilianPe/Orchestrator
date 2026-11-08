@@ -1,4 +1,4 @@
-import { AGENT_QUESTION, onlyRestatesCause, STOPPED, type BlockCause } from '../../src/core/block-cause.js';
+import { AGENT_QUESTION, restatesCause, STOPPED, type BlockCause } from '../../src/core/block-cause.js';
 import type { FlowTicketView, FlowView, WorkingRunView } from './types.js';
 
 const CAUSE_LABELS: Record<BlockCause, string> = {
@@ -93,7 +93,7 @@ export function Flow({ flow, elapsedMs, selectedRun, onSelect, onStop }: {
       <section className={waiting ? 'needs active' : 'needs'}>
         <h2>Needs you{waiting > 0 && <span className="count">{waiting}</span>}</h2>
         {!waiting && <p className="empty">Nothing is waiting for a human.</p>}
-        {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: onlyRestatesCause(g.cause, ticket.reason) ? undefined : ticket.reason }))} />)}
+        {blocked.map((g) => <Group key={g.cause} label={CAUSE_LABELS[g.cause]} tone="blocked" tickets={g.tickets.map((ticket) => ({ ticket, detail: restatesCause(ticket.kind) ? undefined : ticket.reason }))} />)}
         {humanReview.length > 0 && <Group label="PRs in Human Review" tone="human" tickets={humanReview.map((ticket) => ({ ticket }))} />}
         {gates.length > 0 && <Group label="Pending gates" tone="human" tickets={gates.map((ticket) => ({ ticket, detail: 'Merge gate' }))} />}
       </section>
