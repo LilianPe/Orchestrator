@@ -42,7 +42,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
-import { composeResult, OutputPolicy, OutputRefused, policedTracker } from '../publish/output-policy.js';
+import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
@@ -412,7 +412,7 @@ export class Orchestrator {
   constructor(private d: OrchestratorDeps) {
     this.policy = d.outputPolicy ?? new OutputPolicy();
     this.relayTracker = d.tracker;
-    this.d = { ...d, tracker: policedTracker(d.tracker, this.policy, (m) => this.log('warn', m)) };
+    this.d = { ...d, tracker: new PolicedTracker(d.tracker, this.policy, (m) => this.log('warn', m)) };
     this.newId = d.newId ?? randomUUID;
     this.dispatchOpen = !d.holdInboxUntilReplay;
     this.worker = new Worker({
@@ -627,7 +627,7 @@ export class Orchestrator {
       await store.renewRun(run.id, clock.now() + RUN_LEASE_MS);
       this.handles.set(run.id, handle);
       this.liveRuns.add(run.id);
-      this.track(this.pump(run, handle, sandbox?.id), run.id);
+      this.track(this.pump(run, job.step ?? job.name, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
       return true;
     } catch (err) {
@@ -1755,12 +1755,11 @@ export class Orchestrator {
         return published();
       } catch (err) {
         if (err instanceof OutputRefused) reason = `the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`;
-        else {
-          if (!(err instanceof PublishRefused)) throw err;
+        else if (err instanceof PublishRefused) {
           // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
           if (err.code === 'empty') return published();
           reason = err.message;
-        }
+        } else throw err;
       }
     }
     await this.d.store.setMeta(mark, reason);
@@ -2352,7 +2351,7 @@ export class Orchestrator {
       });
       this.handles.set(runId, handle);
       this.liveRuns.add(runId);
-      this.track(this.pump(run, handle, sandbox?.id), runId);
+      this.track(this.pump(run, job.step ?? job.name, handle, sandbox?.id), runId);
       handedOver = true;
     } finally {
       // The sandbox first: it mounts the worktree.
@@ -2377,15 +2376,13 @@ export class Orchestrator {
   }
 
   /** Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. */
-  private async pump(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
+  private async pump(run: RunRecord, step: string, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { bus, store, clock } = this.d;
     let result: RunResult | undefined;
     try {
-      // Composed by the relay of the factory's words alone (ORC-214): checked without gitleaks, which would cost a sandbox per activity.
-      const frozen = await this.runtimeFor(run.projectId, run.ticketId).catch(() => undefined);
-      const step = frozen?.workflow.jobs[run.job]?.step ?? run.job;
+      // The relay composes from the factory's words alone, a closed table and the step (ORC-214): nothing of the agent to check, and no sandbox per activity.
       const relay = new ActivityRelay(
-        (a) => (run.linearSessionId && !this.policy.checkRelay(a).length ? this.relayTracker.activity(run.linearSessionId, a) : Promise.resolve()),
+        (a) => (run.linearSessionId ? this.relayTracker.activity(run.linearSessionId, a) : Promise.resolve()),
         step,
         this.d.activityIntervalMs ?? 2000,
         () => clock.now(),

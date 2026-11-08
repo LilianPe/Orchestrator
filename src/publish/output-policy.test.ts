@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { prText } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { parseAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { composeResult, NO_RESULT, OUTPUT_LIMITS, OutputPolicy, OutputRefused, sandboxSecretScan, type Capture } from './output-policy.js';
+import { OUTPUT_LIMITS } from './output-limits.js';
+import { composeResult, NO_RESULT, OutputPolicy, OutputRefused, sandboxSecretScan, type Capture } from './output-policy.js';
 
 const output = (over: Partial<AgentOutput> = {}): AgentOutput => ({ status: 'done', summary: 'Export CSV added.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...over });
 // Written in two parts: this file is not to be found by a scan of the factory's own repository.
@@ -77,6 +78,10 @@ describe('OutputPolicy (ORC-214)', () => {
       await policy.activity({ type: 'action', action: 'Bash', parameter: 'npm test', result: 'ok' });
       await policy.pr({ title: 'REL-1 Export', body: 'Ticket: REL-1' });
       expect(scanned).toEqual(['Bash\nnpm test\nok', 'REL-1 Export\nTicket: REL-1']);
+      // The same text again (a retried effect, the ack's comment then its activity): its verdict kept, no second sandbox.
+      await policy.comment('Got it.');
+      await policy.activity({ type: 'thought', body: 'Got it.' });
+      expect(scanned.filter((t) => t === 'Got it.')).toHaveLength(1);
     });
 
     it('a scan that cannot run is no green: it throws, and the write is retried, never posted unscanned', async () => {

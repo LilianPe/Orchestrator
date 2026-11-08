@@ -218,6 +218,9 @@ export const gitleaksArgv = (mode: readonly string[], target: string): string[] 
   'gitleaks', ...mode, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', target,
 ];
 
+/** The same in a sandbox, under `verify`'s cap: the image's coreutils end it. */
+export const sandboxGitleaksArgv = (mode: readonly string[], target: string): string[] => ['timeout', String(VERIFY_TIMEOUT_MS / 1000), ...gitleaksArgv(mode, target)];
+
 /** What a gitleaks run found. Anything but a clean exit, or its leaks' code, with a readable report is a breakdown, never a green: it rejects. */
 export function gitleaksFindings({ code, stdout, stderr }: ExecResult): { leaked: boolean; found: { File: string; StartLine: number; RuleID: string }[] } {
   if ((code !== 0 && code !== LEAKS_FOUND) || stderr.trim()) throw new Error(`gitleaks could not run (code ${code}): ${stderr.trim()}`);
@@ -241,7 +244,7 @@ export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sh
   // Plain `git log -p` shows no patch for a merge, where a secret can be added: what it changed beyond the clean merge, and only that.
   const logOpts = `--diff-merges=remerge ${from === EMPTY_TREE ? sha : `${from}..${sha}`}`;
   const env = { GIT_AUTHOR_NAME: 'factory', GIT_AUTHOR_EMAIL: 'factory@localhost', GIT_COMMITTER_NAME: 'factory', GIT_COMMITTER_EMAIL: 'factory@localhost', ...IN_SANDBOX_ENV };
-  const { leaked, found } = gitleaksFindings(await sandboxes.exec(id, ['timeout', String(VERIFY_TIMEOUT_MS / 1000), ...gitleaksArgv(['git', `--log-opts=${logOpts}`], '.')], { env }));
+  const { leaked, found } = gitleaksFindings(await sandboxes.exec(id, sandboxGitleaksArgv(['git', `--log-opts=${logOpts}`], '.'), { env }));
   if (!leaked) return [];
   const lines = found.map((f) => `- ${f.File}:${f.StartLine} (${f.RuleID})`);
   return [{ command: SECRETS_CHECK, exitCode: 1, output: `Hard-coded secret in the branch's commits, publication blocked. Remove it from its history, and consider it exposed:\n${lines.join('\n')}` }];

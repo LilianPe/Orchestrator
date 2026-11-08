@@ -1,5 +1,5 @@
 import type { UntrustedMark } from '../../core/clean-verify.js';
-import { OUTPUT_LIMITS } from '../../publish/output-policy.js';
+import { OUTPUT_LIMITS } from '../../publish/output-limits.js';
 
 /** The factory pushes the verified sha and opens or finds the branch's PR (ORC-125). */
 export interface PublishRequest {
