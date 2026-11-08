@@ -224,7 +224,7 @@ describe('recorded journals (test/replay/journals)', () => {
     const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
     expect(tickets.length).toBeGreaterThan(0);
     expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
-    expect(replayJournal(journal).divergences).toEqual([]);
+    expect(replayJournal(journal)).toMatchObject({ upcast: 1, divergences: [] });
     // Upcast, not ignored: a value that differs is still caught.
     (journal.entries.find((e) => e.decision?.ticket)!.decision!.ticket as unknown as { pendingFeedback: unknown[] }).pendingFeedback = [{ body: 'x' }];
     expect(replayJournal(journal).divergences.map((d) => d.field)).toContain('ticket');
