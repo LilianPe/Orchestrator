@@ -61,9 +61,23 @@ export const CLAUDE_BETAS: ReadonlySet<string> = new Set([
  */
 export const CLAUDE_BODY_MAX = 16 * 1024 * 1024;
 
-/** Model calls read at once, per run and in all (ORC-337): memory held at worst, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`. Past it, a 429, which Claude Code retries. */
-export const CLAUDE_READS_PER_RUN = 4;
+/**
+ * Model calls held at once, from their first byte until they are sent on, per run and in all (ORC-337): memory held
+ * at worst, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`. A run gets its share alone, so four runs at least are served
+ * side by side. Past it, a 429, which Claude Code retries.
+ */
+export const CLAUDE_READS_PER_RUN = 2;
 export const CLAUDE_READS_MAX = 8;
+
+/** How long a model call's body may take to come in (ORC-337): past it, the call is cut and its place freed. */
+export const CLAUDE_READ_MS = 30_000;
+
+/**
+ * How deep a model call may nest (ORC-337), checked on the raw bytes before anything parses them: deeper, a parse,
+ * a walk or a serialisation could run out of stack. Claude Code's calls nest 10 deep (measured on 2.1.316, haiku and
+ * opus, its tools' schemas and a tool call included).
+ */
+export const CLAUDE_BODY_DEPTH = 64;
 
 /**
  * Tools run by the client, Claude Code: its own (no `type`, or `custom`), and the Anthropic-defined ones the
@@ -71,6 +85,54 @@ export const CLAUDE_READS_MAX = 8;
  * search…), run by Anthropic's servers on the factory's account: a way out for a hijacked agent.
  */
 const CLIENT_TOOL = /^(custom|(bash|text_editor|computer|memory)_\d{8})$/;
+
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+
+/** A byte a JSON number is written with, or the `e` of `true` and `false`, which `numberProblem` leaves alone. */
+const inNumber = (c: number) => (c >= 0x30 && c <= 0x39) || c === 0x2d || c === 0x2b || c === 0x2e || c === 0x65 || c === 0x45;
+
+/** A number token that does not survive a parse and a serialisation as the API would read it: one past a double's range. */
+function numberProblem(raw: Buffer, start: number, end: number): string | undefined {
+  const token = raw.toString('latin1', start, end);
+  return /^-?\d/.test(token) && !Number.isFinite(Number(token)) ? `the number ${token.slice(0, 20)} out of range` : undefined;
+}
+
+/**
+ * One linear pass over the raw bytes, before any parse (ORC-337): nesting past `CLAUDE_BODY_DEPTH`, or a number a
+ * double cannot hold. A string is skipped to its closing quote, one not escaped by an odd run of backslashes.
+ */
+function rawProblem(raw: Buffer): string | undefined {
+  let depth = 0;
+  let number = -1;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (inNumber(c)) {
+      if (number < 0) number = i;
+      continue;
+    }
+    if (number >= 0) {
+      const p = numberProblem(raw, number, i);
+      if (p) return p;
+      number = -1;
+    }
+    if (c === QUOTE) {
+      let close = raw.indexOf(QUOTE, i + 1);
+      while (close > 0) {
+        let slashes = 0;
+        while (raw[close - 1 - slashes] === BACKSLASH) slashes++;
+        if (slashes % 2 === 0) break;
+        close = raw.indexOf(QUOTE, close + 1);
+      }
+      if (close < 0) return undefined; // unterminated: the parse refuses it
+      i = close;
+    } else if ((c === 0x5b || c === 0x7b) && ++depth > CLAUDE_BODY_DEPTH) return `nested deeper than ${CLAUDE_BODY_DEPTH}`;
+    else if (c === 0x5d || c === 0x7d) depth--;
+  }
+  return number >= 0 ? numberProblem(raw, number, raw.length) : undefined;
+}
 
 /** A block's content Anthropic would fetch: anything but inline data. */
 const INLINE_SOURCE = new Set(['base64', 'text']);
@@ -129,19 +191,19 @@ function callProblem(c: Record<string, unknown>): string | undefined {
  * this one, are gone.
  */
 export function claudeBody(raw: Buffer): { ok: true; body: Buffer } | { ok: false; reason: string } {
+  const scanned = rawProblem(raw);
+  if (scanned) return { ok: false, reason: `Claude API body refused: ${scanned}` };
   let call: unknown;
   try {
-    call = JSON.parse(raw.toString('utf8'));
+    call = JSON.parse(UTF8.decode(raw));
   } catch {
-    return { ok: false, reason: 'Claude API body refused: not JSON' };
+    return { ok: false, reason: 'Claude API body refused: not JSON in UTF-8' };
   }
   if (typeof call !== 'object' || call === null || Array.isArray(call)) return { ok: false, reason: 'Claude API body refused: not a JSON object' };
-  let problem: string | undefined;
-  try {
-    problem = callProblem(call as Record<string, unknown>);
-  } catch {
-    problem = 'nested too deep'; // the stack, on a content nested by the thousand
-  }
+  const problem = callProblem(call as Record<string, unknown>);
+  // ponytail: scanned, parsed, walked and serialised again whole: ~40 ms of the event loop for a 4.3 MiB call (measured),
+  // ~1 ms for a run's usual ~50 KB, ~150 ms at the 16 MiB cap. If calls grow there, check duplicate keys in a parse of
+  // one's own and send the bytes as they came.
   return problem ? { ok: false, reason: `Claude API body refused: ${problem}` } : { ok: true, body: Buffer.from(JSON.stringify(call)) };
 }
 

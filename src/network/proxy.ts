@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
-import { allowConnect, allowRequest, CLAUDE_API, CLAUDE_BETAS, CLAUDE_BODY_MAX, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN, claudeBody, norm, type EgressPolicy, type Verdict } from './levels.js';
+import { allowConnect, allowRequest, CLAUDE_API, CLAUDE_BETAS, CLAUDE_BODY_MAX, CLAUDE_READ_MS, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN, claudeBody, norm, type EgressPolicy, type Verdict } from './levels.js';
 
 /** One line of a run's egress journal: every request, allowed or refused (ORC-213). */
 export interface EgressEntry {
@@ -26,6 +26,19 @@ export interface EgressEntry {
   down: number;
 }
 
+/**
+ * A journal line that is no request nor refusal (ORC-337): a beta dropped, a model call throttled, cut for its slowness,
+ * or whose client went away. Kept in the journal, out of the security log's requests and refusals.
+ */
+export interface EgressNote {
+  at: string;
+  kind: 'note';
+  method: string;
+  host: string;
+  path?: string;
+  note: string;
+}
+
 export interface EgressProxyOptions {
   /** The runs' sockets and journals (`<home>/network`), the daemon's alone. */
   dir: string;
@@ -39,13 +52,15 @@ export interface EgressProxyOptions {
   claudeToken?: () => string | undefined;
   /** Tests only: the trust, the resolver and the port of the upstream connections (a local HTTPS server). */
   upstream?: { ca: string; lookup: LookupFunction; port: number };
+  /** Tests only: how long a model call's body may take, `CLAUDE_READ_MS` otherwise. */
+  claudeReadMs?: number;
 }
 
 interface Run {
   policy: EgressPolicy;
   /** Set on its requests to the Claude API in place of the client's (ORC-337): the sandbox never holds it. */
   claudeToken: string | undefined;
-  /** Its model calls being read (ORC-337), against `CLAUDE_READS_PER_RUN`. */
+  /** Its model calls held, read or being sent on (ORC-337), against `CLAUDE_READS_PER_RUN`. */
   reading: number;
   /** The `anthropic-beta` values dropped already: each is journaled once. */
   droppedBetas: Set<string>;
@@ -126,7 +141,7 @@ export class EgressProxy {
   /** The CA and its leaves, made at the first open. */
   private tlsReady?: Promise<void>;
   private tls?: { ca: FactoryCa; issuer: LeafIssuer };
-  /** Model calls being read, all runs together (ORC-337), against `CLAUDE_READS_MAX`. */
+  /** Model calls held, all runs together (ORC-337), against `CLAUDE_READS_MAX`. */
   private reading = 0;
   /** The agent API's name in the sandbox, normalised as every CONNECT host is. */
   private readonly agentHost?: string;
@@ -263,6 +278,12 @@ export class EgressProxy {
     run.journal.write(`${JSON.stringify({ at: new Date().toISOString(), up: 0, down: 0, ...e })}\n`);
   }
 
+  /** A note of the run's journal (`EgressNote`): never throws, never blocks. */
+  private note(run: Run, method: string, host: string, path: string, note: string): void {
+    if (run.closed) return;
+    run.journal.write(`${JSON.stringify({ at: new Date().toISOString(), kind: 'note', method, host, path: pathOf(path), note })}\n`);
+  }
+
   /** Something of the run under way: close() waits for its release (idempotent). */
   private hold(run: Run): () => void {
     run.inflight++;
@@ -351,9 +372,9 @@ export class EgressProxy {
     const path = req.url ?? '/';
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
-    this.readClaudeBody(run, req, res, method, t.host, path, (body) => {
+    this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) => {
       const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...this.upstreamHeaders(run, t.host, req, method, path, body), host: authority(t.host, t.port, 443) } });
-      this.relay(run, req, res, out, method, t.host, path, body);
+      this.relay(run, req, res, out, method, t.host, path, body, sent);
     });
   }
 
@@ -376,14 +397,14 @@ export class EgressProxy {
       ? agentVerdict(run.policy)
       : check(host, port === 80 || run.policy.level === 'full' ? allowRequest(run.policy, host, method, path) : { ok: false, reason: `port ${port} refused` });
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
-    this.readClaudeBody(run, req, res, method, host, path, (body) => {
+    this.readClaudeBody(run, req, res, method, host, path, (body, sent) => {
       // Below full the port is 80 (checked above), so the Host is the bare host either way.
       const opts = { method, path, headers: { ...this.upstreamHeaders(run, host, req, method, path, body), host: authority(host, port, 80) } };
       let out: ClientRequest;
       if (agent) out = httpRequest({ ...opts, ...agent });
       else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
       else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
-      this.relay(run, req, res, out, method, host, path, body);
+      this.relay(run, req, res, out, method, host, path, body, sent);
     });
   }
 
@@ -394,54 +415,94 @@ export class EgressProxy {
   }
 
   /**
-   * A model call (a POST to the Claude API below `full`) is read whole, up to `CLAUDE_BODY_MAX`, and checked before
-   * it goes on with the factory's token (ORC-337); what goes on is the call as checked (`claudeBody`). Counted in
-   * flight while it is read; a client gone before its end is journaled. Any other request streams.
+   * A model call (a POST to the Claude API below `full`) is read whole, up to `CLAUDE_BODY_MAX` and within
+   * `CLAUDE_READ_MS`, and checked before it goes on with the factory's token (ORC-337); what goes on is the call as
+   * checked (`claudeBody`). It holds a place, of the run's and the proxy's, from its first byte until it is sent on:
+   * the bound on the memory. Nothing it holds can throw out of here. Any other request streams.
    */
-  private readClaudeBody(run: Run, req: IncomingMessage, res: ServerResponse, method: string, host: string, path: string, send: (body?: Buffer) => void): void {
+  private readClaudeBody(run: Run, req: IncomingMessage, res: ServerResponse, method: string, host: string, path: string, send: (body?: Buffer, sent?: () => void) => void): void {
     if (!isModelApi(run, host) || method !== 'POST') return send();
     const refuse = (reason: string, status?: number) => this.refuse(run, res, method, host, path, reason, status);
+    const note = (text: string) => this.note(run, method, host, path, text);
+    /** Answered, then the connection cut: the rest of the body is not read. */
+    const cut = (status: number, text: string) => {
+      if (!res.headersSent) res.writeHead(status, { 'content-type': 'text/plain' }).end(`egress proxy: ${text}\n`);
+      res.once('finish', () => req.socket.destroy());
+    };
     const encoding = req.headers['content-encoding'];
     if (encoding !== undefined && encoding !== 'identity') return refuse(`Claude API body refused: content-encoding ${encoding}`);
     const tooBig = `Claude API body refused: over ${CLAUDE_BODY_MAX} bytes`;
-    // Answered, then cut: the rest of the body is not read.
-    const cut = () => res.once('finish', () => req.socket.destroy());
-    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) return void (refuse(tooBig, 413), cut());
-    if (run.reading >= CLAUDE_READS_PER_RUN || this.reading >= CLAUDE_READS_MAX) return void (refuse('Claude API: too many model calls read at once', 429), cut());
+    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) {
+      this.journal(run, { method, host, path: pathOf(path), ok: false, reason: tooBig });
+      return cut(413, tooBig);
+    }
+    if (run.reading >= CLAUDE_READS_PER_RUN || this.reading >= CLAUDE_READS_MAX) {
+      note('model call throttled: too many held at once (429)');
+      return cut(429, 'too many model calls held at once, retry');
+    }
     run.reading++;
     this.reading++;
     const release = this.hold(run);
-    let settled = false;
-    /** Once: the read is over, whichever way. */
-    const settle = () => {
-      if (settled) return false;
-      settled = true;
+    let freed = false;
+    /** Its place given back: refused, cut, gone, or sent on (idempotent). */
+    const free = () => {
+      if (freed) return;
+      freed = true;
+      clearTimeout(deadline);
       run.reading--;
       this.reading--;
       release();
-      return true;
     };
-    const chunks: Buffer[] = [];
+    let reading = true;
+    let chunks: Buffer[] = [];
     let size = 0;
+    const deadline = setTimeout(() => {
+      if (!reading) return;
+      reading = false;
+      chunks = [];
+      free();
+      note('model call cut: its body too slow to come in');
+      cut(408, 'body too slow');
+    }, this.o.claudeReadMs ?? CLAUDE_READ_MS);
+    deadline.unref();
     req.on('data', (c: Buffer) => {
-      if (settled) return;
+      if (!reading) return;
       size += c.length;
       if (size <= CLAUDE_BODY_MAX) return void chunks.push(c);
-      settle();
-      chunks.length = 0;
-      refuse(tooBig, 413);
-      cut();
+      reading = false;
+      chunks = [];
+      free();
+      this.journal(run, { method, host, path: pathOf(path), ok: false, reason: tooBig });
+      cut(413, tooBig);
     });
     req.on('end', () => {
-      if (!settle()) return;
-      const checked = claudeBody(Buffer.concat(chunks));
-      if (!checked.ok) return refuse(checked.reason);
-      send(checked.body);
+      if (!reading) return;
+      reading = false;
+      try {
+        let raw: Buffer | undefined = Buffer.concat(chunks);
+        chunks = [];
+        const checked = claudeBody(raw);
+        raw = undefined;
+        if (!checked.ok) {
+          free();
+          return refuse(checked.reason);
+        }
+        send(checked.body, free);
+      } catch (err) {
+        // Whatever slipped by the checks: refused, never thrown out of the server.
+        free();
+        if (!res.headersSent) refuse(`Claude API body refused: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300), 400);
+        else res.destroy();
+      }
     });
-    const aborted = () => {
-      if (settle()) this.journal(run, { method, host, path: pathOf(path), ok: false, reason: 'client gone while sending the body', up: size });
+    const gone = () => {
+      if (!reading) return;
+      reading = false;
+      chunks = [];
+      free();
+      note('model call dropped: its client went away while sending the body');
     };
-    req.on('error', aborted).on('close', aborted);
+    req.on('error', gone).on('close', gone);
   }
 
   /**
@@ -458,7 +519,7 @@ export class EgressProxy {
     delete h['anthropic-beta'];
     for (const b of sent.filter((b) => !CLAUDE_BETAS.has(b) && !run.droppedBetas.has(b))) {
       run.droppedBetas.add(b);
-      this.journal(run, { method, host, path: pathOf(path), ok: false, reason: `anthropic-beta ${b} dropped, the request went on without it` });
+      this.note(run, method, host, path, `anthropic-beta ${b} dropped, the request went on without it`);
     }
     const betas = sent.filter((b) => CLAUDE_BETAS.has(b));
     if (body) {
@@ -478,11 +539,18 @@ export class EgressProxy {
    * cut mid-body ends the client's response and is a failure), by the request's errors before. The
    * upstream request dies with the client's.
    */
-  private relay(run: Run, req: IncomingMessage, res: ServerResponse, out: ClientRequest, method: string, host: string, path: string, body?: Buffer): void {
+  private relay(run: Run, req: IncomingMessage, res: ServerResponse, out: ClientRequest, method: string, host: string, path: string, body?: Buffer, sent?: () => void): void {
     let up = body?.length ?? 0;
     let down = 0;
     let responded = false;
-    const done = this.track(run, (failure) => ({ method, host, path: pathOf(path), ok: !failure, ...(failure ? { reason: failure } : {}), up, down }));
+    const finished = this.track(run, (failure) => ({ method, host, path: pathOf(path), ok: !failure, ...(failure ? { reason: failure } : {}), up, down }));
+    const done = (failure?: string) => {
+      sent?.();
+      finished(failure);
+    };
+    // A model call read whole gives its place back once written upstream: its buffer is no longer held. Its response
+    // streams, held by nothing; a run's calls in flight are not bounded, only those read.
+    out.once('finish', () => sent?.());
     if (!body) req.on('data', (c: Buffer) => (up += c.length));
     out.on('response', (r) => {
       responded = true;

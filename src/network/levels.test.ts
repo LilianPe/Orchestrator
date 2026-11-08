@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../config/repo-config.js';
-import { agentPolicy, allowConnect, allowRequest, claudeBody, stepPolicy, type EgressPolicy } from './levels.js';
+import { agentPolicy, allowConnect, allowRequest, CLAUDE_BODY_DEPTH, claudeBody, stepPolicy, type EgressPolicy } from './levels.js';
 
 const repo = (yaml?: string) => parseRepoConfig(yaml);
 const limited: EgressPolicy = { level: 'limited', allow: [] };
@@ -180,10 +180,26 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(again.ok && JSON.parse(again.body.toString())).toEqual(exact);
   });
 
-  it('refuses a content nested past what it can walk, without throwing', () => {
-    const n = 20_000;
-    const raw = `{"messages":[{"role":"user","content":${'[{"type":"tool_result","content":'.repeat(n)}"x"${'}]'.repeat(n)}}]}`;
-    expect(claudeBody(Buffer.from(raw))).toMatchObject({ ok: false, reason: 'Claude API body refused: nested too deep' });
+  it('refuses a call nested past CLAUDE_BODY_DEPTH on its raw bytes, wherever, before any parse (ORC-337)', () => {
+    const v = (raw: string) => claudeBody(Buffer.from(raw));
+    const n = 200_000;
+    const deep = `${'['.repeat(n)}${']'.repeat(n)}`;
+    for (const raw of [
+      `{"messages":[{"role":"user","content":${'[{"type":"tool_result","content":'.repeat(n)}"x"${'}]'.repeat(n)}}]}`,
+      `{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"B","input":${deep}}]}]}`,
+      `{"messages":[],"whatever":${deep}}`,
+    ]) expect(v(raw)).toEqual({ ok: false, reason: `Claude API body refused: nested deeper than ${CLAUDE_BODY_DEPTH}` });
+    const at = (d: number) => `{"x":${'['.repeat(d - 1)}${']'.repeat(d - 1)}}`;
+    expect(v(at(CLAUDE_BODY_DEPTH)).ok).toBe(true);
+    expect(v(at(CLAUDE_BODY_DEPTH + 1)).ok).toBe(false);
+    // In a string, a bracket is text; an escaped quote does not end the string, an escaped backslash does not escape it.
+    expect(v(`{"x":"${'['.repeat(1000)}\\"${'{'.repeat(100)}","y":"a\\\\"}`).ok).toBe(true);
+  });
+
+  it('refuses what a parse and a serialisation would change: not UTF-8, a number past a double (ORC-337)', () => {
+    expect(claudeBody(Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xe9, 0x22, 0x7d]))).toMatchObject({ ok: false, reason: 'Claude API body refused: not JSON in UTF-8' });
+    for (const n of ['1e309', '-1e400', '9'.repeat(400), '1.5E+999']) expect(claudeBody(Buffer.from(`{"n":${n}}`)), n).toMatchObject({ ok: false, reason: expect.stringMatching(/out of range/) as string });
+    for (const n of ['1e308', '-0.5', '12', '1E3']) expect(claudeBody(Buffer.from(`{"n":${n},"t":true,"f":false}`)).ok, n).toBe(true);
   });
 
   it('follows the level', () => {

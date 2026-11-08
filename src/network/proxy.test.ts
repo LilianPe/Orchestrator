@@ -8,7 +8,8 @@ import { once } from 'node:events';
 import { connect as tlsConnect } from 'node:tls';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { httpsUpstream } from '../../test/helpers/egress-upstream.js';
-import { CLAUDE_BODY_MAX, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN } from './levels.js';
+import { CLAUDE_BODY_DEPTH, CLAUDE_BODY_MAX, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN } from './levels.js';
+import { readSecurityLog, refusalSummary } from './security-log.js';
 import { EgressProxy, isPrivate, type EgressEntry, type EgressProxyOptions } from './proxy.js';
 
 let dir = '';
@@ -122,6 +123,10 @@ async function rawModelCall(socketPath: string, headers: Record<string, string>,
 const until = async (ok: () => boolean) => {
   for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 20));
 };
+
+/** The notes of a run's journal (`EgressNote`): what is no request nor refusal. */
+const notes = async (runId: string): Promise<string[]> =>
+  (await journal(runId)).filter((e) => (e as unknown as { kind?: string }).kind === 'note').map((e) => (e as unknown as { note: string }).note);
 
 const journal = async (runId: string): Promise<EgressEntry[]> => {
   // Written when the connection closes, a tick after the client sees its end.
@@ -280,13 +285,16 @@ describe('EgressProxy', () => {
       const r = await call(sock, MESSAGE, { 'anthropic-beta': 'oauth-2025-04-20, mcp-client-2025-11-20,claude-code-20250219,code-execution-2025-08-25' });
       expect(r.body).toContain(' anthropic-beta=oauth-2025-04-20,claude-code-20250219 ');
       expect((await call(sock, MESSAGE, { 'anthropic-beta': 'files-api-2025-04-14,mcp-client-2025-11-20' })).body).not.toContain('anthropic-beta');
-      const dropped = (await journal('run-1')).filter((e) => e.reason?.startsWith('anthropic-beta'));
-      expect(dropped.map((e) => e.reason)).toEqual([
+      expect(await notes('run-1')).toEqual([
         'anthropic-beta mcp-client-2025-11-20 dropped, the request went on without it',
         'anthropic-beta code-execution-2025-08-25 dropped, the request went on without it',
         'anthropic-beta files-api-2025-04-14 dropped, the request went on without it',
       ]);
-      expect(dropped[0]).toMatchObject({ method: 'POST', host: CLAUDE, path: '/v1/messages', ok: false });
+      // Notes, not refusals: the security log and the summary posted on the ticket see two requests that went through.
+      const log = readSecurityLog({ runId: 'run-1', projectId: 'p', ticketId: 'T-1', at: 0 }, { egress: proxy.journalPath('run-1'), refusals: join(dir, 'none.jsonl') });
+      expect(log.egress.map((e) => e.ok)).toEqual([true, true]);
+      expect(log.skipped.egress).toBe(0);
+      expect(refusalSummary(log)).toBeUndefined();
     });
 
     it('refuses content Anthropic would fetch by URL, in a message, a tool result or the system prompt', async () => {
@@ -358,35 +366,83 @@ describe('EgressProxy', () => {
       ]);
     }, 30_000);
 
-    it('reads a few model calls at once, per run and in all: past it a 429; one dropped while read is journaled, and held close() for', async () => {
-      const runs = await Promise.all(['run-1', 'run-2', 'run-3'].map((id) => proxy.open(id, { level: 'limited', allow: [] })));
+    it('holds a few model calls at once, a share per run within the bound in all: past it a 429 note; a client gone is noted and frees its place', async () => {
+      const ids = Array.from({ length: CLAUDE_READS_MAX / CLAUDE_READS_PER_RUN + 1 }, (_, i) => `run-${i + 1}`);
+      const runs = await Promise.all(ids.map((id) => proxy.open(id, { level: 'limited', allow: [] })));
       const half = { 'content-length': '100' };
-      const reading = await Promise.all(Array.from({ length: CLAUDE_READS_PER_RUN }, () => rawModelCall(runs[0]!, half, '{"model":')));
-      await new Promise((r) => setTimeout(r, 100)); // their heads read by the proxy
-      // Read by the proxy once their head is in: the next one on the run is refused.
+      const pause = () => new Promise((r) => setTimeout(r, 100)); // their heads read by the proxy
+      const held = await Promise.all(Array.from({ length: CLAUDE_READS_PER_RUN }, () => rawModelCall(runs[0]!, half, '{"model":')));
+      await pause();
+      // The run's share is full: its next one waits for a retry, the other runs are served.
       const extra = await rawModelCall(runs[0]!, half, '{');
       await extra.closed;
       expect(extra.answer()).toMatch(/^HTTP\/1.1 429/);
-      // The other runs fill what is left of the proxy's own bound.
-      const more = await Promise.all(Array.from({ length: CLAUDE_READS_MAX - CLAUDE_READS_PER_RUN }, () => rawModelCall(runs[1]!, half, '{')));
-      await new Promise((r) => setTimeout(r, 100));
-      const third = await rawModelCall(runs[2]!, half, '{');
-      await third.closed;
-      expect(third.answer()).toMatch(/^HTTP\/1.1 429/);
-      // Gone while it sends: journaled, and the slot is free again.
-      for (const c of [...reading, ...more]) c.tls.destroy();
-      await until(() => (readFileSync(proxy.journalPath('run-1'), 'utf8').match(/client gone/g) ?? []).length === CLAUDE_READS_PER_RUN);
-      expect((await journal('run-1')).filter((e) => e.reason === 'client gone while sending the body')).toHaveLength(CLAUDE_READS_PER_RUN);
-      expect((await call(runs[2]!, MESSAGE)).status).toBe(200);
+      // The other runs fill what is left of the bound in all; one run more gets a 429.
+      for (const sock of runs.slice(1, -1)) held.push(...(await Promise.all(Array.from({ length: CLAUDE_READS_PER_RUN }, () => rawModelCall(sock, half, '{')))));
+      await pause();
+      const last = await rawModelCall(runs.at(-1)!, half, '{');
+      await last.closed;
+      expect(last.answer()).toMatch(/^HTTP\/1.1 429/);
+      // Gone while it sends: noted, and the place is free again.
+      for (const c of held) c.tls.destroy();
+      const gone = 'model call dropped: its client went away while sending the body';
+      await until(() => readFileSync(proxy.journalPath('run-1'), 'utf8').split(gone).length - 1 === CLAUDE_READS_PER_RUN);
+      expect(await notes('run-1')).toEqual(['model call throttled: too many held at once (429)', gone, gone]);
+      expect((await call(runs.at(-1)!, MESSAGE)).status).toBe(200);
+      // A throttle and a client gone are no refusals.
+      expect((await journal('run-1')).filter((e) => e.ok === false)).toEqual([]);
     });
 
-    it('waits for a model call being read before it closes the run, and journals it', async () => {
+    it('cuts a model call whose body is too slow to come in, and frees its place', async () => {
+      const slow = new EgressProxy({ dir: join(dir, 'slow'), caDir: join(dir, 'ca'), claudeToken: () => FACTORY_TOKEN, upstream, claudeReadMs: 200 });
+      try {
+        await proxy.open('run-0', { level: 'limited', allow: [] }); // the CA viaTls trusts
+        const sock = await slow.open('run-1', { level: 'limited', allow: [] });
+        const calls = await Promise.all(Array.from({ length: CLAUDE_READS_PER_RUN }, () => rawModelCall(sock, { 'content-length': '100' }, '{')));
+        for (const c of calls) await c.closed;
+        expect(calls.map((c) => c.answer().split('\r\n')[0])).toEqual(calls.map(() => 'HTTP/1.1 408 Request Timeout'));
+        expect((await call(sock, MESSAGE)).status).toBe(200);
+        const lines = readFileSync(slow.journalPath('run-1'), 'utf8');
+        expect(lines.split('model call cut: its body too slow to come in').length - 1).toBe(CLAUDE_READS_PER_RUN);
+      } finally {
+        await slow.closeAll();
+      }
+    });
+
+    it('waits for a model call being read before it closes the run, and notes it', async () => {
       const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
       await rawModelCall(sock, { 'content-length': '100' }, '{');
       const path = proxy.journalPath('run-1');
       await new Promise((r) => setTimeout(r, 100)); // its head read by the proxy
       await proxy.close('run-1');
-      expect(readFileSync(path, 'utf8')).toContain('client gone while sending the body');
+      expect(readFileSync(path, 'utf8')).toContain('model call dropped: its client went away while sending the body');
+    });
+
+    it('survives a call nested by the hundred thousand, in a tool call\'s input or an unknown field, and refuses it', async () => {
+      const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
+      const n = 200_000;
+      const deep = `${'['.repeat(n)}${']'.repeat(n)}`;
+      const inInput = `{"model":"m","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{"x":${deep}}}]}]}`;
+      const inUnknown = `{"model":"m","messages":[],"whatever":${deep}}`;
+      for (const raw of [inInput, inUnknown]) {
+        const r = await viaTls(sock, CLAUDE, 'POST', '/v1/messages', {}, undefined, raw);
+        expect(r).toEqual({ status: 403, body: `egress proxy: Claude API body refused: nested deeper than ${CLAUDE_BODY_DEPTH}\n` });
+      }
+      // Still up, and the next call goes through.
+      expect((await call(sock, MESSAGE)).status).toBe(200);
+      // Brackets inside strings are text: no nesting.
+      const inString = { ...MESSAGE, messages: [{ role: 'user', content: `${'['.repeat(1000)} \\" {{{` }] };
+      expect((await call(sock, inString)).status).toBe(200);
+    });
+
+    it('refuses a body that is not UTF-8, or a number a double cannot hold: what goes on is what was checked', async () => {
+      const sock = await proxy.open('run-1', { level: 'limited', allow: [] });
+      const latin1 = Buffer.concat([Buffer.from('{"model":"m","messages":[{"role":"user","content":"caf'), Buffer.from([0xe9]), Buffer.from('"}]}')]);
+      expect((await viaTls(sock, CLAUDE, 'POST', '/v1/messages', {}, undefined, latin1)).body).toMatch(/not JSON in UTF-8/);
+      for (const n of ['1e400', '-1e400', '1' + '0'.repeat(400)]) {
+        expect((await viaTls(sock, CLAUDE, 'POST', '/v1/messages', {}, undefined, `{"model":"m","max_tokens":${n},"messages":[]}`)).body, n).toMatch(/out of range/);
+      }
+      expect((await viaTls(sock, CLAUDE, 'POST', '/v1/messages', {}, undefined, '{"model":"m","max_tokens":1e3,"temperature":-0.5,"messages":[]}')).status).toBe(200);
     });
 
     it("sends none of the client's credentials when the factory has no token", async () => {
