@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from './reduce.js';
-import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, normalizeTicket, type EventPayloads, type EventType, type FeedbackItem, type InternalEvent, type FactoryEvent, type PendingJob, type TicketState } from './types.js';
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
@@ -145,11 +145,81 @@ describe('reduce — facts recorded by the orchestrator', () => {
     expect(reduce(ticket(), started('questions', 'c1'))).toEqual(ticket());
   });
 
+  it('the first untrusted run in the worktree marks the branch for good, whatever the ticket says of its path (ORC-338)', () => {
+    const untrusted = (head: string) => ({ type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', untrusted: { head } }) as const;
+    // Released meanwhile: the worktree's path is gone from the ticket, not the run's place in it.
+    const marked = reduce(ticket({ worktreePath: undefined, untrustedSince: null }), untrusted('h1'))!;
+    expect(marked.untrustedSince).toBe('h1');
+    // Never read (a ticket from before the mark, which the launch reads first): its whole branch, not a head that would trust what came before.
+    expect(reduce(ticket(), untrusted('h1'))!.untrustedSince).toBe('');
+    expect(reduce(ticket({ untrustedSince: '' }), untrusted('h1'))!.untrustedSince).toBe('');
+    expect(reduce(marked, untrusted('h2'))!.untrustedSince).toBe('h1');
+    expect(reduce(marked, { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c' })!.untrustedSince).toBe('h1');
+    expect(reduce(ticket(), { type: 'run.started', runId: 'r2', job: 'dev', queue: 'dev', claudeSessionId: 'c' })!.untrustedSince).toBeUndefined();
+  });
+
+  it('keeps the pushes humans made to the branch, once each, the newest last (ORC-338)', () => {
+    const push = (sha: string, before?: string) => ev('push.human', { branch: 'factory/rel-1', sha, author: 'mate', ...(before ? { before } : {}) });
+    const t = [push('a', 'z'), push('b', 'a'), push('a')].reduce((s, e) => reduce(s, e)!, ticket());
+    expect(t.humanPushes).toEqual([{ before: 'a', after: 'b' }, { after: 'a' }]);
+  });
+
+  it('the read of a ticket the mark has not seen is kept once, and never over a mark; a later untrusted run still marks (ORC-338)', () => {
+    const read = (since: '' | null) => ({ type: 'untrusted.read', since }) as const;
+    const none = reduce(ticket({ untrustedSince: undefined }), read(null))!;
+    expect(reduce(ticket({ untrustedSince: undefined }), read(''))!.untrustedSince).toBe('');
+    expect(none.untrustedSince).toBeNull();
+    expect(reduce(none, read(''))!.untrustedSince).toBeNull();
+    expect(reduce(ticket({ untrustedSince: 'h1' }), read(null))!.untrustedSince).toBe('h1');
+    expect(reduce(none, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', untrusted: { head: 'h2' } })!.untrustedSince).toBe('h2');
+  });
+
   it('a run that consumes the feedback empties it', () => {
     const t = ticket({ humanInbox: [{ author: 'L', body: 'x', at: 1, source: 'session' }] });
     // Kept until the run that read it is written (ORC-220): a launch cut before reads it again.
     expect(reduce(t, { type: 'run.started', runId: 'r1', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c' })!.humanInbox).toHaveLength(t.humanInbox.length);
     expect(reduce(t, { type: 'feedback.consumed' })!.humanInbox).toEqual([]);
+  });
+
+  it('a run consumes only the messages its launch read: one that came in since stays (ORC-339)', () => {
+    const read: FeedbackItem = { author: 'L', authorId: 'u1', body: 'x', at: 1, source: 'session' };
+    const later: FeedbackItem = { author: 'L', authorId: 'u1', body: 'y', at: 2, source: 'session' };
+    const out = reduce(ticket({ humanInbox: [read, later] }), { type: 'feedback.consumed', items: [{ ...read }] })!;
+    expect(out.humanInbox).toEqual([later]);
+  });
+
+  describe('the pending job (ORC-339)', () => {
+    const pendingJob = { job: 'dev-feedback', resume: true, sensitivePaths: ['a'] };
+    const started = (starts: PendingJob = pendingJob, runId = 'r2') =>
+      ({ type: 'run.started', runId, job: starts.job, queue: 'dev', claudeSessionId: 'c', starts }) as const;
+
+    it('leaves the ticket with the run that starts it, in the same step, whoever launched it', () => {
+      expect(reduce(ticket({ pendingJob }), started())).toMatchObject({ activeRunId: 'r2', pendingJob: undefined });
+      // Its keys in another order, an empty field left out: the same start.
+      expect(reduce(ticket({ pendingJob }), started({ sensitivePaths: ['a'], job: 'dev-feedback', resume: true, input: undefined }))!.pendingJob).toBeUndefined();
+    });
+
+    it('stays behind a run of another job, of the same job with another input, or the relaunch of a lost attempt', () => {
+      expect(reduce(ticket({ pendingJob }), started({ job: 'dev' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob }), started({ ...pendingJob, inputText: 'other' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob }), started({ ...pendingJob, sensitivePaths: undefined }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob }), started({ ...pendingJob, relaunchOf: 'r0' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob: { ...pendingJob, relaunchOf: 'r0' } }), started({ ...pendingJob, relaunchOf: 'r0' }))!.pendingJob).toBeUndefined();
+      // A run.started that names no start (written before ORC-339) clears nothing.
+      expect(reduce(ticket({ pendingJob }), { type: 'run.started', runId: 'r2', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c' })!.pendingJob).toEqual(pendingJob);
+    });
+
+    it('a run does not take a ticket another launch took first', () => {
+      const t = ticket({ activeRunId: 'r1', activeJob: 'dev', pendingJob });
+      expect(reduce(t, started())).toEqual(t);
+    });
+
+    it('a clear that names a job clears only that one, its keys in any order', () => {
+      const t = ticket({ pendingJob });
+      expect(reduce(t, { type: 'pending.cleared', job: { sensitivePaths: ['a'], resume: true, job: 'dev-feedback' } })!.pendingJob).toBeUndefined();
+      expect(reduce(t, { type: 'pending.cleared', job: { job: 'dev-feedback', resume: true } })!.pendingJob).toEqual(pendingJob);
+      expect(reduce(t, { type: 'pending.cleared', job: { job: 'fix-ci' } })!.pendingJob).toEqual(pendingJob);
+    });
   });
 
   it('a cleared run frees the ticket, and keeps the verification', () => {

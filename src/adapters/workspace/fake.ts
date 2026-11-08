@@ -1,3 +1,4 @@
+import type { BranchReader, HumanPush } from '../../core/clean-verify.js';
 import { branchName } from '../../core/naming.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
@@ -57,6 +58,31 @@ export class FakeWorkspaces implements WorkspaceManager {
       showAtBase: async (p) => base[p],
       showAtHead: async (p) => d.head?.[p],
       filesAtHead: async () => Object.keys(d.head ?? {}),
+    };
+  }
+
+  /**
+   * Each worktree's branch as the path rules read it (ORC-338), as a test sets it: what it changed since the fork point,
+   * what it changed since each of its ancestors, and the default branch's config. A worktree not set changed nothing;
+   * one in `gone` is no worktree at all.
+   */
+  branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string }>();
+  gone = new Set<string>();
+  /** What each `changedSince` was asked: the mark, and the human heads left out. */
+  sinceAsked: { rev: string; humanPushes: readonly HumanPush[] }[] = [];
+
+  async branchReader(_repoPath: string, path: string): Promise<BranchReader | undefined> {
+    if (this.gone.has(path)) return undefined;
+    const b = this.branches.get(path) ?? { changed: [] };
+    return {
+      changed: async () => b.changed,
+      agentChanges: async (rev, humanPushes) => {
+        this.sinceAsked.push({ rev, humanPushes });
+        return b.since?.[rev] ?? b.changed.map((f) => f.path);
+      },
+      showAtFork: async () => undefined,
+      showAtHead: async () => undefined,
+      baseConfig: async () => b.baseConfig,
     };
   }
 

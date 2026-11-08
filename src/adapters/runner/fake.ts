@@ -16,8 +16,12 @@ export interface FakeScript {
   fail?: string;
   /** What the detector saw (ORC-136). */
   stagnation?: Stagnation;
+  /** The subscription's usage limit stopped it (ORC-340). */
+  usageLimit?: { resetAt?: number };
   /** `false`: this build never calls `submit_result`. */
   submit?: false;
+  /** What this run hands to `submit_result`, whatever its step (the `intake` assessment, ORC-206), in place of a build's default. */
+  output?: AgentOutput;
 }
 
 interface LiveRun {
@@ -73,13 +77,13 @@ export class FakeRunner implements Runner {
       releaseHold();
     };
     const lastText = [...events].reverse().find((e): e is Extract<RunStreamEvent, { kind: 'text' }> => e.kind === 'text')?.text ?? '';
-    const output: AgentOutput = { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
-    const submitted = this.submit && s.submit !== false && req.prompt.startsWith('/factory:dev\n') ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
+    const output: AgentOutput = s.output ?? { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    const submitted = this.submit && s.submit !== false && (s.output || req.prompt.startsWith('/factory:dev\n')) ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
     const done: Promise<RunResult> = Promise.all([held, submitted]).then(() => {
       ch.close();
       this.live.delete(req.runId);
       if (s.fail) throw new Error(s.fail);
-      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}) };
+      return { outcome: forced ?? s.outcome ?? 'success', costUsd: s.costUsd ?? 0.1, turns, lastText, ...(s.tokens ? { tokens: s.tokens } : {}), ...(s.stagnation ? { stagnation: s.stagnation } : {}), ...(s.usageLimit ? { usageLimit: s.usageLimit } : {}) };
     });
     const run: LiveRun = { deadline: this.clock.now() + req.limits.durationMs, end, done };
     if (s.hold) this.live.set(req.runId, run);

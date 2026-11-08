@@ -1,3 +1,5 @@
+import type { BranchReader } from '../../core/clean-verify.js';
+
 export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'knowledge';
 
 export interface WorkspaceRequest {
@@ -44,6 +46,11 @@ export interface WorkspaceManager {
   head(path: string): Promise<string | undefined>;
   /** What the commits from `base` to a worktree's head changed (ORC-123); none for a path that is no worktree. */
   stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined>;
+  /**
+   * A worktree's branch as the path rules read it (ORC-338), on the factory's repository against its default branch: the
+   * same `gitReader` as the clone's. None for a path that is no worktree. Without sandboxes only, where `verify` reads no clone.
+   */
+  branchReader(repoPath: string, path: string): Promise<BranchReader | undefined>;
   /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */
   uncommitted(path: string): Promise<string[]>;
   /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */

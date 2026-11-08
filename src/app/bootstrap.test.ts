@@ -27,6 +27,19 @@ describe('bootstrap', () => {
     await app.stop();
   });
 
+  it('says at startup that no daily budget caps the runs, and only then (ORC-340)', async () => {
+    const started = async (limits: { perDayUsd?: number }) => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits });
+      const logs: string[] = [];
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      await app.stop();
+      return logs.some((m) => m.startsWith('Warning: no daily budget'));
+    };
+    expect(await started({})).toBe(true);
+    expect(await started({ perDayUsd: 40 })).toBe(false);
+  });
+
   it('selects the GitHub App forge when the app is configured, without logging the key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -99,6 +112,12 @@ describe('bootstrap', () => {
       expect(fullReadPaths!({ frozenTests: frozen } as Partial<TicketState> as TicketState)).toEqual(['src/export.test.ts', 'vitest.config.ts']);
       expect(fullReadPaths!({} as TicketState)).toEqual([]);
     });
+  });
+
+  it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' } })).rejects.toThrow(/^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/);
   });
 
   it('refuses to start on an invalid factory.yml, naming the key', async () => {
@@ -247,6 +266,12 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4196, host: '0.0.0.0', relay: { kind: 'none' }, projects: [], limits: {} });
     await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/FACTORY_UI_PASSWORD/);
+  });
+
+  it('refuses to start real runs without a container engine or FACTORY_ALLOW_HOST_RUNS=1 (ORC-349)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4194, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    await expect(startFactory({ home, log: () => {}, env: {} })).rejects.toThrow(/FACTORY_ALLOW_HOST_RUNS=1/);
   });
 
   it('protects the API with the UI password on a non-loopback host', async () => {

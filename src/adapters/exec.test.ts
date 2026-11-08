@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, TIMED_OUT } from './exec.js';
 
@@ -22,6 +25,34 @@ describe.skipIf(process.platform === 'win32')('execCmd with a deadline', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(alive(grandchild)).toBe(false);
   });
+
+  it('gives the code of a command that ended before the deadline, even when what it left holds its output past it', async () => {
+    const started = Date.now();
+    // It exits at once; its background child keeps the pipe open until the deadline kills the group.
+    const r = await execCmd('sh', ['-c', 'sleep 30 & exit 3'], { timeoutMs: 300 });
+    expect(r.code).toBe(3);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  // `setsid` is Linux's: elsewhere nothing would hold the output, and the test would pass without the fix.
+  it.skipIf(process.platform !== 'linux')('answers at the deadline for a command that ended before it, when what holds its output left its group', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-exec-'));
+    const pidFile = join(dir, 'holder.pid');
+    const started = Date.now();
+    try {
+      // Its child in a session of its own, holding stdout: the group's kill misses it, and 'close' never comes.
+      const r = await execCmd('sh', ['-c', `setsid sh -c 'echo $$ > ${pidFile}; exec sleep 30' & exit 0`], { timeoutMs: 300 });
+      expect(r.code).toBe(0);
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally {
+      try {
+        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
+      } catch {
+        // Not started, or already gone.
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10_000);
 
   it('leaves a command that ends in time as it is', async () => {
     expect(await execCmd('sh', ['-c', 'echo ok'], { timeoutMs: 5_000 })).toEqual({ stdout: 'ok\n', stderr: '', code: 0 });

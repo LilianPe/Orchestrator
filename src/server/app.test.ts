@@ -11,7 +11,7 @@ import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp } from './app.js';
 
-async function setup(extra: { uiPassword?: string } = {}) {
+async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined> } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -50,6 +50,12 @@ describe('server', () => {
     expect(githubWebhook).toHaveBeenCalledWith('{"x":1}', expect.objectContaining({ 'x-hub-signature-256': 'sha256=00', 'x-github-event': 'push' }));
   });
 
+  it('serves until when the usage limit holds the launches, null when it holds none (ORC-340)', async () => {
+    expect((await (await (await setup()).app.request('/api/state')).json()).usageLimitedUntil).toBeNull();
+    const held = await setup({ usageLimitedUntil: async () => 301_000 });
+    expect((await (await held.app.request('/api/state')).json()).usageLimitedUntil).toBe(301_000);
+  });
+
   it('serves state without run tokens', async () => {
     const { app } = await setup();
     const body = await (await app.request('/api/state')).json();
@@ -59,7 +65,7 @@ describe('server', () => {
     expect(body.capacity.dev).toEqual({ used: 1, total: 3 });
   });
 
-  describe('the Flux (ORC-297)', () => {
+  describe('the Flow (ORC-297)', () => {
     it('serves a blocked ticket in Needs you with its cause, a running run in Working with its step, duration and tokens', async () => {
       const { app, store } = await setup();
       const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
@@ -94,7 +100,7 @@ describe('server', () => {
       expect((await app.request('/api/flow')).status).toBe(401);
     });
 
-    it('serves no run token to the browser: not in the state, the Flux, the events nor the live stream', async () => {
+    it('serves no run token to the browser: not in the state, the Flow, the events nor the live stream', async () => {
       const { app, store, bus } = await setup();
       const TOKEN = 'CANARY-RUN-TOKEN';
       const run = (await store.getRun('r1'))!;
@@ -154,6 +160,15 @@ describe('server', () => {
     const ok = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
     expect((await ok.json()).identifier).toBe('REL-1');
     expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
+  });
+
+  it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {
+    const { app, tracker } = await setup();
+    tracker.addIssue({ identifier: 'REL-2', title: 'Export to CSV' });
+    tracker.addIssue({ identifier: 'HR-7', title: 'Export of salaries' });
+    const res = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { identifier: string }[]).map((h) => h.identifier).sort()).toEqual(['REL-1', 'REL-2']);
   });
 
   it('the agent listener serves the agent API, with its run token, and nothing else (ORC-204)', async () => {
@@ -315,6 +330,35 @@ describe('server', () => {
       expect((await app.request('http://localhost:4100/api/control/pause', { method: 'POST', headers: { origin: 'http://localhost:4100' } })).status).toBe(200);
       expect((await app.request('/api/control/resume', { method: 'POST' })).status).toBe(200);
       expect(submitted).toHaveLength(2);
+    });
+  });
+
+  describe('a foreign Host is refused: DNS rebinding (ORC-349)', () => {
+    // A page of evil.example rebound to 127.0.0.1 sends Host and Origin of its own name: equal, so the Origin check passes.
+    const as = (host: string, init: RequestInit = {}) => ({ ...init, headers: { ...(init.headers as Record<string, string>), host } });
+
+    it('refuses the interface, its reads and its writes, under a name that is not the loopback or the public URL', async () => {
+      const { app, submitted } = await setup();
+      expect((await app.request('/api/state', as('evil.example:4100'))).status).toBe(403);
+      expect((await app.request('/', as('evil.example'))).status).toBe(403);
+      const pause = await app.request('/api/control/pause', as('evil.example:4100', { method: 'POST', headers: { origin: 'http://evil.example:4100' } }));
+      expect(pause.status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+
+    it('answers under the loopback names alone, not a tunnel that brings the public URL here', async () => {
+      const { app } = await setup();
+      for (const host of ['localhost:4100', '127.0.0.1:4100', '127.0.1.1:4100', '[::1]:4100', 'LOCALHOST']) expect((await app.request('/api/state', as(host))).status, host).toBe(200);
+      for (const host of ['factory.example.com', '127.0.0.1.evil.example', 'localhost.evil.example:4100', '127.0.0.1x']) expect((await app.request('/api/state', as(host))).status, host).toBe(403);
+    });
+
+    it('leaves the webhooks and the run-token agent API to their own guards, and the password-guarded interface to its password', async () => {
+      const { app } = await setup();
+      expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
+      expect((await app.request('/agent/issue/REL-1', as('host.containers.internal:4101', { headers: { authorization: 'Bearer tok' } }))).status).toBe(200);
+      const guarded = await setup({ uiPassword: 's3cret' });
+      const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
+      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic }))).status).toBe(200);
     });
   });
 });

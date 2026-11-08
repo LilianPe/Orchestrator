@@ -31,7 +31,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
       'What I tried:',
       '- Started the run dev: stopped at its limit.',
       'Question: Shall I redo the step as is (reply "yes") or with an instruction (write it)?',
-      expect.stringMatching(/^State: branch \S+ · last commit \S+ · CI none · tokens 123 · \d+ min$/),
+      expect.stringMatching(/^State: branch \S+ · last commit \S+ · CI none · code-run tokens 123 · \d+ min$/),
       'Reply on this ticket: I will resume as soon as you answer.',
     ]);
     const told = h.tracker.activities('ls-1').filter((a) => a.type === 'elicitation' || a.type === 'error');

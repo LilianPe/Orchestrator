@@ -145,6 +145,39 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.getRun('r1'))!.tokens).toEqual(tokens);
   });
 
+  it('tells whether the inbox holds an event id, processed or not (ORC-336)', async () => {
+    const s = await store();
+    expect(await s.inboxHas('e1')).toBe(false);
+    await s.appendInbox(delegatedEvent('e1', 'REL-1', 10));
+    expect(await s.inboxHas('e1')).toBe(true);
+    await s.markInboxProcessed('e1');
+    expect(await s.inboxHas('e1')).toBe(true);
+    expect(await s.inboxHas('e2')).toBe(false);
+  });
+
+  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {
+    const s = await store();
+    expect(await s.pendingDeliveries()).toEqual([]);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe(false);
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"2"}' }, { key: 'activity:a', value: '{"raw":"1"}' }]);
+    await s.deleteDelivery('activity:b');
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBe(true);
+    // Set aside: no longer pending, its value kept for an operator; the key may be kept again.
+    await s.asideDelivery('activity:a');
+    expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"again"}' }]);
+    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"1"}');
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    await s.asideDelivery('activity:a');
+    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"new"}');
+    // The same delivery, same value, kept again once set aside: kept, beside the row set aside.
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.pendingDeliveries()).toContainEqual({ key: 'activity:a', value: '{"raw":"new"}' });
+    expect(await s.getMeta('delivery:activity:a')).toBe('{"raw":"new"}');
+  });
+
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
     const s = await store();
     expect(await s.measureFacts('p', 'REL-1')).toEqual({ devSession: undefined, events: [], runs: [], effects: [], acks: {} });
@@ -300,6 +333,35 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`).sort()).toEqual(['A:ask', 'B:dev']);
     await s.removeFromQueue('p', 'A');
     expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`)).toEqual(['B:dev']);
+  });
+
+  it("gives a ticket's queued items, handed-out ones included, which the line no longer lists (ORC-339)", async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A', job: 'dev-feedback', queue: 'dev', input: 'feedback', resume: true }));
+    await s.enqueue(q({ ticketId: 'B', job: 'dev', queue: 'dev' }));
+    const claim = await s.claimQueued('dev', 60_000);
+    expect(claim?.item.ticketId).toBe('A');
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['B']);
+    expect(await s.queuedItems('p', 'A')).toEqual([expect.objectContaining({ job: 'dev-feedback', input: 'feedback', resume: true })]);
+    expect(await s.queuedItems('other', 'A')).toEqual([]);
+    await s.finishQueued(claim!);
+    expect(await s.queuedItems('p', 'A')).toEqual([]);
+  });
+
+  it('keeps the failed starts of an item put back in line on the item, and hands it out again only from its time on (ORC-339)', async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A' }));
+    expect(await s.releaseQueued((await s.claimQueued('dev', 60_000))!, { failedStarts: 2, notBefore: Date.now() - 1 })).toBe(true);
+    const again = await s.claimQueued('dev', 60_000);
+    expect(again?.item.failedStarts).toBe(2);
+    // Put back without a count: the one it has stays.
+    expect(await s.releaseQueued(again!)).toBe(true);
+    const third = await s.claimQueued('dev', 60_000);
+    expect(third?.item.failedStarts).toBe(2);
+    // Not before its time: no drain hands it out, and it is still the ticket's.
+    expect(await s.releaseQueued(third!, { failedStarts: 3, notBefore: Date.now() + 60_000 })).toBe(true);
+    expect(await s.claimQueued('dev', 60_000)).toBeUndefined();
+    expect(await s.queuedItems('p', 'A')).toEqual([expect.objectContaining({ failedStarts: 3 })]);
   });
 
   it('keeps the order of arrival of items of one priority enqueued at the same instant (ORC-228)', async () => {

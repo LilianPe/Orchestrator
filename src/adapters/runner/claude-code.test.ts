@@ -7,7 +7,7 @@ import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../
 import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner, liveDir, worktreeReader } from './claude-code.js';
+import { buildClaudeArgs, childEnv, ClaudeCodeRunner, estimateCostUsd, liveDir, NO_PUSH, SANDBOX_CLAUDE_TOKEN, worktreeReader } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -410,6 +410,92 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     expect(done).toMatchObject({ outcome: 'limit' });
     expect(done).not.toHaveProperty('infra');
   });
+
+  it('prices a run killed at its duration cap from the tokens it consumed, never $0 (ORC-340)', async () => {
+    const { r } = runner();
+    const usage = { input_tokens: 1_000_000, output_tokens: 100_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 };
+    const capped = r.start(req({ model: 'claude-sonnet-5-5', limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(assistant('m1', usage)), FAKE_CLAUDE_HANG: '1' }));
+    // $2 of input, $1 of output, $0.20 of cache reads.
+    expect(await capped.done).toMatchObject({ outcome: 'limit', costUsd: 3.2 });
+  });
+
+  it('prices at the list price of each family; a model of no known family at the dearest, never under-counted', () => {
+    const t = { input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000 };
+    expect(estimateCostUsd('claude-opus-5-5', t)).toBeCloseTo(4 + 20 + 0.2 + 5);
+    expect(estimateCostUsd('claude-sonnet-5-5', t)).toBeCloseTo(2 + 10 + 0.2 + 2.5);
+    expect(estimateCostUsd('claude-haiku-5-5', t)).toBeCloseTo(0.1 + 0.5 + 0.01 + 0.125);
+    expect(estimateCostUsd('some-new-model', t)).toBeCloseTo(10 + 50 + 0.25 + 12.5);
+  });
+
+  it('a result line that reports less than what streamed takes the larger, per field: real work is never $0 nor off the budget', async () => {
+    const { r } = runner();
+    const streamed = assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 });
+    const zero = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0, num_turns: 1, result: 'ok', usage: { input_tokens: 0, output_tokens: 5 } });
+    expect(await r.start(req({ model: 'claude-sonnet-5-5' }, { FAKE_CLAUDE_SCRIPT: script(streamed, zero) })).done).toMatchObject({
+      outcome: 'success',
+      tokens: { input: 1_000_000, output: 5 },
+      costUsd: 2.00005,
+    });
+  });
+
+  it('keeps the larger of the reported cost and the estimate: a result that under-reports is not kept, one that reports more is', async () => {
+    const { r } = runner();
+    const used = assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 });
+    const costing = (usd: number) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: usd, num_turns: 1, result: 'ok' });
+    // $2 of Sonnet input, reported as $0.01.
+    expect(await r.start(req({ model: 'claude-sonnet-5-5' }, { FAKE_CLAUDE_SCRIPT: script(used, costing(0.01)) })).done).toMatchObject({ costUsd: 2 });
+    expect(await r.start(req({ model: 'claude-sonnet-5-5' }, { FAKE_CLAUDE_SCRIPT: script(used, costing(3)) })).done).toMatchObject({ costUsd: 3 });
+  });
+
+  it('prices a cut run on the model the init line reports, whatever the request named', async () => {
+    const { r } = runner();
+    const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });
+    const h = r.start(req({ model: '', limits: { turns: 50, durationMs: 200, usd: 5 } }, { FAKE_CLAUDE_SCRIPT: script(init, assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 })), FAKE_CLAUDE_HANG: '1' }));
+    expect(await h.done).toMatchObject({ outcome: 'limit', costUsd: 4 });
+  });
+
+  describe('the usage limit of the subscription (ORC-340)', () => {
+    const limitEvent = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_900_000_000 } });
+    const resultOf = (text: string, isError = true) => JSON.stringify({ type: 'result', subtype: 'success', is_error: isError, total_cost_usd: 0, num_turns: 1, result: text });
+
+    it('is told with its reset, from the event or from the CLI result', async () => {
+      const { r } = runner();
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent) })).done).toMatchObject({ usageLimit: { resetAt: 1_900_000_000_000 } });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(resultOf('Claude AI usage limit reached|1900000000')) })).done).toMatchObject({ outcome: 'failure', usageLimit: { resetAt: 1_900_000_000_000 } });
+    });
+
+    it('only from the anchored result: an error that names a limit in other words is a failure of the agent', async () => {
+      const { r } = runner();
+      for (const text of ["You've hit your limit", 'The API usage limit reached|1900000000 was quoted in a log', 'Done within the usage limit.']) {
+        expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(resultOf(text)) })).done).not.toHaveProperty('usageLimit');
+      }
+    });
+
+    it.each(['allowed', 'allowed_warning'])('a later event %s lifts a rejected one', async (status) => {
+      const { r } = runner();
+      const lifted = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status, resetsAt: 1_900_000_000 } });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(limitEvent, lifted, resultOf('Something else broke.')) })).done).not.toHaveProperty('usageLimit');
+    });
+
+    it('a stream that goes on after a rejected event was not stopped by it, and a run that succeeds never is', async () => {
+      const { r } = runner();
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(limitEvent, assistant('m1'), resultOf('Done.')) })).done).not.toHaveProperty('usageLimit');
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, resultOf('Done.', false)) })).done).toMatchObject({ outcome: 'success' });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, resultOf('Done.', false)) })).done).not.toHaveProperty('usageLimit');
+    });
+
+    it("the CLI's own message after the event (model <synthetic>) is no model turn: the limit stands", async () => {
+      const { r } = runner();
+      const synthetic = JSON.stringify({ type: 'assistant', message: { id: 'm-syn', model: '<synthetic>', content: [{ type: 'text', text: 'Claude AI usage limit reached|1900000000' }] } });
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent, synthetic, resultOf('Claude AI usage limit reached|1900000000')) })).done).toMatchObject({ usageLimit: { resetAt: 1_900_000_000_000 } });
+    });
+
+    it('leaves infra as it is: what to make of the limit is the factory configuration', async () => {
+      const { r } = runner();
+      // No result line, nobody stopped it: the infrastructure, as without the limit.
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(assistant('m1'), limitEvent) })).done).toMatchObject({ outcome: 'failure', infra: true, usageLimit: { resetAt: 1_900_000_000_000 } });
+    });
+  });
 });
 
 /** ORC-220: the attempt's writer outlives the daemon that started it, which `start-and-die.ts` is, killed for real. */
@@ -495,14 +581,27 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
 describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('names the token of the chosen account, whatever login the daemon holds', async () => {
+  it("names a placeholder for the chosen account, never its token nor the daemon's (ORC-337)", async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
     const { sandboxes, id, spawnCommand } = await sandbox();
     const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
     const r = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, claudeToken: () => 'chosen-account' });
     await r.start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
     const [, , opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
-    expect(opts!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'chosen-account' });
+    expect(opts!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
+    expect(JSON.stringify(opts)).not.toMatch(/chosen-account|daemon-login/);
+  });
+
+  it('follows the token resolved with the proxy when given one: none there, no placeholder, whatever the daemon holds (ORC-337)', async () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
+    const make = (token: string | undefined) => new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, sandboxClaudeToken: () => token });
+    await make(undefined).start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    await make('resolved').start(req({ sandboxId: id, cwd: '/work', runId: 'r-2' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    const envs = spawnCommand.mock.calls.map((c) => (c as Parameters<SandboxProvider['spawnCommand']>)[2]!.env);
+    expect(envs[0]).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(envs[1]).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
   });
 
   it('names no credential at all when there is none, and the API key never', async () => {
@@ -516,7 +615,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(opts!.env).toEqual({ FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') });
   });
 
-  it('runs claude through spawnCommand, naming the run env and the account token only', async () => {
+  it('runs claude through spawnCommand, naming the run env and the token placeholder only', async () => {
     vi.stubEnv('SOME_DAEMON_VAR', 'leak');
     vi.stubEnv('GH_TOKEN', 'ghp_leak');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
@@ -533,7 +632,7 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const [sid, argv, opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
     expect(sid).toBe(id);
     expect(argv).toEqual([process.execPath, fx('fake-claude.mjs'), ...buildClaudeArgs(rq)]);
-    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth-test' } });
+    expect(opts).toEqual({ cwd: '/work', env: { ...runEnv, CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN } });
   });
 
   it('spawns the engine CLI with the daemon PATH, and hands the sandbox PATH to the command in the container', async () => {
@@ -600,19 +699,60 @@ describe('childEnv: a run on the host (ORC-211)', () => {
       HOME: '/h', PATH: '/app/bin:/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
       CLAUDE_CODE_OAUTH_TOKEN: 'c',
       FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app',
+      ...NO_PUSH,
     });
   });
 
   it('gives no run on the host a GitHub token (ORC-125), and keeps ANTHROPIC_API_KEY until the host runs go (ORC-179)', () => {
-    expect(childEnv({ GH_TOKEN: 'g', GH_HOST: 'h', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' });
+    expect(childEnv({ GH_TOKEN: 'g', GH_HOST: 'h', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s', ...NO_PUSH });
   });
 
   it('the chosen account replaces any other login of the daemon', () => {
-    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen' });
+    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen', ...NO_PUSH });
+  });
+
+  it('without a chosen account, a host run keeps both logins of the daemon, as before ORC-337', () => {
+    // The daemon's CLAUDE_CODE_OAUTH_TOKEN goes to the proxy for the sandboxes (`sandboxClaudeToken`), never as a chosen account here.
+    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {})).toEqual({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old', ...NO_PUSH });
   });
 
   it('drops variables left over from the old prefix', () => {
     const env = childEnv({ HOME: '/h', RELAIS_UI_PASSWORD: 'pw', RELAIS_HOME: '/old' }, {}); // transition, à retirer (ORC-167)
-    expect(env).toEqual({ HOME: '/h' });
+    expect(env).toEqual({ HOME: '/h', ...NO_PUSH });
+  });
+
+  describe('a push from the host fails by its git config, however the command names it (ORC-349)', () => {
+    // No global config of the machine: its pushurl or its rewrites would decide for the test.
+    const isolated = { GIT_CONFIG_GLOBAL: '/dev/null' };
+    const clean = { ...process.env, ...isolated };
+    const git = (cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+    const repos = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'factory-nopush-'));
+      const id = { ...clean, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' };
+      git(dir, ['init', '-q', '--bare', 'origin.git'], id);
+      git(dir, ['clone', '-q', 'origin.git', 'w'], id);
+      const work = join(dir, 'w');
+      git(work, ['commit', '-q', '--allow-empty', '-m', 'agent'], id);
+      return { origin: join(dir, 'origin.git'), work };
+    };
+    // What the parsing hook misses: a name in a variable, a substitution, an alias, a URL of its own.
+    const disguised = (origin: string) => [
+      'git push origin HEAD:refs/heads/a',
+      'g=git; $g push origin HEAD:refs/heads/b',
+      'git $(printf push) origin HEAD:refs/heads/c',
+      'git -c alias.ship=push ship origin HEAD:refs/heads/d',
+      `git push file://${origin} HEAD:refs/heads/e`,
+      `git push ${origin} HEAD:refs/heads/f`,
+    ];
+
+    it.skipIf(process.platform === 'win32')('fails every push to every remote, and leaves the fetch alone', () => {
+      const { origin, work } = repos();
+      const env = { ...childEnv(process.env, {}), ...isolated };
+      for (const command of disguised(origin)) expect(spawnSync('bash', ['-c', command], { cwd: work, env, encoding: 'utf8' }).status, command).not.toBe(0);
+      expect(git(origin, ['for-each-ref'], env).stdout).toBe('');
+      expect(git(work, ['fetch', '-q', 'origin'], env).status).toBe(0);
+      // The control: the same push without the run's config reaches the remote.
+      expect(git(work, ['push', '-q', 'origin', 'HEAD:refs/heads/control'], clean).status).toBe(0);
+    });
   });
 });

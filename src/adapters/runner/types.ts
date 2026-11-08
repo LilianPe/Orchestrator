@@ -33,8 +33,9 @@ export interface RunRequest {
   limits: RunLimits;
   env: Record<string, string>;
   /**
-   * Paths the run must not write: set when it reads untrusted content (I12, ORC-274). Carried, not
-   * enforced yet: `ClaudeCodeRunner` ignores it until the runner's sandbox does (ORC-151, ORC-204).
+   * Paths the run must not write: set when it reads untrusted content (I12, ORC-274). The runner
+   * does not enforce it: it marks the ticket's branch untrusted (`TicketState.untrustedSince`, ORC-338), and `checkClone` refuses what
+   * the branch then commits in the repository's `sensitive_paths`.
    */
   sensitivePaths?: readonly string[];
   /**
@@ -55,6 +56,8 @@ export interface RunResult {
   infra?: true;
   /** What stopped it, when the detector did (ORC-136): `outcome` is then `limit`. */
   stagnation?: Stagnation;
+  /** The subscription's usage limit stopped it (ORC-340); `resetAt` (ms) when the CLI told it. */
+  usageLimit?: { resetAt?: number };
 }
 
 export interface RunHandle {
@@ -67,6 +70,8 @@ export interface RunHandle {
 export interface AttachRequest {
   runId: string;
   limits: RunLimits;
+  /** Prices the attempt if it ended without a result line (ORC-340). */
+  model?: string;
   /** Spent already, against `limits.durationMs`. */
   elapsedMs: number;
   /** The run's environment: its secrets are masked as at the start. */

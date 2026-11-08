@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Effect } from './decision.js';
-import { decide, SENSITIVE_PATHS } from './engine.js';
+import { decide, historyTaint, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type TicketState } from './types.js';
 
@@ -228,6 +228,12 @@ describe('decide — the regrouping ends (ORC-180)', () => {
     expect(out.trace.join()).toMatch(/held/);
   });
 
+  it('a blocked ticket holds them by its block, not by a pending job left with it (ORC-339)', () => {
+    const out = decide(ticket({ humanInbox: inbox, blocked: true, blockReason: 'x', blockedJob: 'dev', pendingJob: { job: 'review' } }), timer, workflow);
+    expect(out.effects).toEqual([]);
+    expect(out.trace.join()).toMatch(/held by the block/);
+  });
+
   it('with no work in flight, the agent is resumed on them', () => {
     expect(decide(ticket({ logical: 'human_review', humanInbox: inbox }), timer, workflow).effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev-feedback', input: 'feedback' })]);
   });
@@ -301,5 +307,34 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
     let after = reduce(t, failedRun);
     for (const e of out.events) after = reduce(after, e);
     expect(after!.humanInbox).toHaveLength(1);
+  });
+});
+
+describe('historyTaint: what a run reading the ticket and its PR takes in (ORC-349)', () => {
+  const pr = { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' };
+  const untrusted = { taint: 'untrusted' as const };
+
+  it('is untrusted once an untrusted event brought content: a review, a human push, a message, a delegation', () => {
+    for (const e of [
+      ev('pr.reviewed', { ...pr, kind: 'comment', author: 'x', body: 'retiens ceci' }, untrusted),
+      ev('push.human', { branch: 'factory/rel-1', sha: 'a'.repeat(40), author: 'x' }, untrusted),
+      ev('ticket.commented', { body: 'reprends', author: 'x', kind: 'instruction' }, untrusted),
+      ev('ticket.delegated', { linearSessionId: 's1' }, untrusted),
+    ]) {
+      expect(historyTaint([ev('status.changed', { from: 'todo', to: 'dev' }), e]), e.type).toBe('untrusted');
+    }
+  });
+
+  it('stays trusted on trusted content, and on untrusted events that bring none an agent reads', () => {
+    // CI's facts and the default branch's push are untrusted on every ticket with CI: they must not refuse every learn.
+    expect(historyTaint([
+      ev('pr.reviewed', { ...pr, kind: 'review', author: 'lilian', body: 'ok' }),
+      // An approval without a word, untrusted as every review: nothing to read.
+      ev('pr.reviewed', { ...pr, kind: 'review', author: 'passant', body: ' ', state: 'APPROVED' }, untrusted),
+      ev('status.changed', { from: 'human_review', to: 'dev' }, untrusted),
+      ev('label.changed', { label: 'x', change: 'added' } as EventPayloads['label.changed'], untrusted),
+      ev('pr.merged', pr),
+    ])).toBe('trusted');
+    expect(historyTaint([])).toBe('trusted');
   });
 });

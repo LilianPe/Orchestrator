@@ -2,7 +2,9 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
-import { execCmd, HARDENING, mustExec, type Exec } from '../exec.js';
+import { forkPoint, gitAt, gitReader, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
+import { STALLED } from '../../publish/publish.js';
+import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
@@ -11,11 +13,16 @@ function assertSafe(id: string): void {
 }
 
 /**
- * What the agent's repository does not take of the repository's own config, which the agent read before and which no
- * agent writes: what describes that repository's layout, or names a host's path for hooks. The rest stays as it was for
- * a run: identity, remotes, credentials, filters, line endings.
+ * What the agent's repository takes of the repository's own config, and nothing else (ORC-341): its identity and line
+ * endings for a commit, Git LFS's filter, its remotes' URLs and what they fetch, each value without the credentials of a
+ * URL (`withoutUserinfo`).
+ * Left out, whatever its key: what reaches the forge with a credential (an extraheader, `credential.*`, a push URL, an
+ * `insteadOf` that names a token), runs a command of the host's (`core.sshCommand`, a hooks path), or describes the
+ * repository's layout. The agent has no token (ORC-125): the factory alone pushes, with its own.
  */
-const NOT_INHERITED = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
+const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean|smudge|process|required)|remote\..+\.(url|fetch))$/i;
+/** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
+const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 /** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
 const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
@@ -64,6 +71,18 @@ function agentHead(work: string): { branch: string; sha?: string } | undefined {
   return packed && SHA.test(packed) ? { branch, sha: packed } : { branch };
 }
 
+/**
+ * A remote's URL without what authenticates it: `https://x-access-token:…@`, or a token as the user, a transport's
+ * (`<helper>::<url>`) included. Over ssh the user stays, as the server's login, never its password. An scp-like
+ * `git@host:path` or a path has none.
+ */
+export function withoutUserinfo(url: string): string {
+  return url.replace(/(^|::)([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)@/i, (_, at: string, scheme: string, userinfo: string) => {
+    const user = /^(git\+)?ssh(\+git)?:/i.test(scheme) ? userinfo.split(':')[0] : '';
+    return `${at}${scheme}${user ? `${user}@` : ''}`;
+  });
+}
+
 /** The paths of `git status --porcelain -z`, a rename's or copy's both sides included (ORC-123). */
 export function parseStatus(out: string): string[] {
   const fields = out.split('\0').filter(Boolean);
@@ -75,26 +94,66 @@ export function parseStatus(out: string): string[] {
   return paths;
 }
 
-/** The default branch as `origin/<name>`; `origin/main` when the clone does not know it. */
+/**
+ * The default branch as a full ref, `refs/remotes/origin/<name>`; `refs/remotes/origin/main` when the clone does not
+ * know it. In full: a short `origin/main` is resolved by git as `refs/tags/origin/main` first, a tag anyone who pushes
+ * to the forge can make.
+ */
 export async function originHead(exec: Exec, repo: string): Promise<string> {
-  return (await originHeadOf(exec, repo)).name;
+  return (await originHeadOf(exec, repo)).ref;
 }
 
-/** `originHead`, and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
-export async function originHeadOf(exec: Exec, repo: string): Promise<{ name: string; set: boolean }> {
-  const r = await exec('git', ['-C', repo, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
-  return r.code === 0 ? { name: r.stdout.trim(), set: true } : { name: 'origin/main', set: false };
+/** `originHead` (`ref`), its short name for a message (`origin/main`), and whether `origin/HEAD` gave it (`set`) or `origin/main` is assumed. */
+export async function originHeadOf(exec: Exec, repo: string): Promise<{ ref: string; name: string; set: boolean }> {
+  const r = await exec('git', ['-C', repo, 'symbolic-ref', 'refs/remotes/origin/HEAD']);
+  const ref = r.code === 0 ? r.stdout.trim() : 'refs/remotes/origin/main';
+  return { ref, name: ref.replace(/^refs\/remotes\//, ''), set: r.code === 0 };
+}
+
+/** A launch waits this long for the forge, at most: past it, it is refused (ORC-209 C). */
+export const FETCH_DEADLINE_MS = 2 * 60_000;
+/** What the launch still gives git, killed at its deadline, to end: past it, it stops waiting for a process that left git's group. */
+const FETCH_GRACE_MS = 5_000;
+
+/**
+ * `git fetch origin` in `repo`, never longer than `deadlineMs` and never a prompt for a credential: past the deadline,
+ * git and what stayed in its process group (its ssh) are killed, and the launch stops waiting a few seconds later
+ * whatever still holds git's output. A failure's message reaches the ticket (Linear): it names neither the server's
+ * path nor the command, which go to `log`.
+ */
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void } = {}): Promise<void> {
+  const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
+  const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
+  const args = ['-C', repo, 'fetch', '--quiet', 'origin'];
+  const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
+  // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
+  const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
+  const r = await within(exec('git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired).catch((err: Error) => {
+    throw err.message === silent ? timedOut() : err;
+  });
+  if (r.code === 0) return;
+  const failure = execFailure('git', args, r);
+  o.log?.(failure.message);
+  if (r.code === TIMED_OUT) throw timedOut();
+  // git's own words stay out of the message, which reaches the ticket, but in its cause: `isTransient` reads them (ORC-343).
+  throw new Error(`the forge could not be read (git fetch, code ${r.code})`, { cause: failure });
 }
 
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
-  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec }) {
+  /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. */
+  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void }) {
     this.exec = o.exec ?? execCmd;
   }
 
   private git(repo: string, ...args: string[]): Promise<string> {
     return mustExec(this.exec, 'git', ['-C', repo, ...args]);
+  }
+
+  /** Bounded: a forge that does not answer refuses the launch, which never waits for it forever (ORC-209). */
+  private fetch(repo: string): Promise<void> {
+    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log });
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
@@ -109,7 +168,7 @@ export class GitWorkspaces implements WorkspaceManager {
       if (!branch) throw new Error(`The git repository of ${path} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
       return { path, port, branch };
     }
-    await this.git(req.repoPath, 'fetch', 'origin');
+    await this.fetch(req.repoPath);
     const branch = branchName(req.ticketId, req.title);
     const has = async (ref: string) =>
       (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
@@ -120,7 +179,8 @@ export class GitWorkspaces implements WorkspaceManager {
     // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
     if (await has(`refs/remotes/origin/${branch}`)) {
       existing = `refs/remotes/origin/${branch}`;
-      checkout = ['-b', branch, `origin/${branch}`];
+      // In full, as the trunk: a short `origin/<branch>` resolves a tag of that name first.
+      checkout = ['-b', branch, existing];
     } else if (await has(`refs/heads/${branch}`)) {
       existing = local = `refs/heads/${branch}`;
       checkout = [branch];
@@ -153,20 +213,28 @@ export class GitWorkspaces implements WorkspaceManager {
     await rm(making, { recursive: true, force: true });
     mkdirSync(dirname(path), { recursive: true });
     // Nothing of an agent has run in it: the checkout runs no hook, as `--template=` left none, and reads the daemon's own config.
-    const here = (...args: string[]) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args]);
+    const here = (args: string[], env?: Record<string, string>) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { env });
     try {
-      await here('init', '--quiet', '--template=', making);
-      const config = (await this.git(repo, 'config', '--local', '-z', '--list')).split('\0').filter(Boolean);
-      for (const entry of config) {
+      await here(['init', '--quiet', '--template=', making]);
+      // A key without a value is a boolean's true: `-z --list` gives it without the newline.
+      const config = zFields(await this.git(repo, 'config', '--local', '-z', '--list')).map((entry): [string, string] => {
         const at = entry.indexOf('\n');
-        if (at < 0 || NOT_INHERITED.test(entry.slice(0, at))) continue;
-        await here('-C', making, 'config', '--add', entry.slice(0, at), entry.slice(at + 1));
-      }
+        return at < 0 ? [entry, 'true'] : [entry.slice(0, at), entry.slice(at + 1)];
+      });
+      // Every value: a URL is never inherited with its credentials, whatever key the list admits next.
+      for (const [key, value] of config) if (INHERITED.test(key)) await here(['-C', making, 'config', '--add', key, withoutUserinfo(value)]);
+      // The checkout's LFS filter reaches the forge as the repository does, its credentials included: in the env of that
+      // checkout alone, never on a command line nor in the agent's config.
+      const forHost = config.filter(([key]) => !LAYOUT.test(key));
+      const asRepo = Object.fromEntries([
+        ['GIT_CONFIG_COUNT', String(forHost.length)],
+        ...forHost.flatMap(([key, value], i) => [[`GIT_CONFIG_KEY_${i}`, key], [`GIT_CONFIG_VALUE_${i}`, value]]),
+      ]);
       // Resolved: it is read from `making`, and `repoPath` can be relative.
-      await here('-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : []));
-      await here('-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/${trunk}`);
-      await here('-C', making, 'checkout', '--quiet', ...checkout);
-      await here('-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md');
+      await here(['-C', making, 'fetch', '--quiet', '--no-tags', '--', resolve(repo), '+refs/remotes/origin/*:refs/remotes/origin/*', '+refs/tags/*:refs/tags/*', ...(localRef ? [`+${localRef}:${localRef}`] : [])]);
+      await here(['-C', making, 'symbolic-ref', 'refs/remotes/origin/HEAD', trunk]);
+      await here(['-C', making, 'checkout', '--quiet', ...checkout], asRepo);
+      await here(['-C', making, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.claude/*', '/.claude/CLAUDE.md'], asRepo);
       renameSync(making, path);
     } catch (err) {
       await rm(making, { recursive: true, force: true });
@@ -178,7 +246,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     assertSafe(req.runId);
     const path = join(this.o.root, req.projectId, '_trunk', req.runId);
-    await this.git(req.repoPath, 'fetch', 'origin');
+    await this.fetch(req.repoPath);
     const ref = await originHead(this.exec, req.repoPath);
     await this.agentRepository(req.repoPath, path, ref, ['--detach', ref]);
     return { path };
@@ -187,7 +255,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {
     const kb = this.o.knowledgeRepo;
     if (!kb) throw new Error('No knowledge repository configured.');
-    await this.git(kb, 'fetch', 'origin');
+    await this.fetch(kb);
     const path = join(this.o.root, '_kb', req.runId);
     const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;
     const trunk = await originHead(this.exec, kb);
@@ -214,22 +282,26 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /**
-   * On the factory's repository, its config and its hooks: the agent's objects are only one more place to read objects
-   * from, whatever their `info/alternates` says. A link for `objects` could reach another repository's: not followed.
+   * A worktree's head, and git on the factory's repository, its config and its hooks, to read it: the agent's objects are
+   * only one more place to read objects from, whatever their `info/alternates` says. A link for `objects` could reach
+   * another repository's: not followed. None for a path that is no worktree.
    */
-  async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
+  private async worktreeGit(repoPath: string, path: string): Promise<{ head: string; git: CloneGit } | undefined> {
     const head = await this.head(path);
     // Absolute: read from `repoPath`, and the workspaces' root can be relative.
     const objects = resolve(path, '.git', 'objects');
     if (!head || !isDir(objects)) return undefined;
-    const env = { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
-    const git = (...args: string[]) => mustExec(this.exec, 'git', ['-C', repoPath, ...args], { env });
+    return { head, git: gitAt(this.exec, repoPath, { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects }) };
+  }
+
+  async stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined> {
+    const at = await this.worktreeGit(repoPath, path);
+    if (!at) return undefined;
+    const { head, git } = at;
     // Without renames, a source file moved into a test is its deletion: a change outside the tests.
-    const fields = (await git('diff', '--name-status', '--no-renames', '-z', base, head)).split('\0').filter(Boolean);
-    const changed: StepDiff['changed'] = [];
-    for (let i = 0; i + 1 < fields.length; i += 2) changed.push({ path: fields[i + 1]!, deleted: fields[i] === 'D' });
+    const changed = parseRawDiff(await git.raw('diff', '--raw', '--no-renames', '-z', base, head)).map(({ path: p, deleted }) => ({ path: p, deleted }));
     const show = async (rev: string, p: string) => {
-      const r = await this.exec('git', ['-C', repoPath, 'show', `${rev}:${p}`], { env });
+      const r = await git.status('show', `${rev}:${p}`);
       return r.code === 0 ? r.stdout : undefined;
     };
     return {
@@ -238,13 +310,25 @@ export class GitWorkspaces implements WorkspaceManager {
       existsAtBase: async (paths) => {
         if (paths.length === 0) return new Set();
         // One process for every candidate: the files at the base under these paths.
-        const listed = (await git('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', base, '--', ...paths)).split('\0');
+        const listed = zFields(await git.raw('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', base, '--', ...paths));
         return new Set(paths.filter((p) => listed.some((f) => f === p || f.startsWith(`${p}/`))));
       },
       showAtBase: (p) => show(base, p),
       showAtHead: (p) => show(head, p),
-      filesAtHead: async () => (await git('ls-tree', '-r', '--name-only', '-z', head)).split('\0').filter(Boolean),
+      filesAtHead: async () => zFields(await git.raw('ls-tree', '-r', '--name-only', '-z', head)),
     };
+  }
+
+  /**
+   * The same reading as the clone's (`gitReader`), on the factory's repository: its default branch fetched from the forge
+   * first, as the clone fetches it, so that the fork point and the config are the forge's. A forge that does not answer rejects.
+   */
+  async branchReader(repoPath: string, path: string): Promise<BranchReader | undefined> {
+    const at = await this.worktreeGit(repoPath, path);
+    if (!at) return undefined;
+    await this.fetch(repoPath);
+    const base = await originHead(this.exec, repoPath);
+    return gitReader(at.git, base, await forkPoint(at.git, at.head, base), at.head);
   }
 
   /** Git in the agent's directory, on the host: only without sandboxes (`FACTORY_ALLOW_HOST_VERIFY`), where the agent runs on the host anyway. */

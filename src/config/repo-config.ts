@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
-import { FORBIDDEN_PATHS } from '../checks/forbidden-paths.js';
+import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 
 /**
  * `.factory/config.yml` (ORC-209): what a repository declares to the factory, optional. It can add controls or
@@ -20,6 +20,11 @@ export interface RepoConfig {
   setupSecrets: string[];
   services: string[];
   sensitivePaths: string[];
+  /**
+   * The `sensitive_paths` entries that name no path of the repository (ORC-338), left out of `sensitivePaths`: reported by
+   * `factory validate` and the daemon's log, and an untrusted branch is refused on them. Absent when there is none.
+   */
+  sensitivePathWarnings?: string[];
   /** Paths the agent never writes: the socle's, which no configuration removes. */
   forbiddenPaths: string[];
   maxDiff: MaxDiff;
@@ -125,10 +130,17 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   const services = read('services', strings, 'an array is expected', 'a non-empty service name is expected');
   const sensitivePaths = read('sensitive_paths', strings, 'an array of paths is expected', 'a non-empty path is expected');
   const visualPaths = read('visual_paths', strings, 'an array of paths is expected', 'a non-empty path is expected');
+  const sensitiveWarnings: string[] = [];
+  const enforced: string[] = [];
   for (const [key, paths] of [['sensitive_paths', sensitivePaths], ['visual_paths', visualPaths]] as const) {
     paths?.forEach((p, i) => {
+      // Enforced at `checkClone` (ORC-338): a pattern that names nothing of the repository would protect nothing.
+      const outside = key === 'sensitive_paths' ? repoPatternError(p) : undefined;
       // Anywhere in the pattern: `!x` and the extglob `src/!(auth)/**` both carve a hole.
       if (p.includes('!')) violations.push(`${key}[${i}]: "${p}" would remove a path; paths can only be added`);
+      // A warning, not a refusal: a file that passed before ORC-338 keeps its trusted tickets going; an untrusted branch is refused on it (`checkBranchPaths`).
+      else if (outside) sensitiveWarnings.push(`${key}[${i}]: "${p}": ${outside}`);
+      else if (key === 'sensitive_paths') enforced.push(p);
     });
   }
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');
@@ -150,7 +162,8 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     env: env ?? [],
     setupSecrets: setupSecrets ?? [],
     services: services ?? [],
-    sensitivePaths: sensitivePaths ?? [],
+    sensitivePaths: enforced,
+    ...(sensitiveWarnings.length ? { sensitivePathWarnings: sensitiveWarnings } : {}),
     forbiddenPaths: [...SOCLE_FORBIDDEN_PATHS],
     maxDiff,
     network,

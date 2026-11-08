@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
@@ -24,7 +25,7 @@ export interface FactoryYml {
   };
   /** Tickets worked at once: the dev queue's capacity, over `parallel_sessions` of the workflow (ORC-203). */
   concurrency?: number;
-  /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens`, `validate`'s worst case and the wait on a usage limit by ORC-216 and ORC-215. */
+  /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340); `validate`'s worst case waits for ORC-216. */
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
   /**
    * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and
@@ -40,7 +41,22 @@ const MIN_REPO_SECRET_LENGTH = 8;
 
 /** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). ORC-215 owns the choice of the account. */
 export function activeClaudeToken(yml: FactoryYml | undefined): string | undefined {
-  return yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token || undefined;
+  return claudeToken(yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token, 'claude.active in factory.yml');
+}
+
+/**
+ * A Claude token as the egress proxy sets it on a header (ORC-337): trimmed, a secret file's newline gone. One a
+ * header cannot carry (a line break, a control character) is refused, naming `from`: the daemon does not start.
+ */
+export function claudeToken(value: string | undefined, from: string): string | undefined {
+  const token = value?.trim() || undefined;
+  if (token === undefined) return undefined;
+  try {
+    validateHeaderValue('authorization', `Bearer ${token}`);
+  } catch {
+    throw new Error(`${from}: the Claude token holds a character an HTTP header cannot carry (a line break or a control character)`);
+  }
+  return token;
 }
 
 /** What the workflow's agent steps read of the file (ORC-136). */

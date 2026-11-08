@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { TrackerIssue } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import { loadWorkflow } from '../config/load-workflow.js';
-import { blockCause } from './block-cause.js';
+import { AGENT_QUESTION, blockCause, onlyRestatesCause, STOPPED } from './block-cause.js';
+import { BEFORE_ORC_331 } from './legacy-messages.js';
 import { deadLetterReason } from './dead-letter.js';
 import { decide } from './engine.js';
 import { pickupFailures } from './pickup.js';
@@ -58,6 +59,10 @@ describe('blockCause (ORC-297)', () => {
     expect(failures.map(blockCause)).toEqual(['pickup', 'pickup', 'pickup']);
   });
 
+  it('classifies a pending job no settle could start as the infrastructure (ORC-339)', () => {
+    expect(blockCause('Error: the pending dev-feedback could not be started: connection reset')).toBe('infra');
+  });
+
   it('classifies a dead letter', () => {
     expect(blockCause(deadLetterReason({ eventId: 'e9', eventType: 'pr.opened', error: 'boom', failures: 1 }))).toBe('dead_letter');
   });
@@ -79,5 +84,16 @@ describe('blockCause (ORC-297)', () => {
   it('never guesses: an unknown or missing reason is `other`', () => {
     expect(blockCause('Une raison que le moteur écrira demain.')).toBe('other');
     expect(blockCause(undefined)).toBe('other');
+  });
+
+  it('knows the reasons that say no more than their cause, in English and as written before ORC-331 (ORC-332)', () => {
+    for (const [cause, reasons] of [['stopped', [STOPPED, BEFORE_ORC_331.stopped]], ['question', [AGENT_QUESTION, BEFORE_ORC_331.question]]] as const) {
+      for (const reason of reasons) {
+        expect(blockCause(reason)).toBe(cause);
+        expect(onlyRestatesCause(cause, reason)).toBe(true);
+      }
+    }
+    expect(onlyRestatesCause('question', "Waiting for an answer to the agent's question.")).toBe(false);
+    expect(onlyRestatesCause('red', STOPPED)).toBe(false);
   });
 });

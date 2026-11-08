@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -23,6 +23,16 @@ describe('factory validate (ORC-209)', () => {
     const { code, out } = run(repo('commands: { test: npm test }\n'));
     expect(code).toBe(0);
     expect(out.join('\n')).toContain('.factory/config.yml valid');
+  });
+
+  it('warns of a sensitive path that names nothing, without refusing the file (ORC-338)', () => {
+    const { code, out } = run(repo('sensitive_paths: [infra, "../x"]\n'));
+    expect(code).toBe(0);
+    expect(out).toEqual([
+      '.factory/config.yml valid: it only adds checks or prohibitions to the baseline.',
+      'Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):',
+      '- sensitive_paths[1]: "../x": a path from the repository root is expected (no drive, no `..`, no absolute path in a brace)',
+    ]);
   });
 
   it('refuses a configuration that takes from the socle, one line per violation', () => {
@@ -50,6 +60,26 @@ describe('factory validate (ORC-209)', () => {
     const { code, out } = run(dir);
     expect(code).toBe(1);
     expect(out[1]).toMatch(/^- unreadable: /);
+  });
+
+  it('reports a .factory it cannot look into as unreadable, not a crash', () => {
+    // A loop on the way to .factory (ELOOP).
+    const loop = repo();
+    symlinkSync('self', join(loop, 'self'));
+    const looped = run(join(loop, 'self'));
+    expect(looped.code).toBe(1);
+    expect(looped.out).toEqual(['.factory/config.yml refused:', expect.stringMatching(/^- unreadable: .*ELOOP/)]);
+    // A .factory that cannot be searched (EACCES); root reads it all the same.
+    if (process.getuid?.() === 0) return;
+    const locked = repo('commands: { test: npm test }\n');
+    chmodSync(join(locked, '.factory'), 0o000);
+    try {
+      const denied = run(locked);
+      expect(denied.code).toBe(1);
+      expect(denied.out).toEqual(['.factory/config.yml refused:', expect.stringMatching(/^- unreadable: .*EACCES/)]);
+    } finally {
+      chmodSync(join(locked, '.factory'), 0o755);
+    }
   });
 
   it('refuses a link, at .factory or at its file, as the launch does: git reads nothing through it', () => {

@@ -6,9 +6,9 @@ export interface UiState {
   flow?: FlowView;
   /** When `flow` was received: its durations go on from there. */
   flowAt: number;
-  /** The last read of the Flux failed: `flow`, if any, is out of date. */
+  /** The last read of the Flow failed: `flow`, if any, is out of date. */
   flowFailed: boolean;
-  /** Bumped by each ticket update: the page reads the Flux again. */
+  /** Bumped by each ticket update: the page reads the Flow again. */
   flowStale: number;
   runLines: Record<string, RunLine[]>;
   events: EventView[];

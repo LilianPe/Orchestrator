@@ -68,7 +68,7 @@ describe('a block posts the standard comment (ORC-196)', () => {
     ['a failed run', ticket(), finished({ outcome: 'failure' }), 'failed'],
     ['the loop guard', ticket(), finished({ stagnation: { kind: 'loop', command: 'npm test', failure: 'f', tree: 't', count: 3 } }), 'loop'],
     ['a verification that could not run', verifying(), ev('verify.errored', { runId: 'r1', job: 'dev', error: 'moteur' }), 'infra'],
-  ])('the Flux still reads the cause of %s from the reason', (_what, state, event, cause) => {
+  ])('the Flow still reads the cause of %s from the reason', (_what, state, event, cause) => {
     const out = decide(state, event, workflow);
     expect(notice(out)).toBeDefined();
     expect(blockCause(out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), state)?.blockReason)).toBe(cause);

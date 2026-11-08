@@ -10,6 +10,15 @@ export function isLogicalState(v: string): v is LogicalState {
   return (LOGICAL_STATES as readonly string[]).includes(v);
 }
 
+/** The size of a ticket as `intake` estimates it (ORC-206). */
+export const TICKET_SIZES = ['xs', 's', 'm', 'l', 'xl'] as const;
+export type TicketSize = (typeof TICKET_SIZES)[number];
+/** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
+export const RISKS = ['low', 'medium', 'high'] as const;
+export type Risk = (typeof RISKS)[number];
+/** The higher of two risks: a proposal never lowers the run's (I4). */
+export const higherRisk = (held: Risk | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
+
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
 
 /**
@@ -140,14 +149,14 @@ export interface EffectResultPayload {
  *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
  * - `clarify.remind` / `clarify.expire`: the reminder of a `clarify` question at 24 h, then the block at
  *   72 h, in the question's session; the rules that arm and decide them are ORC-210's.
- * - `usage.reset`: the reset of a subscription's usage limit, after which the waiting runs resume; the
- *   rule is ORC-215's.
+ * - `usage.reset`: the reset of a subscription's usage limit, armed by a `run.finished` the limit stopped
+ *   (`on_usage_limit: wait`, ORC-340): `job` starts again then, on the ticket's session.
  */
 export interface TimerPayloads {
   debounce: { job: string; inbox?: true };
   'clarify.remind': { linearSessionId?: string };
   'clarify.expire': { linearSessionId?: string };
-  'usage.reset': { account?: string };
+  'usage.reset': { account?: string; job?: string; runId?: string };
   /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
 }
@@ -202,7 +211,8 @@ export interface EventPayloads {
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
   'label.changed': { label: string; change: 'added' | 'removed'; otherRepo?: true };
   /** A commit pushed by a human on the ticket's branch. */
-  'push.human': { branch: string; sha: string; author: string };
+  /** `before`: the branch's head before the push (all zeros for a new branch); absent on events recorded before ORC-338. */
+  'push.human': { branch: string; sha: string; author: string; before?: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
   command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
@@ -249,7 +259,21 @@ export interface EventPayloads {
    * what `submit_result` recorded (`output`, when valid). Optional: no version bump, rows written before
    * it lack both and decide on `outcome` as before. `stagnation` (ORC-136): optional likewise, absent on rows written before it.
    */
-  'run.finished': { runId: string; job: string; outcome: RunOutcome; costUsd: number; turns: number; lastText: string; attempt?: AttemptOutcome; output?: AgentOutput; stagnation?: Stagnation };
+  'run.finished': {
+    runId: string;
+    job: string;
+    outcome: RunOutcome;
+    costUsd: number;
+    turns: number;
+    lastText: string;
+    attempt?: AttemptOutcome;
+    output?: AgentOutput;
+    stagnation?: Stagnation;
+    /** The deterministic checks of the ticket that failed at the launch of `intake` (ORC-206): inputs of the guard before In Progress. Absent when none failed. */
+    pickup?: string[];
+    /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
+    usageLimit?: { resetAt: number; account?: string };
+  };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
    * freeze read with it (ORC-131), on both verdicts, recorded once the run goes on to the build. `sha`: the commit it
@@ -346,7 +370,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -366,7 +390,8 @@ export type ShellEvent =
   | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
   | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
-  | { type: 'pending.cleared' }
+  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
+  | { type: 'pending.cleared'; job?: PendingJob }
   | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
   | { type: 'workspace.released' }
   | {
@@ -377,14 +402,27 @@ export type ShellEvent =
       claudeSessionId: string;
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
+      /**
+       * A run launched with sensitive paths (it read untrusted content, I12) in the ticket's worktree: the head it starts on,
+       * `''` when none is read. Marks the ticket's branch (`untrustedSince`, ORC-338).
+       */
+      untrusted?: { head: string };
+      /** What the run starts, in the shape of a pending job: the run that starts the ticket's pending job takes it off (ORC-339). */
+      starts?: PendingJob;
     }
   /**
    * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut
-   * before it keeps the replies for the start taken up again.
+   * before it keeps the replies for the start taken up again. `items`: those the launch read, a message that came
+   * in since stays for the next run (ORC-339); absent, the whole inbox.
    */
-  | { type: 'feedback.consumed' }
+  | { type: 'feedback.consumed'; items?: readonly FeedbackItem[] }
   /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
-  | { type: 'run.cleared' };
+  | { type: 'run.cleared' }
+  /**
+   * What a ticket's run records said, read once, of a branch the mark has not seen yet (ORC-338): `''` when an untrusted
+   * worktree run came before the mark existed (its whole branch is read), `null` when none did.
+   */
+  | { type: 'untrusted.read'; since: '' | null };
 
 export type InternalEvent = DecidedEvent | ShellEvent;
 
@@ -417,9 +455,20 @@ export interface TicketState {
   activeRunId?: string;
   /** Job of `activeRunId`, read by `when: job == …` conditions. */
   activeJob?: string;
+  /** What `activeRunId` started, in the shape of a pending job (ORC-339): a launch that lost to it tells the same start from another. */
+  activeStart?: PendingJob;
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
+  /**
+   * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
+   * `''` when that head was not read or the run came before the mark existed: from then on, what the agent's commits
+   * change in the repository's `sensitive_paths` is refused. Sticky: its commits stay on the branch whoever runs next.
+   * `null` once read that no such run worked on it (`untrusted.read`); absent until then.
+   */
+  untrustedSince?: string | null;
+  /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
+  humanPushes?: { before?: string; after: string }[];
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */
@@ -452,6 +501,15 @@ export interface TicketState {
    */
   cutRelaunches?: number[];
   /**
+   * The step the usage limit cut, waiting for its reset (`on_usage_limit: wait`, ORC-340): the `usage.reset` timer resumes it only
+   * while this still names its run. Whatever moves the ticket on ends the wait (`reduce`): `null` then. Absent on a ticket that never waited.
+   */
+  usageWait?: { runId: string; job: string; logical: LogicalState } | null;
+  /** Relaunches at a usage reset of `job` in a row (ORC-340), bounded by `USAGE_RELAUNCHES`; `null` once a run of the step ends without the limit. */
+  usageRelaunches?: { job: string; count: number } | null;
+  /** Questions asked again at a usage reset in a row (ORC-340), bounded like `usageRelaunches`; `null` once one ends without the limit. */
+  usageAsks?: number | null;
+  /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.
    */
@@ -464,6 +522,12 @@ export interface TicketState {
   priority: number;
   costUsd: number;
   updatedAt: number;
+  /** The size `intake` estimated (ORC-206), its last assessment. Absent until one. */
+  size?: TicketSize;
+  /** The risk of the run (ORC-206): the highest any step proposed, never lowered (I4). Absent until `intake` assessed it. */
+  risk?: Risk;
+  /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
+  visualProof?: 'required';
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }

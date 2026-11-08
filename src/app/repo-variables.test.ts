@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ function git(o: { origin?: string; head?: string; config?: string; mode?: string
   const exec: Exec = async (_, args) => {
     calls.push(args);
     if (args.includes('get-url')) return ok(`${o.origin ?? 'https://github.com/org/app.git'}\n`);
-    if (args.includes('symbolic-ref')) return o.head === undefined ? ko : ok(`${o.head}\n`);
+    if (args.includes('symbolic-ref')) return o.head === undefined ? ko : ok(`refs/remotes/${o.head}\n`);
     if (args.includes('fetch')) return ok('');
     if (args.at(-1) === '.factory') return ok(o.config === undefined ? '' : `${o.dir ?? '040000 tree'} def456\t.factory\0`);
     if (args.includes('ls-tree')) return ok(o.config === undefined ? '' : `${o.mode ?? '100644 blob'} abc123\t.factory/config.yml\0`);
@@ -79,8 +79,41 @@ describe('makeRepoConfig (ORC-209 C)', () => {
     expect(calls.some((c) => c.args.includes('ls-tree'))).toBe(false);
   });
 
+  it.skipIf(process.platform !== 'linux')('bounds the launch end to end, even when what git started left its process group and holds its output', { timeout: 30_000 }, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-repo-config-'));
+    const pidFile = join(root, 'transport.pid');
+    try {
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
+      // A transport that never answers, in a session of its own: the deadline's kill of git's group misses it, and it keeps git's stderr.
+      const stall = join(root, 'stall.sh');
+      writeFileSync(stall, `#!/bin/sh\necho $$ > ${pidFile}\nexec setsid sleep 60\n`, { mode: 0o755 });
+      run(repo, 'config', 'protocol.ext.allow', 'always');
+      run(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
+      const started = Date.now();
+      const logged: string[] = [];
+      await expect(makeRepoConfig({ fetchDeadlineMs: 300, log: (m) => logged.push(m) })({ repoPath: repo })).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
+      expect(Date.now() - started).toBeLessThan(15_000);
+      // The ticket names neither the path nor the command: the daemon's log does.
+      expect(logged).toEqual([expect.stringContaining(`git -C ${repo} fetch`)]);
+    } finally {
+      try {
+        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
+      } catch {
+        // Not started, or already gone.
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('gives the socle when the default branch has no file', async () => {
     expect(await makeRepoConfig({ exec: git({ head: 'origin/main' }).exec })(PROJECT)).toEqual(parseRepoConfig(undefined));
+  });
+
+  it('logs a sensitive path that names nothing, and reads the file all the same (ORC-338)', async () => {
+    const logged: string[] = [];
+    const config = await makeRepoConfig({ exec: git({ head: 'origin/main', config: 'sensitive_paths: [infra, "../x"]\n' }).exec, log: (m) => logged.push(m) })(PROJECT);
+    expect(config.sensitivePaths).toEqual(['infra']);
+    expect(logged).toEqual([expect.stringContaining('ignored sensitive_paths[1]: "../x"')]);
   });
 
   it('rejects an invalid file, naming the fault', async () => {

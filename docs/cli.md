@@ -32,7 +32,7 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty), recorded in `secrets.json`. Details: [`linear.md`](linear.md).
 5. If no knowledge base is configured, offers to create a private GitHub repository `relais-knowledge` (`gh repo create`). See [`projects-and-workspaces.md`](projects-and-workspaces.md#shared-knowledge-base).
 6. If `.relais/workflow.yml` does not exist, creates it: asks for the verification commands (suggested from the `lint`, `typecheck`, `test` scripts in `package.json`, separated by `;`) and sets `workspace.setup: ["npm ci"]` if the repository has a `package-lock.json`. Exact contents: [`workflow.md`](workflow.md#1-role-of-the-file-and-merging-with-the-pack).
-7. Writes `config.yaml` and prints the next steps: `relais up`, « Connecter Linear », delegate a ticket.
+7. Writes `config.yaml` and prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
 
 `relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It never rewrites an existing `.relais/workflow.yml`. Remember to commit `.relais/workflow.yml` to the repository.
 
@@ -45,6 +45,7 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 - If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
 - Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
+- Refuses to start without `FACTORY_CONTAINER_CLI` (the agents would run on the host), unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349). `--fake-runner` launches no agent and needs neither.
 
 `Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are interrupted, then taken back on the next start).
 
@@ -95,7 +96,7 @@ For each ticket: its state, a check in progress, the reason for a block, and its
 
 ### `relais pause` / `relais resume`
 
-`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in `relais.db` and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Reprendre » button.
+`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in `relais.db` and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Resume » button.
 
 ### `factory stop <ID>`
 
@@ -141,7 +142,7 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 | Command | Effect |
 |---|---|
 | `relais-agent issue <ID>` | Prints the ticket: identifier, title, status, URL, description. **Limited to the run's ticket** (403 otherwise). |
-| `relais-agent search <text>` | Searches Linear tickets. |
+| `relais-agent search <text>` | Searches the Linear tickets of the current ticket's team (ORC-349). |
 | `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
 

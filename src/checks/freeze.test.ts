@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { checkFrozen, fingerprint, FREEZE_CHECK, freezeTests, isFrozenHarness, newTestsOnly, type FreezeView } from './freeze.js';
 
@@ -96,9 +97,42 @@ describe('checkFrozen (ORC-131)', () => {
     expect((await after({ 'package.json': PKG.replace('"tsc"', '"tsc -b"') })).ok).toBe(true);
   });
 
+  it('what npm test runs beyond its script blocks: pretest, a script it calls, the jest key (ORC-342)', async () => {
+    const pkg = (over: object) => JSON.stringify({ name: 'app', scripts: { test: 'npm run test:unit', 'test:unit': 'vitest run', build: 'tsc' }, ...over });
+    const base = await freezeTests([], view('sha-1', { 'package.json': pkg({}) }));
+    const check = (content: string) => checkFrozen(base, view('sha-2', { 'package.json': content }, ['package.json']));
+    expect((await check(pkg({ scripts: { test: 'npm run test:unit', 'test:unit': 'vitest run --exclude src', build: 'tsc' } }))).ok).toBe(false);
+    expect((await check(pkg({ scripts: { test: 'npm run test:unit', 'test:unit': 'vitest run', pretest: 'rm -rf src/*.test.ts', build: 'tsc' } }))).ok).toBe(false);
+    expect((await check(pkg({ jest: { testPathIgnorePatterns: ['src'] } }))).ok).toBe(false);
+    expect((await check(pkg({ scripts: { test: 'npm run test:unit', 'test:unit': 'vitest run', build: 'tsc -b' } }))).ok).toBe(true);
+  });
+
+  it('a vite.config.ts added or changed after the freeze blocks: vitest reads it (ORC-342)', async () => {
+    expect((await after({ 'vite.config.ts': "export default { resolve: { alias: { './export': './stub' } } };\n" })).ok).toBe(false);
+  });
+
   it('the pytest section of pyproject.toml changed blocks; another section does not', async () => {
     expect((await after({ 'pyproject.toml': PYPROJECT.replace('-q', '-q --deselect tests/test_export.py') })).ok).toBe(false);
     expect((await after({ 'pyproject.toml': PYPROJECT.replace('"app"', '"app2"') })).ok).toBe(true);
+  });
+
+  it('the pytest section of tox.ini or setup.cfg changed blocks; another section does not (ORC-311)', async () => {
+    const tox = '[tox]\nenvlist = py312\n\n[pytest]\naddopts = -q\n';
+    const cfg = '[metadata]\nname = app\n\n[tool:pytest]\ntestpaths = tests\n';
+    const base = await freezeTests([], view('sha-1', { 'tox.ini': tox, 'setup.cfg': cfg }));
+    expect(Object.keys(base.files).sort()).toEqual(['setup.cfg', 'tox.ini']);
+    const check = (files: Record<string, string>) => checkFrozen(base, view('sha-2', { 'tox.ini': tox, 'setup.cfg': cfg, ...files }, Object.keys(files)));
+    expect((await check({ 'tox.ini': tox.replace('-q', '-q --ignore=tests/test_export.py') })).ok).toBe(false);
+    expect((await check({ 'setup.cfg': cfg.replace('testpaths = tests', 'testpaths = src') })).ok).toBe(false);
+    expect((await check({ 'tox.ini': tox.replace('py312', 'py313'), 'setup.cfg': cfg.replace('name = app', 'name = app2') })).ok).toBe(true);
+  });
+
+  it('a pytest configuration added after the freeze blocks: pytest reads the first it finds (ORC-311)', async () => {
+    for (const files of [{ 'setup.cfg': '[tool:pytest]\naddopts = --ignore=src\n' }, { 'tox.ini': '[pytest]\naddopts = -k "not export"\n' }, { '.pytest.ini': '[pytest]\n' }, { 'pytest.toml': '[pytest]\n' }]) {
+      expect((await after(files)).ok, Object.keys(files)[0]).toBe(false);
+    }
+    // A tox.ini or setup.cfg without a pytest section is not read by pytest.
+    expect((await after({ 'tox.ini': '[tox]\nenvlist = py312\n', 'setup.cfg': '[flake8]\nmax-line-length = 100\n' })).ok).toBe(true);
   });
 
   it('a file that is not frozen passes, a new test included', async () => {
@@ -109,13 +143,56 @@ describe('checkFrozen (ORC-131)', () => {
 
 describe('the freeze rule', () => {
   it('reads the harness by name, anywhere in the repository', () => {
-    for (const p of ['vitest.config.ts', 'web/vitest.config.mts', 'jest.config.js', 'tsconfig.build.json', 'pkg/package.json', 'pytest.ini', 'a/conftest.py', 'pyproject.toml']) {
+    for (const p of ['vitest.config.ts', 'web/vitest.config.mts', 'jest.config.js', 'tsconfig.build.json', 'pkg/package.json', 'pytest.ini', 'a/conftest.py', 'pyproject.toml', '.pytest.ini', 'pytest.toml', '.pytest.toml', 'tox.ini', 'pkg/setup.cfg']) {
       expect(isFrozenHarness(p), p).toBe(true);
     }
-    for (const p of ['src/export.test.ts', 'vite.config.ts', 'README.md']) expect(isFrozenHarness(p), p).toBe(false);
+    for (const p of ['src/export.test.ts', 'README.md']) expect(isFrozenHarness(p), p).toBe(false);
+  });
+
+  it('freezes the configuration of any tool by the shape of its name: the runner reads more than its own file (ORC-342)', () => {
+    // vite.config holds vitest's `test` and the aliases a test imports through; babel, swc and the frameworks transform
+    // the tests; npm's and yarn's rc can change the shell that runs the test script.
+    const frozen = ['vite.config.ts', 'web/vite.config.mjs', 'next.config.mjs', 'svelte.config.js', 'playwright.config.ts', 'karma.conf.js', 'babel.config.cjs', '.babelrc', '.swcrc', '.mocharc.yml', '.c8rc.json', '.npmrc', '.yarnrc.yml', 'jsconfig.json', 'bunfig.toml', 'packages/api/rollup.config.ts'];
+    for (const p of frozen) expect(isFrozenHarness(p), p).toBe(true);
+    // Linters, formatters, commit hooks and styles: they change no test. The application's own config under src/ neither.
+    const free = ['eslint.config.js', '.prettierrc', 'prettier.config.cjs', '.stylelintrc.json', 'commitlint.config.ts', '.lintstagedrc', 'tailwind.config.ts', 'postcss.config.js', '.nvmrc', '.markdownlint.json', 'src/app/app.config.ts', 'src/config.ts', 'config.json'];
+    for (const p of free) expect(isFrozenHarness(p), p).toBe(false);
+  });
+
+  it('a freeze made before ORC-342 keeps its rules: no harness it did not take, its package.json part (ORC-342)', async () => {
+    const files = { 'package.json': JSON.stringify({ scripts: { test: 'vitest run', pretest: 'tsc' }, jest: {} }), 'vite.config.ts': 'export default {};\n' };
+    const old = { sha: 'sha-0', files: { 'package.json': createHash('sha256').update(JSON.stringify('vitest run')).digest('hex') } };
+    expect((await checkFrozen(old, view('sha-2', files, Object.keys(files)))).ok).toBe(true);
+    const changed = { ...files, 'package.json': files['package.json'].replace('vitest run', 'true') };
+    expect((await checkFrozen(old, view('sha-2', changed, Object.keys(changed)))).ok).toBe(false);
+    // A freeze made now takes vite.config.ts in, and marks its rules.
+    expect(await freezeTests([], view('sha-1', files))).toMatchObject({ rules: 2, files: { 'vite.config.ts': expect.any(String) } });
+  });
+
+  it('a tool configuration under src/ is frozen too; the application config is not', () => {
+    expect(isFrozenHarness('src/frontend/vite.config.ts')).toBe(true);
+    expect(isFrozenHarness('app.config.ts')).toBe(false);
+  });
+
+  it('a package.json read with the rules of a freeze made before ORC-342 reads its test script alone, as then', () => {
+    expect(fingerprint('package.json', PKG, true)).toBe(createHash('sha256').update(JSON.stringify('vitest run')).digest('hex'));
   });
 
   it('an unreadable package.json is fingerprinted whole: it cannot be read, so any change counts', () => {
     expect(fingerprint('package.json', '{oops')).toBe(fingerprint('x', '{oops'));
+  });
+
+  it('a tox.ini or setup.cfg read as a blob too large to show is fingerprinted whole (ORC-311)', () => {
+    expect(fingerprint('setup.cfg', '\0too large: 1234')).toBe(fingerprint('x', '\0too large: 1234'));
+  });
+
+  it('reads the pytest section of an INI file as pytest does: an exact header, no other (ORC-311)', () => {
+    const tox = '[pytest]\naddopts = -q\n';
+    expect(fingerprint('tox.ini', `${tox}[ pytest ]\naddopts = --ignore=tests\n`)).toBe(fingerprint('tox.ini', tox));
+    expect(fingerprint('tox.ini', '[pytest] # the runner\naddopts = -q\n')).toBe(fingerprint('tox.ini', tox));
+  });
+
+  it('a file named after an Object property is fingerprinted whole, not read as an INI file (ORC-311)', () => {
+    for (const name of ['constructor', 'toString', '__proto__']) expect(fingerprint(`tests/fixtures/${name}`, 'data'), name).toBe(fingerprint('x', 'data'));
   });
 });

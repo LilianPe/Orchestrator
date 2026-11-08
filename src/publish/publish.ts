@@ -6,7 +6,8 @@ import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { NoCommitsBetween, type ForgeWriter } from '../adapters/forge/types.js';
 import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
 import { WORKSPACE_TARGET, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
-import { BASE, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, withDeadline, within } from '../core/clean-verify.js';
+import { RepoConfigError, REPO_CONFIG_PATH } from '../config/repo-config.js';
+import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, untrustedCheck, withDeadline, within } from '../core/clean-verify.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
@@ -36,7 +37,8 @@ export interface GitPublisherDeps {
  * 2. in a sandbox of its own, without network, its `.git` read-only, `git bundle` of the branch in the agent's own repository, whose head must be the commit `verify` found
  *    green, then `git bundle verify` and a fresh clone on the host, without a checkout (`extractWork`);
  * 3. the base and the branch's head fetched into that clone, from the forge;
- * 4. the blocking check of the diff from the base: `checkClone` on the clone's objects, then gitleaks in a sandbox at `none`.
+ * 4. the blocking check of the diff from the base: `checkClone` on the clone's objects (the base's `sensitive_paths` too, on what
+ *    the agent's commits changed since the branch took untrusted content, ORC-338), then gitleaks in a sandbox at `none`.
  *    `verify` checked the same commit: this is the last word before the forge, and it depends on no state;
  * 5. a push only forward. What the forge's branch holds must be in the work: otherwise the branch moved (a human's commit,
  *    which is ORC-159's, or a history the agent rewrote), and it is refused. The lease is on the head read in 3: a push in
@@ -97,7 +99,8 @@ export class GitPublisher implements Publisher {
     const from = await forkPoint(git, req.sha);
     if (from === req.sha) throw nothingToPublish(req.branch);
 
-    const failures = await checkClone(git, from, req.sha, undefined);
+    const untrusted = req.untrusted && untrustedCheck(req.untrusted, await refusedConfig(() => baseConfig(git)));
+    const failures = await refusedConfig(() => checkClone(git, from, req.sha, undefined, untrusted));
     if (this.d.gitleaks !== false) failures.push(...(await inBox('publish-secrets', cloneDir, [], (id) => scanSecrets(sandboxes, id, from, req.sha))));
     if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command}: ${f.output}`).join('\n'));
 
@@ -112,6 +115,16 @@ export class GitPublisher implements Publisher {
     if (!refused) throw new Error(`git push: ${out.stderr.trim() || `code ${out.code}`}`);
     if (/stale info|fetch first|non-fast-forward/.test(refused)) throw new PublishRefused('moved', `the branch ${req.branch} moved during the publication: nothing is overwritten.`);
     throw new PublishRefused('rejected', `the forge refuses the push to ${req.branch}: ${refused.trim().slice(0, 500)}`);
+  }
+}
+
+/** A base config the check of an untrusted branch cannot read is an answer, journaled once, not a breakdown retried forever (ORC-338). */
+async function refusedConfig<T>(check: () => Promise<T>): Promise<T> {
+  try {
+    return await check();
+  } catch (err) {
+    if (!(err instanceof RepoConfigError)) throw err;
+    throw new PublishRefused('config', `the default branch's ${REPO_CONFIG_PATH} is refused, so the sensitive paths of this branch, which took untrusted content, cannot be checked: ${err.message}`);
   }
 }
 

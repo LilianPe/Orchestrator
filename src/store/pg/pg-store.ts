@@ -31,6 +31,7 @@ import {
   type MeasureFacts,
   type OutboxRow,
   type QueueClaim,
+  type QueueRetry,
   type QueueItem,
   type RunRecord,
   type SecurityLog,
@@ -272,6 +273,11 @@ export class PgStore implements AsyncStore {
       await tx.execute(ticketLock(event.ticketId));
       return this.appendResult(tx, event);
     });
+  }
+
+  async inboxHas(id: string): Promise<boolean> {
+    const result = await this.db.execute(sql`select 1 from inbox where id = ${id}`);
+    return result.rows.length > 0;
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -1080,13 +1086,16 @@ export class PgStore implements AsyncStore {
     return this.settleQueued(claim, 'done');
   }
 
-  async releaseQueued(claim: QueueClaim): Promise<boolean> {
-    return this.settleQueued(claim, 'pending');
+  async releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean> {
+    return this.settleQueued(claim, 'pending', retry);
   }
 
-  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending'): Promise<boolean> {
+  private async settleQueued(claim: QueueClaim, status: 'done' | 'pending', retry?: QueueRetry): Promise<boolean> {
+    const payload = retry === undefined ? sql`payload - 'lease'` : sql`jsonb_set(payload - 'lease', '{failedStarts}', to_jsonb(${retry.failedStarts}::int))`;
+    // A retry's wait is the row's `available_at`: no claim takes it before.
+    const available = retry === undefined ? sql`` : sql`, available_at = to_timestamp(${retry.notBefore / 1000})`;
     const result = await this.db.execute(sql`
-      update outbox set status = ${status}, lease_until = null, payload = payload - 'lease', updated_at = to_timestamp(${this.now() / 1000})
+      update outbox set status = ${status}, lease_until = null, payload = ${payload}${available}, updated_at = to_timestamp(${this.now() / 1000})
       where id = ${claim.id} and status = 'running' and payload->>'lease' = ${claim.lease}
     `);
     return (result.rowCount ?? 0) > 0;
@@ -1162,6 +1171,17 @@ export class PgStore implements AsyncStore {
     return result.rows.map((row) => row.payload);
   }
 
+  async queuedItems(projectId: string, ticketId: string): Promise<QueueItem[]> {
+    const result = await this.db.execute<{ payload: QueueItem }>(
+      sql`
+        select payload - 'lease' as payload from outbox
+        where ticket_id = ${ticketId} and status in ('pending', 'running') and payload->>'projectId' = ${projectId}
+          and payload->>'queue' is not null
+      `,
+    );
+    return result.rows.map((row) => row.payload);
+  }
+
   /** Handed-out items too (a stop during their start): `releaseQueued` then finds nothing to put back. */
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     const ofQueue = queue === undefined ? sql`` : sql`and payload->>'queue' = ${queue}`;
@@ -1224,6 +1244,44 @@ export class PgStore implements AsyncStore {
       )
       on conflict (id) do update set hash = excluded.hash, definition = excluded.definition
     `);
+  }
+
+  async receiveDelivery(key: string, value: string): Promise<boolean> {
+    const id = metaId(`delivery:${key}`);
+    const hash = createHash('sha256').update(`${id}\0${value}`).digest('hex');
+    const result = await this.db.execute(sql`
+      insert into workflow_versions (id, hash, definition, created_at)
+      values (${id}, ${hash}, ${JSON.stringify({ key: `delivery:${key}`, value })}::jsonb, clock_timestamp())
+      on conflict (id) do nothing
+      returning id
+    `);
+    return result.rows.length > 0;
+  }
+
+  async pendingDeliveries(): Promise<{ key: string; value: string }[]> {
+    const prefix = metaId('delivery:');
+    const result = await this.db.execute<{ id: string; value: string }>(sql`
+      select id, definition->>'value' as value from workflow_versions
+      where starts_with(id, ${prefix}) order by created_at, id
+    `);
+    return result.rows.map((r) => ({ key: r.id.slice(prefix.length), value: r.value }));
+  }
+
+  async deleteDelivery(key: string): Promise<void> {
+    await this.db.execute(sql`delete from workflow_versions where id = ${metaId(`delivery:${key}`)}`);
+  }
+
+  async asideDelivery(key: string): Promise<void> {
+    const aside = metaId(`delivery-aside:${key}`);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`delete from workflow_versions where id = ${aside}`);
+      const kept = await tx.execute<{ value: string }>(sql`select definition->>'value' as value from workflow_versions where id = ${metaId(`delivery:${key}`)} for update`);
+      const value = kept.rows[0]?.value;
+      if (value === undefined) return;
+      // Its hash follows its id, as `setMeta` computes it: the same delivery kept again must not meet it on the hash's unique index.
+      const hash = createHash('sha256').update(`${aside}\0${value}`).digest('hex');
+      await tx.execute(sql`update workflow_versions set id = ${aside}, hash = ${hash} where id = ${metaId(`delivery:${key}`)}`);
+    });
   }
 
   async close(): Promise<void> {

@@ -7,6 +7,7 @@ import { makeRepoConfig } from '../../src/app/repo-variables.js';
 import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { blockCause } from '../../src/core/block-cause.js';
+import { TRUSTED } from '../../src/core/types.js';
 import { createHarness } from '../helpers/harness.js';
 
 const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
@@ -107,8 +108,33 @@ describe("the repository's config at the launch", () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.comments('REL-1').at(-1)).toMatch(/Reason: Repository configuration to fix: \.factory\/config\.yml refused:[\s\S]*network\.level/);
-    // The Flux shows it as the repository's to fix, not as a breakdown of the factory.
+    // The Flow shows it as the repository's to fix, not as a breakdown of the factory.
     expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
+  });
+
+  it('reads the config again when a member answers the block: still invalid, the same refusal and no agent; fixed, the step starts', async () => {
+    const member = 'user-lilian';
+    let yaml = 'network: { level: full }\n';
+    const h = createHarness({ sandboxed: true, authz: { githubLogins: { [member]: 'lilian-gh' } }, repoConfig: async () => parseRepoConfig(yaml) });
+    h.tracker.setTeamMembers('REL', [member]);
+    h.forge.setRepoPermission('lilian-gh', 'write');
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: member });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
+    // Answered without the repository fixed: the launch reads the file again and refuses it again.
+    await h.send('ticket.commented', { body: 'Go ahead.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: member });
+    expect(h.runner.requests).toEqual([]);
+    expect(agents(h)).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'dev' });
+    expect(blockCause((await h.ticket()).blockReason)).toBe('repo_config');
+    expect(h.tracker.comments('REL-1').filter((c) => /Reason: Repository configuration to fix/.test(c))).toHaveLength(2);
+    // Fixed on the default branch, then answered: the step starts, at the fixed file's level.
+    yaml = 'network: { level: none }\n';
+    h.runner.enqueue({ hold: true });
+    await h.send('ticket.commented', { body: 'Fixed.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: member });
+    expect(h.runner.requests).toHaveLength(1);
+    expect(agents(h)).toMatchObject([{ network: 'claude-api' }]);
+    expect(await h.ticket()).toMatchObject({ blocked: false, activeJob: 'dev' });
   });
 
   it('keeps a config the forge could not give as a breakdown, not as a fault of the repository', async () => {
@@ -159,5 +185,98 @@ describe("the repository's config at the launch", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/** ORC-338: without sandboxes, `verify` on the host applies the path rules of `checkClone` to the worktree's commits. */
+describe('the path rules of verify on the host', () => {
+  const WORKTREE = '/tmp/factory-fake/p/REL-1';
+  const failed = async (h: ReturnType<typeof createHarness>) =>
+    (await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.failed').map((e) => (e.payload as { failures: { command: string; output: string }[] }).failures);
+
+  /**
+   * A worktree whose commits since the default branch change `paths`, and since `later.since` (the head an untrusted run
+   * starts on) change `later.paths`. The default branch's config, as the clone would read it, declares `infra` sensitive.
+   */
+  function onHost(paths: string[], later?: { since: string; paths: string[] }) {
+    const h = createHarness({ projectYaml: VERIFIED });
+    const since = later ? { since: { [later.since]: later.paths } } : {};
+    h.workspaces.branches.set(WORKTREE, { changed: paths.map((path) => ({ path, deleted: false })), baseConfig: 'sensitive_paths: [infra]\n', ...since });
+    if (later) h.workspaces.heads.set(WORKTREE, later.since);
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    return h;
+  }
+
+  /** What gives no verdict is an infrastructure or config failure, as on the clone: the ticket blocked, nothing sent to the agent. */
+  const errored = async (h: ReturnType<typeof createHarness>) =>
+    (await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.errored').map((e) => (e.payload as { error: string }).error);
+
+  it('fails closed on a worktree it cannot read: an infrastructure failure, not the agent\'s', async () => {
+    const h = onHost([]);
+    h.workspaces.gone.add(WORKTREE);
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await errored(h)).toEqual([expect.stringContaining('no worktree')]);
+    expect(await failed(h)).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+    expect((await h.ticket()).blocked).toBe(true);
+  });
+
+  it('fails closed on a default branch config it cannot read, once the branch is untrusted: a config failure, not the agent\'s', async () => {
+    const h = onHost(['src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
+    h.workspaces.branches.get(WORKTREE)!.baseConfig = 'sensitive_paths: ["../infra"]\n';
+    h.runner.enqueue({});
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'd1', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+    await h.orch.drained();
+    expect(await errored(h)).toEqual([expect.stringContaining('sensitive_paths[0]')]);
+    expect(await failed(h)).toEqual([]);
+    expect(h.runner.requests).toHaveLength(1);
+  });
+
+  it('runs no command on a branch it refuses, as on the clone', async () => {
+    const h = onHost(['.github/workflows/ci.yml']);
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.checks.calls.filter((c) => c.commands.includes('npm test'))).toHaveLength(0);
+  });
+
+  it('refuses a forbidden path, whoever ran', async () => {
+    const h = onHost(['.github/actions/setup/action.yml']);
+    h.runner.enqueue({});
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await failed(h))[0]).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('.github/actions/setup/action.yml') })]);
+  });
+
+  it('lets a trusted branch change a sensitive path', async () => {
+    const h = onHost(['infra/main.tf']);
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await failed(h)).toEqual([]);
+    // Read once in its runs: none untrusted, and kept so.
+    expect((await h.ticket()).untrustedSince).toBeNull();
+  });
+
+  it('a human push the branch took in is the human\'s: only the agent\'s commits since the mark count', async () => {
+    const h = onHost(['infra/human.tf', 'src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'p1', type: 'push.human', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { branch: 'factory/rel-1-export-csv', sha: 'human-head', author: 'mate', before: 'agent-head' } });
+    await h.orch.drained();
+    expect((await h.ticket()).humanPushes).toEqual([{ before: 'agent-head', after: 'human-head' }]);
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy infra', author: 'stranger' } });
+    await h.orch.drained();
+    await h.advance(600_000);
+    expect((await h.ticket()).untrustedSince).toBe('head-before');
+    expect(h.workspaces.sinceAsked).toEqual([{ rev: 'head-before', humanPushes: [{ before: 'agent-head', after: 'human-head' }] }]);
+    expect(await failed(h)).toEqual([]);
+  });
+
+  it('refuses what an untrusted branch changed in a sensitive path since it took untrusted content, not what came before', async () => {
+    const h = onHost(['infra/old.tf', 'infra/new.tf'], { since: 'head-before', paths: ['infra/new.tf'] });
+    h.runner.enqueue({});
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'd1', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+    await h.orch.drained();
+    expect((await h.ticket()).untrustedSince).toBe('head-before');
+    const [failures] = await failed(h);
+    expect(failures).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('infra/new.tf') })]);
+    expect(failures![0]!.output).not.toContain('infra/old.tf');
   });
 });

@@ -3,11 +3,12 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
-import { ANTI_CHEAT_CHECK, antiCheatCheck } from '../checks/anti-cheat.js';
+import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
-import { checkForbiddenPaths, FORBIDDEN_CHECK } from '../checks/forbidden-paths.js';
+import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig } from '../config/repo-config.js';
+import { isTestSpec } from '../checks/test-files.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -41,6 +42,8 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
+  /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
+  untrusted?: UntrustedMark;
   /** The variables the repository declares (ORC-211), never a secret. */
   env: (config: RepoConfig) => Promise<Record<string, string>>;
   log: (message: string) => void;
@@ -132,13 +135,13 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const tree = await git('rev-parse', `${sha}^{tree}`);
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
     await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
-    const config = parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
+    const config = await baseConfig(git);
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
-    const failures = await checkClone(git, from, sha, req.frozen);
+    const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
     if (req.gitleaks || (commands.length && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
@@ -171,6 +174,11 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 };
 
 export const BASE = 'refs/factory/base';
+
+/** `.factory/config.yml` as the base branch holds it, in the clone: never as the agent's branch does. */
+export async function baseConfig(git: CloneGit): Promise<RepoConfig> {
+  return parseRepoConfig(await show(git, BASE, REPO_CONFIG_PATH));
+}
 
 /**
  * The forge's default branch, in the clone. The daemon's own config is read, for its credentials: the repository's is
@@ -233,32 +241,143 @@ export function isYes(r: ExecResult): boolean {
   return r.code === 0;
 }
 
-/** Where the commit left the base, the empty tree for one that never shares a commit with it: all its files are then changes. */
-export async function forkPoint(git: CloneGit, sha: string): Promise<string> {
-  const common = await git.status('merge-base', BASE, sha);
+/** Where the commit left the default branch (`base`, the clone's by default), the empty tree for one that never shares a commit with it: all its files are then changes. */
+export async function forkPoint(git: CloneGit, sha: string, base = BASE): Promise<string> {
+  const common = await git.status('merge-base', base, sha);
   return isYes(common) ? common.stdout.trim() : EMPTY_TREE;
 }
 
 /**
- * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits`, `factory/binaires` and `factory/anti-triche`
+ * What the path rules read of a branch (ORC-338): on the clone (`checkClone`), or without sandboxes on the factory's
+ * repository (`WorkspaceManager.branchReader`). Both are `gitReader`: one reading, one verdict.
+ */
+export interface BranchReader {
+  /** What the head changed since it left the default branch; `link`, the target of one that is a symbolic link at the head. */
+  changed(): Promise<ForbiddenView['changed']>;
+  /**
+   * The paths the agent's commits touched since `since`: the head's commits from the mark, or from the fork point when the
+   * mark is `''` or not one of the head's ancestors (a rewritten history), but for those the default branch reaches and
+   * those a human pushed (`before..after` of each push the branch took in; a push whose range cannot be read leaves out
+   * nothing). A merge counts by what it changed beyond the clean merge.
+   */
+  agentChanges(since: string, humanPushes: readonly HumanPush[]): Promise<readonly string[]>;
+  showAtFork(path: string): Promise<string | undefined>;
+  showAtHead(path: string): Promise<string | undefined>;
+  /** `.factory/config.yml` as the default branch holds it, never as the branch does. */
+  baseConfig(): Promise<string | undefined>;
+}
+
+/** The fields of a `-z` listing, as git wrote them: a path can start or end with a space, so nothing is trimmed. */
+export const zFields = (out: string): string[] => out.split('\0').filter(Boolean);
+
+/** `git diff --raw -z`: `:<old mode> <new mode> <old id> <new id> <status>`, then the path, for each file. */
+export function parseRawDiff(out: string): { path: string; deleted: boolean; mode: string }[] {
+  const fields = zFields(out);
+  const files = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [, mode, , , status] = fields[i]!.split(' ');
+    files.push({ path: fields[i + 1]!, deleted: status === 'D', mode: mode! });
+  }
+  return files;
+}
+
+/**
+ * `git log --format=%x00%H --name-only -z`: each commit as `\0<sha>\0`, then its paths, the first after a `\n`, each ending in
+ * `\0`. A path is never empty, so an empty field always comes before a commit: no path, whatever its name, reads as one.
+ */
+export function logPaths(out: string): { commit: string; paths: string[] }[] {
+  const commits: { commit: string; paths: string[] }[] = [];
+  const fields = out.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    if (fields[i] === '') {
+      if (i + 1 < fields.length && fields[i + 1] !== '') commits.push({ commit: fields[++i]!, paths: [] });
+      continue;
+    }
+    const current = commits.at(-1);
+    if (!current) continue;
+    current.paths.push(current.paths.length === 0 ? fields[i]!.replace(/^\n/, '') : fields[i]!);
+  }
+  return commits;
+}
+
+/** A branch read by git: `base`, the default branch's ref; `from`, where `sha` left it. */
+export function gitReader(git: CloneGit, base: string, from: string, sha: string): BranchReader {
+  const ancestor = async (rev: string) => (await git.status('merge-base', '--is-ancestor', rev, sha)).code === 0;
+  return {
+    changed: async () => {
+      const changed = [];
+      for (const { path, deleted, mode } of parseRawDiff(await git.raw('diff', '--raw', '--no-renames', '-z', from, sha))) {
+        changed.push({ path, deleted, ...(mode === SYMLINK ? { link: (await show(git, sha, path))! } : {}) });
+      }
+      return changed;
+    },
+    agentChanges: async (since, humanPushes) => {
+      const start = since && (await ancestor(since)) ? since : from;
+      // The commits a human pushed: only theirs, not the agent's they were built on, which `--not <after>` would also leave out.
+      const human = new Set<string>();
+      for (const { before, after } of humanPushes) {
+        if (!before || !(await ancestor(after))) continue;
+        const r = await git.status('rev-list', ...(/^0+$/.test(before) ? [after, '--not', base] : [`${before}..${after}`]));
+        if (r.code === 0) for (const c of r.stdout.split('\n').filter(Boolean)) human.add(c);
+      }
+      const range = start === EMPTY_TREE ? sha : `${start}..${sha}`;
+      const out = await git.raw('log', '--format=%x00%H', '--name-only', '-z', '--no-renames', '--diff-merges=remerge', range, '--not', base);
+      return logPaths(out).filter(({ commit }) => !human.has(commit)).flatMap(({ paths }) => paths);
+    },
+    showAtFork: (p) => show(git, from, p),
+    showAtHead: (p) => show(git, sha, p),
+    baseConfig: () => show(git, base, REPO_CONFIG_PATH),
+  };
+}
+
+/** A push a human made to the ticket's branch (`push.human`): `before` absent on an event recorded without it. */
+export interface HumanPush {
+  before?: string;
+  after: string;
+}
+
+/** A branch that took untrusted content (ORC-338): its mark (`TicketState.untrustedSince`) and the pushes humans made to it. */
+export interface UntrustedMark {
+  since: string;
+  humanPushes: readonly HumanPush[];
+}
+
+/** What the check of an untrusted branch needs: its mark, and the default branch's `sensitive_paths` as its caller parsed them. */
+export type UntrustedCheck = UntrustedMark & Pick<RepoConfig, 'sensitivePaths' | 'sensitivePathWarnings'>;
+
+export const untrustedCheck = (mark: UntrustedMark, config: RepoConfig): UntrustedCheck => ({
+  ...mark,
+  sensitivePaths: config.sensitivePaths,
+  ...(config.sensitivePathWarnings ? { sensitivePathWarnings: config.sensitivePathWarnings } : {}),
+});
+
+/**
+ * `factory/chemins-interdits` on a branch, whoever reads it: the forbidden paths, outward links and `package.json#scripts`
+ * on all it changed since the fork point; and on a branch that took untrusted content (`untrusted`, ORC-338), the default
+ * branch's `sensitive_paths` among what the agent's commits touched since the mark (`agentChanges`). Only paths changed
+ * since the fork point count. An entry of `sensitive_paths` that names nothing (`sensitivePathWarnings`) leaves the
+ * untrusted branch unchecked on it, so the branch is refused with a `RepoConfigError`, a config failure the agent is not sent.
+ */
+export async function checkBranchPaths(reader: BranchReader, untrusted?: UntrustedCheck): Promise<VerifyFailure[]> {
+  if (untrusted?.sensitivePathWarnings?.length) throw new RepoConfigError(untrusted.sensitivePathWarnings.map((w) => `${w}; a branch that took untrusted content is refused until it is fixed`));
+  const changed = await reader.changed();
+  let sensitive: ForbiddenView['sensitive'];
+  if (untrusted?.sensitivePaths.length) sensitive = { patterns: untrusted.sensitivePaths, changed: new Set(await reader.agentChanges(untrusted.since, untrusted.humanPushes)) };
+  const r = await checkForbiddenPaths({ changed, showAtBase: (p) => reader.showAtFork(p), showAtHead: (p) => reader.showAtHead(p), ...(sensitive ? { sensitive } : {}) });
+  return r.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: r.summary }];
+}
+
+/**
+ * The blocking checks on the commit, from the clone's objects: `factory/chemins-interdits` (`checkBranchPaths`), `factory/binaires` and `factory/anti-triche`
  * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
-export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined): Promise<VerifyFailure[]> {
+export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, untrusted?: UntrustedCheck): Promise<VerifyFailure[]> {
   const showAtHead = (p: string) => show(git, sha, p);
-  // `--raw`: status and modes in one process, `:<old mode> <new mode> <old id> <new id> <status>`, then the path.
-  const fields = (await git('diff', '--raw', '--no-renames', '-z', from, sha)).split('\0').filter(Boolean);
-  const changed = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    const [, mode, , , status] = fields[i]!.split(' ');
-    const path = fields[i + 1]!;
-    changed.push({ path, deleted: status === 'D', ...(mode === SYMLINK ? { link: (await showAtHead(path))! } : {}) });
-  }
-  const forbidden = await checkForbiddenPaths({ changed, showAtBase: (p) => show(git, from, p), showAtHead });
-  const failures: VerifyFailure[] = forbidden.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: forbidden.summary }];
+  const failures = await checkBranchPaths(gitReader(git, BASE, from, sha), untrusted);
   failures.push(...(await checkAdded(git, from, sha)));
   if (frozen) {
-    const atHead = (await git('ls-tree', '-r', '--name-only', '-z', sha)).split('\0').filter(Boolean);
+    const atHead = zFields(await git.raw('ls-tree', '-r', '--name-only', '-z', sha));
     const listed = new Set(atHead);
     const paths = [...new Set([...Object.keys(frozen.files), ...atHead.filter(isFrozenHarness)])];
     const r = await checkFrozen(frozen, { head: sha, changed: paths.map((path) => ({ path, deleted: !listed.has(path) })), filesAtHead: async () => atHead, showAtHead });
@@ -274,13 +393,19 @@ export async function checkClone(git: CloneGit, from: string, sha: string, froze
  * its text never comes into the daemon's memory, nor does a whole read over `MAX_PATCH_BYTES`, which blocks too.
  */
 async function checkAdded(git: CloneGit, from: string, sha: string): Promise<VerifyFailure[]> {
-  const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--numstat', '--patch', '-z', '-U0', '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-filter=d', from, sha);
+  // Full context (ORC-342), as many lines as the read cap lets a file weigh: each file changed is whole in its diff,
+  // before and after, for its syntax tree and its tests.
+  const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '--numstat', '--patch', '-z', `-U${MAX_READ_BYTES}`, '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-filter=d', from, sha);
   if (read === undefined) return [{ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Diff too large to analyze (over ${MAX_PATCH_BYTES / 2 ** 20} MB), publication blocked. Split the work.` }];
   const end = read.indexOf('\0\0');
   const binaries = (end === -1 ? [] : read.slice(0, end).split('\0')).filter((l) => l.startsWith('-\t-\t')).map((l) => l.slice(4));
   const failures: VerifyFailure[] = [];
   if (binaries.length) failures.push({ command: BINARY_CHECK, exitCode: 1, output: `Binary file, or one too large to analyze (over ${MAX_READ_BYTES / 2 ** 20} MB), in the diff, publication blocked. Remove it from the branch:\n${binaries.map((p) => `- ${mdCode(p)}`).join('\n')}` });
-  const cheat = antiCheatCheck(end === -1 ? '' : read.slice(end + 2));
+  // The test files the branch deleted (a rename is one, `--no-renames`), as they were, and the trailers that justify a removal.
+  const deleted = zFields(await git.raw('diff', '--name-only', '-z', '--no-renames', '--diff-filter=D', from, sha)).filter(isTestSpec);
+  const deletedTests = Object.fromEntries(await Promise.all(deleted.map(async (p) => [p, (await show(git, from, p)) ?? ''] as const)));
+  const justified = justifiedRemovals(await git.raw('log', '--format=%B', from === EMPTY_TREE ? sha : `${from}..${sha}`));
+  const cheat = antiCheatCheck(end === -1 ? '' : read.slice(end + 2), { deletedTests, justified });
   if (!cheat.ok) failures.push({ command: ANTI_CHEAT_CHECK, exitCode: 1, output: `Workaround or disabled test in the diff, publication blocked. Remove it from the branch:\n${cheat.summary}` });
   return failures;
 }
@@ -290,7 +415,7 @@ async function checkAdded(git: CloneGit, from: string, sha: string): Promise<Ver
  * itself, by its id, it reads as changed.
  */
 async function show(git: CloneGit, rev: string, path: string): Promise<string | undefined> {
-  const entry = /^\d+ (\w+) (\w+)\s+(\d+)?/.exec(await git('ls-tree', '-l', '-z', rev, '--', path));
+  const entry = /^\d+ (\w+) (\w+)\s+(\d+)?/.exec(await git.raw('ls-tree', '-l', '-z', rev, '--', path));
   if (entry?.[1] !== 'blob') return undefined;
   return Number(entry[3]) > MAX_READ_BYTES ? `\0too large: ${entry[2]}` : git.raw('show', `${rev}:${path}`);
 }
@@ -304,9 +429,12 @@ export type CloneGit = ((...args: string[]) => Promise<string>) & {
 };
 
 export function cloneGit(req: Pick<CleanVerifyRequest, 'workDir' | 'exec'>, cloneDir: string): CloneGit {
-  const env = hostGitEnv(req.workDir, req.workDir);
-  const exec = req.exec ?? execCmd;
-  const argv = (args: string[]) => [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, ...args];
+  return gitAt(req.exec ?? execCmd, cloneDir, hostGitEnv(req.workDir, req.workDir));
+}
+
+/** Git in `dir`, hardened (no hook, no fsmonitor), under `env`. */
+export function gitAt(exec: Exec, dir: string, env: Record<string, string>): CloneGit {
+  const argv = (args: string[]) => [...HARDENING.flatMap((c) => ['-c', c]), '-C', dir, ...args];
   const raw = (...args: string[]) => mustExec(exec, 'git', argv(args), { env });
   const status = (...args: string[]) => exec('git', argv(args), { env });
   const capped = async (max: number, ...args: string[]) => {

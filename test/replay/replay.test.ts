@@ -1,11 +1,19 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { upcastTicket } from '../../src/core/types.js';
 import { formatReplay, readJournal, replayJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 import { asVersion1, record as recordScenario, recordedFiles, scenarioWorkflow, SCENARIOS } from './scenarios.js';
+
+// Replay must never reach the small model of messages (ORC-336): any call to it fails this file.
+vi.mock('../../src/adapters/runner/message-classifier.js', () => {
+  const never = () => {
+    throw new Error('the small model was called on replay');
+  };
+  return { messageClassifier: never, apiClassifier: never, cliClassifier: never };
+});
 
 const dir = join(import.meta.dirname, 'journals');
 
@@ -61,6 +69,15 @@ async function record(name: string): Promise<ExportedJournal> {
 }
 
 describe('replay oracle (ORC-174)', () => {
+  it('replays a message by the class journaled with it, never asking a model again (ORC-336)', () => {
+    const journal = readJournal(readFileSync(join(dir, 'human-reply-during-run.json'), 'utf8'));
+    expect(replayJournal(journal).divergences).toEqual([]);
+    // Another class in the journal is another decision: the class read is the journaled one, not a new verdict.
+    const asked = journal.entries.find((e) => e.event.type === 'session.prompted' && (e.event.payload as { kind?: string }).kind === 'question')!;
+    (asked.event.payload as { kind: string }).kind = 'instruction';
+    expect(replayJournal(journal).divergences.length).toBeGreaterThan(0);
+  });
+
   it('replays a journal recorded by the unchanged engine: projection and effects identical bit for bit', async () => {
     const journal = await record('check-failed-then-feedback');
     const report = replayJournal(journal);

@@ -35,7 +35,7 @@ Is a failure already on the base? `gh run list --branch <base> --limit 5` (same 
 
 ## Forbidden
 
-Never disable, skip (`skip`, `only`), delete or weaken a test, an assertion or a CI step. Do not modify the CI workflows to make the build pass. Do not increase a timeout without justifying, with a measurement (actual duration of the latest runs), that the slowness is legitimate. Never merge, never push (the factory publishes), do not rewrite history, do not switch branches.
+Never disable, skip (`skip`, `only`), delete or weaken a test, an assertion or a CI step. Do not modify the CI workflows to make the build pass: nothing under `.github/` goes out, nor the other forbidden paths of the `dev` skill; if the fix needs one, `factory-agent ask`. Do not increase a timeout without justifying, with a measurement (actual duration of the latest runs), that the slowness is legitimate. Never merge, never push (the factory publishes), do not rewrite history, do not switch branches.
 
 ## Last message (published in Linear)
 

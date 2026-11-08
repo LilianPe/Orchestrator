@@ -1,4 +1,5 @@
 import type { RepoConfig } from '../config/repo-config.js';
+import type { RunLimits } from '../config/workflow-schema.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -60,6 +61,10 @@ export interface RunRecord {
   stagnation?: Stagnation;
   /** The runner or its sandbox broke: nothing for the agent to fix (ORC-136). */
   infra?: true;
+  /** The limits it was launched with when they are not its job's: the ticket's token budget lowered them (ORC-340). A reattach keeps them. */
+  limits?: RunLimits;
+  /** The subscription's usage limit stopped the attempt (ORC-340). */
+  usageLimit?: { resetAt?: number };
   /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
   leaseUntil?: number;
   /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */
@@ -69,6 +74,8 @@ export interface RunRecord {
    * `verify` on the host) reads this one, not what the default branch holds by then. Absent on older records.
    */
   repoConfig?: RepoConfig;
+  /** The deterministic checks of the ticket that failed at the launch of an `intake` run (ORC-206), for its guard. Absent when none failed. */
+  pickup?: string[];
 }
 
 /**
@@ -104,6 +111,8 @@ export interface QueueItem {
    * effect: a launch cut before the item left the queue is not launched again when handed out.
    */
   startMark?: string;
+  /** Its starts that failed on a passing error so far (ORC-339): past a bound, the ticket is blocked. */
+  failedStarts?: number;
 }
 
 /** A workflow definition and its hash (`workflowHash`): what a ticket's run is frozen on (ORC-149). */
@@ -354,6 +363,12 @@ export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fire
 }
 
 /** A queue item handed out under a lease (ORC-150): it stays in the queue until its start is recorded. */
+/** A queued item put back after a start that failed (ORC-339): counted, and handed out again only from `notBefore` on. */
+export interface QueueRetry {
+  failedStarts: number;
+  notBefore: number;
+}
+
 export interface QueueClaim {
   id: string;
   lease: string;
@@ -373,6 +388,8 @@ export interface Store {
    * when an event with this id is already in the inbox, processed or not: the id is the dedup key.
    */
   appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean>;
+  /** Whether the inbox already holds an event with this id, processed or not (ORC-336: a redelivered webhook). */
+  inboxHas(id: string): Promise<boolean>;
   /** Inbox events not processed yet, oldest first, except the ids in `exclude`. */
   pendingInbox(limit: number, exclude?: readonly string[]): Promise<StoredEvent[]>;
   /** Marks an inbox event processed: `pendingInbox` no longer returns it. */
@@ -490,10 +507,18 @@ export interface Store {
   renewQueued(claim: QueueClaim, leaseMs: number): Promise<boolean>;
   /** The item's start is recorded (or the item is dropped): out of the queue for good. */
   finishQueued(claim: QueueClaim): Promise<boolean>;
-  /** The item goes back in line, at its place (no free slot, paused, over budget). */
-  releaseQueued(claim: QueueClaim): Promise<boolean>;
+  /**
+   * The item goes back in line, at its place (no free slot, paused, over budget). `retry`: after a start that failed
+   * (ORC-339), its failures so far, kept on the item, and the time before which no drain hands it out again.
+   */
+  releaseQueued(claim: QueueClaim, retry?: QueueRetry): Promise<boolean>;
   /** Items waiting in line: not handed out, or handed out under a lease that expired (their holder died). */
   listQueue(): Promise<QueueItem[]>;
+  /**
+   * A ticket's items in a queue, handed-out ones included (ORC-339): an item whose start a crash cut under a live
+   * lease is still the queue's to start, not a start to make again.
+   */
+  queuedItems(projectId: string, ticketId: string): Promise<QueueItem[]>;
   /**
    * Takes the ticket's items out of the queue, of every queue or of `queue` only, handed-out ones
    * included (a stop): their claim then settles nothing.
@@ -521,6 +546,16 @@ export interface Store {
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   getMeta(key: string): Promise<string | undefined>;
+  /**
+   * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: false, and nothing
+   * written, when one with this key is kept already. In the meta rows, under `delivery:`: a few short-lived rows.
+   */
+  receiveDelivery(key: string, value: string): Promise<boolean>;
+  /** The deliveries kept, in the order received: what a restart writes to the inbox. */
+  pendingDeliveries(): Promise<{ key: string; value: string }[]>;
+  deleteDelivery(key: string): Promise<void>;
+  /** Moves a kept delivery that will not be written aside, under `delivery-aside:`: no longer pending, kept for an operator. */
+  asideDelivery(key: string): Promise<void>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;
 }

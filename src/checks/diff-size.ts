@@ -114,7 +114,7 @@ export function measureDiff(diff: string | DiffFile[]): DiffMeasure {
     const kind = kindOf(file);
     if (kind === 'test') tests++;
     else if (kind === 'generated') generated++;
-    else counted.push({ path: file.path, lines: file.added.length + file.removed });
+    else counted.push({ path: file.path, lines: file.added.length + file.removed.length });
   }
   counted.sort((a, b) => b.lines - a.lines);
   return { size: { files: counted.length, lines: counted.reduce((n, f) => n + f.lines, 0) }, counted, tests, generated };

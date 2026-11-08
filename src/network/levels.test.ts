@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../config/repo-config.js';
-import { agentPolicy, allowConnect, allowRequest, stepPolicy, type EgressPolicy } from './levels.js';
+import { agentPolicy, allowConnect, allowRequest, CLAUDE_BODY_DEPTH, claudeBody, stepPolicy, type EgressPolicy } from './levels.js';
 
 const repo = (yaml?: string) => parseRepoConfig(yaml);
 const limited: EgressPolicy = { level: 'limited', allow: [] };
@@ -91,19 +91,115 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(allowRequest(limited, 'api.github.com', 'POST', '/o/r.git/git-upload-pack').ok).toBe(false);
   });
 
-  it('keeps every method for the Claude API, the read methods elsewhere', () => {
-    expect(allowRequest(limited, 'api.anthropic.com', 'POST', '/v1/messages').ok).toBe(true);
+  it('lets through the Claude API only the calls Claude Code makes, at any level but none (ORC-337)', () => {
+    for (const p of [limited, { level: 'claude-api' as const, allow: [] }]) {
+      expect(allowRequest(p, 'api.anthropic.com', 'POST', '/v1/messages?beta=true').ok).toBe(true);
+      expect(allowRequest(p, 'API.anthropic.com.', 'POST', '/v1/messages/count_tokens?beta=true').ok).toBe(true);
+      expect(allowRequest(p, 'api.anthropic.com', 'GET', '/api/claude_code/settings').ok).toBe(true);
+      expect(allowRequest(p, 'api.anthropic.com', 'GET', '/api/claude_code/policy_limits').ok).toBe(true);
+    }
+    const refused = [
+      ['POST', '/v1/files'], ['GET', '/v1/files'], ['GET', '/v1/messages'], ['POST', '/v1/messages/batches'], ['POST', '/v1/messages/../files'],
+      ['POST', '//v1/messages'], ['POST', '/api/event_logging/v2/batch'], ['POST', '/api/eval/sdk-x'], ['GET', '/api/claude_cli/bootstrap'], ['POST', '/api/claude_code/settings'],
+    ];
+    for (const [method, path] of refused) expect(allowRequest(limited, 'api.anthropic.com', method!, path!), `${method} ${path}`).toMatchObject({ ok: false, reason: expect.stringMatching(/not a call of Claude Code/) as string });
+    expect(allowRequest({ level: 'none', allow: [] }, 'api.anthropic.com', 'POST', '/v1/messages').ok).toBe(false);
+  });
+
+  it('keeps the read methods elsewhere', () => {
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'OPTIONS', '/').ok).toBe(true);
     expect(allowRequest({ level: 'limited', allow: ['docs.exemple.com'] }, 'docs.exemple.com', 'DELETE', '/').ok).toBe(false);
   });
 
-  it('lets Claude Code refresh its OAuth token, and write nothing else to the auth hosts', () => {
-    const claude = { level: 'claude-api' as const, allow: [] };
-    expect(allowRequest(claude, 'console.anthropic.com', 'POST', '/v1/oauth/token').ok).toBe(true);
-    expect(allowRequest(claude, 'platform.claude.com', 'POST', '/v1/oauth/token?x=1').ok).toBe(true);
-    expect(allowRequest(claude, 'console.anthropic.com', 'POST', '/v1/other').ok).toBe(false);
-    expect(allowRequest(claude, 'nodejs.org', 'GET', '/').ok).toBe(false);
-    expect(allowRequest({ level: 'none', allow: [] }, 'console.anthropic.com', 'POST', '/v1/oauth/token').ok).toBe(false);
+  it('refuses the OAuth refresh hosts: a sandbox holds no refresh token, its token is the proxy\'s (ORC-337)', () => {
+    for (const p of [{ level: 'claude-api' as const, allow: [] }, limited]) {
+      for (const host of ['console.anthropic.com', 'platform.claude.com']) {
+        expect(allowConnect(p, host).ok).toBe(false);
+        expect(allowRequest(p, host, 'POST', '/v1/oauth/token').ok).toBe(false);
+      }
+      expect(allowRequest(p, 'nodejs.org', 'POST', '/').ok).toBe(false);
+    }
+  });
+
+  it('reads a model call\'s body: JSON, client tools only, no MCP server nor container (ORC-337)', () => {
+    const v = (body: unknown) => claudeBody(Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+    expect(v({ model: 'm', messages: [] }).ok).toBe(true);
+    expect(v({ tools: [{ name: 'Bash', input_schema: {} }, { name: 'R', type: 'custom', input_schema: {} }, { type: 'bash_20250124', name: 'bash' }, { type: 'text_editor_20250728', name: 'e' }, { type: 'computer_20250124', name: 'c' }, { type: 'memory_20250818', name: 'memory' }] }).ok).toBe(true);
+    for (const type of ['web_search_20250305', 'web_fetch_20250910', 'code_execution_20250825', 'mcp_toolset', 'tool_search_tool_regex_20251119', 'bash', 'bash_2025', 'custom_x', 7]) {
+      expect(v({ tools: [{ type, name: 'x' }] }), String(type)).toMatchObject({ ok: false, reason: expect.stringMatching(/server tool/) as string });
+    }
+    expect(v({ mcp_servers: [] })).toMatchObject({ ok: false, reason: 'Claude API body refused: mcp_servers' });
+    expect(v({ container: 'c' }).ok).toBe(false);
+    expect(v({ tools: {} }).ok).toBe(false);
+    expect(v({ tools: [null] }).ok).toBe(false);
+    for (const bad of ['', 'nope', '[]', 'null', '"s"']) expect(v(bad).ok, bad).toBe(false);
+  });
+
+  it('refuses any content Anthropic would fetch by URL, wherever the block sits (ORC-337)', () => {
+    const v = (body: unknown) => claudeBody(Buffer.from(JSON.stringify(body)));
+    const user = (content: unknown) => ({ model: 'm', messages: [{ role: 'user', content }] });
+    const image = (source: unknown) => ({ type: 'image', source });
+    const inline = [
+      'hi',
+      [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }],
+      [image({ type: 'base64', media_type: 'image/png', data: 'AA==' })],
+      [{ type: 'document', source: { type: 'text', media_type: 'text/plain', data: 'x' } }],
+      [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'ok' }, image({ type: 'base64', media_type: 'image/png', data: 'AA==' })] }],
+      // A tool call's input is the agent's own data: a `url` in it is fetched by no one.
+      [{ type: 'tool_use', id: 't', name: 'WebFetch', input: { url: 'https://example.com' } }],
+    ];
+    for (const content of inline) expect(v(user(content)), JSON.stringify(content)).toMatchObject({ ok: true });
+    expect(v({ model: 'm', system: [{ type: 'text', text: 'rules' }], messages: [] }).ok).toBe(true);
+    const fetched: [unknown, RegExp][] = [
+      [user([image({ type: 'url', url: 'https://attacker.example/a.png' })]), /image block sourced by url/],
+      [user([{ type: 'document', source: { type: 'url', url: 'https://attacker.example/a.pdf' } }]), /document block sourced by url/],
+      [user([{ type: 'document', source: { type: 'file', file_id: 'f' } }]), /sourced by file/],
+      [user([{ type: 'document', source: { type: 'content', content: [{ type: 'text', text: 'x' }] } }]), /sourced by content/],
+      [user([image('https://attacker.example/a.png')]), /sourced by string/],
+      [user([{ type: 'tool_result', tool_use_id: 't', content: [image({ type: 'url', url: 'https://attacker.example/a.png' })] }]), /image block sourced by url/],
+      [user([{ type: 'search_result', source: 'https://attacker.example', title: 't', content: [{ type: 'text', text: 'x' }] }]), /search_result block sourced by string/],
+      [user([{ type: 'text', text: 'x', citations: [{ type: 'web_search_result_location', url: 'https://attacker.example' }] }]), /cited by url/],
+      [user([{ type: 'whatever', url: 'https://attacker.example' }]), /whatever block with a url/],
+      [{ model: 'm', system: [{ type: 'text', text: 'x', citations: [{ url: 'https://attacker.example' }] }], messages: [] }, /cited by url/],
+      [{ model: 'm', messages: {} }, /messages is not a list/],
+      [user({ type: 'image' }), /content that is not a list/],
+    ];
+    for (const [body, reason] of fetched) expect(v(body), JSON.stringify(body)).toMatchObject({ ok: false, reason: expect.stringMatching(reason) as string });
+  });
+
+  it('hands on the call as it checked it: duplicate keys, which the API may read otherwise, are gone (ORC-337)', () => {
+    const raw = '{"model":"m","tools":[{"type":"web_fetch_20250910","name":"f"}],"tools":[],"messages":[]}';
+    const checked = claudeBody(Buffer.from(raw));
+    expect(checked).toMatchObject({ ok: true });
+    expect(checked.ok && checked.body.toString()).toBe('{"model":"m","tools":[],"messages":[]}');
+    // The other way round, the last one read is the one checked.
+    expect(claudeBody(Buffer.from('{"tools":[],"tools":[{"type":"web_fetch_20250910","name":"f"}]}')).ok).toBe(false);
+    // Strings stay as sent: a thinking block's signature, unicode, escapes.
+    const exact = { messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'é \u2028 "q"', signature: 'sig/+=' }] }] };
+    const again = claudeBody(Buffer.from(JSON.stringify(exact)));
+    expect(again.ok && JSON.parse(again.body.toString())).toEqual(exact);
+  });
+
+  it('refuses a call nested past CLAUDE_BODY_DEPTH on its raw bytes, wherever, before any parse (ORC-337)', () => {
+    const v = (raw: string) => claudeBody(Buffer.from(raw));
+    const n = 200_000;
+    const deep = `${'['.repeat(n)}${']'.repeat(n)}`;
+    for (const raw of [
+      `{"messages":[{"role":"user","content":${'[{"type":"tool_result","content":'.repeat(n)}"x"${'}]'.repeat(n)}}]}`,
+      `{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"B","input":${deep}}]}]}`,
+      `{"messages":[],"whatever":${deep}}`,
+    ]) expect(v(raw)).toEqual({ ok: false, reason: `Claude API body refused: nested deeper than ${CLAUDE_BODY_DEPTH}` });
+    const at = (d: number) => `{"x":${'['.repeat(d - 1)}${']'.repeat(d - 1)}}`;
+    expect(v(at(CLAUDE_BODY_DEPTH)).ok).toBe(true);
+    expect(v(at(CLAUDE_BODY_DEPTH + 1)).ok).toBe(false);
+    // In a string, a bracket is text; an escaped quote does not end the string, an escaped backslash does not escape it.
+    expect(v(`{"x":"${'['.repeat(1000)}\\"${'{'.repeat(100)}","y":"a\\\\"}`).ok).toBe(true);
+  });
+
+  it('refuses what a parse and a serialisation would change: not UTF-8, a number past a double (ORC-337)', () => {
+    expect(claudeBody(Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xe9, 0x22, 0x7d]))).toMatchObject({ ok: false, reason: 'Claude API body refused: not JSON in UTF-8' });
+    for (const n of ['1e309', '-1e400', '9'.repeat(400), '1.5E+999']) expect(claudeBody(Buffer.from(`{"n":${n}}`)), n).toMatchObject({ ok: false, reason: expect.stringMatching(/out of range/) as string });
+    for (const n of ['1e308', '-0.5', '12', '1E3']) expect(claudeBody(Buffer.from(`{"n":${n},"t":true,"f":false}`)).ok, n).toBe(true);
   });
 
   it('follows the level', () => {

@@ -24,10 +24,15 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
   // As the daemon reads it on the default branch (`makeRepoConfig`): through a link, git sees no file, and the launch refuses it.
   // `lstat`, not `existsSync`, which follows a link: a dangling one would read as no file at all.
   const entry = (p: string) => lstatSync(p, { throwIfNoEntry: false });
-  const dir = entry(join(opts.repoPath, REPO_CONFIG_DIR));
-  if (dir && !dir.isDirectory()) return refuse([`${REPO_CONFIG_DIR}: a folder is expected, not a symbolic link or a file`]);
   const path = join(opts.repoPath, FILE);
-  if (entry(path)?.isSymbolicLink()) return refuse([`${FILE}: a file is expected, not a symbolic link`]);
+  // A path it cannot look into (EACCES, ELOOP) is refused as unreadable, as the file itself is below.
+  try {
+    const dir = entry(join(opts.repoPath, REPO_CONFIG_DIR));
+    if (dir && !dir.isDirectory()) return refuse([`${REPO_CONFIG_DIR}: a folder is expected, not a symbolic link or a file`]);
+    if (entry(path)?.isSymbolicLink()) return refuse([`${FILE}: a file is expected, not a symbolic link`]);
+  } catch (err) {
+    return refuse([`unreadable: ${(err as Error).message}`]);
+  }
   if (!existsSync(path)) {
     opts.out(`no ${FILE}: the factory/default baseline applies as is.`);
     return 0;
@@ -38,12 +43,16 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
   } catch (err) {
     return refuse([`unreadable: ${(err as Error).message}`]);
   }
+  let warnings: string[];
   try {
-    parseRepoConfig(text);
+    warnings = parseRepoConfig(text).sensitivePathWarnings ?? [];
   } catch (err) {
     if (!(err instanceof RepoConfigError)) throw err;
     return refuse(err.violations);
   }
   opts.out(`${FILE} valid: it only adds checks or prohibitions to the baseline.`);
+  // ORC-338: kept out of the check, and a branch that took untrusted content is refused until they are fixed.
+  if (warnings.length) opts.out(`Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):`);
+  for (const w of warnings) opts.out(`- ${w}`);
   return 0;
 }
