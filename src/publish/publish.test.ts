@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { NoCommitsBetween } from '../adapters/forge/types.js';
-import { prText, PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
+import { PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { WORKSPACE_TARGET, type SandboxExecOptions, type SandboxRequest } from '../adapters/sandbox/types.js';
@@ -612,16 +612,6 @@ describe('GitPublisher, on the repository the agent really has (ORC-317)', () =>
     expect(r.code).toBe('head');
     expect(s.sandboxes.created).toEqual([]);
     expect(s.onForge()).toBe('');
-  });
-});
-
-describe('prText', () => {
-  it("names the ticket, and copies nothing of the agent's: no last message reaches GitHub", () => {
-    const { title, body } = prText({ ticketId: 'ORC-1', title: 'Exporter en CSV' });
-    expect(title).toBe('ORC-1 Exporter en CSV');
-    expect(body).toContain('Ticket: ORC-1');
-    // A closing keyword is a claim about the whole ticket: only ORC-195's composer can make it.
-    expect(body).not.toMatch(/\b(fix(es)?|close[sd]?|resolve[sd]?)\b/i);
   });
 });
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { describePr, FACTS_ROOM, formatRecap } from '../publish/describe.js';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
@@ -25,21 +26,6 @@ export const intakeAssessmentSchema = z
 /** An entry of a list `submit_result` holds, and the list: capped as what the factory publishes of them (ORC-214). */
 const item = z.string().max(OUTPUT_LIMITS.item);
 const list = z.array(item).max(OUTPUT_LIMITS.items);
-
-/**
- * The comment of a build's end, in the factory's order and words (ORC-289, ORC-214): what the `OutputPolicy` publishes of a
- * result, never the agent's last text. Pure: the schema measures it, the policy posts it.
- */
-export function formatResult(o: Pick<AgentOutput, 'summary' | 'why' | 'risks' | 'untested' | 'review_hints'>): string {
-  const section = (title: string, items: string[]) => (items.length ? [`**${title}**\n${items.map((i) => `- ${i}`).join('\n')}`] : []);
-  return [
-    o.summary,
-    ...(o.why ? [`**Why**: ${o.why}`] : []),
-    ...section('Risks', o.risks),
-    ...section('Untested', o.untested),
-    ...section('To review', o.review_hints.map((h) => `\`${h.file}\`: ${h.reason}`)),
-  ].join('\n\n');
-}
 
 /**
  * The three conflicts with the default branch the rebase step leaves to a human (ORC-146): the two sides contradict each
@@ -70,6 +56,8 @@ export const agentOutputSchema = z
     assumptions: list,
     risks: list,
     untested: list,
+    /** « Trusted without verification » (ORC-195): libraries, external services and behaviours taken as correct, the approved spec's section carried to the PR. Optional: results older than it lack it. */
+    trusted: list.optional(),
     review_hints: z.array(z.object({ file: item.min(1), reason: item.min(1) }).strict()).max(OUTPUT_LIMITS.items),
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
     /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
@@ -80,9 +68,6 @@ export const agentOutputSchema = z
     if (o.status === 'blocked' && !o.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'required when status is blocked' });
     if (o.status === 'done' && o.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'only for a blocked status' });
     if ((o.reason === 'conflict') !== !!o.conflict) ctx.addIssue({ code: 'custom', path: ['conflict'], message: 'required with reason conflict, and only with it' });
-    // Each field under its cap can still add up past a comment's: refused here, while the agent can shorten it (ORC-214).
-    const published = formatResult(o).length;
-    if (published > OUTPUT_LIMITS.text) ctx.addIssue({ code: 'custom', path: ['summary'], message: `summary, why, risks, untested and review_hints together make a comment of ${published} characters, more than ${OUTPUT_LIMITS.text}: shorten them` });
   });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
@@ -101,6 +86,29 @@ export function parseAgentOutput(raw: unknown): { ok: true; output: AgentOutput 
   const r = agentOutputSchema.safeParse(raw);
   if (r.success) return { ok: true, output: r.data };
   return { ok: false, error: r.error.issues.map((i) => `${i.path.join('.') || '(racine)'}: ${i.message}`).join('; ') };
+}
+
+/**
+ * Fields each under their cap can still add up past what the factory publishes of them (ORC-214, ORC-195): the recap past a
+ * comment's cap, the PR description past a body's less `FACTS_ROOM`, the room the factory's own facts take. Checked when the agent
+ * submits, so it shortens them within its run; never on a stored result, which was valid when it was written.
+ */
+function publishedSizeIssues(o: AgentOutput): string[] {
+  const issues: string[] = [];
+  const recap = formatRecap(o, []).length;
+  if (recap > OUTPUT_LIMITS.text) issues.push(`summary: summary, why, risks, untested, review_hints and tests_added together make a recap of ${recap} characters, more than ${OUTPUT_LIMITS.text}: shorten them`);
+  const pr = describePr(o, { ticketId: '', title: '', sha: '' }).body.length;
+  const room = OUTPUT_LIMITS.text - FACTS_ROOM;
+  if (pr > room) issues.push(`summary: the fields together make a PR description of ${pr} characters, more than ${room}: shorten them`);
+  return issues;
+}
+
+/** What `submit_result` takes: a valid output whose published texts stay under their caps. */
+export function parseSubmittedResult(raw: unknown): ReturnType<typeof parseAgentOutput> {
+  const parsed = parseAgentOutput(raw);
+  if (!parsed.ok) return parsed;
+  const issues = publishedSizeIssues(parsed.output);
+  return issues.length ? { ok: false, error: issues.join('; ') } : parsed;
 }
 
 /**

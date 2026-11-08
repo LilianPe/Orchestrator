@@ -553,6 +553,30 @@ describe('decide — built-ins', () => {
     expect(out.effects[0]).toMatchObject({ kind: 'block_comment', block: { step: 'build', reason: 'The run dev reached a limit (turns, duration or budget).' } });
   });
 
+  describe('a step past its budget, in tokens or in turns (ORC-216)', () => {
+    const over = (overBudget: 'tokens' | 'turns') => ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 1, turns: 150, lastText: '', attempt: 'timeout', overBudget });
+
+    it('blocks, kind budget, with the standard comment naming the budget', () => {
+      const out = decide(ticket({ activeRunId: 'r1' }), over('tokens'), workflow);
+      expect(kinds(out)).toEqual({ events: ['ticket.blocked'], effects: ['block_comment', 'labels'], timers: [] });
+      expect(out.events[0]).toMatchObject({ type: 'ticket.blocked', kind: 'budget', reason: 'The run dev spent its token budget (budgets.per_step_tokens, or what the ticket had left).' });
+      expect(out.effects[0]).toMatchObject({ kind: 'block_comment', block: { step: 'build', tried: ['Started the run dev: stopped at its token budget.'] } });
+      expect(decide(ticket({ activeRunId: 'r1' }), over('turns'), workflow).events[0]).toMatchObject({ kind: 'budget', reason: 'The run dev spent its turn budget (max_turns of its step).' });
+    });
+
+    it('a run ended at its limit without saying which, as journaled before, blocks as it did', () => {
+      const out = decide(ticket({ activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 1, turns: 150, lastText: '', attempt: 'timeout' }), workflow);
+      expect(out.events[0]).toMatchObject({ kind: 'limit', reason: 'The run dev reached a limit (turns, duration or budget).' });
+    });
+
+    it('a usage limit is no overrun: the run waits for the reset, even when it also says a budget', () => {
+      const cut = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 1, turns: 3, lastText: '', attempt: 'timeout', overBudget: 'tokens', usageLimit: { resetAt: 5_000_000 } });
+      const out = decide(ticket({ activeRunId: 'r1' }), cut, workflow);
+      expect(out.events.some((e) => e.type === 'ticket.blocked')).toBe(false);
+      expect(out.timers).toMatchObject([{ kind: 'usage.reset' }]);
+    });
+  });
+
   it('verify failure goes back to the run 3 times, then the 4th failure blocks (preset bound, ORC-187)', () => {
     const failures = [{ command: 'npm test', exitCode: 1, output: 'boom' }];
     const first = decide(ticket({ verifyAttempts: 0, verifyingRunId: 'r1' }), ev('verify.failed', { runId: 'r1', job: 'dev', failures }), workflow);
