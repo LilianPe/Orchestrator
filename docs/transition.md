@@ -226,7 +226,6 @@ Output of the agent's work: no factory tool runs on a tree written by the agent.
 | `src/publish/publish.ts` | `GitPublisher`: head read on the forge, bundle in a sandbox at `none` compared to the verified commit, blocking diff check, forward push with `--force-with-lease`, draft PR | keep | ORC-125, ORC-146 (done: a rebase replaces the head named by `rewrites`, that head only) |
 | `src/publish/output-limits.ts` | `OUTPUT_LIMITS`: the caps of what the factory publishes, the one place they are named, read by the `OutputPolicy` and by the schema of `submit_result` | keep | ORC-214 |
 | `src/publish/output-policy.ts` | `OutputPolicy`: strict zod schema of the texts the factory publishes (comment, activity, PR text, visual-proof capture), capped by `OUTPUT_LIMITS`, base64 and hexadecimal blobs refused (wrapped lines joined), gitleaks on the text as published, one scan per item, its verdict kept by hash (in a sandbox without network, or the host's for host runs); `composeResult`, the comment of a run's end from its `submit_result` (a build's: the recap of ORC-195); `PolicedTracker`, the orchestrator's Linear writes through it; `capture`, the entry point of ORC-176's captures | keep | ORC-214, ORC-195 (done: the PR's text composed, `describePr`), ORC-176 (captures) |
-| `src/publish/publish.ts` | `GitPublisher`: head read on the forge, bundle in a sandbox at `none` compared to the verified commit, blocking diff check, forward push with `--force-with-lease`, draft PR | keep | ORC-125 |
 
 ### `src/network/`
 
