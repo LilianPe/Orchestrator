@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
 import { BLOCKED_LABEL } from '../../src/core/engine.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 type Harness = ReturnType<typeof createHarness>;
@@ -24,10 +24,7 @@ function addIssue(h: Harness): void {
 describe('delegation withdrawn (ORC-227)', () => {
   it('during a run: the sandboxed attempt is stopped, its sandbox gone, the work cancelled and nothing starts again', async () => {
     const h = createHarness({ sandboxed: true });
-    addIssue(h);
-    h.runner.enqueue({ hold: true });
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    const runId = (await h.ticket()).activeRunId!;
+    const runId = await heldRun(h);
     expect(h.sandboxes.active()).toHaveLength(1);
 
     await withdraw(h);
@@ -68,8 +65,7 @@ describe('delegation withdrawn (ORC-227)', () => {
     await h.advance(60 * 60_000);
     expect(h.publisher.published).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
-    const t = await h.ticket();
-    expect(t).toMatchObject({ delegated: false, blocked: false, logical: before.logical });
+    expect(await h.ticket()).toMatchObject({ delegated: false, blocked: false, logical: before.logical });
     expect(h.tracker.issues.get('REL-1')!.labels).not.toContain(BLOCKED_LABEL);
   });
 
@@ -77,8 +73,9 @@ describe('delegation withdrawn (ORC-227)', () => {
     const h = createHarness();
     addIssue(h);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
-    expect((await h.ticket()).activeRunId).toBeUndefined();
+    const before = await h.ticket();
+    expect(before).toMatchObject({ logical: 'human_review' });
+    expect(before.activeRunId).toBeUndefined();
     const said = h.tracker.activities('ls-1').length;
     const comments = h.tracker.comments('REL-1').length;
 
@@ -113,10 +110,7 @@ describe('delegation withdrawn (ORC-227)', () => {
 describe('ticket cancelled by a human (ORC-170)', () => {
   it('during a run: the attempt is stopped, the work cancelled, no block, and nothing starts again', async () => {
     const h = createHarness();
-    addIssue(h);
-    h.runner.enqueue({ hold: true });
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    const runId = (await h.ticket()).activeRunId!;
+    const runId = await heldRun(h);
 
     await h.send('status.changed', { from: 'dev', to: null, cancelled: true }, 'REL-1', { actor: 'user-1', taint: 'trusted' });
 
