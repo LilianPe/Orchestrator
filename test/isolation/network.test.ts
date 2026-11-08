@@ -179,9 +179,12 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     const manifest = JSON.stringify({ name: 'p', version: '1.0.0', packageManager, dependencies: { 'is-number': '7.0.0' } });
     return `cd $(mktemp -d) && echo '${manifest}' > package.json && touch yarn.lock && HOME=$(mktemp -d) ${yarn} install`;
   };
-  /** The package's GETs the proxy let through, metadata and tarball: counted before and after an install, so a hit comes from that install. */
+  /**
+   * The package's tarball GETs the proxy let through, counted before and after an install, so a hit comes from that install.
+   * The tarball, not the metadata: with an empty yarn.lock, Yarn 1 asks for the metadata even when a cache holds the tarball.
+   */
   const isNumberFetches = () =>
-    journal('limited').filter((e) => e.method === 'GET' && e.host === 'registry.yarnpkg.com' && e.path?.startsWith('/is-number') === true && e.ok).length;
+    journal('limited').filter((e) => e.method === 'GET' && e.host === 'registry.yarnpkg.com' && e.path === '/is-number/-/is-number-7.0.0.tgz' && e.ok).length;
 
   it('limited: Yarn 1, the image’s, installs a package through the proxy, trusting the factory CA', async () => {
     expect(await run('limited', 'yarn --version')).toMatchObject({ code: 0, out: expect.stringMatching(/^1\./) as string });
