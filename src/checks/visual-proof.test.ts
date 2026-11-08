@@ -41,7 +41,7 @@ describe('the decision of the visual proof, on the real diff (ORC-176)', () => {
 
 describe('the controls on the captures (ORC-176)', () => {
   it('criterion 1: six captures kept, before on the base and after on the commit, at the three widths, by their hash', async () => {
-    const r = await judgeShots({ before: shots('base'), after: shots('head') }, SHAS, gate);
+    const r = await judgeShots(shots('head'), async () => shots('base'), SHAS, gate);
     expect(r.failures).toEqual([]);
     expect(r.files.map((f) => [f.capture.side, f.capture.sha, f.capture.width])).toEqual([
       ['before', SHAS.before, 1280], ['before', SHAS.before, 768], ['before', SHAS.before, 375],
@@ -51,47 +51,54 @@ describe('the controls on the captures (ORC-176)', () => {
   });
 
   it('criterion 3: before and after identical at every width fail the check, which goes back to build', async () => {
-    const r = await judgeShots({ before: shots('same'), after: shots('same') }, SHAS, gate);
+    const r = await judgeShots(shots('same'), async () => shots('same'), SHAS, gate);
     expect(r.failures).toEqual([{ command: VISUAL_PROOF_CHECK, exitCode: 1, output: expect.stringContaining('identical') }]);
     expect(r.files).toEqual([]);
   });
 
   it('a change seen at one width only is a change', async () => {
     const after: Shots = { started: true, pages: [{ width: 1280, png: fakePng('same@1280'), consoleErrors: [] }, { width: 375, png: fakePng('new@375'), consoleErrors: [] }] };
-    expect((await judgeShots({ before: shots('same', [1280, 375]), after }, SHAS, gate)).failures).toEqual([]);
+    expect((await judgeShots(after, async () => shots('same', [1280, 375]), SHAS, gate)).failures).toEqual([]);
   });
 
   it('criterion 3: an application that does not start on the commit fails the check', async () => {
-    const r = await judgeShots({ before: shots('base'), after: { started: false, detail: 'Error: Cannot find module next' } }, SHAS, gate);
+    const r = await judgeShots({ started: false, detail: 'Error: Cannot find module next' }, async () => shots('base'), SHAS, gate);
     expect(r.failures).toEqual([{ command: VISUAL_PROOF_CHECK, exitCode: 1, output: expect.stringMatching(/did not start[\s\S]*Cannot find module next/) }]);
+    // The base is shot only for a commit whose page passes: no install, no sandbox for a verdict already known.
+    let based = false;
+    await judgeShots({ started: false, detail: 'x' }, async () => {
+      based = true;
+      return shots('base');
+    }, SHAS, gate);
+    expect(based).toBe(false);
   });
 
   it('a blocking console error on the page after fails the check', async () => {
     const after: Shots = { started: true, pages: [{ width: 1280, png: fakePng('x'), consoleErrors: ['TypeError: x is undefined'] }] };
-    const r = await judgeShots({ before: shots('base', [1280]), after }, SHAS, gate);
+    const r = await judgeShots(after, async () => shots('base', [1280]), SHAS, gate);
     expect(r.failures).toEqual([{ command: VISUAL_PROOF_CHECK, exitCode: 1, output: expect.stringContaining('TypeError: x is undefined') }]);
   });
 
   it("a capture the output policy refuses (not a PNG) fails the commit's check, never kept", async () => {
     const after: Shots = { started: true, pages: [{ width: 1280, png: new TextEncoder().encode('<svg/>'), consoleErrors: [] }] };
-    const r = await judgeShots({ before: shots('base', [1280]), after }, SHAS, gate);
+    const r = await judgeShots(after, async () => shots('base', [1280]), SHAS, gate);
     expect(r.failures).toEqual([{ command: VISUAL_PROOF_CHECK, exitCode: 1, output: expect.stringContaining('not a PNG') }]);
     expect(r.files).toEqual([]);
   });
 
   it("a scanner that cannot run is no verdict on the capture: it rejects, an infrastructure failure", async () => {
     const down = () => Promise.reject(new Error('gitleaks could not run (code 2)'));
-    await expect(judgeShots({ before: shots('base'), after: shots('head') }, SHAS, down)).rejects.toThrow(/gitleaks could not run/);
+    await expect(judgeShots(shots('head'), async () => shots('base'), SHAS, down)).rejects.toThrow(/gitleaks could not run/);
   });
 
   it("the base's failure is told by its first line alone: its log stays out of the journal and the check", async () => {
-    const r = await judgeShots({ before: { started: false, detail: 'nothing answers on port 4200\nTOKEN=abc in the log' }, after: shots('head') }, SHAS, gate);
+    const r = await judgeShots(shots('head'), async (): Promise<Shots> => ({ started: false, detail: 'nothing answers on port 4200\nTOKEN=abc in the log' }), SHAS, gate);
     expect(r.unavailable).toContain('nothing answers on port 4200');
     expect(r.unavailable).not.toContain('TOKEN');
   });
 
   it("a base that does not start is no fault of the branch: the proof is unavailable, and nothing fails", async () => {
-    const r = await judgeShots({ before: { started: false, detail: 'port in use' }, after: shots('head') }, SHAS, gate);
+    const r = await judgeShots(shots('head'), async (): Promise<Shots> => ({ started: false, detail: 'port in use' }), SHAS, gate);
     expect(r).toEqual({ failures: [], unavailable: expect.stringContaining('port in use'), files: [] });
   });
 });

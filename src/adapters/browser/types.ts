@@ -1,11 +1,10 @@
-import type { SandboxProvider, SandboxRequirements } from '../sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, type SandboxProvider, type SandboxRequirements } from '../sandbox/types.js';
 
 /** The three widths of the visual proof (ORC-176): a desktop, a tablet, a phone. */
-export const VIEWPORTS = [
-  { name: 'desktop', width: 1280 },
-  { name: 'tablet', width: 768 },
-  { name: 'mobile', width: 375 },
-] as const;
+export const WIDTHS = [1280, 768, 375] as const;
+
+/** What a sandbox needs to shoot in: a browser, beside the application. */
+export const BROWSER_REQUIREMENTS: SandboxRequirements = { ...DEFAULT_REQUIREMENTS, browser: true };
 
 export interface ShootRequest {
   /** The sandbox holding the checkout at `/work`, at network `none`: the app and the browser in it, nothing out. */

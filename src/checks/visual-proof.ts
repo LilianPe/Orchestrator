@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Page, Shots } from '../adapters/browser/types.js';
 import type { VerifyFailure } from '../core/types.js';
+import type { Capture, OutputRefused } from '../publish/output-policy.js';
 import { sensitiveMatcher } from './forbidden-paths.js';
 import { mdCode } from './markdown.js';
 
@@ -45,7 +46,7 @@ export function scenarioPath(url: string | undefined): string {
 }
 
 /** A capture as it goes out, through the `OutputPolicy` (ORC-214): refused, it rejects `OutputRefused`. */
-export type CaptureGate = (c: { width: number; png: Uint8Array; caption: string }) => Promise<unknown>;
+export type CaptureGate = (c: Capture) => Promise<unknown>;
 
 export interface Judged {
   failures: VerifyFailure[];
@@ -54,44 +55,45 @@ export interface Judged {
   files: { capture: VisualCapture; png: Uint8Array }[];
 }
 
+/** A capture as the factory names it, in its caption and in the published check. */
+export const captureLabel = (c: Pick<VisualCapture, 'side' | 'sha' | 'width'>): string => `${c.side === 'before' ? 'Before' : 'After'}, ${c.sha.slice(0, 12)}, ${c.width} px`;
+
 const sha256 = (png: Uint8Array): string => createHash('sha256').update(png).digest('hex');
 const fail = (output: string): VerifyFailure => ({ command: VISUAL_PROOF_CHECK, exitCode: 1, output });
 /** What the base's failure says in the journal and the published check: its first line, short, as code. Its log stays out. */
 const brief = (detail: string): string => mdCode((detail.split('\n')[0] ?? '').slice(0, 200));
-
-/** The commit's page passes what needs no base: it started, and its console stayed clean. Only then is the base shot. */
-export const afterPasses = (after: Shots): boolean => after.started && after.pages.every((p) => !p.consoleErrors.length);
 
 /** A refusal of the policy is a verdict on the capture; any other rejection (its scanner down) is an infrastructure failure, and goes on. */
 async function vetted<T>(work: () => Promise<T>): Promise<{ files: T } | { refused: string }> {
   try {
     return { files: await work() };
   } catch (err) {
+    // By its name: `checks` takes only the type of the policy, whose module imports `verify`'s.
     if ((err as Error).name !== 'OutputRefused') throw err;
-    return { refused: (err as Error).message };
+    return { refused: (err as OutputRefused).refusals.map((r) => r.detail).join('; ') };
   }
 }
 
 /**
- * The controls of the visual proof (ORC-176) on what the browser shot: the branch's page starts, loads without a console error,
- * passes the policy, and differs from the base's at one width at least. What fails on the branch goes back to `build`; what
- * fails on the base is no fault of the agent, and leaves the proof unavailable.
+ * The controls of the visual proof (ORC-176) on what the browser shot: the commit's page starts and loads without a console
+ * error; only then is the base shot (`shootBefore`); every capture passes the policy, and the commit's differs from the base's at
+ * one width at least. What fails on the commit goes back to `build`; what fails on the base is no fault of the agent, and leaves
+ * the proof unavailable.
  */
-export async function judgeShots(shots: { before: Shots; after: Shots }, shas: { before: string; after: string }, gate: CaptureGate): Promise<Judged> {
+export async function judgeShots(after: Shots, shootBefore: () => Promise<Shots>, shas: { before: string; after: string }, gate: CaptureGate): Promise<Judged> {
   const short = (sha: string) => sha.slice(0, 12);
-  const { before, after } = shots;
   if (!after.started) return { failures: [fail(`The application did not start on ${short(shas.after)}, no capture could be taken:\n${after.detail}`)], files: [] };
-  if (!afterPasses(after)) {
-    const errors = after.pages.flatMap((p) => p.consoleErrors.map((e) => `- ${p.width} px: ${mdCode(e)}`));
-    return { failures: [fail(`The page loads with errors in its console on ${short(shas.after)}:\n${errors.join('\n')}`)], files: [] };
-  }
+  const errors = after.pages.flatMap((p) => p.consoleErrors.map((e) => `- ${p.width} px: ${mdCode(e)}`));
+  if (errors.length) return { failures: [fail(`The page loads with errors in its console on ${short(shas.after)}:\n${errors.join('\n')}`)], files: [] };
+  const before = await shootBefore();
   if (!before.started) return { failures: [], unavailable: `the application does not start on the base ${short(shas.before)}: ${brief(before.detail)}`, files: [] };
 
   const kept = async (side: VisualCapture['side'], pages: Page[]) => {
     const files = [];
     for (const { width, png } of pages) {
-      await gate({ width, png, caption: `${side === 'before' ? 'Before' : 'After'}, ${short(shas[side])}, ${width} px` });
-      files.push({ capture: { side, sha: shas[side], width, sha256: sha256(png) }, png });
+      const capture = { side, sha: shas[side], width, sha256: sha256(png) };
+      await gate({ width, png, caption: captureLabel(capture) });
+      files.push({ capture, png });
     }
     return files;
   };
@@ -99,10 +101,9 @@ export async function judgeShots(shots: { before: Shots; after: Shots }, shas: {
   if ('refused' in afterKept) return { failures: [fail(`A capture of ${short(shas.after)} does not pass the output policy: ${afterKept.refused}`)], files: [] };
   const beforeKept = await vetted(() => kept('before', before.pages));
   if ('refused' in beforeKept) return { failures: [], unavailable: `a capture of the base ${short(shas.before)} does not pass the output policy: ${brief(beforeKept.refused)}`, files: [] };
-  const [afterFiles, beforeFiles] = [afterKept.files, beforeKept.files];
-  const hashBefore = new Map(beforeFiles.map((f) => [f.capture.width, f.capture.sha256]));
-  if (afterFiles.every((f) => hashBefore.get(f.capture.width) === f.capture.sha256)) {
+  const hashBefore = new Map(beforeKept.files.map((f) => [f.capture.width, f.capture.sha256]));
+  if (afterKept.files.every((f) => hashBefore.get(f.capture.width) === f.capture.sha256)) {
     return { failures: [fail(`The captures before (${short(shas.before)}) and after (${short(shas.after)}) are identical at every width: the change shows nothing on the page shot.`)], files: [] };
   }
-  return { failures: [], files: [...beforeFiles, ...afterFiles] };
+  return { failures: [], files: [...beforeKept.files, ...afterKept.files] };
 }

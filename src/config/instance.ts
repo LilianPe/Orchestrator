@@ -80,8 +80,6 @@ export function homePaths(home: string) {
     sessions: join(home, 'sessions'),
     /** Each sandboxed run's own dir: its refusals log, its `~/.claude` out of the ticket session (ORC-217). */
     runs: join(home, 'runs'),
-    /** The visual-proof captures (ORC-176), by ticket and hash: never mounted in a sandbox. */
-    artifacts: join(home, 'artifacts'),
     /** The egress proxy's socket and connection journal of each sandboxed run (ORC-213). */
     network: join(home, 'network'),
     /** The egress CA (ORC-213): its key is the daemon's, never mounted in a sandbox. */

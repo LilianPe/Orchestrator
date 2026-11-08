@@ -1,5 +1,6 @@
-import { DEFAULT_REQUIREMENTS, type SandboxProvider } from '../sandbox/types.js';
-import type { Page, ShootRequest, Shots, VisualShooter } from './types.js';
+import { cappedCommand } from '../../core/verify.js';
+import type { SandboxProvider } from '../sandbox/types.js';
+import { BROWSER_REQUIREMENTS, type Page, type ShootRequest, type Shots, type VisualShooter } from './types.js';
 
 /** How long the application has to answer on its port, then how long the page has to load. */
 const START_TIMEOUT_S = 120;
@@ -21,7 +22,8 @@ const { chromium } = require('playwright');
 const tail = () => { try { return require('fs').readFileSync(log, 'utf8').slice(-4000); } catch { return ''; } };
 const out = (o) => process.stdout.write('\n' + JSON.stringify(o) + '\n');
 (async () => {
-  const url = 'http://127.0.0.1:' + port + path;
+  const origin = 'http://127.0.0.1:' + port;
+  const url = origin + path;
   const deadline = Date.now() + ${START_TIMEOUT_S * 1000};
   for (;;) {
     try { await fetch('http://127.0.0.1:' + port + '/', { signal: AbortSignal.timeout(5000) }); break; } catch {}
@@ -34,8 +36,9 @@ const out = (o) => process.stdout.write('\n' + JSON.stringify(o) + '\n');
     for (const width of widths.split(',').map(Number)) {
       const page = await browser.newPage({ viewport: { width, height: ${HEIGHT} } });
       const consoleErrors = [];
-      // At network none, a resource from another host fails, and Chromium logs it as an error: only the page's own scripts count.
-      page.on('console', (m) => { if (m.type() === 'error' && !/^Failed to load resource/.test(m.text())) consoleErrors.push(m.text().slice(0, 500)); });
+      // At network none, a resource of another host fails, and Chromium logs it as an error: only what comes from the application counts.
+      const own = (u) => !u || (u.startsWith(origin + '/') && !u.startsWith(origin + '/favicon.ico'));
+      page.on('console', (m) => { if (m.type() === 'error' && own(m.location().url)) consoleErrors.push(m.text().slice(0, 500)); });
       page.on('pageerror', (e) => consoleErrors.push(String(e.message).slice(0, 500)));
       try {
         await page.goto(url, { waitUntil: 'networkidle', timeout: ${PAGE_TIMEOUT_MS} });
@@ -63,10 +66,10 @@ NODE_PATH="$(npm root -g)" exec node -e "$3" "$1" "$4" "$5" ${APP_LOG}`;
  * a browser (`requirements.browser`): until one does (ORC-152), nothing wires this shooter and a required proof stays unavailable.
  */
 export class PlaywrightShooter implements VisualShooter {
-  readonly requirements = { ...DEFAULT_REQUIREMENTS, browser: true };
+  readonly requirements = BROWSER_REQUIREMENTS;
 
   async shoot(sandboxes: Pick<SandboxProvider, 'exec'>, req: ShootRequest): Promise<Shots> {
-    const argv = ['timeout', String(SHOT_TIMEOUT_S), 'bash', '--norc', '-c', SCRIPT, 'shoot', String(req.port), req.start, SHOOT, req.path, req.widths.join(',')];
+    const argv = [...cappedCommand(SCRIPT, SHOT_TIMEOUT_S), 'shoot', String(req.port), req.start, SHOOT, req.path, req.widths.join(',')];
     const r = await sandboxes.exec(req.sandboxId, argv, { env: req.env });
     return parseShots(r.code, r.stdout, r.stderr);
   }
@@ -74,7 +77,9 @@ export class PlaywrightShooter implements VisualShooter {
 
 /** The script's last line; a run that wrote none, or exited non-zero, is the browser's failure, and rejects. */
 export function parseShots(code: number, stdout: string, stderr: string): Shots {
-  const line = stdout.trimEnd().split('\n').at(-1) ?? '';
+  const out = stdout.trimEnd();
+  // The last line alone: the PNGs make the output weigh megabytes, not worth splitting.
+  const line = out.slice(out.lastIndexOf('\n') + 1);
   let o: { started: boolean; detail?: string; pages?: { width: number; png: string; consoleErrors: string[] }[] };
   try {
     if (code !== 0) throw new Error();
@@ -84,5 +89,10 @@ export function parseShots(code: number, stdout: string, stderr: string): Shots 
   }
   if (!o.started) return { started: false, detail: o.detail ?? '' };
   if (!o.pages?.length) throw new Error('the browser returned no page');
-  return { started: true, pages: o.pages.map((p): Page => ({ width: p.width, png: Uint8Array.from(Buffer.from(p.png, 'base64')), consoleErrors: p.consoleErrors })) };
+  const pages = o.pages.map((p): Page => {
+    const png = Buffer.from(p.png, 'base64');
+    // A view on the decoded bytes, not a copy of them.
+    return { width: p.width, png: new Uint8Array(png.buffer, png.byteOffset, png.byteLength), consoleErrors: p.consoleErrors };
+  });
+  return { started: true, pages };
 }

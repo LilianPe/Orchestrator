@@ -86,7 +86,7 @@ import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type Fr
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
-import { scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import { captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
@@ -220,12 +220,10 @@ export interface OrchestratorDeps {
    */
   runsDir?: string;
   /**
-   * Where the visual-proof captures are kept (ORC-176), `<artifactsDir>/<ticket>/<sha256>.png`: on the daemon's disk, out of every
-   * mount of a run. Required with `visualShooter`.
+   * The visual proof (ORC-176), with sandboxes that offer a browser: its `shooter`, and where its captures are kept,
+   * `<artifactsDir>/<ticket>/<sha256>.png`, on the daemon's disk, out of every mount of a run. Absent, a required proof is unavailable, indicative.
    */
-  artifactsDir?: string;
-  /** The browser of the visual proof (ORC-176), with sandboxes that offer one; absent, a required proof is unavailable, indicative. */
-  visualShooter?: VisualShooter;
+  visualProof?: { shooter: VisualShooter; artifactsDir: string };
   /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
   egressJournal?: (runId: string) => string;
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
@@ -390,7 +388,7 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
     ...(p.triggers.length ? [`Changed under \`visual_paths\`:\n${p.triggers.map((t) => `- ${mdCode(t)}`).join('\n')}`] : []),
   ].join('\n');
   if (!p.captures?.length) return { conclusion: 'neutral', summary: `Visual proof required, not taken: ${p.unavailable ?? 'no capture'}. Indicative until the application starts reliably in the sandbox (ORC-152).\n${why}` };
-  const lines = p.captures.map((c) => `- ${c.side === 'before' ? 'Before' : 'After'}, ${c.sha.slice(0, 12)}, ${c.width} px: sha256 ${c.sha256}`);
+  const lines = p.captures.map((c) => `- ${captureLabel(c)}: sha256 ${c.sha256}`);
   return { conclusion: 'success', summary: `Captures taken by the factory, before on the base and after on this commit:\n${lines.join('\n')}\n${why}` };
 }
 
@@ -1065,7 +1063,7 @@ export class Orchestrator {
     const { preview, portBase } = project.workflow.workspace;
     return {
       intake: t.visualProof === 'required',
-      ...(this.d.visualShooter ? { shooter: this.d.visualShooter } : {}),
+      ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
       ...(preview ? { start: preview } : {}),
       port: portBase,
       path: scenarioPath(output?.visual_scenario?.url),
@@ -1078,15 +1076,17 @@ export class Orchestrator {
    * no run mounts, and its row in `artifacts`, once by its id. A capture that cannot be kept throws: no verdict names a missing file.
    */
   private async keepCaptures(t: TicketState, run: RunRecord, files: NonNullable<CleanVerifyResult['visual']>['files']): Promise<void> {
-    const root = this.d.artifactsDir;
-    if (!root) throw new Error('artifactsDir is required with visualShooter');
-    const dir = join(root, t.ticketId);
+    // Only a shooter takes captures, and it comes with its dir.
+    const dir = join(this.d.visualProof!.artifactsDir, t.ticketId);
     await mkdir(dir, { recursive: true });
-    for (const { capture, png } of files) {
-      const path = join(dir, `${capture.sha256}.png`);
-      await writeFile(path, png);
-      await this.d.store.putArtifact({ id: `visual:${run.id}:${capture.side}:${capture.width}`, ticketId: t.ticketId, attemptId: run.id, kind: 'visual-proof', path, sha256: capture.sha256, createdAt: this.d.clock.now() });
-    }
+    const createdAt = this.d.clock.now();
+    await Promise.all(
+      files.map(async ({ capture, png }) => {
+        const path = join(dir, `${capture.sha256}.png`);
+        await writeFile(path, png);
+        await this.d.store.putArtifact({ id: `visual:${run.id}:${capture.side}:${capture.width}`, ticketId: t.ticketId, attemptId: run.id, kind: 'visual-proof', path, sha256: capture.sha256, createdAt });
+      }),
+    );
   }
 
   /**

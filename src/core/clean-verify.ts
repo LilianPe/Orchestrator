@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { VIEWPORTS, type Shots, type VisualShooter } from '../adapters/browser/types.js';
+import { WIDTHS, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
@@ -9,7 +9,7 @@ import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '..
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
 import { isTestSpec } from '../checks/test-files.js';
-import { afterPasses, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
+import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
@@ -147,6 +147,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   const bundleDir = join(req.workDir, 'bundle');
   const cloneDir = join(req.workDir, 'clone');
   const beforeDir = join(req.workDir, 'before');
+  const beforeIndex = join(req.workDir, 'before.index');
   mkdirSync(bundleDir);
   try {
     const { sha } = await inBox('bundle', req.worktree, [{ host: bundleDir, target: BUNDLE_TARGET, readOnly: false }], (sandboxId) =>
@@ -164,12 +165,16 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
-    const proof = req.visual && decideVisualProof({ intake: req.visual.intake, changed: zFields(await git.raw('diff', '--name-only', '-z', '--no-renames', from, sha)), visualPaths: config.visualPaths });
-    const plan = proof?.decision === 'required' && !failures.length ? visualPlan(req.visual!, from) : undefined;
-    if (typeof plan === 'string') proof!.unavailable = plan;
-    const shooting = typeof plan === 'object' ? plan : undefined;
-    if (shooting) await checkoutBase(req, cloneDir, beforeDir, from);
-    const visual = (files: Judged['files'] = []) => (proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {});
+    const { proof, shooting } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
+    if (shooting) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
+    // Every verdict goes out through here: the proof, decided, with it.
+    const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
+      ok: !failures.length, failures, sha, tree, commands,
+      ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
+    });
+    const setUp = async (suffix: string, workspacePath: string) => {
+      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
+    };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
     if (req.gitleaks || (runs && !failures.length)) {
@@ -182,11 +187,9 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
       });
     }
-    if (failures.length || !runs) return { ok: !failures.length, failures, sha, tree, commands, ...visual() };
+    if (failures.length || !runs) return verdict();
 
-    if (setup.length) {
-      await runSealedSetup(sandboxes, { runId: `${req.runId}-verify`, ticketId: req.ticketId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
-    }
+    await setUp('verify', cloneDir);
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
         const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(command), { env });
@@ -194,15 +197,15 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
       }
     });
-    if (!shooting || failures.length) return { ok: !failures.length, failures, sha, tree, commands, ...visual() };
-    const judged = await shootBoth(sandboxes, inBox, req, shooting, { from, sha, setup, env, cloneDir, beforeDir });
+    if (!shooting || failures.length) return verdict();
+    const judged = await shootBoth(sandboxes, inBox, shooting, { from, sha, env, cloneDir, beforeDir, setUp });
     failures.push(...judged.failures);
     if (judged.unavailable) proof!.unavailable = judged.unavailable;
-    return { ok: !failures.length, failures, sha, tree, commands, ...visual(judged.files) };
+    return verdict(judged.files);
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
     await Promise.all(
-      [bundleDir, cloneDir, beforeDir, beforeIndex(req)].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
+      [bundleDir, cloneDir, beforeDir, beforeIndex].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
     );
   }
 };
@@ -211,52 +214,54 @@ export const BASE = 'refs/factory/base';
 
 type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>>;
 
-/** What takes a required proof, or why it cannot be taken: then indicative (ORC-152), no fault of the branch. */
-function visualPlan(v: VisualRequest, from: string): Shooting | string {
-  if (!v.shooter) return 'this instance has no sandbox with a browser';
-  if (!v.start) return 'no command starts the application (`workspace.preview`)';
-  if (from === EMPTY_TREE) return 'the branch shares no commit with the base, which has no page to compare';
-  return { ...v, shooter: v.shooter, start: v.start };
+/**
+ * The decision on the diff (ORC-176), and what takes a required proof, or why it cannot be taken: then indicative (ORC-152), no
+ * fault of the branch. A commit the checks refused already is not shot.
+ */
+async function planVisual(
+  v: VisualRequest | undefined,
+  at: { git: CloneGit; from: string; sha: string; config: RepoConfig; refused: boolean },
+): Promise<{ proof?: VisualProof; shooting?: Shooting }> {
+  if (!v) return {};
+  const changed = zFields(await at.git.raw('diff', '--name-only', '-z', '--no-renames', at.from, at.sha));
+  const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
+  if (proof.decision !== 'required' || at.refused) return { proof };
+  if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
+  else if (!v.start) proof.unavailable = 'no command starts the application (`workspace.preview`)';
+  else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
+  else return { proof, shooting: { ...v, shooter: v.shooter, start: v.start } };
+  return { proof };
 }
 
 /**
  * The base's files, from the clone's objects, by the host's git into a dir of their own: before any code of the agent has run
  * in the clone, whose objects it can rewrite once it has. A throwaway index: the clone's own is not touched.
  */
-function beforeIndex(req: Pick<CleanVerifyRequest, 'workDir'>): string {
-  return join(req.workDir, 'before.index');
-}
-
-async function checkoutBase(req: CleanVerifyRequest, cloneDir: string, beforeDir: string, from: string): Promise<void> {
-  mkdirSync(beforeDir);
-  const env = { ...hostGitEnv(req.workDir, req.workDir), GIT_INDEX_FILE: beforeIndex(req) };
-  await gitAt(req.exec ?? execCmd, cloneDir, env).raw(`--work-tree=${beforeDir}`, 'checkout', from, '--', '.');
+async function checkoutBase(req: CleanVerifyRequest, cloneDir: string, before: { dir: string; index: string }, from: string): Promise<void> {
+  mkdirSync(before.dir);
+  const env = { ...hostGitEnv(req.workDir, req.workDir), GIT_INDEX_FILE: before.index };
+  await gitAt(req.exec ?? execCmd, cloneDir, env).raw(`--work-tree=${before.dir}`, 'checkout', from, '--', '.');
 }
 
 /**
- * The captures (ORC-176): after on the commit, in the clone the commands ran in; then, only if its page passes, before on the base,
- * set up as the commit was (`setup`, sealed: the base is the default branch's). Each in a sandbox of its own at network `none`,
- * nothing mounted: the application and the browser together, nothing out. The browser's own failure rejects, an infrastructure one.
+ * The captures (ORC-176): after on the commit, in the clone the commands ran in; then, only if its page passes (`judgeShots`),
+ * before on the base, set up as the commit was (`setUp`, sealed: the base is the default branch's). Each in a sandbox of its own at
+ * network `none`, nothing mounted: the application and the browser together, nothing out. The browser's own failure rejects.
  */
 async function shootBoth(
   sandboxes: Boxes,
   inBox: ReturnType<typeof boxOpener>,
-  req: CleanVerifyRequest,
   v: Shooting,
-  at: { from: string; sha: string; setup: readonly string[]; env: Record<string, string>; cloneDir: string; beforeDir: string },
+  at: { from: string; sha: string; env: Record<string, string>; cloneDir: string; beforeDir: string; setUp: (suffix: string, dir: string) => Promise<void> },
 ): Promise<Judged> {
-  const widths = VIEWPORTS.map((w) => w.width);
   const shot = (side: 'before' | 'after', dir: string, sha: string) =>
-    inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths, env: at.env }), v.shooter.requirements);
+    inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths: WIDTHS, env: at.env }), v.shooter.requirements);
   const after = await shot('after', at.cloneDir, at.sha);
-  let before: Shots = { started: false, detail: 'not shot: the commit fails first' };
-  if (afterPasses(after)) {
-    if (at.setup.length) {
-      await runSealedSetup(sandboxes, { runId: `${req.runId}-visual`, ticketId: req.ticketId, workspacePath: at.beforeDir, mounts: [], commands: at.setup, argv: verifyCommand, env: at.env, secrets: {}, now: new Date() });
-    }
-    before = await shot('before', at.beforeDir, at.from);
-  }
-  return judgeShots({ before, after }, { before: at.from, after: at.sha }, v.gate);
+  const before = async () => {
+    await at.setUp('visual', at.beforeDir);
+    return shot('before', at.beforeDir, at.from);
+  };
+  return judgeShots(after, before, { before: at.from, after: at.sha }, v.gate);
 }
 
 /** `.factory/config.yml` as the base branch holds it, in the clone: never as the agent's branch does. */

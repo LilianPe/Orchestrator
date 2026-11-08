@@ -4,11 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fakePng } from '../adapters/browser/fake.js';
-import type { ShootRequest, Shots, VisualShooter } from '../adapters/browser/types.js';
+import { FakeShooter } from '../adapters/browser/fake.js';
+import type { ShootRequest, VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { DEFAULT_REQUIREMENTS, type SandboxExecOptions, type SandboxProvider, type SandboxRequest } from '../adapters/sandbox/types.js';
+import type { SandboxExecOptions, SandboxProvider, SandboxRequest } from '../adapters/sandbox/types.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
@@ -595,16 +595,12 @@ describe('a failure of its own git (ORC-125)', () => {
 describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   const VISUAL = 'visual_paths: ["app/**"]\n';
   /** The browser of these tests: what it "shoots" is the page file of the checkout its sandbox has, read in that sandbox. */
-  class ReadingShooter implements VisualShooter {
-    readonly requirements = { ...DEFAULT_REQUIREMENTS, browser: true };
-    calls: ShootRequest[] = [];
+  class ReadingShooter extends FakeShooter {
     seen: string[] = [];
-    answer?: (sha: string) => Shots | undefined;
-    async shoot(sandboxes: Pick<SandboxProvider, 'exec'>, req: ShootRequest): Promise<Shots> {
-      this.calls.push(req);
+    protected override async label(sandboxes: Pick<SandboxProvider, 'exec'>, req: ShootRequest): Promise<string> {
       const page = (await sandboxes.exec(req.sandboxId, ['cat', 'app/page.txt'])).stdout.trim();
       this.seen.push(page);
-      return this.answer?.(req.sha) ?? { started: true, pages: req.widths.map((width) => ({ width, png: fakePng(`${page}@${width}`), consoleErrors: [] })) };
+      return page;
     }
   }
 
@@ -683,7 +679,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   it('criterion 3: an application that does not start on the commit fails the check', async () => {
     const { req, repo, shooter } = visual({ page: 'new page\n' });
     const head = git(repo, 'rev-parse', BRANCH);
-    shooter.answer = (sha) => (sha === head ? { started: false, detail: 'EADDRINUSE' } : undefined);
+    shooter.answer = ({ sha }) => (sha === head ? { started: false, detail: 'EADDRINUSE' } : undefined);
     const res = await runCleanVerify(req);
     expect(res.ok).toBe(false);
     expect(res.failures).toEqual([expect.objectContaining({ command: VISUAL_PROOF_CHECK, output: expect.stringContaining('EADDRINUSE') })]);
