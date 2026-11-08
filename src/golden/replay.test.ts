@@ -50,6 +50,16 @@ describe('the golden replay (ORC-236)', () => {
     );
   });
 
+  it('lists the passes and the tickets the replay no longer has', () => {
+    const after = report();
+    after.tickets[0]!.passes.pop();
+    after.tickets.pop();
+    expect(compareGoldenReports(report(), after)).toEqual([
+      { ticket: 'V3-705', passes: [{ pass: 3, before: 'pr', after: undefined }], inputsChanged: true },
+      { ticket: 'ORC-341', passes: [1, 2, 3].map((n) => ({ pass: n, before: 'pr', after: undefined })), inputsChanged: true },
+    ]);
+  });
+
   it('compares nothing with a baseline of another set: every ticket is new', () => {
     const before = { ...report(), set: 'another' };
     expect(compareGoldenReports(before, report())).toHaveLength(10);

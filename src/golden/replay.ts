@@ -27,8 +27,8 @@ export interface GoldenReport {
 
 export interface GoldenChange {
   ticket: string;
-  /** The passes whose verdict changed; `before` undefined when the baseline did not have it. */
-  passes: { pass: number; before: GoldenVerdict | undefined; after: GoldenVerdict }[];
+  /** The passes whose verdict changed; `before` (`after`) undefined when the baseline (the replay) did not have it. */
+  passes: { pass: number; before: GoldenVerdict | undefined; after: GoldenVerdict | undefined }[];
   inputsChanged: boolean;
 }
 
@@ -46,20 +46,24 @@ export async function replayGoldenSet(set: GoldenSet, runPass: RunGoldenPass): P
 }
 
 /**
- * The tickets of `after` with at least one pass whose verdict differs from the same pass in `before`, or whose
- * runs received other inputs. A baseline of another set compares nothing: each ticket is then new.
+ * The tickets with at least one pass whose verdict differs from the same pass in `before`, a pass gone or new
+ * included, or whose runs received other inputs; then the tickets of `before` the replay no longer has. A
+ * baseline of another set compares nothing: each ticket is then new.
  */
 export function compareGoldenReports(before: GoldenReport, after: GoldenReport): GoldenChange[] {
   const old = new Map(before.set === after.set ? before.tickets.map((t) => [t.ticket, t]) : []);
   const changes: GoldenChange[] = [];
+  const compare = (ticket: string, was: GoldenPass[], now: GoldenPass[]) => {
+    const count = Math.max(was.length, now.length);
+    const passes = Array.from({ length: count }, (_, i) => ({ pass: i + 1, before: was[i]?.verdict, after: now[i]?.verdict })).filter((p) => p.before !== p.after);
+    const inputsChanged = Array.from({ length: count }, (_, i) => was[i]?.inputs !== now[i]?.inputs).some(Boolean);
+    if (passes.length || inputsChanged) changes.push({ ticket, passes, inputsChanged });
+  };
   for (const t of after.tickets) {
-    const was = old.get(t.ticket);
-    const passes = t.passes
-      .map((p, i) => ({ pass: i + 1, before: was?.passes[i]?.verdict, after: p.verdict }))
-      .filter((p) => p.before !== p.after);
-    const inputsChanged = t.passes.some((p, i) => was?.passes[i]?.inputs !== p.inputs);
-    if (passes.length || inputsChanged) changes.push({ ticket: t.ticket, passes, inputsChanged });
+    compare(t.ticket, old.get(t.ticket)?.passes ?? [], t.passes);
+    old.delete(t.ticket);
   }
+  for (const t of old.values()) compare(t.ticket, t.passes, []);
   return changes;
 }
 
@@ -79,7 +83,7 @@ export function formatGoldenReport(report: GoldenReport, changes: GoldenChange[]
   if (!changes.length) return [...lines, 'Changed since the baseline: none.', ''].join('\n');
   lines.push(`Changed since the baseline: ${changes.length} ticket${changes.length > 1 ? 's' : ''}`, '');
   for (const c of changes) {
-    const what = c.passes.map((p) => `pass ${p.pass} ${p.before ?? '(none)'} → ${p.after}`);
+    const what = c.passes.map((p) => `pass ${p.pass} ${p.before ?? '(none)'} → ${p.after ?? '(none)'}`);
     if (c.inputsChanged) what.push('its runs received other inputs');
     lines.push(`- ${c.ticket}: ${what.join('; ')}`);
   }

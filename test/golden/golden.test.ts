@@ -65,7 +65,8 @@ describe('the golden tickets replayed on fake runners (ORC-236)', () => {
       appendFileSync(join(pack, 'skills/dev/SKILL.md'), '\nAlways write the tests last.\n');
       // The engine runs on the changed pack; one pass each is enough to compare what the runs received.
       const changed = await replayGoldenSet({ ...set, passes: 1 }, fakeGoldenPass({ packDir: pack }));
-      const changes = compareGoldenReports(report, changed);
+      const firstPasses = { ...report, passes: 1, tickets: report.tickets.map((t) => ({ ...t, passes: t.passes.slice(0, 1) })) };
+      const changes = compareGoldenReports(firstPasses, changed);
       expect(changes.map((c) => c.ticket)).toEqual(set.tickets.map((t) => t.ticket));
       expect(changes.every((c) => c.inputsChanged && c.passes.length === 0)).toBe(true);
     } finally {

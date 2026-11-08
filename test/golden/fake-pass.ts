@@ -26,7 +26,8 @@ export function fakeGoldenPass({ packDir }: { packDir?: string } = {}): RunGolde
       const labels = await Promise.all(h.runner.requests.map(async (r) => (await h.store.getRun(r.runId))?.labels));
       const published = h.publisher.published.at(-1);
       return {
-        verdict: published ? 'pr' : state.blocked ? 'blocked' : 'no_pr',
+        // Blocked after its PR (a review, a dead effect) is a block: the PR stays as its artifact.
+        verdict: state.blocked ? 'blocked' : published ? 'pr' : 'no_pr',
         inputs: hashCanonical(labels.map((l) => l && { model: l.model, effort: l.effort, fingerprints: l.fingerprints })),
         ...(published ? { pr: { branch: published.branch, title: published.title } } : {}),
       };
