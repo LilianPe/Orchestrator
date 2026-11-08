@@ -49,6 +49,7 @@ import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge } from './engine.js';
+import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
@@ -72,7 +73,6 @@ import {
   type TicketState,
   type VerifyFailure,
   TRUSTED,
-  spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
@@ -140,12 +140,6 @@ const USAGE_LIMITED_UNTIL = 'usage-limited-until';
 const usageHoldKey = (account: string): string => `${USAGE_LIMITED_UNTIL}:${account}`;
 /** The shortest wait on a usage limit: a reset already past (or announced late) is not a reason to hit the limit again at once. */
 const USAGE_MIN_WAIT_MS = 5 * 60_000;
-
-/** Tokens the ticket's code runs spent (`dev` queue, cache reads left out); undefined when none reported any. The budget's figure and the block comment's (ORC-340). */
-export function codeRunTokens(runs: readonly RunRecord[]): number | undefined {
-  const reported = runs.filter((r) => r.queue === 'dev' && r.tokens !== undefined);
-  return reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined;
-}
 
 /** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
 class TicketBudgetError extends Error {}

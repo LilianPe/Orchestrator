@@ -27,6 +27,23 @@ describe('ticketMeasures (ORC-235)', () => {
     });
   });
 
+  it("gives the share of the ticket's token budget its code runs spent, as the budget counts them (ORC-216)", () => {
+    const tokens = (output: number) => ({ input: 100, output, cacheRead: 9_000_000, cacheCreation: 0 });
+    const spent = facts({
+      runs: [
+        run({ id: 'r1', tokens: tokens(200) }),
+        run({ id: 'r2', job: 'review', tokens: tokens(100) }),
+        // A question is no code run, nor a run without a report: neither counts.
+        run({ id: 'q1', job: 'ask', queue: 'questions', tokens: tokens(5_000) }),
+        run({ id: 'r3', status: 'running' }),
+      ],
+    });
+    expect(ticketMeasures('p', 'REL-1', spent, 1_000).usageLimitShare).toBe(0.5);
+    // Without a cap, or without a code run that reported its tokens, no share.
+    expect(ticketMeasures('p', 'REL-1', spent).usageLimitShare).toBeNull();
+    expect(ticketMeasures('p', 'REL-1', facts({}), 1_000).usageLimitShare).toBeNull();
+  });
+
   it('lists the verdicts of the red check, which are not reworks (ORC-123)', () => {
     const failures = [{ command: 'npm test -- a.test.ts', exitCode: 1, output: 'SyntaxError' }];
     const m = ticketMeasures('p', 'REL-1', facts({

@@ -1,9 +1,9 @@
 import type { RedCause } from '../checks/red.js';
-import type { MeasureFacts, Store } from '../store/types.js';
+import type { MeasureFacts, RunRecord, Store } from '../store/types.js';
 import { allowed, DEFAULT_MATRIX } from './authz.js';
 import { isQuestionSession } from './engine.js';
 import { reduce } from './reduce.js';
-import { addTokens, newTicketState, NO_TOKENS, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
+import { addTokens, newTicketState, NO_TOKENS, spentTokens, type FactoryEvent, type LogicalState, type MessageKind, type TicketState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
 
 /** What a human message asks for: the class journaled with it (ORC-180), else, on a row written before, from its event type and its Linear session. */
@@ -60,8 +60,11 @@ export interface TicketMeasures {
   attempts: number;
   /** Ended attempts without a usage report (a launch failure, a runner that reports none, a run older than ORC-235): `tokens` leaves them out. One still running reports at its end. */
   attemptsWithoutTokens: number;
-  /** Share of the usage limit consumed: no limit in tokens yet (ORC-216). */
-  usageLimitShare: null;
+  /**
+   * Share of the ticket's token budget its code runs spent (ORC-216): `codeRunTokens` over `budgets.per_ticket_tokens`, the
+   * figure the launch refuses at 1. Null without a cap, or while no code run reported its tokens.
+   */
+  usageLimitShare: number | null;
   /**
    * PR mergeable at the first try: merged, with no rework before the merge (`reworks` empty). Null
    * while not merged.
@@ -243,13 +246,19 @@ function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<st
   }
 }
 
+/** Tokens the ticket's code runs spent (`dev` queue, cache reads left out); undefined when none reported any. The budget's figure and the block comment's (ORC-340). */
+export function codeRunTokens(runs: readonly RunRecord[]): number | undefined {
+  const reported = runs.filter((r) => r.queue === 'dev' && r.tokens !== undefined);
+  return reported.length ? reported.reduce((n, r) => n + spentTokens(r.tokens!), 0) : undefined;
+}
+
 /**
  * The measures of a ticket from its facts (ORC-235). Pure: the same facts always give the same
  * measures, whenever they are computed. The journal is read as `decide` reads it: upcast, and folded
  * by `reduce` to tell a question session from the dev session as the engine does. The agent's text
  * (`lastText`, `run.finished.lastText`) is never read.
  */
-export function ticketMeasures(projectId: string, ticketId: string, facts: MeasureFacts): TicketMeasures {
+export function ticketMeasures(projectId: string, ticketId: string, facts: MeasureFacts, perTicketTokens?: number): TicketMeasures {
   const events = facts.events.map((e) => upcast(e as StoredEvent));
   // The fold starts from a tracked ticket (a journal row may lack the issue snapshot), with the dev session the
   // projection knows.
@@ -277,6 +286,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   }
   const outs = outputs(facts, events, ticket.linearSessionId);
   const withTokens = facts.runs.filter((r) => r.tokens !== undefined);
+  const codeTokens = codeRunTokens(facts.runs);
   return {
     projectId,
     ticketId,
@@ -284,7 +294,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     tokens: withTokens.length ? withTokens.reduce((sum, r) => addTokens(sum, r.tokens!), NO_TOKENS) : null,
     attempts: facts.runs.length,
     attemptsWithoutTokens: facts.runs.filter((r) => r.tokens === undefined && r.status !== 'running').length,
-    usageLimitShare: null,
+    usageLimitShare: perTicketTokens === undefined || codeTokens === undefined ? null : codeTokens / perTicketTokens,
     firstTry: mergedAt === null ? null : reworks.length === 0,
     reworks: mergedAt === null ? [] : reworks,
     humanReviewMinutes: null,
@@ -296,7 +306,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   };
 }
 
-/** The measures of a ticket, computed now from what the store holds (ORC-235): read by the dashboard (ORC-223). */
-export async function measureTicket(store: Pick<Store, 'measureFacts'>, projectId: string, ticketId: string): Promise<TicketMeasures> {
-  return ticketMeasures(projectId, ticketId, await store.measureFacts(projectId, ticketId));
+/** The measures of a ticket, computed now from what the store holds (ORC-235): read by the dashboard (ORC-223). `perTicketTokens`: factory.yml's cap. */
+export async function measureTicket(store: Pick<Store, 'measureFacts'>, projectId: string, ticketId: string, perTicketTokens?: number): Promise<TicketMeasures> {
+  return ticketMeasures(projectId, ticketId, await store.measureFacts(projectId, ticketId), perTicketTokens);
 }
