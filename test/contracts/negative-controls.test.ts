@@ -362,8 +362,10 @@ describeCheckRunnerContract(
   { violates: [TIMEOUT] },
 );
 
-const UNREACHABLE = 'findPr and unresolvedReviewComments reject when the forge does not answer';
+const UNREACHABLE = 'findPr, unresolvedReviewComments and mergeState reject when the forge does not answer';
 const UNREADABLE = 'findPr rejects for checks it cannot read';
+
+const offline = async (): Promise<never> => Promise.reject(new Error('forge unreachable'));
 
 function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
   return () => {
@@ -375,19 +377,27 @@ function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
 
 describeForgeContract(
   'a forge that answers nothing instead of rejecting when it cannot reach the forge',
-  forgeThat({ unreachable: { findPr: async () => undefined, unresolvedReviewComments: async () => [] } }),
+  forgeThat({ unreachable: { findPr: async () => undefined, unresolvedReviewComments: async () => [], mergeState: offline } }),
   { violates: [UNREACHABLE] },
 );
 
 describeForgeContract(
   'a forge that answers no review threads instead of rejecting when it cannot reach the forge',
   forgeThat({
-    unreachable: { findPr: async () => Promise.reject(new Error('forge unreachable')), unresolvedReviewComments: async () => [] },
+    unreachable: { findPr: offline, unresolvedReviewComments: async () => [], mergeState: offline },
   }),
   { violates: [UNREACHABLE] },
 );
 
-const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: { findPr, unresolvedReviewComments: async () => [] } });
+describeForgeContract(
+  'a forge that answers a mergeability instead of rejecting when it cannot reach the forge',
+  forgeThat({
+    unreachable: { findPr: offline, unresolvedReviewComments: offline, mergeState: async () => ({ base: 'main', mergeable: 'UNKNOWN', status: 'UNKNOWN' }) },
+  }),
+  { violates: [UNREACHABLE] },
+);
+
+const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: { findPr, unresolvedReviewComments: async () => [], mergeState: async () => ({ base: 'main', mergeable: 'MERGEABLE', status: 'CLEAN' }) } });
 const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(

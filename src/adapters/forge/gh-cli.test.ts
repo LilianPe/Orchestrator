@@ -25,6 +25,7 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
       'gh pr list --head factory/rel-404 ': { stdout: '[]' },
       'gh pr list --head factory/rel-1-x ': { stdout: pr(7, 'factory/rel-1-x') },
       'gh pr checks 7 ': { stdout: JSON.stringify([{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }]), code: 1 },
+      'gh pr view 7 ': { stdout: JSON.stringify({ baseRefName: 'main', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }) },
       'gh pr list --head factory/rel-2-y ': { stdout: pr(8, 'factory/rel-2-y') },
       'gh pr checks 8 ': { stdout: 'not json' },
       // What gh 2.63 and 2.103 answer: exit 1, nothing on stdout, for a PR without checks as for a failure.
@@ -65,6 +66,21 @@ describe('aggregateChecks', () => {
 });
 
 describe('GhCliForge', () => {
+  it("reads a PR's base and mergeability with gh pr view (ORC-322)", async () => {
+    const calls: string[] = [];
+    const forge = new GhCliForge(async (cmd, args) => {
+      calls.push([cmd, ...args].join(' '));
+      return { stdout: JSON.stringify({ baseRefName: 'main', mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }), stderr: '', code: 0 };
+    });
+    expect(await forge.mergeState('/r', 7)).toEqual({ base: 'main', mergeable: 'CONFLICTING', status: 'DIRTY' });
+    expect(calls).toEqual(['gh pr view 7 --json baseRefName,mergeable,mergeStateStatus']);
+  });
+
+  it('refuses a mergeability gh answers in a form it does not know', async () => {
+    const forge = new GhCliForge(async () => ({ stdout: JSON.stringify({ baseRefName: 'main', mergeable: 'maybe', mergeStateStatus: 'CLEAN' }), stderr: '', code: 0 }));
+    await expect(forge.mergeState('/r', 7)).rejects.toThrow(/mergeable/);
+  });
+
   it('finds an open PR with failing checks even when gh exits non-zero', async () => {
     const forge = new GhCliForge(
       fakeExec({

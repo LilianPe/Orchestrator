@@ -15,9 +15,21 @@ export interface PrInfo {
   failedChecks: string[];
 }
 
+/** What a review reads of its PR before it starts (ORC-322), the forge's answer at that moment. */
+export interface PrMergeState {
+  base: string;
+  /** `UNKNOWN` while the forge has not computed it yet. */
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  /** GitHub's `mergeStateStatus`: `CLEAN`, `BEHIND`, `DIRTY`, `BLOCKED`, `UNSTABLE`… */
+  status: string;
+}
+
+export const MERGEABLE: readonly PrMergeState['mergeable'][] = ['MERGEABLE', 'CONFLICTING', 'UNKNOWN'];
+
 export interface Forge {
   findPr(repoPath: string, branch: string): Promise<PrInfo | undefined>;
   unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]>;
+  mergeState(repoPath: string, prNumber: number): Promise<PrMergeState>;
 }
 
 /** A PR the factory opens for its branch (ORC-162), by its Publisher (ORC-125). */

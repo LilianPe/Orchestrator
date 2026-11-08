@@ -75,10 +75,19 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       }
     });
 
-    it('findPr and unresolvedReviewComments reject when the forge does not answer', async (ctx) => {
+    it("mergeState names the PR's base and a mergeability the forge knows (ORC-322)", async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'pr');
+      const m = await s.forge.mergeState(s.repoPath, s.pr.number);
+      expect(m.base).not.toBe('');
+      expect(['MERGEABLE', 'CONFLICTING', 'UNKNOWN']).toContain(m.mergeable);
+      expect(m.status).toMatch(/^[A-Z_]+$/);
+    });
+
+    it('findPr, unresolvedReviewComments and mergeState reject when the forge does not answer', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreachable');
       await expect(s.unreachable.findPr(s.repoPath, s.pr?.branch ?? s.missingBranch)).rejects.toThrow();
       await expect(s.unreachable.unresolvedReviewComments(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
+      await expect(s.unreachable.mergeState(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
     });
 
     it('findPr rejects for checks it cannot read', async (ctx) => {

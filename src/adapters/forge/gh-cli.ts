@@ -3,7 +3,7 @@ import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../e
 import { isRecord } from '../graphql-pages.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
-import { isFactoryCheck, type Forge, type PrInfo } from './types.js';
+import { isFactoryCheck, MERGEABLE, type Forge, type PrInfo, type PrMergeState } from './types.js';
 
 /**
  * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
@@ -128,6 +128,14 @@ export class GhCliForge implements Forge, RepoPermissions {
       checks,
       failedChecks,
     };
+  }
+
+  async mergeState(repoPath: string, prNumber: number): Promise<PrMergeState> {
+    const out = await mustExec(this.exec, 'gh', ['pr', 'view', String(prNumber), '--json', 'baseRefName,mergeable,mergeStateStatus'], { cwd: repoPath });
+    const v = JSON.parse(out) as { baseRefName?: unknown; mergeable?: unknown; mergeStateStatus?: unknown };
+    if (typeof v.baseRefName !== 'string' || !v.baseRefName) throw new Error(`gh pr view ${prNumber}: no base branch`);
+    if (!MERGEABLE.includes(v.mergeable as PrMergeState['mergeable'])) throw new Error(`gh pr view ${prNumber}: unknown mergeable ${JSON.stringify(v.mergeable)}`);
+    return { base: v.baseRefName, mergeable: v.mergeable as PrMergeState['mergeable'], status: typeof v.mergeStateStatus === 'string' && v.mergeStateStatus ? v.mergeStateStatus.toUpperCase() : 'UNKNOWN' };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

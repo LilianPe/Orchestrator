@@ -110,6 +110,7 @@ function scriptedGitHub(prs: Record<string, { number: number; runs: Route; statu
       return { body: pr ? [openPr({ number: pr.number, html_url: `https://github.com/acme/app/pull/${pr.number}`, head: { ref: branch, sha: sha(branch) } })] : [] };
     },
     ...Object.entries(prs).flatMap(([branch, pr]): Route[] => [
+      (url) => (url.pathname === `/repos/acme/app/pulls/${pr.number}` ? { body: openPr({ number: pr.number, base: { ref: 'main', sha: 'b0' }, mergeable: true, mergeable_state: 'clean' }) } : undefined),
       (url, init, body) => (url.pathname === `/repos/acme/app/commits/${sha(branch)}/check-runs` ? pr.runs(url, init, body) : undefined),
       (url) => (url.pathname === `/repos/acme/app/commits/${sha(branch)}/status` ? { body: { statuses: pr.statuses ?? [] } } : undefined),
     ]),
@@ -255,6 +256,26 @@ describe('GitHubAppForge installation tokens', () => {
   it('does not expose the private key when the forge is serialized', () => {
     const { forge } = makeForge([pullsRoute([])]);
     expect(JSON.stringify(forge)).not.toContain('PRIVATE KEY');
+  });
+});
+
+describe('GitHubAppForge.mergeState (ORC-322)', () => {
+  const pullRoute = (over: Record<string, unknown>): Route => (url) =>
+    url.pathname === '/repos/acme/app/pulls/7' ? { body: openPr({ base: { ref: 'main', sha: 'b0' }, ...over }) } : undefined;
+
+  it.each([
+    [{ mergeable: true, mergeable_state: 'behind' }, { base: 'main', mergeable: 'MERGEABLE', status: 'BEHIND' }],
+    [{ mergeable: false, mergeable_state: 'dirty' }, { base: 'main', mergeable: 'CONFLICTING', status: 'DIRTY' }],
+    // GitHub computes it in the background: null until then.
+    [{ mergeable: null, mergeable_state: 'unknown' }, { base: 'main', mergeable: 'UNKNOWN', status: 'UNKNOWN' }],
+  ])('maps %j', async (over, expected) => {
+    const { forge } = makeForge([installationRoute(), tokenRoute(42), pullRoute(over)]);
+    expect(await forge.mergeState('/repo', 7)).toEqual(expected);
+  });
+
+  it('refuses a PR without its base', async () => {
+    const { forge } = makeForge([installationRoute(), tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls/7' ? { body: openPr({ mergeable: true, mergeable_state: 'clean' }) } : undefined)]);
+    await expect(forge.mergeState('/repo', 7)).rejects.toThrow();
   });
 });
 

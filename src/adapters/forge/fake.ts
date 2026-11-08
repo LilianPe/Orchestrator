@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrMergeState, PrRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
@@ -27,6 +27,18 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   async repoPermission(_repoPath: string, login: string): Promise<RepoPermission> {
     this.answer();
     return this.permissions.get(login) ?? 'none';
+  }
+
+  /** Each PR's base and mergeability (ORC-322); a PR without one is on `main`, mergeable. */
+  private mergeStates = new Map<number, PrMergeState>();
+
+  setMergeState(prNumber: number, state: PrMergeState): void {
+    this.mergeStates.set(prNumber, state);
+  }
+
+  async mergeState(_repoPath: string, prNumber: number): Promise<PrMergeState> {
+    this.answer();
+    return { ...(this.mergeStates.get(prNumber) ?? { base: 'main', mergeable: 'MERGEABLE', status: 'CLEAN' }) };
   }
 
   setReviewComments(prNumber: number, items: FeedbackItem[]): void {

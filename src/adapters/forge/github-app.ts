@@ -4,7 +4,7 @@ import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
+import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrMergeState, type PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -175,6 +175,10 @@ const isWorkflow = (w: unknown): w is WorkflowDto =>
 const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
 
 const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.every(isPull);
+
+/** One PR as `mergeState` reads it (ORC-322): its base, and GitHub's mergeability, `null` while it computes it. */
+const isMergeStateOf = (p: unknown): p is PullRequestDto & { base: { ref: string }; mergeable: boolean | null; mergeable_state?: string } =>
+  isPull(p) && p.base !== undefined && isRecord(p) && (p['mergeable'] === null || typeof p['mergeable'] === 'boolean') && (p['mergeable_state'] === undefined || typeof p['mergeable_state'] === 'string');
 
 /** A PR as `markPrReady` reads it: its draft state, and the node id the mutation needs when it is a draft. */
 const isDraftState = (p: unknown): p is PullRequestDto & { draft: boolean } =>
@@ -567,6 +571,14 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     }
     const created = await this.read('POST', `${base}/check-runs`, token, isCreated, 'a check run', { ...body, head_sha: req.sha });
     return { id: created.id, deduplicated: false };
+  }
+
+  async mergeState(repoPath: string, prNumber: number): Promise<PrMergeState> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const pr = await this.read('GET', `${repoApi(repo)}/pulls/${prNumber}`, token, isMergeStateOf, 'a pull request with its mergeability');
+    const mergeable = pr.mergeable === null ? 'UNKNOWN' : pr.mergeable ? 'MERGEABLE' : 'CONFLICTING';
+    return { base: pr.base.ref, mergeable, status: (pr.mergeable_state || 'unknown').toUpperCase() };
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
