@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, CLARIFY_EXPIRED, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, NO_ASSESSMENT, PAUSED, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -825,6 +825,8 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
   out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
   const body = refusalMessage(action, matrix, verdict.reason);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
+  // The dashboard answers its operator itself: nothing is written in Linear (ORC-301).
+  if (channel === 'dashboard') return false;
   if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
   else if (event.actor) out.effects.push({ kind: 'comment', body });
   return false;
@@ -1141,7 +1143,7 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
 /** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
-  return ticket.blocked && ticket.blockKind === 'stopped' ? 'stopped' : undefined;
+  return ticket.blocked && causeOf(ticket.blockKind) === 'stopped' ? 'stopped' : undefined;
 }
 
 /**
@@ -1394,8 +1396,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.resume':
       out.effects.push({ kind: 'set_paused', paused: false });
       return out;
-    case 'control.stop':
-      return stop(out, workflow);
+    case 'control.stop': {
+      const { runId, pause } = event.payload;
+      if (!authorize(out, event, ticket, pause ? 'pause_run' : 'stop_run', 'dashboard', matrix)) return out;
+      // Aimed at a run (the dashboard's inspection, ORC-301): once it has ended, another may be at work, which this stops not.
+      if (runId && ticket?.activeRunId !== runId) {
+        out.trace.push(`control.stop: run ${runId} is no longer the ticket's, nothing stopped`);
+        return out;
+      }
+      return pause ? stop(out, workflow, PAUSED, `Paused from the dashboard. ${relaunch(workflow)}`, 'paused') : stop(out, workflow);
+    }
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];

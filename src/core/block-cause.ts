@@ -6,11 +6,12 @@ export type BlockCause = (typeof BLOCK_CAUSES)[number];
  * What a block is, set on `ticket.blocked` by the code that builds it (ORC-345): the engine decides on it, the Flow
  * classes by it, and the reason is only shown. A cause, or one of the kinds the engine tells apart within a cause:
  * `asked`, a question the agent asks during its run, whose reason says no more than its cause; `stuck`, a pending job
- * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts.
+ * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts;
+ * `paused`, a run paused from the dashboard (ORC-301), a stop that says so.
  */
-export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound';
+export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'paused';
 
-const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit' };
+const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit', paused: 'stopped' };
 
 /** The cause the Flow shows a block under; `other` for a ticket blocked without a kind, never a guess. */
 export const causeOf = (kind: BlockKind | undefined): BlockCause => {
@@ -24,6 +25,8 @@ export const restatesCause = (kind: BlockKind | undefined): boolean => kind === 
 
 /** The reason of a stop: the label of its cause in the Flow too. */
 export const STOPPED = 'Stopped on request';
+/** The reason of a run paused from the dashboard (ORC-301), shown under the cause of a stop. */
+export const PAUSED = 'Paused from the dashboard';
 /** The reason of a question the agent asks during its run: the label of its cause in the Flow too. */
 export const AGENT_QUESTION = 'Question asked by the agent';
 

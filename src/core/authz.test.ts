@@ -9,9 +9,9 @@ const check = (action: AuthzAction, channel: Channel, actor: string | undefined,
   allowed({ action, channel }, actor, t, DEFAULT_MATRIX, roles);
 
 describe('authorization matrix (ORC-186)', () => {
-  it('has the six rows of the default matrix, no more', () => {
+  it('has the six rows of the default matrix and the three of the dashboard, no more', () => {
     expect(Object.keys(DEFAULT_MATRIX).sort()).toEqual([...AUTHZ_ACTIONS].sort());
-    expect(AUTHZ_ACTIONS).toHaveLength(6);
+    expect(AUTHZ_ACTIONS).toHaveLength(9);
   });
 
   describe('row 1: trigger (delegate, mention) needs a Linear team member with write access to the repo, on Linear', () => {
@@ -87,9 +87,23 @@ describe('authorization matrix (ORC-186)', () => {
     });
   });
 
+  describe('the dashboard (ORC-301): pausing, stopping and taking over a run need an operator, on the dashboard', () => {
+    it('allows an operator, for each of the three', () => {
+      for (const action of ['pause_run', 'stop_run', 'take_over'] as const) expect(check(action, 'dashboard', 'dashboard:armand', ['operator']).ok, action).toBe(true);
+    });
+    it('refuses whoever is not an operator, whatever their Linear or GitHub roles', () => {
+      expect(check('stop_run', 'dashboard', MEMBER, ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator'])).toEqual({ ok: false, reason: 'roles' });
+    });
+    it('refuses them through any other channel, and the operator any action of Linear', () => {
+      expect(check('pause_run', 'linear', 'dashboard:armand', ['operator'])).toEqual({ ok: false, reason: 'channel' });
+      expect(check('trigger', 'dashboard', 'dashboard:armand', ['operator'])).toEqual({ ok: false, reason: 'channel' });
+      expect(check('relaunch_blocked', 'linear', 'dashboard:armand', ['operator'])).toEqual({ ok: false, reason: 'roles' });
+    });
+  });
+
   it('refuses every action to an event without a signed actor, whatever roles it claims', () => {
     for (const action of AUTHZ_ACTIONS) {
-      expect(check(action, 'linear_session', undefined, ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator'])).toEqual({
+      expect(check(action, 'linear_session', undefined, ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator', 'operator'])).toEqual({
         ok: false,
         reason: 'unsigned',
       });

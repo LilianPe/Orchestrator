@@ -26,8 +26,11 @@ const TOOL_LABELS: Record<string, string> = {
 };
 const OTHER_TOOL = 'Using a tool';
 
-/** The agent's thoughts are not relayed: what it says of its work reaches Linear only through what the factory composes of its result. */
-function toActivity(ev: RunStreamEvent, step: string): ActivityInput | undefined {
+/**
+ * The agent's thoughts are not relayed: what it says of its work reaches Linear only through what the factory composes of its result.
+ * The dashboard's live feed of a run shows the same (ORC-301).
+ */
+export function composedActivity(ev: RunStreamEvent, step: string): ActivityInput | undefined {
   if (ev.kind !== 'tool') return undefined;
   return { type: 'action', action: TOOL_LABELS[ev.name] ?? OTHER_TOOL, parameter: `step ${step}`, ephemeral: true };
 }
@@ -47,7 +50,7 @@ export class ActivityRelay {
   ) {}
 
   push(ev: RunStreamEvent): void {
-    const a = toActivity(ev, this.step);
+    const a = composedActivity(ev, this.step);
     if (!a) return;
     this.pending = a;
     const wait = this.last + this.intervalMs - this.now();

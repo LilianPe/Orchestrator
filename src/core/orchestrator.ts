@@ -18,7 +18,7 @@ import {
   type SandboxMount,
   type SandboxProvider,
 } from '../adapters/sandbox/types.js';
-import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
+import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
@@ -2515,6 +2515,8 @@ export class Orchestrator {
         // Its result given, a process that lingers is not silent: its end comes, whatever it writes until then.
         if (held && ev.kind === 'result') held.silentMs = Infinity;
         bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
+        const activity = composedActivity(ev, step);
+        if (activity) bus.publish({ kind: 'activity', runId: run.id, ticketId: run.ticketId, activity, at: clock.now() });
         relay.push(ev);
       }
       this.liveRuns.delete(run.id);

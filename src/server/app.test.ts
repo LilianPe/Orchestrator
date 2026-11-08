@@ -211,6 +211,46 @@ describe('server', () => {
       ['control.pause', '*', undefined],
       ['control.stop', 'p', 'REL-1'],
     ]);
+    // A stop is checked on the matrix (ORC-301): its author, and the role the dashboard's guard gives, journaled with it.
+    expect(submitted[1]).toMatchObject({ actor: 'dashboard:local', roles: ['operator'] });
+  });
+
+  describe("a run's inspection (ORC-301)", () => {
+    it('pauses or stops that run alone: the stop names it, its author and the role the guard gives are journaled with it', async () => {
+      const { app, submitted } = await setup();
+      expect((await app.request('/api/runs/r1/pause', { method: 'POST' })).status).toBe(200);
+      expect((await app.request('/api/runs/r1/stop', { method: 'POST' })).status).toBe(200);
+      expect(submitted).toEqual([
+        expect.objectContaining({ type: 'control.stop', projectId: 'p', ticketId: 'REL-1', actor: 'dashboard:local', roles: ['operator'], payload: { runId: 'r1', pause: true } }),
+        expect.objectContaining({ type: 'control.stop', projectId: 'p', ticketId: 'REL-1', actor: 'dashboard:local', roles: ['operator'], payload: { runId: 'r1' } }),
+      ]);
+      expect(new Set(submitted.map((e) => e.id)).size).toBe(2);
+    });
+
+    it('names the author by the user of the HTTP Basic auth, behind the password', async () => {
+      const { app, submitted } = await setup({ uiPassword: 's3cret' });
+      const headers = { authorization: `Basic ${Buffer.from('armand:s3cret').toString('base64')}` };
+      expect((await app.request('/api/runs/r1/stop', { method: 'POST' })).status).toBe(401);
+      expect((await app.request('/api/runs/r1/stop', { method: 'POST', headers })).status).toBe(200);
+      expect(submitted.map((e) => e.actor)).toEqual(['dashboard:armand']);
+    });
+
+    it('answers 404 for an unknown run and 409 for a run that has ended, and submits nothing', async () => {
+      const { app, store, submitted } = await setup();
+      await store.putRun({ ...(await store.getRun('r1'))!, id: 'r0', status: 'success', endedAt: 5, token: 'tok0' });
+      expect((await app.request('/api/runs/nope/stop', { method: 'POST' })).status).toBe(404);
+      const ended = await app.request('/api/runs/r0/pause', { method: 'POST' });
+      expect(ended.status).toBe(409);
+      expect(await ended.json()).toEqual({ error: 'run r0 is not running' });
+      expect(submitted).toEqual([]);
+    });
+
+    it('refuses a pause or a stop from another origin', async () => {
+      const { app, submitted } = await setup();
+      const res = await app.request('http://localhost/api/runs/r1/stop', { method: 'POST', headers: { origin: 'https://evil.test' } });
+      expect(res.status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
   });
 
   it('protects the agent API with the run token', async () => {

@@ -5,18 +5,21 @@
  * (`FactoryEvent.roles`), so that a replay decides the same.
  */
 
-/** Roles resolved for an actor on a project (`RoleResolver`): Linear team, GitHub rights, designations of the configuration. */
-export const ROLES = ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator'] as const;
+/**
+ * Roles resolved for an actor on a project (`RoleResolver`): Linear team, GitHub rights, designations of the configuration.
+ * `operator` is the dashboard's (ORC-301): given by its guard, the password or the loopback without one, never by a resolver.
+ */
+export const ROLES = ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator', 'operator'] as const;
 export type Role = (typeof ROLES)[number];
 
 /** Who the actor is to the ticket, read from the ticket itself: the requester is who delegated it (its run's initiator). */
 export type Relation = 'requester';
 
-export const AUTHZ_ACTIONS = ['trigger', 'answer_clarify', 'validate_spec', 'refreeze', 'relaunch_blocked', 'done_merge'] as const;
+export const AUTHZ_ACTIONS = ['trigger', 'answer_clarify', 'validate_spec', 'refreeze', 'relaunch_blocked', 'done_merge', 'pause_run', 'stop_run', 'take_over'] as const;
 export type AuthzAction = (typeof AUTHZ_ACTIONS)[number];
 
-/** `linear`: the issue (delegation, mention, label, status); `linear_session`: a reply in an agent session; `pr`: the pull request. */
-export type Channel = 'linear' | 'linear_session' | 'pr';
+/** `linear`: the issue (delegation, mention, label, status); `linear_session`: a reply in an agent session; `pr`: the pull request; `dashboard`: a run's inspection (ORC-301). */
+export type Channel = 'linear' | 'linear_session' | 'pr' | 'dashboard';
 
 export interface MatrixRow {
   /** Any one of these sets is enough; a set needs all of its roles and relations. */
@@ -72,6 +75,26 @@ export const DEFAULT_MATRIX: AuthzMatrix = {
     channels: ['linear'],
     what: 'moving the ticket to Done (merge)',
     who: 'humans with GitHub merge rights on the repository',
+  },
+  // A run's inspection (ORC-301). Stopping from Linear (`agent:stop`, removing the delegation) stays outside the matrix.
+  pause_run: {
+    anyOf: [['operator']],
+    channels: ['dashboard'],
+    what: 'pausing a run',
+    who: 'operators of the dashboard',
+  },
+  stop_run: {
+    anyOf: [['operator']],
+    channels: ['dashboard'],
+    what: 'stopping a run',
+    who: 'operators of the dashboard',
+  },
+  /** Wired by ORC-234, which brings the take-over itself. */
+  take_over: {
+    anyOf: [['operator']],
+    channels: ['dashboard'],
+    what: 'taking over a run',
+    who: 'operators of the dashboard',
   },
 };
 

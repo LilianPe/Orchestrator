@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
 import { fetchFlow, fetchMeasures, fetchSnapshot, post, subscribe } from './api.js';
 import { Flow, plural } from './Flow.js';
+import { Inspection } from './Inspection.js';
 import { Measures } from './Measures.js';
 import { initialState, reducer } from './state.js';
 import type { FlowView, MeasuredTicketView, RunLine, WorkingRunView } from './types.js';
@@ -113,9 +114,24 @@ export function App() {
   }, [s.flowStale, view, loadFlow]);
 
   const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`);
+  // A pause or a stop from a run's inspection (ORC-301): a refusal is said there, a success reads the Flow again.
+  const [notice, setNotice] = useState<{ runId: string; text: string }>();
+  const control = (run: WorkingRunView, action: 'pause' | 'stop') => () =>
+    void post(`/api/runs/${run.runId}/${action}`).then(
+      async (res) => {
+        if (res.ok) {
+          setNotice(undefined);
+          return loadFlow();
+        }
+        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+        setNotice({ runId: run.runId, text: error ?? `${action} refused (${res.status})` });
+      },
+      () => setNotice({ runId: run.runId, text: `${action} not sent: the server did not answer` }),
+    );
 
   const snap = s.snapshot;
   const lines = s.selectedRun ? (s.runLines[s.selectedRun] ?? []) : [];
+  const inspected = s.flow?.working.find((w) => w.runId === s.selectedRun);
 
   return (
     <div className="page">
@@ -149,6 +165,9 @@ export function App() {
             <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={stop} />
           ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
+        {inspected && (
+          <Inspection run={inspected} feed={s.feeds[inspected.ticketId] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} />
+        )}
         <section className="run">
           <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
           <div className="lines">

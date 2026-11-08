@@ -56,4 +56,29 @@ describe('reducer', () => {
     expect(s.runLines['r1']).toHaveLength(400);
     expect(s.runLines['r1']![0]).toEqual({ kind: 'text', text: '50' });
   });
+
+  describe("a run's live feed (ORC-301)", () => {
+    const activity = (runId: string, ticketId: string, action: string, at: number) =>
+      ({ kind: 'activity', runId, ticketId, activity: { type: 'action', action, parameter: 'step build', ephemeral: true }, at }) as const;
+
+    it("keeps, by ticket, the factory's composed activities and the ticket's journal events, in their order", () => {
+      let s = reducer(initialState, { type: 'bus', message: activity('r1', 'REL-1', 'Reading the code', 1) });
+      s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} } } });
+      s = reducer(s, { type: 'bus', message: activity('r2', 'REL-2', 'Editing files', 3) });
+      s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e2', type: 'control.pause', at: 4, projectId: '*', payload: {} } } });
+      expect(s.feeds['REL-1']).toEqual([
+        { kind: 'activity', runId: 'r1', action: 'Reading the code', parameter: 'step build', at: 1 },
+        { kind: 'event', id: 'e1', type: 'control.stop', at: 2 },
+      ]);
+      expect(s.feeds['REL-2']).toEqual([{ kind: 'activity', runId: 'r2', action: 'Editing files', parameter: 'step build', at: 3 }]);
+      expect(Object.keys(s.feeds).sort()).toEqual(['REL-1', 'REL-2']);
+    });
+
+    it('caps a feed at its last 200 lines', () => {
+      let s = initialState;
+      for (let i = 0; i < 250; i++) s = reducer(s, { type: 'bus', message: activity('r1', 'REL-1', 'Reading the code', i) });
+      expect(s.feeds['REL-1']).toHaveLength(200);
+      expect(s.feeds['REL-1']![0]!.at).toBe(50);
+    });
+  });
 });

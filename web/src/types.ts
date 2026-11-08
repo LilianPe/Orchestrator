@@ -66,6 +66,11 @@ export type RunLine =
   | { kind: 'tool_result'; isError: boolean }
   | { kind: 'result'; isError: boolean; costUsd: number; turns: number; text: string };
 
+/** A line of a run's live feed (ORC-301): what it does in the factory's words, or an event of its ticket's journal. */
+export type FeedLine =
+  | { kind: 'activity'; runId: string; action: string; parameter: string; at: number }
+  | { kind: 'event'; id: string; type: string; at: number };
+
 export interface EventView {
   id: string;
   type: string;
@@ -79,6 +84,7 @@ export type BusMessage =
   | { kind: 'event'; event: EventView }
   | { kind: 'command'; projectId: string; ticketId?: string; command: { kind: string } }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunLine }
+  | { kind: 'activity'; runId: string; ticketId: string; activity: { type: 'action'; action: string; parameter: string; ephemeral?: boolean }; at: number }
   | { kind: 'ticket' }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };
 
