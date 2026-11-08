@@ -407,6 +407,46 @@ describe('reconcileOnce — labels (ORC-185)', () => {
   });
 });
 
+describe('reconcileOnce — the wait on « blocked by » tickets (ORC-363)', () => {
+  const pass = async (tracker: FakeTracker, store: SqliteStore) => {
+    const events: FactoryEvent[] = [];
+    await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => events.push(e), clock: new FakeClock(100), log: () => {} });
+    return events;
+  };
+  const setup = async (blocker: { stateName: string; stateType: string }, waits = true) => {
+    const tracker = new FakeTracker();
+    const store = new SqliteStore(':memory:');
+    tracker.setStates('OPS', [...STANDARD_STATES, 'Canceled']);
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'app' });
+    tracker.addIssue({ identifier: 'OPS-2', ...blocker });
+    tracker.blocks('OPS-2', 'REL-1');
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'todo', 4), delegated: true, ...(waits ? { waitingOn: { blockers: ['OPS-2'], start: { job: 'dev' } } } : {}) });
+    await recordLabels(store, 'p', 'REL-1', [], 0);
+    return { tracker, store };
+  };
+
+  it('tells a waiting ticket its blockers are done, a blocker of another team included, trusted: the start was decided before', async () => {
+    const { tracker, store } = await setup({ stateName: 'Done', stateType: 'completed' });
+    const events = await pass(tracker, store);
+    expect(events.map((e) => [e.id, e.type, e.payload, e.taint])).toEqual([['reconcile:blockers-done:p:REL-1:4', 'blockers.done', { blockers: ['OPS-2'] }, 'trusted']]);
+  });
+
+  it('a relation taken off in Linear lifts the wait as well', async () => {
+    const { tracker, store } = await setup({ stateName: 'Todo', stateType: 'unstarted' });
+    tracker.unblocks('OPS-2', 'REL-1');
+    expect((await pass(tracker, store)).map((e) => e.type)).toEqual(['blockers.done']);
+  });
+
+  it.each([
+    ['a blocker still open', { stateName: 'In Progress', stateType: 'started' }, true],
+    ['a cancelled blocker, which is not done', { stateName: 'Canceled', stateType: 'canceled' }, true],
+    ['a ticket that does not wait', { stateName: 'Done', stateType: 'completed' }, false],
+  ])('says nothing for %s', async (_what, blocker, waits) => {
+    const { tracker, store } = await setup(blocker, waits);
+    expect(await pass(tracker, store)).toEqual([]);
+  });
+});
+
 describe('Reconciler', () => {
   it('stop() resolves once the pass under way has finished; a pass asked meanwhile joins it', async () => {
     const tracker = new FakeTracker();
