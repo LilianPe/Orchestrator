@@ -11,9 +11,14 @@ export type ScriptForm = 'disabled-test' | 'bypass' | 'test-only-behaviour';
 
 export interface ScriptFinding {
   form: ScriptForm;
-  /** First and last line of what was found, 1-based, and its column for the order of a line. */
+  /**
+   * The lines a diff must add for the finding to be its own, 1-based, in order of preference: the first and last line of
+   * what was found (not the lines between: an edit inside a long call does not make an old finding new), then those of
+   * the aliases and constants it reads (an alias added on one line changes calls left as they were).
+   */
+  lines: number[];
+  /** Line and column, for the order of a file. */
   line: number;
-  last: number;
   column: number;
   match: string;
 }
@@ -41,6 +46,15 @@ const RUNNER_ENV = /\b(?:VITEST(?:_[A-Z_]+)?|JEST_WORKER_ID|PYTEST_CURRENT_TEST)
 const DIRECTIVE = /^[\s/*]*(eslint-disable\b|@ts-(?:ignore|nocheck|expect-error)\b|eslint\s+[\w/@-]+\s*:\s*(?:(["'])off\2|off\b|0\b))/;
 const EQUALITY = new Set([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
 
+const HOOKS = new Set(['beforeEach', 'afterEach', 'beforeAll', 'afterAll', 'before', 'after']);
+
+/** The local names an import binds. */
+function importedLocals(node: ts.ImportDeclaration): string[] {
+  const clause = node.importClause;
+  const bindings = clause?.namedBindings;
+  return [...(clause?.name ? [clause.name.text] : []), ...(bindings ? (ts.isNamespaceImport(bindings) ? [bindings.name.text] : bindings.elements.map((e) => e.name.text)) : [])];
+}
+
 /** Parentheses, type assertions and `!` changed nothing. */
 function unwrap(e: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) || ts.isSatisfiesExpression(e) || ts.isTypeAssertionExpression(e)) e = e.expression;
@@ -55,17 +69,31 @@ class Bindings {
   readonly constants = new Map<string, ts.Expression>();
   /** Names bound to the test mode (`NODE_ENV`, Vite's `env.MODE`). */
   readonly modes = new Set<string>();
-  /** Names a function parameter binds: a test's context (`context.skip()`, `({ skip }) => skip()`). */
+  /** Names the parameters of a test's or a hook's callback bind: its context (`context.skip()`, `({ skip }) => skip()`). */
   readonly params = new Set<string>();
+  /** The lines of the import or declaration that binds each name: a finding that reads an alias counts on them too. */
+  readonly declared = new Map<string, number[]>();
 
   constructor(sf: ts.SourceFile) {
+    const lines = (node: ts.Node) => [lineOf(sf, node.getStart(sf)), lineOf(sf, node.end)];
     const visit = (node: ts.Node): void => {
-      if (ts.isImportDeclaration(node)) this.importOf(node);
-      else if (ts.isVariableDeclaration(node) && node.initializer) this.declare(node, node.initializer);
-      else if (ts.isParameter(node)) for (const n of boundNames(node.name)) this.params.add(n);
+      if (ts.isImportDeclaration(node)) {
+        this.importOf(node);
+        for (const name of importedLocals(node)) this.declared.set(name, lines(node));
+      } else if (ts.isVariableDeclaration(node) && node.initializer) {
+        this.declare(node, node.initializer);
+        for (const name of boundNames(node.name)) this.declared.set(name, lines(node));
+      } else if (ts.isParameter(node) && this.isTestCallback(node.parent)) for (const n of boundNames(node.name)) this.params.add(n);
       ts.forEachChild(node, visit);
     };
     visit(sf);
+  }
+
+  /** A function passed to a test, a suite or a hook. */
+  private isTestCallback(fn: ts.Node): boolean {
+    const call = fn.parent;
+    if (!(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) || !call || !ts.isCallExpression(call) || !call.arguments.includes(fn)) return false;
+    return TEST_API.has(this.testRoot(call.expression) ?? '') || HOOKS.has(this.canonical(call.expression) ?? '');
   }
 
   private moduleAlias(module: string, imported: string): string | undefined {
@@ -247,9 +275,17 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
   const sf = parse(path, text);
   const b = new Bindings(sf);
   const findings: ScriptFinding[] = [];
+  // An alias that renames (`import { xit as it }`), not `import { it }`: adding `vi` to that import makes no old finding new.
+  const bound = (name: string) => (b.aliases.has(name) && b.aliases.get(name) !== name) || b.constants.has(name) || b.modes.has(name);
   const at = (node: ts.Node, form: ScriptForm, match = node.getText(sf), last = node.end): void => {
     const start = node.getStart(sf);
-    findings.push({ form, line: lineOf(sf, start), last: lineOf(sf, last), column: sf.getLineAndCharacterOfPosition(start).character, match });
+    const lines = [lineOf(sf, start), lineOf(sf, last)];
+    const read = (n: ts.Node): void => {
+      if (ts.isIdentifier(n) && bound(n.text)) lines.push(...(b.declared.get(n.text) ?? []));
+      ts.forEachChild(n, read);
+    };
+    read(node);
+    findings.push({ form, lines, line: lines[0]!, column: sf.getLineAndCharacterOfPosition(start).character, match });
   };
   const test = kind === 'test';
 
@@ -351,7 +387,7 @@ export function scanScript(path: string, text: string, kind: FileKind): ScriptFi
       const m = DIRECTIVE.exec(line);
       if (!m) return;
       const lineNo = lineOf(sf, c.pos) + i;
-      findings.push({ form: 'bypass', line: lineNo, last: lineNo, column: i === 0 ? sf.getLineAndCharacterOfPosition(c.pos).character : 0, match: m[1]! });
+      findings.push({ form: 'bypass', lines: [lineNo], line: lineNo, column: i === 0 ? sf.getLineAndCharacterOfPosition(c.pos).character : 0, match: m[1]! });
     });
   }
   return findings.sort((x, y) => x.line - y.line || x.column - y.column);

@@ -248,14 +248,16 @@ function jsonReport(files: { name: string; message?: string; tests: ReportTest[]
 const ASSERTION_FAILURE = 'AssertionError: expected 1 to be 2 // Object.is equality\n    at /work/src/export.test.ts:4:38';
 
 /** Deps whose run prints `output`, then writes `report` where the command asked for it. */
-function reporting(files: string[], exitCode: number | null, output: string, report: string | undefined, repo: Repo = {}): RedDeps & { commands: string[] } {
+function reporting(files: string[], exitCode: number | null, output: string, report: string | undefined, repo: Repo = {}, stderr = ''): RedDeps & { commands: string[] } {
   const d = deps(files, exitCode, output, repo);
   return {
     ...d,
     run: async (command) => {
       d.commands.push(command);
-      const marker = /'(@@factory-report-[\w-]+@@)'/.exec(command)?.[1];
-      return { exitCode, output: report === undefined || !marker ? output : `${output}\n${marker}\n${report}` };
+      const id = /'@@factory-report-([\w-]+)@@'/.exec(command)?.[1];
+      // As a sandbox returns it: stdout, then stderr.
+      const stdout = report === undefined || !id ? output : `${output}\n@@factory-report-${id}@@\n${report}\n@@factory-report-end-${id}@@\n`;
+      return { exitCode, output: stdout + stderr };
     },
   };
 }
@@ -352,6 +354,25 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     expect(await checkRed('pytest', reporting(['tests/test_export.py'], 1, 'SyntaxError', passing))).toMatchObject({ verified: false, cause: 'passing' });
   });
 
+  it('reads the report between its markers when the runner writes to stderr after it (jest)', async () => {
+    const report = jsonReport([{ name: 'src/export.test.ts', tests: [{ fullName: 'exports', status: 'failed', failureMessages: [ASSERTION_FAILURE] }] }]);
+    const d = reporting(['src/export.test.ts'], 1, '', report, {}, ' FAIL  src/export.test.ts\n  ● exports\n    SyntaxError in a log line\n');
+    expect(await checkRed('npx jest', d)).toMatchObject({ verified: true, cause: 'assertion', detail: expect.stringContaining('FAIL  src/export.test.ts') });
+  });
+
+  it('a method of an object that is not a function (a broken mock) is no missing symbol', async () => {
+    const report = jsonReport([
+      {
+        name: 'src/export.test.ts',
+        tests: [
+          { fullName: 'exports', status: 'failed', failureMessages: [ASSERTION_FAILURE] },
+          { fullName: 'replies', status: 'failed', failureMessages: ['TypeError: res.json is not a function'] },
+        ],
+      },
+    ]);
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, '', report))).toMatchObject({ verified: true, cause: 'assertion' });
+  });
+
   it('falls back on the text output when the runner wrote no report', async () => {
     expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, VITEST_SYNTAX, undefined))).toMatchObject({ verified: false, cause: 'compile' });
     expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, 'not json'))).toMatchObject({ verified: true, cause: 'assertion' });
@@ -369,6 +390,15 @@ describe('checkRed reads symbols on the AST (ORC-342)', () => {
       const base = { 'src/export.ts': source };
       expect(await checkRed('npx jest', deps(['src/export.test.ts'], 1, TS_JEST_NO_EXPORT, { base })), source).toMatchObject({ verified: false, cause: 'compile' });
     }
+  });
+
+  it('a CommonJS module exports by assignment; one whose exports cannot be read counts any mention', async () => {
+    for (const source of ['module.exports = { exportCsv: () => "" };\n', 'exports.exportCsv = () => "";\n', 'module.exports = build({ exportCsv });\n']) {
+      const base = { 'src/export.js': source };
+      expect(await checkRed('npx jest', deps(['src/export.test.ts'], 1, TS_JEST_NO_EXPORT, { base })), source).toMatchObject({ verified: false, cause: 'compile' });
+    }
+    const without = { base: { 'src/export.js': 'module.exports = { other: 1 };\n' } };
+    expect(await checkRed('npx jest', deps(['src/export.test.ts'], 1, TS_JEST_NO_EXPORT, without))).toMatchObject({ verified: true, cause: 'missing_export' });
   });
 
   it('a symbol declared but not exported at baseSha is a missing export', async () => {

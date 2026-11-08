@@ -342,6 +342,27 @@ describe('cheats read on the syntax tree (ORC-342)', () => {
     expect(scanDiff(diff)).toEqual([]);
   });
 
+  it('an alias added on one line counts for the calls it changes, left as they were', () => {
+    const xit = wholeFile('src/a.test.ts', "-import { it } from '@jest/globals';", "+import { xit as it } from '@jest/globals';", " it('rounds', () => {});");
+    expect(scanDiff(xit)).toEqual([{ file: 'src/a.test.ts', line: 1, form: 'disabled-test', match: 'it' }]);
+    const mode = wholeFile('src/score.ts', "+const env = process.env.NODE_ENV;", " export const fake = env === 'test';");
+    expect(scanDiff(mode).map((f) => [f.line, f.match])).toEqual([[1, "env === 'test'"]]);
+    // A plain import, `vi` added to it, makes no old finding new.
+    const plain = wholeFile('src/a.test.ts', "-import { it } from 'vitest';", "+import { it, vi } from 'vitest';", " it.skip('rounds', () => {});");
+    expect(scanDiff(plain)).toEqual([]);
+  });
+
+  it('an edit inside a long call or switch does not make its old finding new', () => {
+    const diff = wholeFile('src/score.ts', ' switch (process.env.NODE_ENV) {', "   case 'development':", '-    return 1;', '+    return 2;', "   case 'test':", '     return 42;', ' }');
+    expect(scanDiff(diff)).toEqual([]);
+  });
+
+  it('a skip() of a helper parameter is no test context: only a test or hook callback has one', () => {
+    const diff = added('src/a.test.ts', 'const page = (cursor) => cursor.skip(10).limit(5);');
+    expect(scanDiff(diff)).toEqual([]);
+    expect(scanDiff(added('src/a.test.ts', 'beforeEach((ctx) => ctx.skip());')).map((f) => f.match)).toEqual(['ctx.skip']);
+  });
+
   it('reads a string spanning lines as a string, in a whole file', () => {
     const diff = wholeFile('src/a.ts', ' const doc = `', '+  it.skip and process.exit(0) and // @ts-ignore', ' `;');
     expect(scanDiff(diff)).toEqual([]);

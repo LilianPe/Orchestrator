@@ -16,6 +16,11 @@ export const REFREEZE = '/refreeze';
 export interface FrozenTests {
   sha: string;
   files: Record<string, string>;
+  /**
+   * `FREEZE_RULES` for a freeze made since ORC-342; absent on one made before, which keeps the harness and the
+   * `package.json` part it was made with: a deploy blocks no ticket frozen before it on files it did not freeze.
+   */
+  rules?: number;
 }
 
 /** A commit of the branch, read on the factory's repository, never in the agent's worktree (ORC-205). */
@@ -109,13 +114,18 @@ const TEST_PART = new Map<string, (content: string) => unknown>([
 // `.<tool>rc[.<ext>]`. The runner reads more than its own file: vite's config (vitest's `test`, the aliases a test
 // imports through), the transforms of babel, swc or a framework, npm's shell. So any tool's, but those below.
 const TOOL_CONFIG = /^(?:\.?([\w-]+?)\.(?:config|conf)(?:\.[\w-]+)*\.(?:[cm]?[jt]s|json5?|ya?ml|toml)|\.([\w-]+?)rc(?:\.(?:[cm]?[jt]s|json5?|ya?ml|toml))?)$/;
-// The tools whose configuration changes no test: linters, formatters, commit hooks, styles, the Node version manager.
-const NOT_TEST_TOOLS = new Set(['eslint', 'prettier', 'stylelint', 'commitlint', 'lint-staged', 'lintstaged', 'markdownlint', 'markdownlint-cli2', 'cspell', 'tailwind', 'postcss', 'browserslist', 'renovate', 'husky', 'nvm', 'editorconfig']);
+// The tools whose configuration changes no test: linters, formatters, commit hooks, styles, the Node version manager,
+// the application's own (`app.config.ts` of Angular, Expo, Nuxt).
+const NOT_TEST_TOOLS = new Set(['eslint', 'prettier', 'stylelint', 'commitlint', 'lint-staged', 'lintstaged', 'markdownlint', 'markdownlint-cli2', 'cspell', 'tailwind', 'postcss', 'browserslist', 'renovate', 'husky', 'nvm', 'editorconfig', 'app']);
 
 function isToolConfig(path: string): boolean {
   const m = TOOL_CONFIG.exec(fileName(path));
-  // Under src/, a file named so is the application's own (Angular's `app.config.ts`).
-  return !!m && !NOT_TEST_TOOLS.has(m[1] ?? m[2]!) && !normalizePath(path).split('/').includes('src');
+  return !!m && !NOT_TEST_TOOLS.has(m[1] ?? m[2]!);
+}
+
+/** The harness of a freeze made before ORC-342 (`FrozenTests.rules` absent): the runner's config, `conftest.py`, `tsconfig*.json`, the shared files. */
+function isHarnessBefore342(path: string): boolean {
+  return isTestHarnessFile(path) || TEST_PART.has(fileName(path)) || /^(?:conftest\.py|tsconfig(?:\.[\w-]+)*\.json)$/.test(fileName(path));
 }
 
 /**
@@ -125,9 +135,12 @@ function isToolConfig(path: string): boolean {
  * `tox.ini` and `setup.cfg`).
  */
 export function isFrozenHarness(path: string): boolean {
-  const name = fileName(path);
-  return isTestHarnessFile(path) || TEST_PART.has(name) || /^(?:conftest\.py|[tj]sconfig(?:\.[\w-]+)*\.json|bunfig\.toml)$/.test(name) || isToolConfig(path);
+  return isHarnessBefore342(path) || /^(?:jsconfig\.json|bunfig\.toml)$/.test(fileName(path)) || isToolConfig(path);
 }
+
+/** The rules a freeze was made with: absent before ORC-342, whose harness and `package.json` part it keeps. */
+export const FREEZE_RULES = 2;
+const harnessOf = (frozen: Pick<FrozenTests, 'rules'>) => (frozen.rules === undefined ? isHarnessBefore342 : isFrozenHarness);
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -135,10 +148,12 @@ const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex
  * sha256 of what the test run reads in `content`: the whole file, but the `test` script of a `package.json` and the
  * pytest section of a `pyproject.toml` (`[tool.pytest]`), a `tox.ini` (`[pytest]`) or a `setup.cfg` (`[tool:pytest]`).
  * Undefined when such a file has none: nothing to freeze. A file that does not parse, or the read of a blob too large to
- * show (a NUL in it, ORC-311), is fingerprinted whole: any change to it then counts.
+ * show (a NUL in it, ORC-311), is fingerprinted whole: any change to it then counts. `before342`: a `package.json` read as
+ * a freeze made before ORC-342 read it, its `test` script alone.
  */
-export function fingerprint(path: string, content: string): string | undefined {
-  const part = TEST_PART.get(fileName(path));
+export function fingerprint(path: string, content: string, before342 = false): string | undefined {
+  const name = fileName(path);
+  const part = before342 && name === 'package.json' ? (c: string) => (JSON.parse(c) as { scripts?: { test?: unknown } }).scripts?.test : TEST_PART.get(name);
   if (part && !content.includes('\0')) {
     try {
       const read = part(content);
@@ -165,7 +180,7 @@ export async function freezeTests(tests: readonly string[], view: FreezeView): P
     const print = content === undefined ? undefined : fingerprint(path, content);
     if (print !== undefined) files[path] = print;
   }
-  return { sha: view.head, files };
+  return { sha: view.head, files, rules: FREEZE_RULES };
 }
 
 /**
@@ -173,18 +188,19 @@ export async function freezeTests(tests: readonly string[], view: FreezeView): P
  * first freeze stays out, and `checkFrozen` keeps failing on it: only a `/refreeze` takes it in.
  */
 export function newTestsOnly(read: FrozenTests): FrozenTests {
-  return { sha: read.sha, files: Object.fromEntries(Object.entries(read.files).filter(([path]) => !isFrozenHarness(path))) };
+  return { ...read, files: Object.fromEntries(Object.entries(read.files).filter(([path]) => !isFrozenHarness(path))) };
 }
 
 /** `factory/tests-gelés` on `view.head`: every frozen file the commits since the freeze changed, and every harness file they added. */
 export async function checkFrozen(frozen: FrozenTests, view: FreezeView): Promise<CheckResult> {
   const findings: string[] = [];
+  const isHarness = harnessOf(frozen);
   for (const { path: raw, deleted } of view.changed) {
     const path = normalizePath(raw);
     const was = frozen.files[path];
-    if (was === undefined && !isFrozenHarness(path)) continue;
+    if (was === undefined && !isHarness(path)) continue;
     const content = deleted ? undefined : await view.showAtHead(path);
-    const now = content === undefined ? undefined : fingerprint(path, content);
+    const now = content === undefined ? undefined : fingerprint(path, content, frozen.rules === undefined);
     if (now === was) continue;
     findings.push(`${mdCode(path)}: ${was === undefined ? 'harness added after the freeze' : now === undefined ? 'deleted' : 'changed'}`);
   }

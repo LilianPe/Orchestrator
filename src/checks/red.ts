@@ -43,8 +43,8 @@ const MISSING: Pattern[] = [
   // Node's ESM loader, and vitest 5.
   [/Cannot find module '([^']+)' imported from (\S+)/g, (m) => ({ module: m[1]!, importer: m[2]! })],
   [/The requested module '([^']+)' does not provide an export named '([^']+)'/g, (m) => ({ module: m[1]!, symbol: m[2]! })],
-  // `(0 , __vi_import_0__.f)` (vitest before 5), `__vite_ssr_import_1__.f` (vitest 5), `f`.
-  [/TypeError: (?:\(0 , )?(?:[\w$]+\.)?([\w$]+)\)? is not a function/g, (m) => ({ symbol: m[1]! })],
+  // `(0 , __vi_import_0__.f)` (vitest before 5), `__vite_ssr_import_1__.f` (vitest 5), `f`; not any `obj.f` (a broken mock).
+  [/TypeError: (?:\(0 , [\w$]+\.|__vite_ssr_import_\d+__\.)?([\w$]+)\)? is not a function/g, (m) => ({ symbol: m[1]! })],
   [/ModuleNotFoundError: No module named '([^']+)'/g, (m) => ({ module: m[1]!, python: true })],
   [/ImportError: cannot import name '([^']+)' from '([\w.]+)'/g, (m) => ({ module: m[2]!, symbol: m[1]!, python: true })],
 ];
@@ -249,8 +249,12 @@ function importOf(path: string, source: string, symbol: string): { module: strin
  * Python one defines, assigns or imports it at its top level (a line starting with it: no Python parser here).
  */
 function hasSymbol(path: string, source: string, symbol: string): boolean {
-  if (!path.endsWith('.py')) return exportedNames(parse(path, source)).has(symbol);
   const s = escape(symbol);
+  if (!path.endsWith('.py')) {
+    // `module.exports = build()`: its names cannot be read, a mention of the symbol counts.
+    const names = exportedNames(parse(path, source));
+    return names ? names.has(symbol) : new RegExp(`\\b${s}\\b`).test(source);
+  }
   return new RegExp(`^(?:(?:async\\s+)?def\\s+${s}\\b|class\\s+${s}\\b|${s}\\s*(?::[^=\\n]*)?=|(?:from\\s+\\S+\\s+)?import\\s+[^\\n#]*\\b${s}\\b)`, 'm').test(source);
 }
 
@@ -316,11 +320,15 @@ async function runWithReport(ran: string, runner: Runner | undefined, deps: RedD
   if (!runner) return deps.run(ran);
   const id = randomUUID();
   const marker = `@@factory-report-${id}@@`;
-  const script = [`f="\${TMPDIR:-/tmp}/factory-report-${id}"`, `${ran} ${REPORT_FLAGS[runner]}`, 's=$?', `printf '\\n%s\\n' '${marker}'`, 'cat "$f" 2>/dev/null', 'rm -f "$f"', 'exit $s'].join('\n');
+  const end = `@@factory-report-end-${id}@@`;
+  const script = [`f="\${TMPDIR:-/tmp}/factory-report-${id}"`, `${ran} ${REPORT_FLAGS[runner]}`, 's=$?', `printf '\\n%s\\n' '${marker}'`, 'cat "$f" 2>/dev/null', `printf '\\n%s\\n' '${end}'`, 'rm -f "$f"', 'exit $s'].join('\n');
   const { exitCode, output } = await deps.run(script);
+  // Between its two markers: the runner's stdout comes before, and its stderr, which a sandbox appends, after (jest
+  // writes its whole run there).
   const at = output.indexOf(`\n${marker}\n`);
-  if (at === -1) return { exitCode, output };
-  return { exitCode, output: output.slice(0, at), report: output.slice(at + marker.length + 2).trim() };
+  const to = output.indexOf(`\n${end}\n`, at);
+  if (at === -1 || to === -1) return { exitCode, output };
+  return { exitCode, output: output.slice(0, at) + output.slice(to + end.length + 2), report: output.slice(at + marker.length + 2, to).trim() };
 }
 
 /** What one missing module or symbol is: something the build will create, or a broken test. */

@@ -236,16 +236,17 @@ export function scanDiff(diff: string, options: AntiCheatOptions = {}): CheatFin
     if (frozenFinding) findings.push(frozenFinding);
     // What the file was: its old path for a rename, under which its tests are gone. A frozen test changed is already refused.
     const was = file.oldPath ?? file.path;
+    const after = file.status === 'deleted' ? undefined : versionOf(file, 'new');
     if (file.status !== 'added' && !frozenFinding) {
-      removals(was, deleted.get(was) ?? versionOf(file, 'old'), file.status === 'modified' ? versionOf(file, 'new') : undefined);
+      removals(was, deleted.get(was) ?? versionOf(file, 'old'), file.status === 'modified' ? after : undefined);
       deleted.delete(was);
     }
     if (PROSE.test(file.path) || file.status === 'deleted') continue;
     const kind: FileKind = isTestFile(file.path) ? 'test' : isTestHarnessFile(file.path) ? 'harness' : 'code';
     if (isScript(file.path)) {
       const added = new Set(file.added.map((a) => a.line));
-      for (const f of scanScript(file.path, versionOf(file, 'new'), kind)) {
-        const line = [f.line, ...Array.from({ length: f.last - f.line }, (_, i) => f.line + i + 1)].find((n) => added.has(n));
+      for (const f of scanScript(file.path, after ?? versionOf(file, 'new'), kind)) {
+        const line = f.lines.find((n) => added.has(n));
         if (line !== undefined) findings.push({ file: file.path, line, form: f.form, match: f.match.trim() });
       }
       continue;

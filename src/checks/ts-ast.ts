@@ -21,7 +21,8 @@ function scriptsOf(text: string): string {
   const keep: [number, number][] = [];
   for (const m of text.matchAll(/(<script\b[^>]*>)([\s\S]*?)<\/script>/gi)) keep.push([m.index + m[1]!.length, m.index + m[1]!.length + m[2]!.length]);
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  if (front) keep.push([4, 4 + front[1]!.length]);
+  // After `---\n`, or `---\r\n`.
+  if (front) keep.push([front[0].indexOf('\n') + 1, front[0].indexOf('\n') + 1 + front[1]!.length]);
   let out = '';
   let at = 0;
   for (const [from, to] of keep.sort((a, b) => a[0] - b[0])) {
@@ -44,13 +45,6 @@ export function stringValue(node: ts.Node | undefined): string | undefined {
   return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
 }
 
-/** The name a property access reads, `a.b` or `a['b']`; undefined for a computed one. */
-export function memberName(node: ts.Node): string | undefined {
-  if (ts.isPropertyAccessExpression(node)) return node.name.text;
-  if (ts.isElementAccessExpression(node)) return stringValue(node.argumentExpression);
-  return undefined;
-}
-
 /** The names a binding declares: `a`, and every name of `{ a, b: [c] }`. */
 export function boundNames(name: ts.BindingName): string[] {
   if (ts.isIdentifier(name)) return [name.text];
@@ -59,11 +53,28 @@ export function boundNames(name: ts.BindingName): string[] {
 
 const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean => !!ts.canHaveModifiers(node) && !!ts.getModifiers(node)?.some((m) => m.kind === kind);
 
-/** What a module exports by name, `default` included. `export * from` names nothing: its names are another file's. */
-export function exportedNames(sf: ts.SourceFile): Set<string> {
+/** `module.exports` or `exports`, and `module.exports.x` or `exports.x` as `x`. */
+function commonJsTarget(e: ts.Expression): { name?: string } | undefined {
+  const isExports = (x: ts.Expression) => (ts.isIdentifier(x) && x.text === 'exports') || (ts.isPropertyAccessExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === 'module' && x.name.text === 'exports');
+  if (isExports(e)) return {};
+  return ts.isPropertyAccessExpression(e) && isExports(e.expression) ? { name: e.name.text } : undefined;
+}
+
+/**
+ * What a module exports by name, `default` included: ESM exports, and CommonJS ones (`exports.x =`, `module.exports = { x }`).
+ * `export * from` names nothing: its names are another file's. Undefined when `module.exports` is set to something else
+ * than an object literal: its names cannot be read.
+ */
+export function exportedNames(sf: ts.SourceFile): Set<string> | undefined {
   const names = new Set<string>();
   for (const s of sf.statements) {
-    if (ts.isExportDeclaration(s)) {
+    if (ts.isExpressionStatement(s) && ts.isBinaryExpression(s.expression) && s.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const target = commonJsTarget(s.expression.left);
+      const value = s.expression.right;
+      if (target?.name !== undefined) names.add(target.name);
+      else if (target && !ts.isObjectLiteralExpression(value)) return undefined;
+      else if (target && ts.isObjectLiteralExpression(value)) for (const p of value.properties) if (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) names.add(p.name.text);
+    } else if (ts.isExportDeclaration(s)) {
       if (s.exportClause && ts.isNamedExports(s.exportClause)) for (const e of s.exportClause.elements) names.add(e.name.text);
       else if (s.exportClause) names.add(s.exportClause.name.text);
     } else if (ts.isExportAssignment(s)) names.add('default');

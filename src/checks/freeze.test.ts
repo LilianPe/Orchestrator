@@ -159,6 +159,21 @@ describe('the freeze rule', () => {
     for (const p of free) expect(isFrozenHarness(p), p).toBe(false);
   });
 
+  it('a freeze made before ORC-342 keeps its rules: no harness it did not take, its package.json part (ORC-342)', async () => {
+    const files = { 'package.json': JSON.stringify({ scripts: { test: 'vitest run', pretest: 'tsc' }, jest: {} }), 'vite.config.ts': 'export default {};\n' };
+    const old = { sha: 'sha-0', files: { 'package.json': createHash('sha256').update(JSON.stringify('vitest run')).digest('hex') } };
+    expect((await checkFrozen(old, view('sha-2', files, Object.keys(files)))).ok).toBe(true);
+    const changed = { ...files, 'package.json': files['package.json'].replace('vitest run', 'true') };
+    expect((await checkFrozen(old, view('sha-2', changed, Object.keys(changed)))).ok).toBe(false);
+    // A freeze made now takes vite.config.ts in, and marks its rules.
+    expect(await freezeTests([], view('sha-1', files))).toMatchObject({ rules: 2, files: { 'vite.config.ts': expect.any(String) } });
+  });
+
+  it('a tool configuration under src/ is frozen too; the application config is not', () => {
+    expect(isFrozenHarness('src/frontend/vite.config.ts')).toBe(true);
+    expect(isFrozenHarness('app.config.ts')).toBe(false);
+  });
+
   it('a package.json frozen before ORC-342, with a test script and nothing else of the test run, reads the same', () => {
     expect(fingerprint('package.json', PKG)).toBe(createHash('sha256').update(JSON.stringify('vitest run')).digest('hex'));
   });
