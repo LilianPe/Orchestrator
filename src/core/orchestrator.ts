@@ -268,10 +268,11 @@ interface StartOpts {
   startMark?: string;
 }
 
-/** A drain's hooks on a start it hands out of the queue (`startRun`). */
+/** A drain's hooks on a start it hands out of the queue (`startRun`); `pending`: the ticket's pending job, started by `settle`. */
 interface StartFrom {
   admitted?: () => void;
   recorded?: () => Promise<void>;
+  pending?: true;
 }
 
 const ECHO_MS = 60_000;
@@ -1198,9 +1199,13 @@ export class Orchestrator {
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
     const t = await this.ticket(project.id, ticketId);
     if (!t.activeRunId && !t.verifyingRunId && t.pendingJob) {
-      const pending = t.pendingJob;
-      await this.apply(t, { type: 'pending.cleared' });
-      await this.startRun(project, ticketId, pending);
+      // The job stays pending until its start is recorded (ORC-339): a launch clears it with its `run.started`,
+      // as `feedback.consumed` waits for the run (ORC-220). A crash or a throw before leaves it to the
+      // retry of this effect, which starts it again; an effect that ends clears what is left (refused,
+      // queued, blocked), and a crash before that clear only plays these idempotent outcomes again.
+      await this.startRun(project, ticketId, t.pendingJob, { pending: true });
+      const after = await this.ticket(project.id, ticketId);
+      if (after.pendingJob) await this.apply(after, { type: 'pending.cleared' });
     }
     await this.drain('dev');
     await this.drain('questions');
@@ -1669,7 +1674,7 @@ export class Orchestrator {
     opts: StartOpts,
     from: StartFrom = {},
   ): Promise<'queued' | 'done'> {
-    const { admitted, recorded } = from;
+    const { admitted, recorded, pending } = from;
     const job = project.workflow.jobs[opts.job];
     if (!job) {
       this.log('error', `unknown job ${opts.job}`);
@@ -1746,7 +1751,7 @@ export class Orchestrator {
     admitted?.();
     if (slot === null) return requeue();
     try {
-      await this.launch(project, ticketId, job, opts, slot, key, recorded);
+      await this.launch(project, ticketId, job, opts, slot, key, recorded, pending);
     } catch (err) {
       this.d.scheduler.release(key);
       let fresh = await this.ticket(project.id, ticketId);
@@ -1805,6 +1810,7 @@ export class Orchestrator {
     slot: number,
     key: string,
     recorded?: () => Promise<void>,
+    pending?: true,
   ): Promise<void> {
     const { tracker, store, clock, workspaces, forge } = this.d;
     const wf = project.workflow;
@@ -1969,9 +1975,11 @@ export class Orchestrator {
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
-      // on the ticket until the run that read it is written: a launch cut before reads it again.
+      // on the ticket until the run that read it is written: a launch cut before reads it again. A pending job
+      // leaves the ticket in the same write as its run: never both, never neither (ORC-339).
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
-      await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }) });
+      const started: InternalEvent = { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }) };
+      await this.apply(t, started, ...(pending ? [{ type: 'pending.cleared' as const }] : []));
       await store.putRun(run);
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });
       const step = planStepOfJob(job);

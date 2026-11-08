@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { CUT_BOUND_REASON } from '../../src/core/engine.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS, RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
+import type { Store } from '../../src/store/types.js';
 import { checkChain, Faults, settled } from '../helpers/faults.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -533,5 +534,109 @@ describe('a restart during a check', () => {
     hold();
     expect(h.checks.calls).toHaveLength(1);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+});
+
+/** The ticket runs `dev`, with `dev-feedback` pending behind it: the run's end settles the ticket, whose settle starts the pending job. */
+async function pendingBehind(h: H): Promise<string> {
+  const first = await heldRun(h);
+  await h.store.putTicket({ ...(await h.ticket()), pendingJob: { job: 'dev-feedback', resume: true } });
+  return first;
+}
+
+const prompts = (h: H) => h.runner.requests.map((r) => r.prompt.split('\n')[0]);
+
+/** ORC-339: a pending job leaves the ticket only with the run that starts it. */
+describe('a pending job through its launch', () => {
+  it('the daemon killed during the setup of its launch: the next start launches it', async () => {
+    const h = createHarness({ effectLeaseMs: 60_000 });
+    const first = await pendingBehind(h);
+    const prepare = h.workspaces.prepare.bind(h.workspaces);
+    let cut = false;
+    // The launch never gets past its workspace: the process dies there.
+    h.workspaces.prepare = (req) => (cut ? prepare(req) : ((cut = true), new Promise<never>(() => {})));
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await vi.waitFor(() => expect(cut).toBe(true));
+    await h.restart({ mode: 'brutal' });
+    await h.advance(60_001);
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
+    expect(t.pendingJob).toBeUndefined();
+  });
+
+  it('a passing store error during its start: the retry of the effect launches it', async () => {
+    let armed = false;
+    let thrown = false;
+    const h = createHarness({
+      effectRetry: { attempts: 3, baseMs: 1, capMs: 1 },
+      wrapStore: (store) =>
+        new Proxy(store, {
+          get(t, prop) {
+            if (prop === 'claimEffect') {
+              return async (...args: Parameters<Store['claimEffect']>) => {
+                const row = await t.claimEffect(...args);
+                if (row && row !== 'busy' && row.effect.kind === 'settle') armed = true;
+                return row;
+              };
+            }
+            // The pause, which the start reads once settle took the job off the ticket before ORC-339.
+            if (prop === 'getMeta') {
+              return async (key: string) => {
+                if (armed && !thrown && key === 'paused') {
+                  thrown = true;
+                  throw new Error('connection reset');
+                }
+                return t.getMeta(key);
+              };
+            }
+            const value: unknown = Reflect.get(t, prop, t);
+            return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(t) : value;
+          },
+        }),
+    });
+    const first = await pendingBehind(h);
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    await h.advance(10);
+    expect(thrown).toBe(true);
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
+    expect(t.pendingJob).toBeUndefined();
+  });
+
+  it('a launch that succeeds launches it once: never again at the end of its run', async () => {
+    const h = createHarness();
+    const first = await pendingBehind(h);
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    const t = await h.ticket();
+    expect(t.pendingJob).toBeUndefined();
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    h.runner.release(t.activeRunId!);
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+  });
+
+  it('a launch cut right after the ticket took its run: the step starts again once, the pending job never again', async () => {
+    // The second run's first write: after `run.started`, before the run is written.
+    const faults = new Faults({ point: 'run.write', mode: 'kill', nth: 2 });
+    const h = createHarness({ faults, effectLeaseMs: 60_000 });
+    const first = await pendingBehind(h);
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await faults.killed;
+    await h.restart({ mode: 'brutal' });
+    await h.advance(60_001);
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect((await h.ticket()).pendingJob).toBeUndefined();
+    h.runner.release((await h.ticket()).activeRunId!);
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect((await h.ticket()).pendingJob).toBeUndefined();
   });
 });
