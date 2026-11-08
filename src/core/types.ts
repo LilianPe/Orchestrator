@@ -14,6 +14,15 @@ export function isLogicalState(v: string): v is LogicalState {
 /** The size of a ticket as `intake` estimates it (ORC-206). */
 export const TICKET_SIZES = ['xs', 's', 'm', 'l', 'xl'] as const;
 export type TicketSize = (typeof TICKET_SIZES)[number];
+
+/** A question of `clarify` (ORC-210): its options, none for a free one. */
+export interface ClarifyQuestion {
+  question: string;
+  options: string[];
+}
+
+/** An accepted answer to a `clarify` question (ORC-210), signed as the reply that gave it: a decision, as an approval is. */
+export type ClarifyAnswer = Pick<FeedbackItem, 'author' | 'authorId' | 'at'> & { question: string; answer: string };
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
@@ -157,15 +166,16 @@ export interface EffectResultPayload {
  *
  * - `debounce`: a rule with `debounce` regroups the messages that come in before it fires, then starts `job`.
  *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
- * - `clarify.remind` / `clarify.expire`: the reminder of a `clarify` question at 24 h, then the block at
- *   72 h, in the question's session; the rules that arm and decide them are ORC-210's.
+ * - `clarify.remind` / `clarify.expire`: the reminder of the `clarify` questions still open at 24 h, then the block at
+ *   72 h (ORC-210), armed when intake's guard asks them; one of a round answered or left since does nothing.
  * - `usage.reset`: the reset of a subscription's usage limit, armed by a `run.finished` the limit stopped
  *   (`on_usage_limit: wait`, ORC-340): `job` starts again then, on the ticket's session.
  */
 export interface TimerPayloads {
   debounce: { job: string; inbox?: true };
-  'clarify.remind': { linearSessionId?: string };
-  'clarify.expire': { linearSessionId?: string };
+  /** `at`: when the questions were asked, which tells this round's timers from an earlier one's (`TicketState.clarify`). */
+  'clarify.remind': { linearSessionId?: string; at?: number };
+  'clarify.expire': { linearSessionId?: string; at?: number };
   'usage.reset': { account?: string; job?: string; runId?: string };
   /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
@@ -393,7 +403,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'waitingOn'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -560,6 +570,14 @@ export interface TicketState {
   size?: TicketSize;
   /** The risk of the run (ORC-206): the highest any step proposed, never lowered (I4). Absent until `intake` assessed it. */
   risk?: Risk;
+  /**
+   * The `clarify` questions waiting for their answers (ORC-210): asked by the guard after `job` (intake) at `at`, the first
+   * `answered` of them answered, in order. Not a block: the ticket waits, and whatever moves it on ends the wait (`reduce`).
+   * `null` once over; absent on a ticket never asked.
+   */
+  clarify?: { job: string; questions: ClarifyQuestion[]; at: number; answered: number } | null;
+  /** The answers accepted to the `clarify` questions (ORC-210): decisions of the ticket, given to its runs and kept with the freeze. */
+  decisions?: ClarifyAnswer[];
   /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
   visualProof?: 'required';
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */

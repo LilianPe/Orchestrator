@@ -198,6 +198,24 @@ describe('LinearTracker', () => {
     ]);
   });
 
+  it('posts an elicitation with options as a select signal, each option its own label and value (ORC-210)', async () => {
+    const { api, calls } = fakeLinear({ ActivityCreate: () => ({ agentActivityCreate: { success: true } }) });
+    const t = new LinearTracker(api, 'app-1');
+    await t.activity('as-1', { type: 'elicitation', body: 'CSV or XLSX?', options: ['CSV', 'XLSX'] });
+    await t.activity('as-1', { type: 'elicitation', body: 'Which page?' });
+    expect(calls.map((c) => c.vars)).toEqual([
+      {
+        input: {
+          agentSessionId: 'as-1',
+          content: { type: 'elicitation', body: 'CSV or XLSX?' },
+          signal: 'select',
+          signalMetadata: { options: [{ label: 'CSV', value: 'CSV' }, { label: 'XLSX', value: 'XLSX' }] },
+        },
+      },
+      { input: { agentSessionId: 'as-1', content: { type: 'elicitation', body: 'Which page?' } } },
+    ]);
+  });
+
   it('creates missing labels when adding them', async () => {
     const { api, calls } = fakeLinear({
       Issue: () => ({ issue: node }),
