@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, TIMED_OUT } from './exec.js';
 
@@ -31,19 +34,23 @@ describe.skipIf(process.platform === 'win32')('execCmd with a deadline', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
-  it('answers at the deadline for a command that ended before it, when what holds its output left its group', async () => {
+  // `setsid` is Linux's: elsewhere nothing would hold the output, and the test would pass without the fix.
+  it.skipIf(process.platform !== 'linux')('answers at the deadline for a command that ended before it, when what holds its output left its group', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-exec-'));
+    const pidFile = join(dir, 'holder.pid');
     const started = Date.now();
-    // Its child in a session of its own, holding stdout: the group's kill misses it, and 'close' never comes.
-    const r = await execCmd('sh', ['-c', 'setsid sleep 30 & echo $!; exit 0'], { timeoutMs: 300 });
     try {
+      // Its child in a session of its own, holding stdout: the group's kill misses it, and 'close' never comes.
+      const r = await execCmd('sh', ['-c', `setsid sh -c 'echo $$ > ${pidFile}; exec sleep 30' & exit 0`], { timeoutMs: 300 });
       expect(r.code).toBe(0);
       expect(Date.now() - started).toBeLessThan(3_000);
     } finally {
       try {
-        process.kill(Number(r.stdout.trim()), 'SIGKILL');
+        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
       } catch {
-        // Already gone.
+        // Not started, or already gone.
       }
+      rmSync(dir, { recursive: true, force: true });
     }
   }, 10_000);
 
