@@ -3,9 +3,15 @@ import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
+/** A text of intake's three checks (ORC-207): one entry of what the factory publishes. */
+const finding = z.string().min(1).max(OUTPUT_LIMITS.item);
+
 /**
  * What `intake` makes of the ticket (ORC-206): its size and risk, whether it is complete enough to start, and whether it
  * speaks of a screen. `missing` are the questions a human must answer before the run starts: required when not complete.
+ * Its three checks (ORC-207), each absent when it found nothing: `duplicates`, the work in progress elsewhere that does the
+ * same (a PR, a branch, a ticket, by its link); `reuse`, the existing code close to the request, leads for `build`; `scope`,
+ * a refusal of a ticket out of scope, with the split it proposes, never created.
  */
 export const intakeAssessmentSchema = z
   .object({
@@ -14,6 +20,9 @@ export const intakeAssessmentSchema = z
     complete: z.boolean(),
     missing: z.array(z.string().min(1)).max(3),
     screen: z.boolean(),
+    duplicates: z.array(z.object({ url: finding, why: finding }).strict()).max(3).optional(),
+    reuse: z.array(z.object({ path: finding, symbol: finding.optional(), why: finding }).strict()).max(10).optional(),
+    scope: z.object({ refuse: finding, split: z.array(z.object({ title: finding, summary: finding }).strict()).max(5).optional() }).strict().optional(),
   })
   .strict()
   .refine((a) => a.complete || a.missing.length > 0, { path: ['missing'], message: 'at least one question when the ticket is not complete' });

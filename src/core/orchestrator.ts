@@ -52,7 +52,8 @@ import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
-import { openBlockers, pickupFailures } from './pickup.js';
+import { formatReuse } from './intake-checks.js';
+import { notStarted, openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
@@ -2177,7 +2178,12 @@ export class Orchestrator {
       // except that they make the job wait instead of blocking it.
       const intake = job.step === 'intake';
       const guarded = (intake || job.pickup) && !t.claudeSessionId;
-      const failures = guarded ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
+      const checks = wf.tracker.pickup.checks;
+      const failures = guarded ? pickupFailures(checks, issue) : [];
+      // The duplicate search of intake (ORC-207), which `not_started` is part of; a pickup job without intake keeps that check alone.
+      const search = guarded && intake ? await searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined;
+      const own = search ? search.own : guarded && checks.includes('not_started') ? await notStarted(issue, project.repoPath, forge) : undefined;
+      if (own) failures.push(own);
       const blockers = guarded ? openBlockers(issue) : [];
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
@@ -2212,11 +2218,11 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, activeWork: search?.activeWork };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
-    const { issue, ws, pickup, blockedBy } = head;
+    const { issue, ws, pickup, blockedBy, activeWork } = head;
     // Read again before the first write: the workspace took time.
     let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -2338,6 +2344,9 @@ export class Orchestrator {
         prUrl: t.prUrl,
         conventions,
         input,
+        activeWork,
+        // intake's leads to existing code (ORC-207), for the build alone.
+        reuse: job.step === 'build' && t.reuse?.length ? formatReuse(t.reuse) : undefined,
         reviewRounds: wf.limits.reviewRounds,
         resumedAfterCut: !!opts.relaunchOf && resume,
       };

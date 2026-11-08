@@ -5,13 +5,14 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, CHECK_FINDINGS, INCOMPLETE, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
+import { guardFindings } from './intake-checks.js';
 import { higherRisk, type Blocker, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -125,8 +126,12 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     const reason = NO_ASSESSMENT;
     return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
   }
-  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
-  const checks = p.pickup ?? [];
+  // The code to reuse is the last assessment's (ORC-207): one that found none clears what an earlier one found.
+  const reuse = a.reuse?.length || at.ticket?.reuse?.length ? { reuse: a.reuse ?? [] } : {};
+  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}), ...reuse } });
+  // A duplicate or a ticket out of scope (ORC-207) is a fact for the guard, as a failed check is.
+  const findings = guardFindings(a);
+  const checks = [...(p.pickup ?? []), ...findings];
   const gaps = [...checks, ...(a.complete ? [] : a.missing)];
   // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
   const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
@@ -142,8 +147,8 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     reason,
     body: `I cannot start this ticket yet:\n${gaps.map((g) => `- ${g}`).join('\n')}\nAnswer here, or complete the ticket and reply, and I will read it again.`,
     job: job.name,
-    tried: [`Read the ticket (${job.name}): not complete enough to start.`, ...checks],
-    question: a.complete ? 'Can you complete the ticket, then reply here?' : a.missing.join(' '),
+    tried: [`Read the ticket (${job.name}): not ready to start.`, ...checks],
+    question: !a.complete ? a.missing.join(' ') : findings.length ? CHECK_FINDINGS : 'Can you complete the ticket, then reply here?',
   });
 }
 

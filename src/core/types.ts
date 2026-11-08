@@ -14,6 +14,12 @@ export function isLogicalState(v: string): v is LogicalState {
 /** The size of a ticket as `intake` estimates it (ORC-206). */
 export const TICKET_SIZES = ['xs', 's', 'm', 'l', 'xl'] as const;
 export type TicketSize = (typeof TICKET_SIZES)[number];
+/** A lead to existing code `intake` found close to the request (ORC-207): a file or module, a symbol in it, and why. */
+export interface ReuseLead {
+  path: string;
+  symbol?: string | undefined;
+  why: string;
+}
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
@@ -388,7 +394,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'waitingOn'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'waitingOn'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -556,6 +562,8 @@ export interface TicketState {
   risk?: Risk;
   /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
   visualProof?: 'required';
+  /** The existing code `intake` found close to the request (ORC-207), its last assessment: leads `build` is given to reuse. */
+  reuse?: ReuseLead[];
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }

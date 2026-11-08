@@ -27,7 +27,7 @@ describe('formatActiveWork: what intake reads of the work in progress elsewhere 
       prs: [pr(12, 'feat/csv', ['src/export.ts', 'src/list.tsx']), pr(4, 'factory/rel-3-old')],
       branches: [branch('main'), branch('feat/csv'), branch('wip/pdf'), branch('factory/rel-3-old')],
       tickets: [{ identifier: 'REL-3', title: 'Self', url: 'u3', stateName: 'Todo' }, { identifier: 'REL-9', title: 'CSV again', url: 'https://linear.app/x/REL-9', stateName: 'Done' }],
-    })!;
+    });
     expect(text).toContain('https://github.com/acme/app/pull/12');
     expect(text).toContain('`src/export.ts`, `src/list.tsx`');
     expect(text).toContain('wip/pdf');
@@ -47,7 +47,7 @@ describe('formatActiveWork: what intake reads of the work in progress elsewhere 
     const many = Array.from({ length: 60 }, (_, i) => `src/f${i}.ts`);
     expect(formatActiveWork('REL-3', { prs: [pr(1, 'a', many)], branches: [], tickets: [] })).toContain('and 30 more files');
     const prs = Array.from({ length: 400 }, (_, i) => pr(i + 1, `b${i}`, [`src/${'x'.repeat(40)}${i}.ts`]));
-    const text = formatActiveWork('REL-3', { prs, branches: [], tickets: [] })!;
+    const text = formatActiveWork('REL-3', { prs, branches: [], tickets: [] });
     expect(text.length).toBeLessThanOrEqual(ACTIVE_WORK_MAX + 200);
     expect(text).toMatch(/Capped at \d+ characters: \d+ more open PRs, 0 more branches and 0 more close tickets not shown\./);
   });

@@ -13,7 +13,11 @@ If the prompt carries a "Feedback to address" block: these are humans' answers t
 
 1. Read the whole ticket, then what it cites: the architecture docs and decisions of the repository (`docs/`, ADRs, `CLAUDE.md`), the linked tickets (`factory-agent issue <ID>`), and the code it touches (`grep -rn "<symbol>"`).
 2. Check that the ticket still holds against the code: what it says to change exists, what it must deliver is not already there.
-3. Assess:
+3. Run the three checks:
+   - **Duplicates**: the "Work in progress elsewhere" block lists the open PRs with the files they change, the other branches and the tickets close to this one, as the factory read them. A PR or a branch that changes the files this ticket must change for the same purpose, or a ticket that asks the same thing, is a probable duplicate: put it in `duplicates`, its link and why, at most 3. A PR near the same files for another purpose is none. Its own branch is the factory's to check, not yours.
+   - **Existing code**: the functions and modules close to what the ticket asks, that the build should reuse rather than write again: put them in `reuse` (`path`, the `symbol` when it is one, and why), at most 10, the closest first.
+   - **Scope**: a ticket of performance, of architecture or a large refactor does not fit one PR: put in `scope` why (`refuse`), and when it can be cut, the sub-tickets you propose (`split`: a title and a one-line summary each, at most 5). The factory creates none and starts none.
+4. Assess:
    - `size`: `xs` (a line or two), `s` (one module), `m` (a few modules), `l` (a feature across layers), `xl` (should be split).
    - `risk`: `low` (text, config, isolated code), `medium` (logic with tests around it), `high` (access, data, migrations, secrets, money, a public API, or code nobody tests).
    - `complete`: can a developer build it without asking anything? It is not when the expected behavior has two readings, a criterion contradicts another or the code, or there is no way to tell it is done. A technical choice the code settles is no gap.
@@ -26,4 +30,4 @@ Write nothing in the worktree, commit nothing, push nothing. Do not ask with `fa
 
 ## End of turn: `submit_result`
 
-**Always** end with the `mcp__factory__submit_result` tool, with `status: "done"` and the `intake` field: `{ size, risk, complete, missing, screen }`. `summary`: in English, three to five lines on what the ticket asks, what it touches in the code, and why this size and risk. The factory reads nothing else: without a valid result, the ticket does not start.
+**Always** end with the `mcp__factory__submit_result` tool, with `status: "done"` and the `intake` field: `{ size, risk, complete, missing, screen }`, plus `duplicates`, `reuse` and `scope` when a check found something (leave them out otherwise). A duplicate or a refusal of scope keeps the ticket from starting: a human answers, and you read the ticket again with the answer. `summary`: in English, three to five lines on what the ticket asks, what it touches in the code, and why this size and risk. The factory reads nothing else: without a valid result, the ticket does not start.

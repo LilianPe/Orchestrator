@@ -92,6 +92,8 @@ export function promptTemplate(p: PromptInput): string {
     prUrl: p.prUrl && '<PR>',
     promptContext: p.promptContext && '<CONTEXTE>',
     conventions: p.conventions && '<CONVENTIONS>',
+    activeWork: p.activeWork && '<TRAVAUX>',
+    reuse: p.reuse && '<REUTILISER>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
   });
 }

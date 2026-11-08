@@ -1,0 +1,87 @@
+import type { ForgeBranch, OpenPr } from '../adapters/forge/types.js';
+import type { SearchHit } from '../adapters/tracker/types.js';
+import type { AgentOutput } from './agent-output.js';
+import type { ReuseLead } from './types.js';
+
+/** The prefix of the branches the factory makes for a ticket (`branchName`). */
+export const ownBranchPrefix = (identifier: string): string => `factory/${identifier.toLowerCase()}-`;
+
+/**
+ * The work the ticket itself already has on the forge (ORC-207): a branch of its own, named by its open PR when it has one.
+ * The `not_started` pickup check, absorbed by the duplicate search: a certain duplicate, found without judgement.
+ */
+export function ownWork(identifier: string, branches: readonly ForgeBranch[], prs: readonly OpenPr[]): string | undefined {
+  const own = branches.find((b) => b.name.startsWith(ownBranchPrefix(identifier)));
+  if (!own) return undefined;
+  const link = prs.find((p) => p.branch === own.name)?.url ?? own.url;
+  return `This ticket already has work on the forge: ${link} (branch ${own.name}).`;
+}
+
+/** What the factory read of the work in progress elsewhere, for `intake` to judge: its duplicate candidates. */
+export interface ActiveWork {
+  prs: OpenPr[];
+  branches: ForgeBranch[];
+  tickets: SearchHit[];
+}
+
+/** Characters of work in progress the intake prompt carries (ORC-207): past it, what is left out is counted. Proposal: settled with the prompt budget (ORC-254). */
+export const ACTIVE_WORK_MAX = 12000;
+/** Files listed of one PR. */
+const PR_FILES = 30;
+
+/**
+ * The work in progress elsewhere as intake reads it (ORC-207): the open PRs with the files they change, the branches without
+ * an open PR, the tickets the tracker finds close. The ticket's own work is left out (`ownWork` checks it), and so is the
+ * default branch's like: a branch is listed once, with its PR when it has one. Capped at `ACTIVE_WORK_MAX`, in that order,
+ * what is cut counted at the end. Data the factory read: the forge's and the tracker's texts, not instructions.
+ */
+export function formatActiveWork(identifier: string, work: ActiveWork): string {
+  const own = ownBranchPrefix(identifier);
+  const prs = work.prs.filter((p) => !p.branch.startsWith(own));
+  const withPr = new Set(work.prs.map((p) => p.branch));
+  const branches = work.branches.filter((b) => !withPr.has(b.name) && !b.name.startsWith(own) && b.name !== 'main' && b.name !== 'master');
+  const tickets = work.tickets.filter((t) => t.identifier !== identifier);
+  if (!prs.length && !branches.length && !tickets.length) return 'No open PR, no other branch, no close ticket.';
+  const sections = [
+    { head: 'Open PRs:', lines: prs.map(prLine) },
+    { head: 'Branches without an open PR:', lines: branches.map((b) => `- ${b.name}`) },
+    { head: 'Close tickets in the tracker:', lines: tickets.map((t) => `- ${t.identifier} (${t.stateName}): ${t.title} ${t.url}`) },
+  ];
+  const out: string[] = [];
+  const left = [0, 0, 0];
+  let used = 0;
+  sections.forEach((s, i) => {
+    if (!s.lines.length) return;
+    const shown = s.lines.filter((line) => {
+      if (used + line.length + 1 > ACTIVE_WORK_MAX) return false;
+      used += line.length + 1;
+      return true;
+    });
+    left[i] = s.lines.length - shown.length;
+    if (shown.length) out.push(s.head, ...shown);
+  });
+  if (left.some((n) => n > 0)) out.push(`Capped at ${ACTIVE_WORK_MAX} characters: ${left[0]} more open PRs, ${left[1]} more branches and ${left[2]} more close tickets not shown.`);
+  return out.join('\n');
+}
+
+function prLine(p: OpenPr): string {
+  const files = p.files.slice(0, PR_FILES).map((f) => `\`${f}\``).join(', ');
+  const more = p.files.length > PR_FILES ? `, and ${p.files.length - PR_FILES} more files` : '';
+  return `- #${p.number} ${p.title} (${p.url}, branch ${p.branch}): ${files || 'no file'}${more}`;
+}
+
+/** The leads to existing code `build` is given (ORC-207), one line each. */
+export const formatReuse = (leads: readonly ReuseLead[]): string =>
+  leads.map((l) => `- \`${l.path}\`${l.symbol ? ` (\`${l.symbol}\`)` : ''}: ${l.why}`).join('\n');
+
+/**
+ * What intake found that keeps the ticket from starting (ORC-207), as inputs of the guard beside the failed checks: each
+ * probable duplicate with its link, and a refusal of scope with the split it proposes. Facts for a human to answer, never
+ * a silent drop: a reply relaunches intake with the answer.
+ */
+export function guardFindings(a: NonNullable<AgentOutput['intake']>): string[] {
+  const duplicates = (a.duplicates ?? []).map((d) => `Probable duplicate: ${d.url} (${d.why})`);
+  if (!a.scope) return duplicates;
+  const split = a.scope.split?.length ? ` Proposed split, not created: ${a.scope.split.map((s, i) => `${i + 1}. ${s.title}: ${s.summary}`).join(' ')}` : '';
+  return [...duplicates, `Out of scope: ${a.scope.refuse}${split}`];
+}

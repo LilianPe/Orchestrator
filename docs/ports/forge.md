@@ -1,6 +1,6 @@
 # Forge port
 
-The code forge, read-only: a branch's PR, the state of its checks, its unresolved review threads.
+The code forge, read-only: a branch's PR, the state of its checks, its unresolved review threads, the open PRs and the branches of the repository.
 
 - Interface: `Forge` (`src/adapters/forge/types.ts`), name kept.
 - Implementations: `GitHubAppForge` (`src/adapters/forge/github-app.ts`, through GitHub's REST and GraphQL API, as a GitHub App: the production forge), `GhCliForge` (`src/adapters/forge/gh-cli.ts`, through the `gh` CLI), `FakeForge` (`src/adapters/forge/fake.ts`).
@@ -12,6 +12,8 @@ The code forge, read-only: a branch's PR, the state of its checks, its unresolve
 |---|---|---|---|
 | `findPr(repo, branch)` | `undefined` without a PR; otherwise the branch's PR (number, `https://` URL, state `OPEN`/`MERGED`/`CLOSED`), `checks` among `pending`/`pass`/`fail`/`none`, `failedChecks` non-empty exactly when `checks` is `fail`; a copy | read: same answer | rejects if the forge does not answer, including when it returns the PR but not its checks, and when it returns unreadable checks, even without an error (ORC-305: the PR poll logs the error and retries on the next round); an open PR with no checks at all gives `none`; a check in a state the forge does not know gives neither `pass` nor `none` (ORC-303) |
 | `unresolvedReviewComments(repo, n)` | the unresolved review threads, as `FeedbackItem` with source `review` (author, body, date), bots' comments dropped and capped to the newest threads, the cut said by a last item (ORC-366); a copy | read | rejects if the forge does not answer, or returns unreadable threads (`GitHubAppForge`) |
+| `openPrs(repo)` (ORC-207) | every open PR (number, URL, title, head branch) with every file it changes: every page of PRs, and of a PR's files past its first 100 (`src/adapters/forge/active-work.ts`, GraphQL, for both forges); a copy | read | rejects if the forge does not answer, returns an unreadable page, or more pages than `MAX_GRAPHQL_PAGES` (ORC-347): never a list cut short, which would let a duplicate through |
+| `branches(repo, prefix?)` (ORC-207) | every branch, with its page on the forge; with `prefix`, those whose name starts with it (the forge filters, the prefix is checked again) | read | as `openPrs` |
 
 ## Idempotence
 

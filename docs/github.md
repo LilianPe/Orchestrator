@@ -161,7 +161,7 @@ The merge push may arrive before the `pr.merged` of the same merge: it is then l
 
 ## Branches
 
-Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). A local or remote branch with the same name is reused. The `not_started` check refuses to take a ticket that already has a `relais/<ticket>-…` branch on `origin`.
+Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). A local or remote branch with the same name is reused. The `not_started` check refuses to take a ticket that already has a `factory/<ticket>-…` branch on the forge; with `intake` on, it is part of intake's duplicate search ([preset](preset.md#duplicates-existing-code-and-scope-orc-207)).
 
 ## Branch protection (strongly recommended)
 

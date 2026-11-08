@@ -59,7 +59,7 @@ Accepted for readability (`extends: standard`) but **has no effect**: the pack u
 
 The checks:
 - `has_description`: the ticket description is at least 30 characters long.
-- `not_started`: no `relais/<ticket-id>-…` branch already exists on `origin`.
+- `not_started`: no `factory/<ticket-id>-…` branch already exists on the forge (read through the forge port, every page, ORC-207). With `intake` on, its duplicate search makes this check at its launch, whatever the list says, and names the branch's open PR when it has one.
 - `has_acceptance_criteria`: the description contains « critères d'acceptation » (or « critère d'acceptation », « criteres… ») or "acceptance criteria", case-insensitively.
 
 If a check fails, the ticket is blocked and Relais replies in the Linear session with the list of problems (« I cannot start this ticket… Fix it, then reply in this thread »). `relais plan` shows, for each delegated ticket, whether it would be picked up or not, and why.

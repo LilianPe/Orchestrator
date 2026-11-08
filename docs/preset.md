@@ -94,6 +94,9 @@ The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the reposit
 | `complete` | whether a developer can build it without asking anything |
 | `missing` | the questions to answer: at least one when not complete, at most 3 |
 | `screen` | whether the ticket changes something a user sees |
+| `duplicates` | optional, at most 3: the work in progress elsewhere that does the same, each its link and why ([below](#duplicates-existing-code-and-scope-orc-207)) |
+| `reuse` | optional, at most 10: existing code close to the request (`path`, `symbol`, why), given to `build` |
+| `scope` | optional: `refuse`, why the ticket is out of scope, and `split`, the sub-tickets proposed (a title and a summary each, at most 5) |
 
 Before the ticket's first run (no Claude session yet), the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
 
@@ -105,7 +108,7 @@ At its end, `decide` records the assessment in the ticket's state:
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start. Until `clarify` exists (ORC-210), the ticket is blocked on `intake` (cause « pickup refused ») and the blocking comment asks the questions; nothing moves to In Progress. A reply relaunches `intake` with the answer, which reads the ticket again. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
 `intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
 
@@ -120,7 +123,18 @@ The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer
 
 **The resume comes from the reconciliation**, every 5 minutes ([Linear](linear.md)): it reads each waiting ticket's relations again and, when none is open (blockers done, or a relation taken off), sends `blockers.done`; `decide` makes the start it waited for, and the session hears it, unless a human moved the ticket meanwhile out of Todo and In Progress: then the wait only ends. Not a webhook: the blocker's move to Done comes on another issue, maybe of a team the factory does not follow, and a relation taken off sends no webhook the factory reads; the reconciliation already reads these tickets each pass, so the wait costs no extra call. The price is up to 5 minutes before the resume. `dev` reads the blockers again at its launch: one reopened meanwhile makes it wait again.
 
-**Not yet**: `clarify`'s questions with choices, reminder and expiry (ORC-210); the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
+### Duplicates, existing code and scope (ORC-207)
+
+At the launch of `intake`, before its first run, the factory searches for duplicates through the adapters: every open PR of the repository with every file it changes and every branch (the [forge port](ports/forge.md), GraphQL, every page: a list it cannot read to its end fails the launch, never reads as « no duplicate »), and the tickets of the team the tracker finds close to the title (`Tracker.search`, its 10 best matches: a ranking, not a list). Then:
+
+- **The ticket's own work** (a `factory/<id>-…` branch, named by its open PR when it has one) is a certain duplicate, found without judgement: a failed check, with its link, journaled in `pickup` of `run.finished`. It is the `not_started` check, absorbed: it runs at intake's launch whatever `pickup.checks` lists. A `pickup: true` job without intake still makes it when `not_started` is listed, through the forge's branches.
+- **The rest** goes to intake as data, in a « Work in progress elsewhere » section of its prompt: the open PRs with their files (30 per PR), the branches without an open PR, the close tickets, capped at 12,000 characters, what is cut counted. Intake judges which is a probable duplicate (same files or same subject, for the same purpose) and names it in `duplicates`.
+- **Existing code**: intake names the functions and modules close to the request in `reuse`. The ticket keeps the last assessment's (`reuse` of its state); `build` gets them in an « Existing code to reuse » section of its prompt.
+- **Scope**: a ticket of performance, of architecture or a large refactor is refused in `scope.refuse`, with the sub-tickets intake proposes in `scope.split`. The factory creates none in Linear and starts none.
+
+A probable duplicate and a refusal of scope are inputs of the guard, as a failed check: the ticket is blocked on intake (cause « pickup refused »), the blocking comment names each with its link or its explanation and the split, and asks the human to answer. Never a silent drop: a reply relaunches intake with the answer, which reads the ticket again. Once `clarify` exists (ORC-210), they go to its questions the same way a failed check does.
+
+**Not yet**: `clarify`'s questions with choices, reminder and expiry (ORC-210); creating the proposed sub-tickets in Linear, not delegated (the ticket leaves it open: refusing with the split in the comment is its other branch); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254); a per-step network level (all dev jobs run at the repository's).
 
 ## Attempt stagnation (ORC-136)
 

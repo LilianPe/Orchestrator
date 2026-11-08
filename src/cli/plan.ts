@@ -1,6 +1,7 @@
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { ProjectRuntime } from '../core/orchestrator.js';
+import { ownBranchPrefix } from '../core/intake-checks.js';
 import { pickupFailures } from '../core/pickup.js';
 import { repoLabel } from '../core/routing.js';
 import { routedIssues } from '../adapters/tracker/linear/reconcile.js';
@@ -38,7 +39,11 @@ export async function planRows(d: {
         rows.push({ ...row, status: 'already handled', reasons: [known.logical] });
         continue;
       }
-      const reasons = await pickupFailures(p.workflow.tracker.pickup.checks, issue, p.repoPath, d.workspaces);
+      const checks = p.workflow.tracker.pickup.checks;
+      const reasons = pickupFailures(checks, issue);
+      // A preview: the daemon reads the forge (ORC-207), the command its git, which needs no GitHub App.
+      const prefix = ownBranchPrefix(issue.identifier);
+      if (checks.includes('not_started') && (await d.workspaces.remoteBranchExists(p.repoPath, prefix))) reasons.push(`A branch ${prefix}… already exists on origin.`);
       rows.push({ ...row, status: reasons.length ? 'not taken' : 'taken', reasons });
     }
   }

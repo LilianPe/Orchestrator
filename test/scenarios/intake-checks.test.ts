@@ -43,7 +43,7 @@ describe('intake: duplicates (ORC-207)', () => {
     expect(prompt).toContain('src/audits/export.ts');
     expect(prompt).toContain('wip/other');
     expect(prompt).toContain('REL-9');
-    expect(prompt).not.toMatch(/REL-1\b.*Export CSV\n/);
+    expect(prompt).not.toContain('- REL-1 (');
 
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
