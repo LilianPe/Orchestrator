@@ -13,6 +13,11 @@ export interface PublishRequest {
   sha: string;
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
   untrusted?: UntrustedMark;
+  /**
+   * A rebase's commit (ORC-146): the head the factory published last, which it may replace although the work no longer holds
+   * it. Any other head on the forge is still refused, and the lease stays on the head read.
+   */
+  rewrites?: string;
   title: string;
   body: string;
 }

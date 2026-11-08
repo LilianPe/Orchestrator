@@ -24,9 +24,17 @@ const item = z.string().max(OUTPUT_LIMITS.item);
 const list = z.array(item).max(OUTPUT_LIMITS.items);
 
 /**
+ * The three conflicts with the default branch the rebase step leaves to a human (ORC-146): the two sides contradict each
+ * other, two migrations change the same schema, or the resolution goes beyond the ticket's scope.
+ */
+export const CONFLICT_CASES = ['logic', 'migrations', 'scope'] as const;
+export type ConflictCase = (typeof CONFLICT_CASES)[number];
+
+/**
  * What the agent hands back through the factory MCP's `submit_result` (ORC-188): the engine never
- * reads free text. A blocked attempt says why: a question for a human, or a ticket it contests
- * (`spec_impossible`: contradictory spec, tests it cannot pass honestly) instead of cheating.
+ * reads free text. A blocked attempt says why: a question for a human, a ticket it contests
+ * (`spec_impossible`: contradictory spec, tests it cannot pass honestly) instead of cheating, or a conflict with the
+ * default branch it must not resolve (`conflict`, with its case, ORC-146).
  */
 export const agentOutputSchema = z
   .object({
@@ -35,8 +43,10 @@ export const agentOutputSchema = z
     summary: z.string().min(1).max(OUTPUT_LIMITS.summary),
     /** Required when blocked: the question (`needs_input`) or the justification (`spec_impossible`). */
     question: z.string().min(1).max(OUTPUT_LIMITS.field).optional(),
-    /** `spec_impossible` contests the ticket; absent, a blocked attempt needs a human's answer. */
-    reason: z.enum(['needs_input', 'spec_impossible']).optional(),
+    /** `spec_impossible` contests the ticket, `conflict` stops a rebase; absent, a blocked attempt needs a human's answer. */
+    reason: z.enum(['needs_input', 'spec_impossible', 'conflict']).optional(),
+    /** Which of the three conflicts stopped the rebase: required with `reason: conflict`, and only with it. */
+    conflict: z.enum(CONFLICT_CASES).optional(),
     tests_added: list,
     why: z.string().max(OUTPUT_LIMITS.field),
     assumptions: list,
@@ -53,6 +63,7 @@ export const agentOutputSchema = z
   .superRefine((o, ctx) => {
     if (o.status === 'blocked' && !o.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'required when status is blocked' });
     if (o.status === 'done' && o.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'only for a blocked status' });
+    if ((o.reason === 'conflict') !== !!o.conflict) ctx.addIssue({ code: 'custom', path: ['conflict'], message: 'required with reason conflict, and only with it' });
   });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
@@ -102,7 +113,8 @@ export function parseSubmittedResult(raw: unknown): ReturnType<typeof parseAgent
  * - a cap (duration or turns) → `timeout`; a stop → `errored` too: nothing for the agent to fix;
  * - no valid output, or a `done` from a run that failed → `failed`;
  * - otherwise the output's status: `done` → `succeeded`, `blocked` → `needs_input` or `spec_impossible`
- *   (even if the run then failed: the question it asked still waits for its answer).
+ *   (even if the run then failed: the question it asked still waits for its answer). A `conflict` is a question for a
+ *   human too: `decide` reads its case from the output.
  * `noop` has no source yet: a step that finds nothing to do will say so (ponytail: add a status when one does).
  */
 export function attemptOutcome(run: { outcome: RunOutcome; infraError?: boolean }, output: AgentOutput | undefined): AttemptOutcome {

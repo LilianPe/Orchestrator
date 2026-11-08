@@ -295,6 +295,35 @@ describe('GitPublisher', () => {
       expect(s.onForge()).toBe(s.sha);
     });
 
+    /** A commit on the base, then the agent's branch rebased onto it: its history no longer holds what the factory pushed. */
+    function rebased(s: ReturnType<typeof setup>): string {
+      write(s.seed, 'later.txt', 'base moved\n');
+      commit(s.seed, 'base moved');
+      git(s.seed, 'push', '-q', 'origin', 'main');
+      git(s.repo, 'fetch', '-q', 'origin');
+      git(s.repo, 'rebase', '-q', 'origin/main');
+      return git(s.repo, 'rev-parse', 'HEAD');
+    }
+
+    it('a rebase replaces the head the factory published, and that head only: the lease is on it (ORC-146)', async () => {
+      const s = setup();
+      await s.publisher.publish(s.request());
+      const sha = rebased(s);
+      await s.publisher.publish(s.request({ sha, rewrites: s.sha }));
+      expect(s.onForge()).toBe(sha);
+      expect(s.pushes.at(-1)).toContain(`--force-with-lease=refs/heads/${BRANCH}:${s.sha}`);
+    });
+
+    it('a rebase over a branch a human moved since is refused: their commit stays (ORC-146)', async () => {
+      const s = setup();
+      await s.publisher.publish(s.request());
+      const theirs = humanPush(s);
+      const sha = rebased(s);
+      const r = await refusal(s.publisher.publish(s.request({ sha, rewrites: s.sha })));
+      expect(r.code).toBe('moved');
+      expect(s.onForge()).toBe(theirs);
+    });
+
     it('goes fast-forward over a human commit the work already holds', async () => {
       const s = setup();
       await s.publisher.publish(s.request());

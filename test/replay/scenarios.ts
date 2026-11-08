@@ -228,12 +228,23 @@ export async function record(name: string): Promise<ExportedJournal> {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
   const h = createHarness({ preset: scenario.preset, authz: scenario.authz });
+  // The instance id salts the keys of the effects (and so the id of `publish.refused`): drawn at random, it
+  // would make two recordings of one scenario differ.
+  await h.store.setMeta('instance-id', '0123456789ab');
   await scenario.run(h);
   h.orch.stopAll();
   await h.orch.drained();
   const journal = await exportJournal(h.store, 'p', 'REL-1');
   await h.store.close();
   return journal;
+}
+
+/** The files `npm run replay:record` writes for a scenario, with their exact text. */
+export function recordedFiles(name: string, journal: ExportedJournal): { file: string; text: string }[] {
+  const text = (j: ExportedJournal) => `${JSON.stringify(j, null, 2)}\n`;
+  const files = [{ file: `${name}.json`, text: text(journal) }];
+  if (name === 'review-merge-done') files.push({ file: `${name}.v1.json`, text: text(asVersion1(journal)) });
+  return files;
 }
 
 /**
