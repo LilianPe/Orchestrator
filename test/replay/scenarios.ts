@@ -91,6 +91,8 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
   /** AI review, merge, cleanup and learn. */
   'review-merge-done': {
     run: async (h) => {
+      // The worktree's head, which verify finds green and the factory publishes: what the AI review's two lenses read (ORC-183).
+      h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
       await delegated(h);
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
       await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
