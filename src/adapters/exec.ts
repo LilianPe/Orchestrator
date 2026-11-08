@@ -48,6 +48,12 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
         // Already gone.
       }
     };
+    const done = (code: number | null | undefined) => {
+      clearTimeout(timer);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr, code: timedOut ? TIMED_OUT : (exited ?? code ?? 1), ...(overflow ? { overflow: true as const } : {}) });
+    };
     // Set when the command itself ends, its pipes perhaps still held by what it left behind.
     let exited: number | undefined;
     child.on('exit', (code) => (exited = code ?? 1));
@@ -57,6 +63,8 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
         : setTimeout(() => {
             timedOut = exited === undefined;
             kill();
+            // Ended already: what holds its output past the deadline, perhaps out of the group, does not hold its answer.
+            if (!timedOut) done(exited);
           }, opts.timeoutMs);
     child.stdout.on('data', (d: Buffer) => {
       if (overflow) return;
@@ -74,10 +82,7 @@ export const execCmd: Exec = (cmd, args, opts = {}) =>
       clearTimeout(timer);
       reject(err);
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr, code: timedOut ? TIMED_OUT : (exited ?? code ?? 1), ...(overflow ? { overflow: true as const } : {}) });
-    });
+    child.on('close', (code) => done(code));
   });
 
 /**

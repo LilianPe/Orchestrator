@@ -31,6 +31,22 @@ describe.skipIf(process.platform === 'win32')('execCmd with a deadline', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it('answers at the deadline for a command that ended before it, when what holds its output left its group', async () => {
+    const started = Date.now();
+    // Its child in a session of its own, holding stdout: the group's kill misses it, and 'close' never comes.
+    const r = await execCmd('sh', ['-c', 'setsid sleep 30 & echo $!; exit 0'], { timeoutMs: 300 });
+    try {
+      expect(r.code).toBe(0);
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally {
+      try {
+        process.kill(Number(r.stdout.trim()), 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    }
+  }, 10_000);
+
   it('leaves a command that ends in time as it is', async () => {
     expect(await execCmd('sh', ['-c', 'echo ok'], { timeoutMs: 5_000 })).toEqual({ stdout: 'ok\n', stderr: '', code: 0 });
   });
