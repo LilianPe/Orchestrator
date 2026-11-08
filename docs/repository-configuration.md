@@ -98,7 +98,7 @@ Each agent run takes its preset step's level ([`preset.md`](preset.md#models-eff
 | `custom` | `limited`, plus the hosts in `network.allow`, read-only. |
 | `none` | The Claude API only (`claude-api`): without it, the agent does not run. |
 
-The review runs at `claude-api`, whatever the repository's level: it reaches neither GitHub nor the registries, and the `allow` hosts of a `custom` repository are not its own. It installs no package either: a review fix that needs a new dependency fails, and goes into its last message as a point to decide. The other jobs with a step, `tests`, `build` and `fix` (`dev`, `tests`, `dev-feedback`, `fix-ci`), run at the repository's level (their step's `limited`, narrowed by it); the preset's other agent steps have no job yet. A job out of the preset (`ask`, `learn`) keeps the repository's level. After a daemon restart, a resumed run keeps its level and its `allow` list, both read back from its container's labels.
+The review runs at `claude-api`, whatever the repository's level: it reaches neither GitHub nor the registries, and the `allow` hosts of a `custom` repository are not its own. It installs no package either: a review fix that needs a new dependency fails, and goes into its last message as a point to decide. The other jobs with a step run at the repository's level: `dev` (step `build`), `tests` (step `tests`), `dev-feedback` and `fix-ci` (step `fix`) (their step's `limited`, narrowed by it); the preset's other agent steps have no job yet. A job out of the preset (`ask`, `learn`) keeps the repository's level. After a daemon restart, a resumed run keeps its level and its `allow` list, both read back from its container's labels.
 
 ### The review's PR, brought by the factory (ORC-322)
 
