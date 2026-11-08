@@ -220,3 +220,167 @@ describe('checkRed', () => {
     expect(d.commands).toEqual(["npm test -- 'src/export.test.ts'"]);
   });
 });
+
+// ORC-342: the runner's machine report, not its text output.
+interface ReportTest {
+  fullName: string;
+  status: 'passed' | 'failed' | 'pending';
+  failureMessages?: string[];
+}
+
+/** A JSON report as vitest and jest write it (`--reporter=json`, `--json`), trimmed to what the check reads. */
+function jsonReport(files: { name: string; message?: string; tests: ReportTest[] }[]): string {
+  const tests = files.flatMap((f) => f.tests);
+  return JSON.stringify({
+    numTotalTests: tests.length,
+    numPassedTests: tests.filter((t) => t.status === 'passed').length,
+    numFailedTests: tests.filter((t) => t.status === 'failed').length,
+    success: false,
+    testResults: files.map((f) => ({
+      name: `/work/${f.name}`,
+      status: f.message || f.tests.some((t) => t.status === 'failed') ? 'failed' : 'passed',
+      message: f.message ?? '',
+      assertionResults: f.tests.map((t) => ({ ancestorTitles: [], title: t.fullName, failureMessages: [], ...t })),
+    })),
+  });
+}
+
+const ASSERTION_FAILURE = 'AssertionError: expected 1 to be 2 // Object.is equality\n    at /work/src/export.test.ts:4:38';
+
+/** Deps whose run prints `output`, then writes `report` where the command asked for it. */
+function reporting(files: string[], exitCode: number | null, output: string, report: string | undefined, repo: Repo = {}): RedDeps & { commands: string[] } {
+  const d = deps(files, exitCode, output, repo);
+  return {
+    ...d,
+    run: async (command) => {
+      d.commands.push(command);
+      const marker = /'(@@factory-report-[\w-]+@@)'/.exec(command)?.[1];
+      return { exitCode, output: report === undefined || !marker ? output : `${output}\n${marker}\n${report}` };
+    },
+  };
+}
+
+describe('checkRed reads the runner report (ORC-342)', () => {
+  it('a passing test whose name says fail or AssertionError does not make the run red', async () => {
+    const output = ' ✓ src/export.test.ts > fails with an AssertionError on bad input\n Tests  1 passed (1)\n ERROR: Coverage for lines (12%) does not meet threshold (80%)';
+    // The text alone reads an assertion: the name says so.
+    expect(readTestRun(1, output).kind).toBe('assertion');
+    const report = jsonReport([{ name: 'src/export.test.ts', tests: [{ fullName: 'fails with an AssertionError on bad input', status: 'passed' }] }]);
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, output, report))).toMatchObject({ verified: false, cause: 'passing' });
+  });
+
+  it('a failing assertion beside a passing test named after a SyntaxError is an assertion', async () => {
+    const output = ' ✓ src/export.test.ts > rejects a SyntaxError in the header\n × src/export.test.ts > writes a header\nAssertionError: expected 1 to be 2';
+    expect(readTestRun(1, output).kind).toBe('compile');
+    const report = jsonReport([
+      {
+        name: 'src/export.test.ts',
+        tests: [
+          { fullName: 'rejects a SyntaxError in the header', status: 'passed' },
+          { fullName: 'writes a header', status: 'failed', failureMessages: [ASSERTION_FAILURE] },
+        ],
+      },
+    ]);
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, output, report))).toMatchObject({ verified: true, cause: 'assertion' });
+  });
+
+  it('asks vitest and jest for their JSON report, pytest for its JUnit report, after the test files; the command it records is the plain one', async () => {
+    const cases: [string, RegExp][] = [
+      ['npx vitest run', /^npx vitest run 'src\/export\.test\.ts' --reporter=default --reporter=json --outputFile\.json="\$f"/m],
+      ['npx jest', /^npx jest 'src\/export\.test\.ts' --json --outputFile="\$f"/m],
+      ['python -m pytest', /^python -m pytest 'src\/export\.test\.ts' --junitxml="\$f"/m],
+    ];
+    for (const [command, flags] of cases) {
+      const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined);
+      expect(await checkRed(command, d), command).toMatchObject({ command: `${command} 'src/export.test.ts'` });
+      expect(d.commands[0], command).toMatch(flags);
+    }
+  });
+
+  it('through npm test, reads the runner of the test script, only when the flags reach it', async () => {
+    const pkg = (test: string) => ({ head: { 'package.json': JSON.stringify({ scripts: { test } }) } });
+    const ran = async (command: string, test: string) => {
+      const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, pkg(test));
+      await checkRed(command, d);
+      return d.commands[0]!;
+    };
+    expect(await ran('npm test --', 'tsc --noEmit && vitest run')).toContain("npm test -- 'src/export.test.ts' --reporter=default --reporter=json");
+    // The flags would go to another command, or to npm itself: the text output is read.
+    expect(await ran('npm test --', 'vitest run && echo done')).toBe("npm test -- 'src/export.test.ts'");
+    expect(await ran('npm test', 'vitest run')).toBe("npm test 'src/export.test.ts'");
+    expect(await ran('npm test --', 'mocha')).toBe("npm test -- 'src/export.test.ts'");
+  });
+
+  it('reads a test file that did not load from the report: a missing module', async () => {
+    const report = jsonReport([{ name: 'src/export.test.ts', message: "Cannot find module './export.js' imported from /work/src/export.test.ts", tests: [] }]);
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, '', report))).toMatchObject({ verified: true, cause: 'missing_module' });
+    const present = reporting(['src/export.test.ts'], 1, '', report, { base: { 'src/export.ts': '' } });
+    expect(await checkRed('npx vitest run', present)).toMatchObject({ verified: false, cause: 'module_at_base' });
+  });
+
+  it('reads an undefined function of the vitest 5 form, and a runtime error, per failing test', async () => {
+    const head = { 'src/export.test.ts': "import { exportCsv } from './export';\n" };
+    const notAFunction = jsonReport([{ name: 'src/export.test.ts', tests: [{ fullName: 'exports', status: 'failed', failureMessages: ['TypeError: __vite_ssr_import_1__.exportCsv is not a function\n    at x'] }] }]);
+    const d = reporting(['src/export.test.ts'], 1, '', notAFunction, { base: { 'src/export.ts': 'export const other = 1;\n' }, head });
+    expect(await checkRed('npx vitest run', d)).toMatchObject({ verified: true, cause: 'missing_export' });
+    const runtime = jsonReport([{ name: 'src/export.test.ts', tests: [{ fullName: 'exports', status: 'failed', failureMessages: ["TypeError: Cannot read properties of undefined (reading 'rows')"] }] }]);
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, '', runtime))).toMatchObject({ verified: false, cause: 'error' });
+  });
+
+  it('reads no test from the report', async () => {
+    const report = jsonReport([{ name: 'src/export.test.ts', tests: [] }]);
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, 'AssertionError somewhere in a log', report))).toMatchObject({ verified: false, cause: 'no_tests' });
+  });
+
+  it('reads a jest assertion from its colored failure message', async () => {
+    const failure = '\u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m';
+    const report = jsonReport([{ name: 'src/export.test.ts', tests: [{ fullName: 'exports', status: 'failed', failureMessages: [`Error: ${failure}`] }] }]);
+    expect(await checkRed('npx jest', reporting(['src/export.test.ts'], 1, '', report))).toMatchObject({ verified: true, cause: 'assertion' });
+  });
+
+  it('reads the JUnit report of pytest: an assertion, a collection error, a test named after a failure that passes', async () => {
+    const junit = (cases: string) => `<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest">${cases}</testsuite></testsuites>`;
+    const assertion = junit(
+      '<testcase classname="tests.test_export" name="test_fails_on_AssertionError" time="0.01"/>' +
+        '<testcase classname="tests.test_export" name="test_header" time="0.01"><failure message="AssertionError: assert &apos;&apos; == &apos;id,score&apos;">def test_header():\n&gt;       assert export_csv([]) == "id,score"\nE       AssertionError</failure></testcase>',
+    );
+    expect(await checkRed('pytest', reporting(['tests/test_export.py'], 1, 'ERROR collecting', assertion))).toMatchObject({ verified: true, cause: 'assertion' });
+    const collection = junit('<testcase classname="" name="tests.test_export" time="0.00"><error message="collection failure">ImportError while importing test module.\nE   ModuleNotFoundError: No module named &apos;app.export&apos;</error></testcase>');
+    const repo = { base: { 'app/__init__.py': '' } };
+    expect(await checkRed('pytest', reporting(['tests/test_export.py'], 2, '', collection, repo))).toMatchObject({ verified: true, cause: 'missing_module' });
+    const passing = junit('<testcase classname="tests.test_export" name="test_fails_with_SyntaxError" time="0.01"/>');
+    expect(await checkRed('pytest', reporting(['tests/test_export.py'], 1, 'SyntaxError', passing))).toMatchObject({ verified: false, cause: 'passing' });
+  });
+
+  it('falls back on the text output when the runner wrote no report', async () => {
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, VITEST_SYNTAX, undefined))).toMatchObject({ verified: false, cause: 'compile' });
+    expect(await checkRed('npx vitest run', reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, 'not json'))).toMatchObject({ verified: true, cause: 'assertion' });
+  });
+});
+
+describe('checkRed reads symbols on the AST (ORC-342)', () => {
+  it('a symbol only named in a comment or a string at baseSha is missing', async () => {
+    const base = { 'src/export.ts': "// exportCsv comes with the ticket\nexport const other = 'exportCsv';\n" };
+    expect(await checkRed('npx jest', deps(['src/export.test.ts'], 1, TS_JEST_NO_EXPORT, { base }))).toMatchObject({ verified: true, cause: 'missing_export' });
+  });
+
+  it('a symbol exported under another form exists: a renamed export, an export list, a re-export', async () => {
+    for (const source of ['const csv = () => "";\nexport { csv as exportCsv };\n', 'function exportCsv() {}\nexport { exportCsv };\n', 'export default class {}\nexport type { Row as exportCsv } from "./row";\n']) {
+      const base = { 'src/export.ts': source };
+      expect(await checkRed('npx jest', deps(['src/export.test.ts'], 1, TS_JEST_NO_EXPORT, { base })), source).toMatchObject({ verified: false, cause: 'compile' });
+    }
+  });
+
+  it('a symbol declared but not exported at baseSha is a missing export', async () => {
+    const base = { 'src/export.ts': 'function exportCsv() {}\nexport const other = exportCsv;\n' };
+    expect(await checkRed('npx jest', deps(['src/export.test.ts'], 1, TS_JEST_NO_EXPORT, { base }))).toMatchObject({ verified: true, cause: 'missing_export' });
+  });
+
+  it('finds the import of an undefined function on the AST: a commented import is not one, a multi-line one is', async () => {
+    const head = { 'src/export.test.ts': "// import { exportCsv } from './old';\nimport {\n  type Row,\n  exportCsv,\n} from './export';\n" };
+    const d = deps(['src/export.test.ts'], 1, VITEST_NOT_A_FUNCTION, { base: { 'src/export.ts': 'export const other = 1;\n' }, head });
+    expect(await checkRed('npx vitest run', d)).toMatchObject({ verified: true, cause: 'missing_export' });
+    const withIt = deps(['src/export.test.ts'], 1, VITEST_NOT_A_FUNCTION, { base: { 'src/export.ts': 'export function exportCsv() {}\n' }, head });
+    expect(await checkRed('npx vitest run', withIt)).toMatchObject({ verified: false, cause: 'compile' });
+  });
+});
