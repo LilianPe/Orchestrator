@@ -301,6 +301,13 @@ Network egress of the sandboxes (ORC-213, [decision](decisions/ORC-213.md)).
 |---|---|---|---|
 | `src/knowledge/kb.ts` | `KnowledgeBase`: pull, index, search by terms | adapt | ORC-232 (read-only, `kb_search`, truncation reported), ORC-193 (writing removed) |
 
+### `src/golden/`
+
+| Module | Role | Status | Target ticket |
+|---|---|---|---|
+| `src/golden/golden-set.ts` | The golden tickets (`pilot/golden-tickets.yml`): 10 tickets of the pilot repositories, 5 and 5, risk 3 low, 4 medium, 3 high, at most `max_diff` lines outside tests, each with its start commit; refused when its tickets changed without a written decision (fingerprint of the last `decisions` entry) | keep | ORC-236, ORC-142 (thresholds measured on them), ORC-123 (verified red blocking after validation on them) |
+| `src/golden/replay.ts` | Replay of the golden set: every ticket `passes` times one after the other, the report pass by pass, the tickets of which a pass changed verdict or whose runs received other inputs since the baseline | keep | ORC-236, ORC-231 (a pass with a real model: `fantome` preset, outbox without effect) |
+
 ### `src/cli/`
 
 | Module | Role | Status | Target ticket |
@@ -352,6 +359,7 @@ Network egress of the sandboxes (ORC-213, [decision](decisions/ORC-213.md)).
 | `test/chaos/` | Chaos: a real daemon killed by SIGKILL at random during 500 events, on Postgres (CI job `chaos`); one event in seven signed outside the team, refused by the matrix (ORC-186) | keep | ORC-163, ORC-162 (done: strict by default, fake tracker that keeps the writes of previous lives), ORC-277 (done: the restarted question makes it fail, no more special case) |
 | `test/scenarios/workflow.test.ts` | End-to-end scenarios on the harness (22 `it` at the start) | adapt | ORC-169 (each scenario rewritten or marked abandoned), ORC-225, ORC-228, ORC-187 |
 | `test/replay/` | Recorded journals (`journals/`, `factory replay --export` format) that the CI replays, harness scenarios that produce them (`npm run replay:record`); `authz-refused-then-allowed`: journaled roles, one refusal and one allowed action (ORC-186) | keep | ORC-174, ORC-186 (done) (done: journals taken from the scenarios), real journals exported from an instance to be added as soon as an instance runs on the engine (ORC-233) |
+| `test/golden/` | The golden replay on fake runners (`npm run test:golden`, CI workflow `golden` on a change of prompt, skill or preset): 10 tickets, 3 passes, no model, process or network, compared with `baseline.json` (`npm run golden:record`) | keep | ORC-236 |
 | `test/isolation/network.test.ts` | Egress proxy on a real engine: npm registry and docs pass and are logged, host outside the list and GitHub write refused, no direct DNS, TCP or UDP, nothing at `none` | keep | ORC-213, ORC-219 |
 | `test/e2e/pack.e2e.test.ts` | Test of the pack with the real `claude` (live, see above) | adapt | ORC-191 (renamed, `git push` refused) |
 

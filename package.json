@@ -23,6 +23,8 @@
     "test:properties": "vitest run --project unit test/properties",
     "test:replay": "tsx src/cli/factory.ts replay test/replay/journals",
     "replay:record": "tsx test/replay/record.ts",
+    "test:golden": "vitest run --project golden",
+    "golden:record": "tsx test/golden/record.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",

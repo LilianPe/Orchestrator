@@ -9,13 +9,14 @@ Relais is tested without real services: a **harness** mounts the orchestrator (i
 - Isolation: `test/isolation/` (rootless container engine; and test no. 11, a real `claude -p` on a booby-trapped repository).
 - Properties of `decide`: `test/properties/` (fast-check).
 - Replay of recorded journals: `test/replay/` (ORC-174).
+- Golden tickets: `test/golden/` (ORC-236).
 - Fault injection: `test/scenarios/faults.test.ts`; `kill -9` chaos: `test/chaos/` (ORC-163).
 
 While working, run only the tests for the files you touched: `npx vitest run test/scenarios/harness.test.ts`.
 
 ## The Vitest projects
 
-`vitest.config.ts` declares five projects, so that fast CI stays fast:
+`vitest.config.ts` declares six projects, so that fast CI stays fast:
 
 | Project | Command | What it covers |
 |---|---|---|
@@ -23,9 +24,10 @@ While working, run only the tests for the files you touched: `npx vitest run tes
 | `integration` | `npm run test:integration` | `test/integration/`, with `DATABASE_URL` (Postgres) |
 | `scenarios-pg` | `npm run test:integration` | the scenarios from `test/scenarios/` a second time, each harness on a Postgres database of its own (ORC-228), with `DATABASE_URL` |
 | `isolation` | `npm run test:isolation` | `test/isolation/`, with `FACTORY_ISOLATION=1` and a rootless engine; test no. 11 (`claude-settings.test.ts`) additionally needs `claude` and a credential (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`), without which it skips itself, in CI as elsewhere |
+| `golden` | `npm run test:golden` | `test/golden/`: the 10 golden tickets on fake runners, 3 passes each (ORC-236), in a CI workflow of its own |
 | `chaos` | `npm run test:chaos` | `test/chaos/`: a real daemon killed by SIGKILL at random (ORC-163), on Postgres with `DATABASE_URL`, on a SQLite file otherwise |
 
-`npm run test:all` runs all five. Without `DATABASE_URL`, the integration and `scenarios-pg` tests are skipped; without `FACTORY_ISOLATION=1`, the isolation tests are skipped. CI (`.github/workflows/ci.yml`) runs the `unit` project with typecheck and lint, the property tests on 10,000 sequences (`properties` job), the replay of recorded journals (`npm run test:replay` in the `test` job, see below), then Postgres as a service for `integration` and `scenarios-pg` (same job, `npm run test:integration`) and for chaos on 500 events (`chaos` job, see below), and rootless Podman for `isolation` (see [Isolation tests](#isolation-tests)). The only secret read by the workflows is `CLAUDE_CODE_OAUTH_TOKEN`, optional, for isolation test no. 11.
+`npm run test:all` runs all six. Without `DATABASE_URL`, the integration and `scenarios-pg` tests are skipped; without `FACTORY_ISOLATION=1`, the isolation tests are skipped. CI (`.github/workflows/ci.yml`) runs the `unit` project with typecheck and lint, the property tests on 10,000 sequences (`properties` job), the replay of recorded journals (`npm run test:replay` in the `test` job, see below), then Postgres as a service for `integration` and `scenarios-pg` (same job, `npm run test:integration`) and for chaos on 500 events (`chaos` job, see below), and rootless Podman for `isolation` (see [Isolation tests](#isolation-tests)). A workflow of its own, `.github/workflows/golden.yml`, replays the golden tickets on a change of prompt, skill or preset (see [Golden tickets](#golden-tickets)). The only secret read by the workflows is `CLAUDE_CODE_OAUTH_TOKEN`, optional, for isolation test no. 11.
 
 **Scenarios on Postgres (ORC-228).** The `scenarios-pg` project reuses the files from `test/scenarios/` with `test/helpers/pg-harness.ts` as its setup file: each `createHarness()` there gets its own database, cloned (`create database … template`) from a database migrated once per file, and dropped at the end of the test. Both stores thus pass the same scenarios without changing a line of them. They run in the `integration` job, which already has Postgres, rather than in `test`: the fast job keeps SQLite (a few seconds), the second pass costs about 1 min 40 more on the `integration` job (96 s on 05/11). The few scenarios written for a SQLite file killed by SIGKILL (`harnessStoreKind() === 'postgres'` skips them) have their Postgres equivalent in `test/integration/`.
 
@@ -168,6 +170,20 @@ Regression replay redoes each decision on the version of the workflow the ticket
 **A change that must change a decision.** The replay turns red and names the event. If the change is intended, re-record the scenario journals (`npm run replay:record`) and review their diff in the PR; a real journal is not re-recorded, it is replaced with a new export. To see the effect of a new preset before deploying it: `factory replay test/replay/journals --what-if <workflow.yml>`.
 
 **Adding real journals.** On an instance: `factory replay --export <ID> --out test/replay/journals/<id>.json` (with `FACTORY_HOME` and, on Postgres, the instance's `FACTORY_DATABASE_URL`). A journal contains the text of the events (ticket title, replies in the thread, comments): review it before committing it, or keep only tickets without sensitive content. A real journal is replayed as a regression; its what-if against its project's preset is run by hand (`factory replay <journal> --what-if <the project's .factory/workflow.yml>`). Only decisions made since ORC-174 are recorded: for an older ticket, only the latest decisions are compared.
+
+## Golden tickets
+
+The 10 golden tickets (ORC-236) are replayed on every change of prompt, skill or preset, to see a regression before it reaches a real ticket. The set is frozen in `pilot/golden-tickets.yml`, chosen as the [ORC-137 decision](https://linear.app/liliantest/issue/ORC-137) says: 5 tickets of `Intersektion/intersektion-platform`, 5 of `LilianPe/Orchestrator`, 3 of low risk, 4 medium, 3 high; each closed by a human PR merged with at most 400 lines outside tests, with explicit acceptance criteria and tests green on its start commit, the first parent of the PR's merge commit. The file says how each rule was checked.
+
+**Frozen.** `src/golden/golden-set.ts` refuses the set when one of these rules breaks, and when its tickets no longer have the fingerprint of the last entry of `decisions`: a ticket, a commit or a risk changes only with a new entry that names the written decision and the new fingerprint (the refusal prints it). `src/golden/golden-set.test.ts` loads the set on every PR.
+
+**Replayed.** `.github/workflows/golden.yml` runs `npm run test:golden` on a PR or a push to `main` that touches the pack (skills, hooks, settings, workflow), `src/core/prompt.ts`, `src/presets/`, `src/knowledge/` (what the knowledge base injects counts as prompt, ORC-257), the set or the replay itself; `src/golden/golden-workflow.test.ts` checks these paths, on every PR. Each ticket is replayed 3 times (`passes`), since a regression can show once in two, and the report gives each pass, not a score: the job writes it in its summary.
+
+**On fake runners, in CI.** A pass (`test/golden/fake-pass.ts`) delegates the ticket to a harness on the standard pack and the current preset; the fake agent commits, `verify` passes, and the PR the factory would open stays in the fake publisher, kept as the pass's artifact. Its verdict is `pr`, `blocked` or `no_pr`; its `inputs` are the fingerprint of what its runs received: prompt, model, effort, bounds, the text of their skill, the pack's hooks and settings, and the workflow version. No model is called in CI: the replay fails if it starts a process (`git push`, `gh`, `claude`), reaches the network or the small model of messages. The report is compared with `test/golden/baseline.json`: a ticket of which a pass changed its verdict, or whose runs received other inputs, is listed, even when the total does not move, and the job fails.
+
+**A change that must change the report.** A skill or prompt change changes the inputs of the tickets whose runs read it: that is the replay doing its job. Read the listed tickets, then re-record the baseline (`npm run golden:record`) and review its diff in the PR, as for the journals of the replay oracle.
+
+**What remains.** The pass with a real model, its PR kept as an artifact of the run and judged, needs the `fantome` preset, the outbox without effect and the historical environment (clone at the start commit) of ORC-231. Until then, the fake pass checks that each golden ticket still goes through the pipeline, and which ones a change reaches. The verified red becomes blocking after validation on these tickets (ORC-123), and the `max_diff` thresholds are measured on them (ORC-142).
 
 ## Fault injection and `kill -9` chaos
 
