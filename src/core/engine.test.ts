@@ -858,6 +858,23 @@ describe('decide — built-ins', () => {
     expect(decide(ticket({ prState: 'MERGED' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
     expect(decide(ticket({ blocked: true, blockReason: 'Arrêté à la demande' }), ev('effect.failed', { ...result, error: 'x' }), workflow)).toEqual(decision());
   });
+
+  it('a dead settle that leaves a pending job with no run blocks the ticket on that job, which a reply resumes (ORC-339)', () => {
+    const result = { effectId: 'REL-1:4:0', kind: 'settle', eventId: 'run:r1', attempts: 3, error: 'connection reset' };
+    const pendingJob = { job: 'dev-feedback', resume: true };
+    const out = decide(ticket({ pendingJob }), ev('effect.failed', result), workflow);
+    expect(out.events).toEqual([
+      { type: 'pending.cleared', job: pendingJob },
+      { type: 'ticket.blocked', reason: 'Error: the pending dev-feedback could not be started: connection reset', job: 'dev-feedback' },
+    ]);
+    // Told as any block, its label with it.
+    expect(out.effects.map((e) => e.kind)).toEqual(['block_comment', 'labels']);
+    // The work in flight starts it at its end, a block keeps its own reason, a delivered ticket starts nothing.
+    expect(decide(ticket({ pendingJob, activeRunId: 'r2' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, verifyingRunId: 'r2' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, blocked: true, blockReason: 'x' }), ev('effect.failed', result), workflow)).toEqual(decision());
+    expect(decide(ticket({ pendingJob, prState: 'MERGED' }), ev('effect.failed', result), workflow)).toEqual(decision());
+  });
 });
 
 describe('decide — the tests step and the red check (ORC-123)', () => {

@@ -152,6 +152,41 @@ describe('reduce — facts recorded by the orchestrator', () => {
     expect(reduce(t, { type: 'feedback.consumed' })!.humanInbox).toEqual([]);
   });
 
+  it('a run consumes only the messages its launch read: one that came in since stays (ORC-339)', () => {
+    const read: FeedbackItem = { author: 'L', authorId: 'u1', body: 'x', at: 1, source: 'session' };
+    const later: FeedbackItem = { author: 'L', authorId: 'u1', body: 'y', at: 2, source: 'session' };
+    const out = reduce(ticket({ humanInbox: [read, later] }), { type: 'feedback.consumed', items: [{ ...read }] })!;
+    expect(out.humanInbox).toEqual([later]);
+  });
+
+  describe('the pending job (ORC-339)', () => {
+    const pendingJob = { job: 'dev-feedback', resume: true, sensitivePaths: ['a'] };
+    const started = (patch: Partial<{ runId: string; job: string; relaunchOf: string }> = {}) =>
+      ({ type: 'run.started', runId: 'r2', job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', ...patch }) as const;
+
+    it('leaves the ticket with the run that starts it, in the same step, whoever launched it', () => {
+      expect(reduce(ticket({ pendingJob }), started())).toMatchObject({ activeRunId: 'r2', pendingJob: undefined });
+    });
+
+    it('stays behind a run of another job, or the relaunch of a lost attempt of the same job', () => {
+      expect(reduce(ticket({ pendingJob }), started({ job: 'dev' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob }), started({ relaunchOf: 'r0' }))!.pendingJob).toEqual(pendingJob);
+      expect(reduce(ticket({ pendingJob: { ...pendingJob, relaunchOf: 'r0' } }), started({ relaunchOf: 'r0' }))!.pendingJob).toBeUndefined();
+    });
+
+    it('a run does not take a ticket another launch took first', () => {
+      const t = ticket({ activeRunId: 'r1', activeJob: 'dev', pendingJob });
+      expect(reduce(t, started())).toEqual(t);
+    });
+
+    it('a clear that names a job clears only that one, its keys in any order', () => {
+      const t = ticket({ pendingJob });
+      expect(reduce(t, { type: 'pending.cleared', job: { sensitivePaths: ['a'], resume: true, job: 'dev-feedback' } })!.pendingJob).toBeUndefined();
+      expect(reduce(t, { type: 'pending.cleared', job: { job: 'dev-feedback', resume: true } })!.pendingJob).toEqual(pendingJob);
+      expect(reduce(t, { type: 'pending.cleared', job: { job: 'fix-ci' } })!.pendingJob).toEqual(pendingJob);
+    });
+  });
+
   it('a cleared run frees the ticket, and keeps the verification', () => {
     const t = ticket({ activeRunId: 'r1', activeJob: 'dev', verifyingRunId: 'r0' });
     expect(reduce(t, { type: 'run.cleared' })).toMatchObject({ activeRunId: undefined, activeJob: undefined, verifyingRunId: 'r0' });

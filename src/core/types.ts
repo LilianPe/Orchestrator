@@ -366,7 +366,8 @@ export type ShellEvent =
   | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
   | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
-  | { type: 'pending.cleared' }
+  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
+  | { type: 'pending.cleared'; job?: PendingJob }
   | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
   | { type: 'workspace.released' }
   | {
@@ -377,12 +378,15 @@ export type ShellEvent =
       claudeSessionId: string;
       /** `false` on a run out of the ticket session (a review): the ticket does not take its session (ORC-217). Absent before. */
       ticketSession?: false;
+      /** The lost attempt whose step this run starts again (ORC-220): it is not the pending job of the same name (ORC-339). */
+      relaunchOf?: string;
     }
   /**
    * The pending feedback was given to a run, recorded once that run is written (ORC-220): a launch cut
-   * before it keeps the replies for the start taken up again.
+   * before it keeps the replies for the start taken up again. `items`: those the launch read, a message that came
+   * in since stays for the next run (ORC-339); absent, the whole inbox.
    */
-  | { type: 'feedback.consumed' }
+  | { type: 'feedback.consumed'; items?: readonly FeedbackItem[] }
   /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
   | { type: 'run.cleared' };
 

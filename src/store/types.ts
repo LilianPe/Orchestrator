@@ -495,6 +495,11 @@ export interface Store {
   /** Items waiting in line: not handed out, or handed out under a lease that expired (their holder died). */
   listQueue(): Promise<QueueItem[]>;
   /**
+   * The jobs a ticket has in a queue, handed-out ones included (ORC-339): an item whose start a crash cut under a live
+   * lease is still the queue's to start, not a start to make again.
+   */
+  queuedJobs(projectId: string, ticketId: string): Promise<string[]>;
+  /**
    * Takes the ticket's items out of the queue, of every queue or of `queue` only, handed-out ones
    * included (a stop): their claim then settles nothing.
    */

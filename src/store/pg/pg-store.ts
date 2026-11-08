@@ -1162,6 +1162,17 @@ export class PgStore implements AsyncStore {
     return result.rows.map((row) => row.payload);
   }
 
+  async queuedJobs(projectId: string, ticketId: string): Promise<string[]> {
+    const result = await this.db.execute<{ job: string }>(
+      sql`
+        select effect as job from outbox
+        where ticket_id = ${ticketId} and status in ('pending', 'running') and payload->>'projectId' = ${projectId}
+          and payload->>'queue' is not null
+      `,
+    );
+    return result.rows.map((row) => row.job);
+  }
+
   /** Handed-out items too (a stop during their start): `releaseQueued` then finds nothing to put back. */
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     const ofQueue = queue === undefined ? sql`` : sql`and payload->>'queue' = ${queue}`;

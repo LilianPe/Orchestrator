@@ -643,6 +643,11 @@ export class SqliteStore implements Store {
     return rows.map((r) => JSON.parse(r.data));
   }
 
+  async queuedJobs(projectId: string, ticketId: string): Promise<string[]> {
+    const rows = this.db.prepare('SELECT job FROM queue WHERE project_id = ? AND ticket_id = ?').all(projectId, ticketId) as { job: string }[];
+    return rows.map((r) => r.job);
+  }
+
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ? AND (? IS NULL OR queue = ?)').run(projectId, ticketId, queue ?? null, queue ?? null);
   }

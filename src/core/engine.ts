@@ -156,6 +156,24 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
   return out;
 }
 
+/**
+ * A `settle` that died (ORC-339): its retries spent, a pending job with no run would hold the ticket's messages for
+ * good, in silence. The ticket is blocked on that job instead, a reply resumes it. Anything else: only logged.
+ */
+function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number): Decision {
+  const pending = ticket.pendingJob;
+  if (!pending || ticket.activeRunId || ticket.verifyingRunId || ticket.blocked || settledTicket(ticket)) return out;
+  const reason = `Error: the pending ${pending.job} could not be started: ${error}`;
+  out.events.push({ type: 'pending.cleared', job: pending });
+  return block(out, workflow, {
+    reason,
+    body: `${reason} Reply in this thread to start it again.`,
+    job: pending.job,
+    tried: [`Starting ${pending.job}, ${attempts} times.`],
+    question: 'Can you reply here once the factory is healthy again?',
+  });
+}
+
 /** A wait for a repo: only an action lifts it, no job of the ticket has started. Its reason is what a frozen version posts. */
 function askForRepo(out: Decision, workflow: Workflow, reason: string, question: string, tried: string, sessionId: string | undefined): void {
   tell(out, workflow, { ...blockFacts({ reason, step: 'intake', tried: [tried], question }), waits: true }, { kind: 'activity', type: 'elicitation', body: reason, ...(sessionId ? { linearSessionId: sessionId } : {}) });
@@ -1210,9 +1228,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       return out;
     }
     case 'effect.failed': {
-      // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged.
+      // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged, unless it leaves a
+      // pending job no run will start (ORC-339). Its block says so, and a reply resumes the ticket (ORC-196).
       const { kind, error, eventId } = event.payload;
-      if (kind === 'settle' || !ticket) return out;
+      if (kind === 'settle') return ticket ? stuckPending(out, ticket, workflow, error, event.payload.attempts) : out;
+      if (!ticket) return out;
       if (isRefusedNotice(eventId)) {
         out.trace.push('effect.failed ignored: the notice of a refused event, which blocks nothing');
         return out;

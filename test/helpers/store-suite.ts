@@ -302,6 +302,19 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect((await s.listQueue()).map((i) => `${i.ticketId}:${i.job}`)).toEqual(['B:dev']);
   });
 
+  it("names a ticket's queued jobs, handed-out ones included, which the line no longer lists (ORC-339)", async () => {
+    const s = await store();
+    await s.enqueue(q({ ticketId: 'A', job: 'dev-feedback', queue: 'dev' }));
+    await s.enqueue(q({ ticketId: 'B', job: 'dev', queue: 'dev' }));
+    const claim = await s.claimQueued('dev', 60_000);
+    expect(claim?.item.ticketId).toBe('A');
+    expect((await s.listQueue()).map((i) => i.ticketId)).toEqual(['B']);
+    expect(await s.queuedJobs('p', 'A')).toEqual(['dev-feedback']);
+    expect(await s.queuedJobs('other', 'A')).toEqual([]);
+    await s.finishQueued(claim!);
+    expect(await s.queuedJobs('p', 'A')).toEqual([]);
+  });
+
   it('keeps the order of arrival of items of one priority enqueued at the same instant (ORC-228)', async () => {
     const s = await store();
     // Ids that sort the other way as text.

@@ -641,3 +641,137 @@ describe('a pending job through its launch', () => {
     expect((await h.ticket()).pendingJob).toBeUndefined();
   });
 });
+
+/**
+ * A store whose calls `fault` may make throw (`throw`) or never answer (`hang`), from the claim of the settle that starts
+ * the ticket's pending job on: the claim of a settle that finds the first run's check still in flight opens nothing.
+ */
+function settleWindow(fault: (method: string, args: unknown[]) => 'throw' | 'hang' | undefined) {
+  const w = { open: false };
+  const wrap = (store: Store): Store =>
+    new Proxy(store, {
+      get(t, prop) {
+        const value: unknown = Reflect.get(t, prop, t);
+        if (typeof value !== 'function') return value;
+        const f = (value as (...a: unknown[]) => unknown).bind(t);
+        return async (...args: unknown[]) => {
+          const hit = w.open ? fault(String(prop), args) : undefined;
+          if (hit === 'hang') return new Promise<never>(() => {});
+          if (hit === 'throw') throw new Error(`connection reset at ${String(prop)}`);
+          const result = await f(...args);
+          if (prop === 'claimEffect' && result && result !== 'busy' && (result as { effect: { kind: string } }).effect.kind === 'settle') {
+            const ticket = await t.getTicket('p', 'REL-1');
+            if (ticket?.pendingJob && !ticket.activeRunId && !ticket.verifyingRunId) w.open = true;
+          }
+          return result;
+        };
+      },
+    });
+  return { w, wrap };
+}
+
+const control = (h: H, id: string, type: 'control.pause' | 'control.resume') => h.orch.accept({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} } as FactoryEvent);
+
+/** ORC-339, after review: the holes of a pending job kept through its launch. */
+describe('a pending job: queue, death of its settle, messages and races', () => {
+  it('queued by a settle cut before it cleared it: the queue launches it once, and its run takes it off the ticket', async () => {
+    let queued = false;
+    let hung = false;
+    // The clear that follows the enqueue never answers: the daemon dies between the two.
+    const { wrap } = settleWindow((method) => {
+      if (method === 'enqueue') queued = true;
+      else if (method === 'updateTicket' && queued && !hung) return (hung = true), 'hang';
+      return undefined;
+    });
+    const h = createHarness({ effectLeaseMs: 60_000, wrapStore: wrap });
+    const first = await pendingBehind(h);
+    await control(h, 'g1', 'control.pause');
+    await h.orch.drained();
+    h.runner.enqueue({ hold: true }, { hold: true });
+    h.runner.release(first);
+    await vi.waitFor(() => expect(hung).toBe(true), { timeout: 10_000 });
+    await h.restart({ mode: 'brutal' });
+    // Resumed before the settle's lease expires: the queue launches the job while the ticket still holds it.
+    await control(h, 'g2', 'control.resume');
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect((await h.ticket()).pendingJob).toBeUndefined();
+    await h.advance(60_001);
+    h.runner.release((await h.ticket()).activeRunId!);
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(await h.store.listQueue()).toEqual([]);
+  });
+
+  it('a settle whose retries are spent: the ticket is blocked on the pending job, and a reply starts it', async () => {
+    let outage = true;
+    const { wrap } = settleWindow((method) => (outage && method === 'queuedJobs' ? 'throw' : undefined));
+    const h = createHarness({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, wrapStore: wrap });
+    const first = await pendingBehind(h);
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    for (let i = 0; i < 3; i++) await h.advance(10);
+    const blocked = await h.ticket();
+    expect(blocked).toMatchObject({ blocked: true, blockReason: 'Error: the pending dev-feedback could not be started: connection reset at queuedJobs' });
+    expect(blocked.pendingJob).toBeUndefined();
+    expect(prompts(h)).toEqual(['/factory:dev']);
+    outage = false;
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'try again', author: 'L', kind: 'instruction' });
+    await h.advance(180_000);
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(prompts(h)).toHaveLength(2);
+  });
+
+  it('a message that comes in during the launch stays in the inbox for the next run', async () => {
+    const h = createHarness();
+    const first = await pendingBehind(h);
+    const item = { author: 'L', authorId: 'u1', body: 'one more thing', at: h.clock.now(), source: 'session' as const, kind: 'instruction' as const, taint: 'trusted' as const };
+    const reset = h.workspaces.resetClaudeDir.bind(h.workspaces);
+    // Written by another worker's decision after the launch read the inbox, before its run is written.
+    h.workspaces.resetClaudeDir = async (path) => {
+      if (h.runner.requests.length === 1) await h.store.updateTicket('p', 'REL-1', (t) => ({ ...t, humanInbox: [...t.humanInbox, item] }));
+      return reset(path);
+    };
+    await h.store.putTicket({ ...(await h.ticket()), humanInbox: [{ ...item, body: 'read at the launch', at: item.at - 1 }] });
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    expect(h.runner.requests[1]!.prompt).toContain('read at the launch');
+    expect(h.runner.requests[1]!.prompt).not.toContain('one more thing');
+    expect((await h.ticket()).humanInbox.map((i) => i.body)).toEqual(['one more thing']);
+  });
+
+  it('a launch that finds the ticket taken by another launch lets go: one run, never two', async () => {
+    const h = createHarness();
+    const first = await pendingBehind(h);
+    const prepare = h.workspaces.prepare.bind(h.workspaces);
+    // Another worker, which took up this settle after a lost lease, wrote its run first.
+    h.workspaces.prepare = async (req) => {
+      if (req.runId !== h.runner.requests[0]?.runId) await h.store.updateTicket('p', 'REL-1', (t) => ({ ...t, activeRunId: 'other', activeJob: 'dev-feedback', pendingJob: undefined }));
+      return prepare(req);
+    };
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(await h.ticket()).toMatchObject({ activeRunId: 'other', blocked: false });
+    expect(h.logs.some((l) => /took the ticket first/.test(l.message))).toBe(true);
+  });
+
+  it('a passing store error inside the launch, before its run.started: retried, never a launch error', async () => {
+    let thrown = false;
+    const { wrap } = settleWindow((method, args) => (!thrown && method === 'getMeta' && String(args[0]).startsWith('setup-pending:') ? ((thrown = true), 'throw') : undefined));
+    const h = createHarness({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, wrapStore: wrap });
+    const first = await pendingBehind(h);
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    await h.advance(10);
+    expect(thrown).toBe(true);
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
+    expect(t.pendingJob).toBeUndefined();
+  });
+});
