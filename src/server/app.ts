@@ -84,11 +84,11 @@ const OPERATOR_NAME_MAX = 64;
 
 /**
  * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: the user of its HTTP Basic
- * auth behind the password, `local` on the loopback without one. Not signed: whoever passed the guard is an operator, and
- * names themself.
+ * auth behind the password, `local` on the loopback without one, whatever header comes then. Not signed: whoever passed
+ * the guard is an operator, and names themself.
  */
-function operator(c: Context): Pick<FactoryEvent, 'actor' | 'roles'> {
-  const user = basicCredentials(c.req.header('authorization'))?.user.replace(/[^\p{L}\p{N}._@-]/gu, '').slice(0, OPERATOR_NAME_MAX);
+function operator(c: Context, password: string | undefined): Pick<FactoryEvent, 'actor' | 'roles'> {
+  const user = password && basicCredentials(c.req.header('authorization'))?.user.replace(/[^\p{L}\p{N}._@-]/gu, '').slice(0, OPERATOR_NAME_MAX);
   return { actor: `dashboard:${user || 'local'}`, roles: ['operator'] };
 }
 
@@ -291,18 +291,18 @@ export function createApp(d: ServerDeps): Hono {
   app.post('/api/tickets/:projectId/:ticketId/stop', async (c) => {
     const at = d.clock.now();
     const ticketId = c.req.param('ticketId');
-    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
+    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
   });
-  // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is the ticket's.
+  // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check, not a question).
   const runControl = (pause: boolean) => async (c: Context) => {
     const runId = c.req.param('id')!;
     const run = await d.store.getRun(runId);
     if (!run) return c.json({ error: `unknown run ${runId}` }, 404);
-    if (run.status !== 'running') return c.json({ error: `run ${runId} is not running` }, 409);
+    if ((await d.store.getTicket(run.projectId, run.ticketId))?.activeRunId !== runId) return c.json({ error: `run ${runId} is not the ticket's run at work` }, 409);
     const at = d.clock.now();
     const payload = pause ? { runId, pause: true as const } : { runId };
-    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:${pause ? 'pause' : 'stop'}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
+    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${pause ? 'pause' : 'stop'}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
     return c.json({ ok: true });
   };
   app.post('/api/runs/:id/pause', runControl(true));

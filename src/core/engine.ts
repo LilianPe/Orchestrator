@@ -825,7 +825,7 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
   out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
   const body = refusalMessage(action, matrix, verdict.reason);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
-  // The dashboard answers its operator itself: nothing is written in Linear (ORC-301).
+  // The dashboard is no Linear thread (ORC-301): its refusal is only traced, and logged, which its log shows.
   if (channel === 'dashboard') return false;
   if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
   else if (event.actor) out.effects.push({ kind: 'comment', body });

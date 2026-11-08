@@ -8,7 +8,7 @@ export type BusMessage =
   | { kind: 'command'; projectId: string; ticketId?: string; command: Effect }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunStreamEvent }
   /** What a run does, in the factory's words (`composedActivity`, ORC-214): the dashboard's live feed of a run (ORC-301). */
-  | { kind: 'activity'; runId: string; ticketId: string; activity: ActivityInput; at: number }
+  | { kind: 'activity'; projectId: string; runId: string; ticketId: string; activity: ActivityInput; at: number }
   | { kind: 'ticket'; ticket: TicketState }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };
 

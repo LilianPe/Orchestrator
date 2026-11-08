@@ -84,7 +84,7 @@ export type BusMessage =
   | { kind: 'event'; event: EventView }
   | { kind: 'command'; projectId: string; ticketId?: string; command: { kind: string } }
   | { kind: 'run'; runId: string; ticketId: string; ev: RunLine }
-  | { kind: 'activity'; runId: string; ticketId: string; activity: { type: 'action'; action: string; parameter: string; ephemeral?: boolean }; at: number }
+  | { kind: 'activity'; projectId: string; runId: string; ticketId: string; activity: { type: 'action'; action: string; parameter: string; ephemeral?: boolean }; at: number }
   | { kind: 'ticket' }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number };
 

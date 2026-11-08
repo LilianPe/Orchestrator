@@ -3,7 +3,7 @@ import { fetchFlow, fetchMeasures, fetchSnapshot, post, subscribe } from './api.
 import { Flow, plural } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures } from './Measures.js';
-import { initialState, reducer } from './state.js';
+import { feedKey, initialState, reducer } from './state.js';
 import type { FlowView, MeasuredTicketView, RunLine, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
@@ -166,7 +166,7 @@ export function App() {
           ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
         {inspected && (
-          <Inspection run={inspected} feed={s.feeds[inspected.ticketId] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} />
+          <Inspection run={inspected} feed={s.feeds[feedKey(inspected.projectId, inspected.ticketId)] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} />
         )}
         <section className="run">
           <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, reducer } from './state.js';
+import { feedKey, initialState, reducer } from './state.js';
 import type { FlowView, Snapshot } from './types.js';
 
 const snapshot: Snapshot = {
@@ -58,27 +58,47 @@ describe('reducer', () => {
   });
 
   describe("a run's live feed (ORC-301)", () => {
-    const activity = (runId: string, ticketId: string, action: string, at: number) =>
-      ({ kind: 'activity', runId, ticketId, activity: { type: 'action', action, parameter: 'step build', ephemeral: true }, at }) as const;
+    const activity = (runId: string, ticketId: string, action: string, at: number, projectId = 'p') =>
+      ({ kind: 'activity', projectId, runId, ticketId, activity: { type: 'action', action, parameter: 'step build', ephemeral: true }, at }) as const;
 
     it("keeps, by ticket, the factory's composed activities and the ticket's journal events, in their order", () => {
       let s = reducer(initialState, { type: 'bus', message: activity('r1', 'REL-1', 'Reading the code', 1) });
       s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'control.stop', at: 2, projectId: 'p', ticketId: 'REL-1', payload: {} } } });
       s = reducer(s, { type: 'bus', message: activity('r2', 'REL-2', 'Editing files', 3) });
       s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e2', type: 'control.pause', at: 4, projectId: '*', payload: {} } } });
-      expect(s.feeds['REL-1']).toEqual([
+      expect(s.feeds[feedKey('p', 'REL-1')]).toEqual([
         { kind: 'activity', runId: 'r1', action: 'Reading the code', parameter: 'step build', at: 1 },
         { kind: 'event', id: 'e1', type: 'control.stop', at: 2 },
       ]);
-      expect(s.feeds['REL-2']).toEqual([{ kind: 'activity', runId: 'r2', action: 'Editing files', parameter: 'step build', at: 3 }]);
-      expect(Object.keys(s.feeds).sort()).toEqual(['REL-1', 'REL-2']);
+      expect(s.feeds[feedKey('p', 'REL-2')]).toEqual([{ kind: 'activity', runId: 'r2', action: 'Editing files', parameter: 'step build', at: 3 }]);
+      expect(Object.keys(s.feeds).sort()).toEqual([feedKey('p', 'REL-1'), feedKey('p', 'REL-2')]);
+    });
+
+    it('keeps apart the same ticket identifier in two projects (ORC-316)', () => {
+      let s = reducer(initialState, { type: 'bus', message: activity('r1', 'REL-1', 'Reading the code', 1, 'p1') });
+      s = reducer(s, { type: 'bus', message: { kind: 'event', event: { id: 'e1', type: 'run.finished', at: 2, projectId: 'p2', ticketId: 'REL-1', payload: {} } } });
+      expect(s.feeds[feedKey('p1', 'REL-1')]).toHaveLength(1);
+      expect(s.feeds[feedKey('p2', 'REL-1')]).toEqual([{ kind: 'event', id: 'e1', type: 'run.finished', at: 2 }]);
+    });
+
+    it('keeps the feeds of the 50 tickets heard of last', () => {
+      let s = initialState;
+      for (let i = 0; i < 60; i++) s = reducer(s, { type: 'bus', message: activity('r', `REL-${i}`, 'Reading the code', i) });
+      expect(Object.keys(s.feeds)).toHaveLength(50);
+      expect(s.feeds[feedKey('p', 'REL-9')]).toBeUndefined();
+      // Heard of again, the oldest kept goes last: the next new ticket drops the one after it.
+      s = reducer(s, { type: 'bus', message: activity('r', 'REL-10', 'Reading the code', 99) });
+      s = reducer(s, { type: 'bus', message: activity('r', 'REL-60', 'Reading the code', 100) });
+      expect(Object.keys(s.feeds)).toHaveLength(50);
+      expect(s.feeds[feedKey('p', 'REL-11')]).toBeUndefined();
+      expect(s.feeds[feedKey('p', 'REL-10')]).toHaveLength(2);
     });
 
     it('caps a feed at its last 200 lines', () => {
       let s = initialState;
       for (let i = 0; i < 250; i++) s = reducer(s, { type: 'bus', message: activity('r1', 'REL-1', 'Reading the code', i) });
-      expect(s.feeds['REL-1']).toHaveLength(200);
-      expect(s.feeds['REL-1']![0]!.at).toBe(50);
+      expect(s.feeds[feedKey('p', 'REL-1')]).toHaveLength(200);
+      expect(s.feeds[feedKey('p', 'REL-1')]![0]!.at).toBe(50);
     });
   });
 });
