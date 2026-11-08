@@ -7,6 +7,7 @@ import type { Role } from './authz.js';
 import type { Decision } from './decision.js';
 import { decide, isFenced, pushCheckId } from './engine.js';
 import { reduce } from './reduce.js';
+import { CUT_RELAUNCHES } from '../store/types.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 /**
@@ -56,7 +57,7 @@ describe('a human push on the agent branch (ORC-159)', () => {
     it('a ticket at rest in Human Review is paused all the same, with no job to resume', () => {
       const t = ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN', reviewSha: AGENT });
       const out = decide(t, push(), workflow);
-      expect(out.events[1]).toEqual({ type: 'ticket.blocked', reason: expect.stringContaining(HUMAN), kind: 'human_push' });
+      expect(out.events.find((e) => e.type === 'ticket.blocked')).toEqual({ type: 'ticket.blocked', reason: expect.stringContaining(HUMAN), kind: 'human_push' });
       expect(out.effects).toContainEqual({ kind: 'run_verify', runId: CHECK, job: 'dev', head: HUMAN });
     });
 
@@ -102,10 +103,22 @@ describe('a human push on the agent branch (ORC-159)', () => {
       expect(after(t, red, out)).toMatchObject({ blocked: true, blockKind: 'human_push', verifiedSha: AGENT, verifyAttempts: 0 });
     });
 
-    it('a check that could not run blocks as an infrastructure failure', () => {
+    it("a check that could not run says so, and stays the push's block: the next push replaces it and is told", () => {
       const t = after(ticket(), push(), decide(ticket(), push(), workflow));
-      const out = decide(t, verdict('verify.errored', { error: 'engine down' }), workflow);
-      expect(out.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked', kind: 'infra' }));
+      const errored = verdict('verify.errored', { error: 'engine down' });
+      const out = decide(t, errored, workflow);
+      expect(out.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked', kind: 'human_push', reason: expect.stringContaining('could not run') }));
+      const NEWER = 'beef5678';
+      const again = after(after(t, errored, out), push(NEWER, 2000), decide(after(t, errored, out), push(NEWER, 2000), workflow));
+      expect(decide(again, verdict('verify.passed', { sha: NEWER }, pushCheckId(NEWER, 2000)), workflow).effects.map((e) => e.kind)).toEqual(['block_comment']);
+    });
+
+    it('a check cut too often blocks the push for a human, not paused for good on a check nothing runs', () => {
+      const t = after(ticket(), push(), decide(ticket(), push(), workflow));
+      const cut = { ...t, cutRelaunches: Array.from({ length: CUT_RELAUNCHES }, (_, i) => 4000 + i) };
+      const out = decide(cut, ev('verify.lost', { runId: CHECK, job: 'dev' }, { at: 5000 }), workflow);
+      expect(out.effects.some((e) => e.kind === 'run_verify')).toBe(false);
+      expect(out.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked' }));
     });
 
     it('a verdict that comes once a human relaunched the ticket records the green commit and lets the work go on', () => {
@@ -127,7 +140,7 @@ describe('a human push on the agent branch (ORC-159)', () => {
 
     it('a version whose agents push themselves (no job the factory publishes) does not react', () => {
       const legacy: Workflow = { ...workflow, jobs: Object.fromEntries(Object.entries(workflow.jobs).map(([k, j]) => [k, { ...j, repoChecks: false }])) };
-      expect(kinds(decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), push(), legacy))).toEqual({ events: [], effects: [] });
+      expect(kinds(decide(ticket({ activeRunId: 'r1', activeJob: 'dev', reviewSha: AGENT }), push(), legacy))).toEqual({ events: [], effects: [] });
     });
   });
 
@@ -143,11 +156,28 @@ describe('a human push on the agent branch (ORC-159)', () => {
     }
   });
 
-  it('a ticket blocked for another reason keeps it, its push still checked', () => {
-    const t = ticket({ blocked: true, blockKind: 'asked', blockReason: 'Question asked by the agent', blockedJob: 'dev' });
+  it('a ticket blocked for another reason keeps it, and the pending job a reply to it resumes; its push is still checked', () => {
+    const pendingJob = { job: 'dev-feedback', input: 'feedback' as const, sensitivePaths: ['.github/**'] };
+    const t = ticket({ blocked: true, blockKind: 'stuck', blockReason: 'Error: the pending dev-feedback could not be started', blockedJob: 'dev-feedback', pendingJob });
     const out = decide(t, push(), workflow);
-    expect(out.events.some((e) => e.type === 'ticket.blocked')).toBe(false);
+    expect(out.events.some((e) => e.type === 'ticket.blocked' || e.type === 'work.cancelled')).toBe(false);
     expect(out.effects).toContainEqual({ kind: 'run_verify', runId: CHECK, job: 'dev', head: HUMAN });
+    expect(after(t, push(), out)).toMatchObject({ blockKind: 'stuck', pendingJob, verifyingRunId: CHECK });
+  });
+
+  describe('criterion 2: what every later check asks for', () => {
+    it('the human head is asked for until a publication of the factory carries it', () => {
+      const pushed = reduce(ticket(), push())!;
+      expect(pushed.humanHead).toBe(HUMAN);
+      // A publication that is not the awaited one carries nothing.
+      expect(reduce({ ...pushed, verifyingRunId: 'r2' }, ev('publish.done', { runId: 'r1', job: 'dev', sha: 'e1' }))!.humanHead).toBe(HUMAN);
+      expect(reduce({ ...pushed, verifyingRunId: 'r1' }, ev('publish.done', { runId: 'r1', job: 'dev', sha: 'e1' }))!.humanHead).toBeNull();
+    });
+
+    it('a branch a human puts back on the commit verified last asks for nothing more', () => {
+      const pushed = reduce(ticket(), push())!;
+      expect(reduce(pushed, push(AGENT, 2000))!.humanHead).toBeNull();
+    });
   });
 
   describe('criterion 3: a human commit that changes a frozen test fails verify', () => {
@@ -166,7 +196,10 @@ describe('a human push on the agent branch (ORC-159)', () => {
     const inReview = ticket({ logical: 'human_review', prNumber: 7, prState: 'OPEN', reviewSha: AGENT });
 
     it('the commit under review is no longer reviewed once a human pushed', () => {
-      expect(reduce(inReview, push())!.reviewSha).toBeUndefined();
+      expect(after(inReview, push(), decide(inReview, push(), workflow)).reviewSha).toBeNull();
+      // Nor on a ticket the factory does not work on.
+      const idle = { ...inReview, delegated: false };
+      expect(after(idle, push(), decide(idle, push(), workflow)).reviewSha).toBeNull();
       // Merged as before without the push.
       expect(decide(inReview, done, workflow).effects).toContainEqual({ kind: 'merge', sha: AGENT });
     });

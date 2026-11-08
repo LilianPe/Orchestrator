@@ -963,10 +963,19 @@ function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: Tick
     return out;
   }
   const job = pushCheckJob(workflow);
-  if (!job || !ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !/^[0-9a-f]{4,64}$/.test(sha)) return undefined;
+  if (!job) return undefined;
+  // The commit shown to the reviewer is no longer the branch's: no approval from before the push passes a gate (I2).
+  if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
+  if (!ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !/^[0-9a-f]{4,64}$/.test(sha)) return undefined;
   const interrupted = state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
-  cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
-  if (!ticket.blocked || ticket.blockKind === 'human_push') {
+  const pausing = !ticket.blocked || ticket.blockKind === 'human_push';
+  if (pausing) cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
+  else {
+    // Its block, and the pending job a reply to it resumes, stay: only the run in flight stops.
+    out.trace.push(`push.human: ${author} pushed ${sha.slice(0, 12)}, the ticket stays blocked for its own reason`);
+    out.effects.push({ kind: 'stop_run' });
+  }
+  if (pausing) {
     const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : interrupted;
     out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
   }
@@ -994,8 +1003,9 @@ function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verif
   const at = ticket.blockedJob ? { job: ticket.blockedJob, step: 'verify' } : { step: 'verify' };
   const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
   if (event.type === 'verify.errored') {
+    // Still the push's block: a next push replaces it, and its verdict is told.
     const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run: infrastructure failure.`;
-    return block(out, workflow, { kind: 'infra', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
+    return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
   }
   if (event.type === 'verify.failed') {
     const reason = `${pushed(head)}: verify fails on it.`;
@@ -1432,7 +1442,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (recent.length >= CUT_RELAUNCHES) {
         // Nothing runs it any more: the ticket must not wait for its verdict, or no later start would pass it.
         out.events.push({ type: 'work.cancelled' });
-        return ticket?.blocked ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
+        // The check of a human's push: its block says it is being checked, and would say so for good.
+        const pushCheck = !!pushedHead(runId) && ticket?.blockKind === 'human_push';
+        return ticket?.blocked && !pushCheck ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
       }
       out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
       const head = pushedHead(runId);

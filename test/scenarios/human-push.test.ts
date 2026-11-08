@@ -128,7 +128,7 @@ describe('a human push on the agent branch (ORC-159)', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: AGENT });
 
     await humanPushes(h);
-    expect((await h.ticket()).reviewSha).toBeUndefined();
+    expect((await h.ticket()).reviewSha).toBeNull();
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
     expect(comments(h).at(-1)).toMatch(/no reviewed commit/);

@@ -1010,7 +1010,7 @@ export class Orchestrator {
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
     }
     // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
-    return this.cleanCheck(project, t, run.id, job, { green, humanHead: t.humanPushes?.at(-1)?.after });
+    return this.cleanCheck(project, t, run.id, job, { green, humanHead: t.humanHead ?? undefined });
   }
 
   /**

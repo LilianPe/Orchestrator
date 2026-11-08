@@ -142,7 +142,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // Before a commit found green is taken as it is: one from before the push does not carry it either.
     if (req.humanHead && !(await carries(git, req.humanHead, sha))) return { ok: false, failures: [humanCommitsMissing(req.humanHead, req.branch)], sha, tree };
     if (sha === req.green) return { ok: true, failures: [], sha, tree };
-    await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
+    // A human's push brought the base with it.
+    if (!req.head) await within(fetchBase(req, cloneDir), deadlineMs, `the forge no longer responds after ${deadlineMs / 1000} s`);
     const config = await baseConfig(git);
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
@@ -193,22 +194,24 @@ export async function baseConfig(git: CloneGit): Promise<RepoConfig> {
  * not, as nothing here runs in it, and the clone's is ours. Read on the forge, not on `origin/HEAD` of the repository:
  * what `.factory/config.yml` says of a commit is read as close to its source as the factory can.
  */
-async function fetchBase(req: CleanVerifyRequest, cloneDir: string): Promise<void> {
-  const args = [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`];
+async function fetchBase(req: CleanVerifyRequest, cloneDir: string, pushed = false): Promise<void> {
+  // A human's push (ORC-159) comes in the same fetch, its objects checked: what it holds was written outside the factory.
+  const branch = pushed ? ['-c', 'transfer.fsckObjects=true'] : [];
+  const args = [...HARDENING.flatMap((c) => ['-c', c]), ...branch, '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+HEAD:${BASE}`, ...(pushed ? [`+refs/heads/${req.branch}:${PUSHED}`] : [])];
   try {
     await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
   } catch (err) {
     // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
-    throw new Error(`base branch not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
+    throw new Error(`${pushed ? 'the base or the pushed branch' : 'base branch'} not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
   }
 }
 
 const PUSHED = 'refs/factory/pushed';
 
 /**
- * A human's push (ORC-159), from the forge into a new repository of ours, as the base is: its branch fetched with its
- * objects checked, and no remote recorded, so its URL and credentials stay out of the clone the commands later run in.
- * The pushed commit must still be on that branch; a newer push on top of it is the next check's.
+ * A human's push (ORC-159), from the forge into a new repository of ours, with the base in the same fetch (`fetchBase`,
+ * the daemon's credentials): its objects checked, and no remote recorded, so the forge's URL and credentials stay out of
+ * the clone the commands later run in. The pushed commit must still be on that branch; a newer push on top of it is the next check's.
  */
 async function fetchPushed(req: CleanVerifyRequest, head: string, cloneDir: string): Promise<{ sha: string }> {
   const exec = req.exec ?? execCmd;
@@ -217,13 +220,7 @@ async function fetchPushed(req: CleanVerifyRequest, head: string, cloneDir: stri
   await mustExec(exec, 'git', [...hardened, 'init', '--quiet', '--template=', cloneDir], opts);
   // For whoever runs git in it next, as `extractWork` keeps them in its clone.
   for (const c of HARDENING) await mustExec(exec, 'git', ['-C', cloneDir, 'config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1)], opts);
-  const fetch = ['-c', 'transfer.fsckObjects=true', '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, `+refs/heads/${req.branch}:${PUSHED}`];
-  try {
-    await mustExec(exec, 'git', [...hardened, ...fetch], opts);
-  } catch (err) {
-    // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
-    throw new Error(`the pushed branch not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);
-  }
+  await fetchBase(req, cloneDir, true);
   if ((await exec('git', [...hardened, '-C', cloneDir, 'merge-base', '--is-ancestor', head, PUSHED], opts)).code !== 0) {
     throw new Error(`the pushed commit ${head.slice(0, 12)} is no longer on the forge's branch ${req.branch}`);
   }
