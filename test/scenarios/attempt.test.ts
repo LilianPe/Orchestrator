@@ -71,16 +71,17 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
     expect(lastBody(h)).toContain('🔴 Blocked');
   });
 
-  it("a reply (a feedback run) posts the agent's answer, not the output template", async () => {
+  it('a reply (a feedback run) posts the summary it submitted, not the output template, nor its last text (ORC-214)', async () => {
     const h = await devRun(done);
-    h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'Corrigé : les boutons sont alignés.' }] });
+    h.runner.enqueue({ hold: true, submit: false, events: [{ kind: 'text', text: 'Corrigé : les boutons sont alignés.' }] });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'L' });
     await h.advance(180_000); // the reply's debounce
     const runId = h.runner.requests[1]!.runId;
     await h.store.setMeta(agentOutputKey(runId), JSON.stringify(done));
     h.runner.release(runId);
     await h.advance(0);
-    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Corrigé : les boutons sont alignés.' });
+    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: done.summary });
+    expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('Corrigé');
   });
 
   it('an unreadable output store is the infrastructure: errored, not « no output »', async () => {
@@ -95,7 +96,7 @@ describe('the closed outcome of an attempt decides its end (ORC-289)', () => {
   it('a failure after the run ended (recording it) does not turn a finished attempt into errored', async () => {
     const h = await devRun(done, (inner) =>
       Object.assign(Object.create(inner) as Store, {
-        putRun: (r: Parameters<Store['putRun']>[0]) => (r.endedAt !== undefined ? Promise.reject(new Error('database down')) : inner.putRun(r)),
+        putRun: (r: Parameters<Store['putRun']>[0], fence?: number) => (r.endedAt !== undefined ? Promise.reject(new Error('database down')) : inner.putRun(r, fence)),
       }),
     );
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });

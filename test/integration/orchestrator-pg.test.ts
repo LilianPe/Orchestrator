@@ -104,8 +104,10 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     h.runner.enqueue({ hold: true }, { events: [{ kind: 'text', text: 'Repris.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const runId = (await h.ticket()).activeRunId!;
+    // A shutdown leaves the run going (ORC-344): this one is gone by the next start.
+    h.runner.forget(runId);
     await h.restart();
-    expect((await h.store.getRun(runId))!.status).toBe('stopped');
+    expect((await h.store.getRun(runId))!.status).toBe('failure');
     expect(h.runner.requests[1]).toMatchObject({ resume: true, claudeSessionId: h.runner.requests[0]!.claudeSessionId });
     expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'human_review' });
   });

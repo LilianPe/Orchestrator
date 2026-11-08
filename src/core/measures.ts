@@ -1,5 +1,5 @@
 import type { RedCause } from '../checks/red.js';
-import type { MeasureFacts, RunRecord, Store } from '../store/types.js';
+import type { MeasureFacts, OutboxRow, RunRecord, SessionRole, Store } from '../store/types.js';
 import { allowed, DEFAULT_MATRIX } from './authz.js';
 import { isQuestionSession } from './engine.js';
 import { reduce } from './reduce.js';
@@ -95,6 +95,44 @@ export interface TicketMeasures {
    * not `verified`. Its returns to the tests step are measured here, not as reworks.
    */
   red: { id: string; verified: boolean; cause: RedCause }[];
+  /** When the ticket's work began (ORC-223): the earlier of its first delegation in the journal and its first attempt's start; null with neither. */
+  startedAt: number | null;
+  /** From `startedAt` to the first merge of the journal (`mergedAt`); null while not merged. */
+  leadTimeMs: number | null;
+  /** Sum of the durations of the attempts that ended (`runs[].durationMs`). */
+  workMs: number;
+  /** Sum of the dollars the runner reported per attempt: what exists before the token budgets (ORC-216). */
+  costUsd: number;
+  /**
+   * Review rounds of the ticket (ORC-223). `ai`: its attempts in the reviewer role (ORC-217) that ran to their end (`success`
+   * or `failure`, not an infrastructure failure): one stopped, cut by a limit, interrupted or still running is no round, its
+   * relaunch is. A record older than that role is left out; the rounds a review skill makes inside its one session are not the
+   * factory's to count. `human`: the moves to
+   * Human Review the factory carried out (`move` effects done), each one a handover to a human reviewer; a human moving the
+   * ticket there by hand is not counted. The single counter of the preset's loops comes with ORC-184 and ORC-190.
+   */
+  reviewRounds: { ai: number; human: number };
+  /** The ticket's attempts, oldest first: what each cost and how long it ran (ORC-223). */
+  runs: RunMeasure[];
+}
+
+/** One attempt as measured from its record (ORC-223): never its text. */
+export interface RunMeasure {
+  id: string;
+  job: string;
+  role: SessionRole | null;
+  status: RunRecord['status'];
+  startedAt: number;
+  endedAt: number | null;
+  /**
+   * `endedAt - startedAt`; null while running, for an attempt cut without an end, and for one ended after its lease ran out
+   * (ORC-220): a restart settles a cut attempt at the restart's time, and the downtime is no work.
+   */
+  durationMs: number | null;
+  /** What the runner reported at the end; null while running and when it reported none. */
+  tokens: TokenUsage | null;
+  costUsd: number;
+  turns: number;
 }
 
 /** Workflow run attempts of a ticket's CI, summed per PR then for the ticket, one per run id and attempt (ORC-278). */
@@ -213,6 +251,25 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
   return out;
 }
 
+const runMeasure = (r: RunRecord): RunMeasure => ({
+  id: r.id,
+  job: r.job,
+  role: r.sessionRole ?? null,
+  status: r.status,
+  startedAt: r.startedAt,
+  endedAt: r.endedAt ?? null,
+  durationMs: r.endedAt === undefined || (r.leaseUntil !== undefined && r.endedAt > r.leaseUntil) ? null : r.endedAt - r.startedAt,
+  tokens: r.tokens ?? null,
+  costUsd: r.costUsd,
+  turns: r.turns,
+});
+
+/** A review round: a reviewer attempt that ran to its end. */
+const reviewed = (r: RunRecord): boolean => r.sessionRole === 'reviewer' && (r.status === 'success' || r.status === 'failure') && !r.infra;
+
+/** A handover to a human reviewer: a move to Human Review the factory carried out. */
+const handedToHuman = (row: OutboxRow): boolean => row.status === 'done' && row.effect.kind === 'move' && row.effect.to === 'human_review';
+
 /** States a human sends a ticket back to dev from: its work had been handed over. */
 const HANDED_OVER = new Set<LogicalState>(['human_review', 'ai_review', 'ready', 'done']);
 
@@ -287,6 +344,10 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   const outs = outputs(facts, events, ticket.linearSessionId);
   const withTokens = facts.runs.filter((r) => r.tokens !== undefined);
   const codeTokens = perTicketTokens === undefined ? undefined : codeRunTokens(facts.runs);
+  const runs = facts.runs.map(runMeasure);
+  const delegatedAt = events.find((e) => e.type === 'ticket.delegated')?.at;
+  const starts = [delegatedAt, facts.runs[0]?.startedAt].filter((t): t is number => t !== undefined);
+  const startedAt = starts.length ? Math.min(...starts) : null;
   return {
     projectId,
     ticketId,
@@ -303,6 +364,12 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
     ciCost: ciCost(events),
     messages: messages.map(({ m, kind }) => messageMeasure(m, kind, outs, facts.acks[m.id], ticket.linearSessionId)),
     red: redVerdicts(events),
+    startedAt,
+    leadTimeMs: mergedAt === null || startedAt === null ? null : mergedAt - startedAt,
+    workMs: runs.reduce((sum, r) => sum + (r.durationMs ?? 0), 0),
+    costUsd: runs.reduce((sum, r) => sum + r.costUsd, 0),
+    reviewRounds: { ai: facts.runs.filter(reviewed).length, human: facts.effects.filter(handedToHuman).length },
+    runs,
   };
 }
 

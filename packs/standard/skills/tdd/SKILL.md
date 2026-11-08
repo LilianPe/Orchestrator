@@ -11,7 +11,7 @@ description: Test-first method (red, green, clean up) for any behavior change: f
 
 Always when the behavior changes: new feature, bug, refactoring that touches logic, review feedback that describes a defect.
 
-Exceptions (to write in your last message, with the reason): pure configuration file, text or translation, generated code, documentation. If the repository forbids a type of test (see `CLAUDE.md`), follow the repository and say so.
+Exceptions (to write in your `submit_result` summary, with the reason): pure configuration file, text or translation, generated code, documentation. If the repository forbids a type of test (see `CLAUDE.md`), follow the repository and say so.
 
 ## The cycle
 

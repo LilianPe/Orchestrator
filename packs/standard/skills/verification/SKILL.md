@@ -5,7 +5,7 @@ description: Verify before asserting: run the command that proves a result and r
 
 # factory:verification
 
-**Rule: no claim of success without fresh proof.** Your last message is published in Linear and a human relies on it. "It should pass" is not a result.
+**Rule: no claim of success without fresh proof.** Your `submit_result` summary is published in Linear and a human relies on it. "It should pass" is not a result.
 
 ## The gate, before any claim
 
@@ -43,4 +43,4 @@ Other sessions run at the same time on the same machine, and the factory then re
 
 ## Done when
 
-Every sentence of your last message that says "works", "passes", "fixed", "committed" or "green" rests on a command run after your last change, and you cite it. What you could not verify is written as such.
+Every sentence of your summary that says "works", "passes", "fixed", "committed" or "green" rests on a command run after your last change, and you cite it. What you could not verify is written as such.

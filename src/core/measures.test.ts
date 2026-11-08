@@ -24,6 +24,7 @@ describe('ticketMeasures (ORC-235)', () => {
     expect(ticketMeasures('p', 'REL-1', facts({}))).toEqual({
       projectId: 'p', ticketId: 'REL-1', mergedAt: null, tokens: null, attempts: 0, attemptsWithoutTokens: 0, usageLimitShare: null,
       firstTry: null, reworks: [], humanReviewMinutes: null, revertedWithin14Days: null, revertWindowEndsAt: null, ciCost: null, messages: [], red: [],
+      startedAt: null, leadTimeMs: null, workMs: 0, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [],
     });
   });
 
@@ -231,5 +232,78 @@ describe('reverts within 14 days and CI cost (ORC-278)', () => {
         { number: 4, durationMs: 30_000, runs: 1 },
       ],
     });
+  });
+});
+
+describe('cost, duration and review rounds of each run (ORC-223)', () => {
+  const tokens = { input: 10, output: 20, cacheRead: 30, cacheCreation: 40 };
+
+  it('measures each attempt from its record: job, role, status, duration, tokens, dollars and turns, never its text', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      runs: [
+        run({ id: 'r1', startedAt: 1_000, endedAt: 61_000, status: 'success', sessionRole: 'implementer', tokens, costUsd: 0.25, turns: 7, lastText: 'cost: 0' }),
+        run({ id: 'r2', job: 'review', startedAt: 70_000, status: 'running', sessionRole: 'reviewer', costUsd: 0, turns: 0 }),
+      ],
+    }));
+    expect(m.runs).toEqual([
+      { id: 'r1', job: 'dev', role: 'implementer', status: 'success', startedAt: 1_000, endedAt: 61_000, durationMs: 60_000, tokens, costUsd: 0.25, turns: 7 },
+      { id: 'r2', job: 'review', role: 'reviewer', status: 'running', startedAt: 70_000, endedAt: null, durationMs: null, tokens: null, costUsd: 0, turns: 0 },
+    ]);
+    // A running attempt has no duration yet: the work counts what ended.
+    expect(m).toMatchObject({ workMs: 60_000, costUsd: 0.25 });
+  });
+
+  it('times the ticket from its delegation, or its first attempt, to its first merge; null while not merged', () => {
+    const delegated = ev('d', 'ticket.delegated', 500, { linearSessionId: 'ls' });
+    const merged = ev('m', 'pr.merged', 90_500, { number: 1, url: 'u', branch: 'b' });
+    const runs = [run({ startedAt: 1_000, endedAt: 2_000 })];
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [delegated, merged], runs }))).toMatchObject({ startedAt: 500, leadTimeMs: 90_000 });
+    // Picked up without a delegation (a label, a move): from its first attempt.
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged], runs }))).toMatchObject({ startedAt: 1_000, leadTimeMs: 89_500 });
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [delegated], runs }))).toMatchObject({ startedAt: 500, leadTimeMs: null });
+    // Delegated after a label pickup, even after the merge: the work began with the first attempt, never a negative time.
+    const late = ev('d', 'ticket.delegated', 95_000, { linearSessionId: 'ls' });
+    expect(ticketMeasures('p', 'REL-1', facts({ events: [merged, late], runs }))).toMatchObject({ startedAt: 1_000, leadTimeMs: 89_500 });
+  });
+
+  it('gives no duration to an attempt settled after its lease ran out: a restart settles it at its own time, the downtime is no work', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      runs: [
+        run({ id: 'cut', startedAt: 0, endedAt: 8 * 3_600_000, leaseUntil: 300_000, status: 'failure' }),
+        run({ id: 'ok', startedAt: 0, endedAt: 60_000, leaseUntil: 120_000 }),
+        // A record older than the lease (ORC-220) keeps its end.
+        run({ id: 'old', startedAt: 0, endedAt: 30_000 }),
+      ],
+    }));
+    expect(m.runs.map((r) => [r.id, r.durationMs])).toEqual([['cut', null], ['ok', 60_000], ['old', 30_000]]);
+    expect(m.workMs).toBe(90_000);
+  });
+
+  it('counts the AI review rounds as the attempts of a reviewer, and the human ones as the factory moves to Human Review it carried out', () => {
+    const m = ticketMeasures('p', 'REL-1', facts({
+      runs: [
+        run({ id: 'r1', sessionRole: 'implementer' }),
+        run({ id: 'r2', job: 'review', sessionRole: 'reviewer' }),
+        run({ id: 'r3', sessionRole: 'implementer' }),
+        run({ id: 'r4', job: 'review', sessionRole: 'reviewer', status: 'failure' }),
+        // A review stopped, cut by the usage limit, interrupted or still running is no round: its relaunch will be.
+        run({ id: 'r5', job: 'review', sessionRole: 'reviewer', status: 'stopped' }),
+        run({ id: 'r6', job: 'review', sessionRole: 'reviewer', status: 'limit', usageLimit: {} }),
+        run({ id: 'r7', job: 'review', sessionRole: 'reviewer', status: 'running' }),
+        run({ id: 'r8', job: 'review', sessionRole: 'reviewer', status: 'interrupted' }),
+        // A question's answerer reviews nothing; a record older than ORC-217 has no role: not counted.
+        run({ id: 'q', queue: 'questions', job: 'ask', sessionRole: 'answerer' }),
+        run({ id: 'old', job: 'review' }),
+      ],
+      effects: [
+        row('e1', { kind: 'move', to: 'human_review' }),
+        row('e2', { kind: 'move', to: 'dev' }),
+        row('e3', { kind: 'move', to: 'human_review' }),
+        // Not carried out (yet, or ever): no human was asked to review.
+        row('e4', { kind: 'move', to: 'human_review' }, 'pending'),
+        row('e5', { kind: 'move', to: 'human_review' }, 'failed'),
+      ],
+    }));
+    expect(m.reviewRounds).toEqual({ ai: 2, human: 2 });
   });
 });

@@ -211,17 +211,18 @@ const BINARY_CHECK = 'factory/binaires';
 const LEAKS_FOUND = 7;
 
 /**
- * The commits the branch adds, by gitleaks in a sandbox of its own, before any code of the agent has run: the clone has no
- * checkout, so neither a `.gitleaks.toml` nor a `.gitleaksignore` of the branch is read, and the `gitleaks:allow` it could
- * write is ignored. The report is redacted. Measured on 8.30.1: a failing `git log` leaves an empty report, exit 0, and
- * only an error on stderr. So anything but a clean exit with a readable report is a breakdown, never a green.
+ * gitleaks on `target` in mode `mode` (`git` and its log options, `dir`), with the factory's flags: the report redacted, as JSON on stdout,
+ * and the `gitleaks:allow` of what it scans ignored. The one way the factory runs it: the branch's commits here, a text it publishes (ORC-214).
  */
-export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sha: string): Promise<VerifyFailure[]> {
-  // Plain `git log -p` shows no patch for a merge, where a secret can be added: what it changed beyond the clean merge, and only that.
-  const logOpts = `--diff-merges=remerge ${from === EMPTY_TREE ? sha : `${from}..${sha}`}`;
-  const argv = ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'gitleaks', 'git', `--log-opts=${logOpts}`, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', '.'];
-  const env = { GIT_AUTHOR_NAME: 'factory', GIT_AUTHOR_EMAIL: 'factory@localhost', GIT_COMMITTER_NAME: 'factory', GIT_COMMITTER_EMAIL: 'factory@localhost', ...IN_SANDBOX_ENV };
-  const { code, stdout, stderr } = await sandboxes.exec(id, argv, { env });
+export const gitleaksArgv = (mode: readonly string[], target: string): string[] => [
+  'gitleaks', ...mode, '--no-banner', '--redact', '--ignore-gitleaks-allow', '--exit-code', String(LEAKS_FOUND), '--report-format', 'json', '--report-path', '-', '--log-level', 'error', target,
+];
+
+/** The same in a sandbox, under `verify`'s cap: the image's coreutils end it. */
+export const sandboxGitleaksArgv = (mode: readonly string[], target: string): string[] => ['timeout', String(VERIFY_TIMEOUT_MS / 1000), ...gitleaksArgv(mode, target)];
+
+/** What a gitleaks run found. Anything but a clean exit, or its leaks' code, with a readable report is a breakdown, never a green: it rejects. */
+export function gitleaksFindings({ code, stdout, stderr }: ExecResult): { leaked: boolean; found: { File: string; StartLine: number; RuleID: string }[] } {
   if ((code !== 0 && code !== LEAKS_FOUND) || stderr.trim()) throw new Error(`gitleaks could not run (code ${code}): ${stderr.trim()}`);
   let found: { File: string; StartLine: number; RuleID: string }[];
   try {
@@ -230,7 +231,21 @@ export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sh
   } catch {
     throw new Error(`gitleaks returned no readable report (code ${code})`);
   }
-  if (code === 0 && !found.length) return [];
+  return { leaked: code === LEAKS_FOUND || found.length > 0, found };
+}
+
+/**
+ * The commits the branch adds, by gitleaks in a sandbox of its own, before any code of the agent has run: the clone has no
+ * checkout, so neither a `.gitleaks.toml` nor a `.gitleaksignore` of the branch is read, and the `gitleaks:allow` it could
+ * write is ignored. The report is redacted. Measured on 8.30.1: a failing `git log` leaves an empty report, exit 0, and
+ * only an error on stderr. So anything but a clean exit with a readable report is a breakdown, never a green.
+ */
+export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sha: string): Promise<VerifyFailure[]> {
+  // Plain `git log -p` shows no patch for a merge, where a secret can be added: what it changed beyond the clean merge, and only that.
+  const logOpts = `--diff-merges=remerge ${from === EMPTY_TREE ? sha : `${from}..${sha}`}`;
+  const env = { GIT_AUTHOR_NAME: 'factory', GIT_AUTHOR_EMAIL: 'factory@localhost', GIT_COMMITTER_NAME: 'factory', GIT_COMMITTER_EMAIL: 'factory@localhost', ...IN_SANDBOX_ENV };
+  const { leaked, found } = gitleaksFindings(await sandboxes.exec(id, sandboxGitleaksArgv(['git', `--log-opts=${logOpts}`], '.'), { env }));
+  if (!leaked) return [];
   const lines = found.map((f) => `- ${f.File}:${f.StartLine} (${f.RuleID})`);
   return [{ command: SECRETS_CHECK, exitCode: 1, output: `Hard-coded secret in the branch's commits, publication blocked. Remove it from its history, and consider it exposed:\n${lines.join('\n')}` }];
 }
