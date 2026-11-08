@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrRequest } from './types.js';
+import type { CheckRunRequest, Forge, ForgeBranch, ForgeWriter, GitAccess, MergeResult, OpenPr, PrInfo, PrRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
@@ -46,6 +46,23 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
     this.answer();
     return (this.comments.get(prNumber) ?? []).map((c) => ({ ...c }));
+  }
+
+  /** The open PRs `openPrs` lists (ORC-207), as another hand opened them: apart from `setPr`'s and `ensurePr`'s. */
+  openPullRequests: OpenPr[] = [];
+  /** The branch names on the forge (ORC-207). */
+  branchNames: string[] = [];
+  /** The web page of the repository, the root of a branch's link. */
+  repoUrl = 'https://github.test/acme/app';
+
+  async openPrs(): Promise<OpenPr[]> {
+    this.answer();
+    return this.openPullRequests.map((pr) => ({ ...pr, files: [...pr.files] }));
+  }
+
+  async branches(_repoPath: string, prefix?: string): Promise<ForgeBranch[]> {
+    this.answer();
+    return this.branchNames.filter((b) => !prefix || b.startsWith(prefix)).map((name) => ({ name, url: `${this.repoUrl}/tree/${name}` }));
   }
 
   async ensurePr(_repoPath: string, req: PrRequest): Promise<{ number: number; url: string; deduplicated: boolean }> {

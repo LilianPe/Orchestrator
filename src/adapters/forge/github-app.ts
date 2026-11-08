@@ -2,9 +2,10 @@ import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
+import { openPullRequests, repoBranches } from './active-work.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
+import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type ForgeBranch, type MergeResult, type OpenPr, type PrInfo, type PrRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -570,9 +571,25 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
+    const { repo, gql } = await this.graphQl(repoPath);
+    // Every page of threads and of their comments (ORC-347).
+    return unresolvedReviewFeedback(gql, repo.owner, repo.name, prNumber);
+  }
+
+  async openPrs(repoPath: string): Promise<OpenPr[]> {
+    const { repo, gql } = await this.graphQl(repoPath);
+    return openPullRequests(gql, repo.owner, repo.name);
+  }
+
+  async branches(repoPath: string, prefix?: string): Promise<ForgeBranch[]> {
+    const { repo, gql } = await this.graphQl(repoPath);
+    return repoBranches(gql, repo.owner, repo.name, prefix);
+  }
+
+  /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */
+  private async graphQl(repoPath: string): Promise<{ repo: GitHubRepoRef; gql: GraphQl }> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    // Every page of threads and of their comments (ORC-347), each answer checked before it is read (ORC-273).
     const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
       // With errors, `data` is not read.
       const isAnswer = (d: unknown): d is { data: T; errors?: { message: string }[] } => isRecord(d) && isGraphQlErrors(d.errors) && (hasErrors(d) || isData(d.data));
@@ -580,7 +597,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       if (out.errors?.length) throw new Error(`GitHub GraphQL: ${out.errors.map((e) => e.message).join('; ')}`);
       return out.data;
     };
-    return unresolvedReviewFeedback(gql, repo.owner, repo.name, prNumber);
+    return { repo, gql };
   }
 
   /**

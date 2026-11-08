@@ -15,9 +15,28 @@ export interface PrInfo {
   failedChecks: string[];
 }
 
+/** An open PR of the repository as `intake`'s duplicate search reads it (ORC-207): every file it changes. */
+export interface OpenPr {
+  number: number;
+  url: string;
+  title: string;
+  branch: string;
+  files: string[];
+}
+
+/** A branch of the repository (ORC-207), with its page on the forge: the link a duplicate's block gives. */
+export interface ForgeBranch {
+  name: string;
+  url: string;
+}
+
 export interface Forge {
   findPr(repoPath: string, branch: string): Promise<PrInfo | undefined>;
   unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]>;
+  /** Every open PR of the repository, each with every file it changes (ORC-207): every page read, never a list cut short. */
+  openPrs(repoPath: string): Promise<OpenPr[]>;
+  /** Every branch of the repository, or only those whose name starts with `prefix` (ORC-207): every page read. */
+  branches(repoPath: string, prefix?: string): Promise<ForgeBranch[]>;
 }
 
 /** A PR the factory opens for its branch (ORC-162), by its Publisher (ORC-125). */

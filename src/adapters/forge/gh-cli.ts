@@ -1,9 +1,10 @@
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { isRecord } from '../graphql-pages.js';
+import { openPullRequests, repoBranches } from './active-work.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
-import { isFactoryCheck, type Forge, type PrInfo } from './types.js';
+import { isFactoryCheck, type Forge, type ForgeBranch, type OpenPr, type PrInfo } from './types.js';
 
 /**
  * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
@@ -131,12 +132,30 @@ export class GhCliForge implements Forge, RepoPermissions {
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    // Every page of threads and of their comments (ORC-347).
+    return unresolvedReviewFeedback(gql, owner, name, prNumber);
+  }
+
+  async openPrs(repoPath: string): Promise<OpenPr[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return openPullRequests(gql, owner, name);
+  }
+
+  async branches(repoPath: string, prefix?: string): Promise<ForgeBranch[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return repoBranches(gql, owner, name, prefix);
+  }
+
+  /**
+   * GraphQL through `gh api`, on the repository of `repoPath`. A cursor or a name goes as a string (`-f`): `-F` would
+   * turn `null`, `true` or digits into JSON; a `null` variable is left out. GraphQL errors make gh exit non-zero.
+   */
+  private async graphQl(repoPath: string): Promise<{ owner: string; name: string; gql: GraphQl }> {
     const repo = JSON.parse(await mustExec(this.exec, 'gh', ['repo', 'view', '--json', 'owner,name'], { cwd: repoPath })) as {
       owner: { login: string };
       name: string;
     };
-    // Every page of threads and of their comments (ORC-347). A cursor or a name goes as a string (`-f`): `-F` would
-    // turn `null`, `true` or digits into JSON. GraphQL errors make gh exit non-zero.
     const gql: GraphQl = async <T>(query: string, variables: Record<string, unknown>, isData: (d: unknown) => d is T, what: string) => {
       const fields = Object.entries(variables).flatMap(([k, v]) => (v === null ? [] : [typeof v === 'number' ? '-F' : '-f', `${k}=${String(v)}`]));
       const out = await mustExec(this.exec, 'gh', ['api', 'graphql', '-f', `query=${query}`, ...fields], { cwd: repoPath });
@@ -145,6 +164,6 @@ export class GhCliForge implements Forge, RepoPermissions {
       if (!isData(data)) throw new Error(`gh api graphql: unreadable output, not ${what}: ${excerpt(out)}`);
       return data;
     };
-    return unresolvedReviewFeedback(gql, repo.owner.login, repo.name, prNumber);
+    return { owner: repo.owner.login, name: repo.name, gql };
   }
 }
