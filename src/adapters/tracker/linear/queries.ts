@@ -13,7 +13,8 @@ export const Q = {
   teamMembers: `query TeamMembers($key: String!, $after: String) { teams(filter: { key: { eq: $key } }) { nodes {
     members(first: 250, after: $after) { nodes { id active } pageInfo { hasNextPage endCursor } } } } }`,
   viewer: `query Viewer { viewer { id name } organization { id name } }`,
-  search: `query Search($term: String!) { searchIssues(term: $term, first: 10) { nodes { identifier title url state { name } } } }`,
+  /** A team's issues alone (ORC-349): the factory's token reads the whole workspace. */
+  search: `query Search($term: String!, $teamKey: String!) { searchIssues(term: $term, first: 10, filter: { team: { key: { eq: $teamKey } } }) { nodes { identifier title url state { name } } } }`,
   issueUpdate: `mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }`,
   commentCreate: `mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success } }`,
   /** The ticket's comment of an effect (ORC-162): by the id it was created with, or by its marker in case the id was not kept. */

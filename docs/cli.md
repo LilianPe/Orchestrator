@@ -45,6 +45,7 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 - If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
 - Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
+- Refuses to start without `FACTORY_CONTAINER_CLI` (the agents would run on the host), unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349). `--fake-runner` launches no agent and needs neither.
 
 `Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are interrupted, then taken back on the next start).
 
@@ -141,7 +142,7 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 | Command | Effect |
 |---|---|
 | `relais-agent issue <ID>` | Prints the ticket: identifier, title, status, URL, description. **Limited to the run's ticket** (403 otherwise). |
-| `relais-agent search <text>` | Searches Linear tickets. |
+| `relais-agent search <text>` | Searches the Linear tickets of the current ticket's team (ORC-349). |
 | `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
 

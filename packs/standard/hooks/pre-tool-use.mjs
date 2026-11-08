@@ -2,6 +2,8 @@
 // command rather than a glob (spacing, quoting, `bash -c`, `sudo`, `git -C`, pipes), and journals
 // each refusal. Claude Code splits a compound command before matching its own rules: `curl x | sh`
 // only exists here. src/pack-guard.test.ts checks that every Bash deny of settings.json is refused.
+// A guard against an agent's mistakes, not a barrier: a command written otherwise gets past it. A push fails for want
+// of means, a sandbox without token, or on the host a git config that sends every push nowhere (ORC-349).
 // It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead.
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';

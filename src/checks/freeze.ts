@@ -27,36 +27,70 @@ export interface FreezeView {
   showAtHead(path: string): Promise<string | undefined>;
 }
 
+const fileName = (path: string): string => normalizePath(path).split('/').at(-1) ?? '';
+
+/**
+ * The lines of `[section]` in an INI file, blank and comment lines left out, indentation kept (it continues a value).
+ * A header as pytest's iniconfig reads it: exact, alone on its line but for a comment. Undefined when the file has no such section.
+ */
+function iniSection(content: string, section: string): string[] | undefined {
+  const lines: string[] = [];
+  let [inside, found] = [false, false];
+  for (const raw of content.split(/\r?\n/)) {
+    const header = /^\[([^\]]*)\]\s*(?:[#;].*)?$/.exec(raw);
+    if (header) {
+      inside = header[1] === section;
+      found ||= inside;
+    } else if (inside && !/^\s*(?:[#;]|$)/.test(raw)) lines.push(raw.trimEnd());
+  }
+  return found ? lines : undefined;
+}
+
+/**
+ * The files shared with other tools, of which only the part the test run reads is frozen: undefined when they have none,
+ * a throw when they do not parse.
+ */
+const TEST_PART = new Map<string, (content: string) => unknown>([
+  ['package.json', (c) => (JSON.parse(c) as { scripts?: { test?: unknown } }).scripts?.test],
+  [
+    'pyproject.toml',
+    (c) => {
+      const tool = parseToml(c).tool;
+      return isTable(tool) ? tool.pytest : undefined;
+    },
+  ],
+  // The sections pytest reads in the INI files it shares (ORC-311).
+  ['tox.ini', (c) => iniSection(c, 'pytest')],
+  ['setup.cfg', (c) => iniSection(c, 'tool:pytest')],
+]);
+
 /**
  * The harness beyond the runner's config (`isTestHarnessFile`): `conftest.py` (pytest's shared fixtures), `tsconfig*.json`,
- * and the manifests whose test part only is frozen (`package.json`'s `test` script, `pyproject.toml`'s pytest section).
+ * and the files whose test part only is frozen (`package.json`'s `test` script, the pytest section of `pyproject.toml`,
+ * `tox.ini` and `setup.cfg`).
  */
 export function isFrozenHarness(path: string): boolean {
-  const name = normalizePath(path).split('/').at(-1) ?? '';
-  return isTestHarnessFile(path) || /^(?:conftest\.py|tsconfig(?:\.[\w-]+)*\.json|package\.json|pyproject\.toml)$/.test(name);
+  const name = fileName(path);
+  return isTestHarnessFile(path) || TEST_PART.has(name) || /^(?:conftest\.py|tsconfig(?:\.[\w-]+)*\.json)$/.test(name);
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 /**
  * sha256 of what the test run reads in `content`: the whole file, but the `test` script of a `package.json` and the
- * `[tool.pytest]` section of a `pyproject.toml`. Undefined when such a manifest has none: nothing to freeze. A manifest
- * that does not parse is fingerprinted whole: any change to it then counts.
+ * pytest section of a `pyproject.toml` (`[tool.pytest]`), a `tox.ini` (`[pytest]`) or a `setup.cfg` (`[tool:pytest]`).
+ * Undefined when such a file has none: nothing to freeze. A file that does not parse, or the read of a blob too large to
+ * show (a NUL in it, ORC-311), is fingerprinted whole: any change to it then counts.
  */
 export function fingerprint(path: string, content: string): string | undefined {
-  const name = normalizePath(path).split('/').at(-1);
-  try {
-    if (name === 'package.json') {
-      const test = (JSON.parse(content) as { scripts?: { test?: unknown } }).scripts?.test;
-      return test === undefined ? undefined : sha256(JSON.stringify(test));
+  const part = TEST_PART.get(fileName(path));
+  if (part && !content.includes('\0')) {
+    try {
+      const read = part(content);
+      return read === undefined ? undefined : sha256(JSON.stringify(read));
+    } catch {
+      // Unreadable: whole, below.
     }
-    if (name === 'pyproject.toml') {
-      const tool = parseToml(content).tool;
-      const pytest = isTable(tool) ? tool.pytest : undefined;
-      return pytest === undefined ? undefined : sha256(JSON.stringify(pytest));
-    }
-  } catch {
-    // Unreadable: whole, below.
   }
   return sha256(content);
 }
