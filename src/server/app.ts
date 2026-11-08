@@ -300,7 +300,14 @@ export function createApp(d: ServerDeps): Hono {
   agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(c.get('run').ticketId))));
   // A read for the agent, even if it writes the PR's refs into its own repository: it reaches no forge itself.
   agent.get('/pr', async (c) => {
-    const pr = d.prState ? await d.prState(c.get('run')) : undefined;
+    let pr: PrRead | undefined;
+    try {
+      pr = d.prState ? await d.prState(c.get('run')) : undefined;
+    } catch (err) {
+      // The factory's own failure (the ticket or its workflow version unreadable): its message names nothing the agent needs.
+      d.bus.publish({ kind: 'log', level: 'error', message: `agent pr of ${c.get('run').id}: ${(err as Error).message}`, at: d.clock.now() });
+      return c.json({ error: 'the factory could not read this run, ask again later' }, 500);
+    }
     if (!pr) return c.json({ error: 'this run has no PR to read' }, 404);
     return isUnreadable(pr) ? c.json({ error: 'the forge did not answer, ask again later' }, 503) : c.json(pr);
   });

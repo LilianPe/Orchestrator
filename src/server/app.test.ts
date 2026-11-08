@@ -263,6 +263,9 @@ describe('server', () => {
     expect(none.status).toBe(404);
     const down = await (await setup({ prState: async () => ({ unreadable: true as const }) })).app.request('/agent/pr', { headers: { authorization: 'Bearer tok' } });
     expect(down.status).toBe(503);
+    const broken = await (await setup({ prState: async () => Promise.reject(new Error('workflow version x of REL-1 is not stored')) })).app.request('/agent/pr', { headers: { authorization: 'Bearer tok' } });
+    expect(broken.status).toBe(500);
+    expect(await broken.json()).toEqual({ error: 'the factory could not read this run, ask again later' });
   });
 
   it('agent ask journals the question, and tells nothing itself: `decide` blocks and the outbox writes it', async () => {

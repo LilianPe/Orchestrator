@@ -937,12 +937,12 @@ export class Orchestrator {
     const inFlight = this.prReads.get(run.id);
     if (inFlight) return inFlight;
     const read = (async () => {
+      const t = await this.ticket(run.projectId, run.ticketId);
       // The version the ticket is frozen on, as its launch read it: a review started before ORC-322 has no PR to read.
-      const project = await this.runtimeFor(run.projectId, run.ticketId);
+      const project = await this.runtimeFor(run.projectId, run.ticketId, t);
       if (!project?.workflow.jobs[run.job]?.prState) return undefined;
       const sandbox = this.d.sandboxes && (await this.d.sandboxes.findByAttempt(run.id));
       if (this.d.sandboxes && !sandbox) return undefined;
-      const t = await this.ticket(project.id, run.ticketId);
       return this.readPr(project, t.branch, run.cwd, run.id, sandbox || undefined, { fetch: true, fastForward: false });
     })().finally(() => this.prReads.delete(run.id));
     this.prReads.set(run.id, read);
