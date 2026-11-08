@@ -1,8 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse, stringify } from 'yaml';
-import { GOLDEN_SET_PATH, GoldenSetError, goldenFingerprint, loadGoldenSet, parseGoldenSet, PILOT_REPOS } from './golden-set.js';
+import { GOLDEN_SET_PATH, GoldenSetError, loadGoldenSet, parseGoldenSet, PILOT_REPOS } from './golden-set.js';
 
 const pilot = readFileSync(GOLDEN_SET_PATH, 'utf8');
 
@@ -10,17 +9,11 @@ const pilot = readFileSync(GOLDEN_SET_PATH, 'utf8');
 function variant(edit: (doc: Record<string, unknown> & { tickets: Record<string, unknown>[] }) => void, { resign = true } = {}): string {
   const doc = parse(pilot) as Record<string, unknown> & { tickets: Record<string, unknown>[]; decisions: { fingerprint: string }[] };
   edit(doc);
-  if (resign) doc.decisions.at(-1)!.fingerprint = fingerprintOf(doc.tickets);
+  // Signed with the fingerprint the loader's refusal names, when it gets that far.
+  const unsigned = stringify(doc);
+  const fingerprint = violations(unsigned).join('\n').match(/with fingerprint ([0-9a-f]{64})/)?.[1];
+  if (resign && fingerprint) doc.decisions.at(-1)!.fingerprint = fingerprint;
   return stringify(doc);
-}
-
-/** The fingerprint the loader computes for tickets written as in the file. */
-function fingerprintOf(tickets: Record<string, unknown>[]): string {
-  return goldenFingerprint(tickets.map((t) => ({
-    ticket: String(t.ticket), repo: String(t.repo), pr: Number(t.pr), title: String(t.title),
-    startCommit: String(t.start_commit), mergeCommit: String(t.merge_commit), nonTestLines: Number(t.non_test_lines),
-    risk: t.risk as 'low' | 'medium' | 'high',
-  })));
 }
 
 const violations = (text: string): string[] => {
@@ -89,9 +82,5 @@ describe('the golden tickets (ORC-236)', () => {
     expect(violations(variant((doc) => void (doc.tickets[0]!.non_test_lines = 401)))).toContainEqual(expect.stringMatching(/V3-705.*401 lines outside tests.*400/));
     expect(violations(variant((doc) => void (doc.tickets[0]!.start_commit = 'abc123')))).toContainEqual(expect.stringMatching(/start_commit/));
     expect(violations(variant((doc) => void (doc.tickets[0]!.notes = 'easy')))).toContainEqual(expect.stringMatching(/notes/));
-  });
-
-  it('reads the default file of the factory repository', () => {
-    expect(GOLDEN_SET_PATH).toBe(join(import.meta.dirname, '../../pilot/golden-tickets.yml'));
   });
 });

@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, appendFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -55,10 +55,7 @@ describe('the golden tickets replayed on fake runners (ORC-236)', () => {
   it('gives back its baseline: no ticket changed a verdict or the inputs of its runs', () => {
     const baseline = JSON.parse(readFileSync(baselinePath, 'utf8')) as GoldenReport;
     const changes = compareGoldenReports(baseline, report);
-    const text = formatGoldenReport(report, changes);
-    // CI shows the report in the job's summary (.github/workflows/golden.yml).
-    if (process.env.GOLDEN_REPORT) writeFileSync(process.env.GOLDEN_REPORT, text);
-    expect(changes, `${text}\nIf the change is intended, re-record the baseline: npm run golden:record (docs/tests.md).`).toEqual([]);
+    expect(changes, `${formatGoldenReport(report, changes)}\nIf the change is intended, re-record the baseline: npm run golden:record (docs/tests.md).`).toEqual([]);
   });
 
   it('shows a changed skill on every golden ticket whose run reads it, verdicts unchanged', async () => {
@@ -66,7 +63,8 @@ describe('the golden tickets replayed on fake runners (ORC-236)', () => {
     try {
       cpSync(packDir, pack, { recursive: true });
       appendFileSync(join(pack, 'skills/dev/SKILL.md'), '\nAlways write the tests last.\n');
-      const changed = await replayGoldenSet(set, fakeGoldenPass({ packDir: pack }));
+      // The engine runs on the changed pack; one pass each is enough to compare what the runs received.
+      const changed = await replayGoldenSet({ ...set, passes: 1 }, fakeGoldenPass({ packDir: pack }));
       const changes = compareGoldenReports(report, changed);
       expect(changes.map((c) => c.ticket)).toEqual(set.tickets.map((t) => t.ticket));
       expect(changes.every((c) => c.inputsChanged && c.passes.length === 0)).toBe(true);

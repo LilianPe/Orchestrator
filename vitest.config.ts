@@ -20,7 +20,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'web/src/**/*.test.ts'],
-          exclude: ['test/integration/**', 'test/isolation/**', 'test/chaos/**', 'test/golden/**'],
+          exclude: ['test/integration/**', 'test/isolation/**', 'test/chaos/**'],
           environment: 'node',
           // Many of these tests spawn real processes (git, bash, node), which need CPUs beside their worker's (ORC-325).
           // Measured on an 8-CPU machine, two `npm test` at once: with Vitest's default of a worker per CPU but one, 85 to
@@ -53,17 +53,6 @@ export default defineConfig({
           // A scenario is up to ~1,700 queries one after the other: 41 s at 24 ms a query on a loaded machine (docs/tests.md).
           testTimeout: 90_000,
           ...onPostgres,
-        },
-      },
-      {
-        // The golden tickets on fake runners (ORC-236): their own CI workflow, on a change of prompt, skill or
-        // preset (.github/workflows/golden.yml, docs/tests.md).
-        test: {
-          name: 'golden',
-          include: ['test/golden/**/*.test.ts'],
-          environment: 'node',
-          testTimeout: 60_000,
-          hookTimeout: 120_000,
         },
       },
       {

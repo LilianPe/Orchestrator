@@ -29,14 +29,14 @@ import type { TestPreset } from './test-preset.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
-/** The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read. */
-export function loadTestWorkflow(projectYaml?: string): Workflow {
-  if (!projectYaml) return loadWorkflow({ packDir });
+/** The standard pack (or `pack`) with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read. */
+export function loadTestWorkflow(projectYaml?: string, pack: string = packDir): Workflow {
+  if (!projectYaml) return loadWorkflow({ packDir: pack });
   const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
   try {
     const projectFile = join(dir, 'workflow.yml');
     writeFileSync(projectFile, projectYaml);
-    return loadWorkflow({ packDir, projectFile });
+    return loadWorkflow({ packDir: pack, projectFile });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -223,10 +223,13 @@ export function createHarness(
     repoConfig?: OrchestratorDeps['repoConfig'];
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
+    /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
+    packDir?: string;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
-  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
+  const pack = opts.packDir ?? packDir;
+  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, pack);
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
@@ -283,7 +286,7 @@ export function createHarness(
     scheduler: new Scheduler(store, { dev: devCapacity(opts.concurrency, workflow.limits.parallelSessions), questions: workflow.limits.questionSessions }),
     ...outside,
     projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}` }))],
-    packDir,
+    packDir: pack,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,

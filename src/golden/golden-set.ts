@@ -71,11 +71,6 @@ const FILE = z.strictObject({
   tickets: z.array(TICKET),
 });
 
-/** The fingerprint of a set: its tickets only, whatever the order of the keys or the comments of the file. */
-export function goldenFingerprint(tickets: readonly GoldenTicket[]): string {
-  return hashCanonical(tickets);
-}
-
 /** Reads a golden set; throws a GoldenSetError listing every rule it breaks. */
 export function parseGoldenSet(text: string): GoldenSet {
   const parsed = FILE.safeParse(parse(text));
@@ -105,7 +100,8 @@ export function parseGoldenSet(text: string): GoldenSet {
   const counts = Object.fromEntries(RISKS.map((r) => [r, tickets.filter((t) => t.risk === r).length])) as Record<Risk, number>;
   if (RISKS.some((r) => counts[r] !== RISK_MIX[r])) violations.push(`risk mix: ${mix(RISK_MIX)} expected, ${mix(counts)} here`);
 
-  const fingerprint = goldenFingerprint(tickets);
+  // The tickets only, whatever the order of the keys or the comments of the file.
+  const fingerprint = hashCanonical(tickets);
   const last = file.decisions.at(-1)!;
   if (last.fingerprint !== fingerprint) {
     violations.push(`the tickets changed without a written decision: add an entry to \`decisions\` naming it, with fingerprint ${fingerprint}`);
