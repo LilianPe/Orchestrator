@@ -46,12 +46,53 @@ function iniSection(content: string, section: string): string[] | undefined {
   return found ? lines : undefined;
 }
 
+// The package.json keys of the tools a test run may read.
+const PACKAGE_TOOLS = ['jest', 'mocha', 'ava', 'babel', 'c8', 'nyc'];
+
+/**
+ * The scripts `npm test` runs: `test`, `pretest`, `posttest`, and every script they run in turn (`npm run x`, `yarn x`,
+ * `run-s x`...), with its own `pre` and `post`.
+ */
+function testScripts(scripts: Record<string, unknown>): string[] {
+  const seen = new Set<string>();
+  const queue = ['test'];
+  while (queue.length > 0) {
+    const name = queue.shift()!;
+    if (seen.has(name) || typeof scripts[name] !== 'string') continue;
+    seen.add(name);
+    const body = scripts[name] as string;
+    queue.push(`pre${name}`, `post${name}`);
+    for (const m of body.matchAll(/\b(?:npm|pnpm|yarn|bun)\s+(?:run(?:-script)?\s+)?([\w:.-]+)/g)) queue.push(m[1]!);
+    // npm-run-all and its `run-s`/`run-p`: its arguments are script names, globs included (`test:*`).
+    if (/\b(?:run-[sp]|npm-run-all)\b/.test(body)) {
+      for (const word of body.split(/\s+/)) {
+        const glob = /^([\w:.-]+)\*$/.exec(word)?.[1];
+        queue.push(...(glob === undefined ? [word] : Object.keys(scripts).filter((s) => s.startsWith(glob))));
+      }
+    }
+  }
+  return [...seen];
+}
+
+/**
+ * What a test run reads of a package.json: the scripts `npm test` runs and the keys of the test tools. A package.json
+ * whose only part is its `test` script reads as before ORC-342, its script alone: a freeze made then still holds.
+ */
+function packageTestPart(content: string): unknown {
+  const pkg = JSON.parse(content) as { scripts?: Record<string, unknown> } & Record<string, unknown>;
+  const scripts = pkg.scripts ?? {};
+  const run = testScripts(scripts);
+  const tools = PACKAGE_TOOLS.filter((k) => k in pkg);
+  if (tools.length === 0 && run.length <= 1) return scripts.test;
+  return { scripts: Object.fromEntries(run.map((s) => [s, scripts[s]])), ...Object.fromEntries(tools.map((k) => [k, pkg[k]])) };
+}
+
 /**
  * The files shared with other tools, of which only the part the test run reads is frozen: undefined when they have none,
  * a throw when they do not parse.
  */
 const TEST_PART = new Map<string, (content: string) => unknown>([
-  ['package.json', (c) => (JSON.parse(c) as { scripts?: { test?: unknown } }).scripts?.test],
+  ['package.json', packageTestPart],
   [
     'pyproject.toml',
     (c) => {
@@ -64,14 +105,28 @@ const TEST_PART = new Map<string, (content: string) => unknown>([
   ['setup.cfg', (c) => iniSection(c, 'tool:pytest')],
 ]);
 
+// The configuration of a tool, by the shape of its name (ORC-342): `<tool>.config.<ext>`, `<tool>.conf.<ext>`,
+// `.<tool>rc[.<ext>]`. The runner reads more than its own file: vite's config (vitest's `test`, the aliases a test
+// imports through), the transforms of babel, swc or a framework, npm's shell. So any tool's, but those below.
+const TOOL_CONFIG = /^(?:\.?([\w-]+?)\.(?:config|conf)(?:\.[\w-]+)*\.(?:[cm]?[jt]s|json5?|ya?ml|toml)|\.([\w-]+?)rc(?:\.(?:[cm]?[jt]s|json5?|ya?ml|toml))?)$/;
+// The tools whose configuration changes no test: linters, formatters, commit hooks, styles, the Node version manager.
+const NOT_TEST_TOOLS = new Set(['eslint', 'prettier', 'stylelint', 'commitlint', 'lint-staged', 'lintstaged', 'markdownlint', 'markdownlint-cli2', 'cspell', 'tailwind', 'postcss', 'browserslist', 'renovate', 'husky', 'nvm', 'editorconfig']);
+
+function isToolConfig(path: string): boolean {
+  const m = TOOL_CONFIG.exec(fileName(path));
+  // Under src/, a file named so is the application's own (Angular's `app.config.ts`).
+  return !!m && !NOT_TEST_TOOLS.has(m[1] ?? m[2]!) && !normalizePath(path).split('/').includes('src');
+}
+
 /**
- * The harness beyond the runner's config (`isTestHarnessFile`): `conftest.py` (pytest's shared fixtures), `tsconfig*.json`,
- * and the files whose test part only is frozen (`package.json`'s `test` script, the pytest section of `pyproject.toml`,
+ * The harness beyond the runner's config (`isTestHarnessFile`): `conftest.py` (pytest's shared fixtures), `tsconfig*.json`
+ * and `jsconfig.json`, bun's `bunfig.toml`, any tool's configuration that can change which tests run or how (ORC-342), and
+ * the files whose test part only is frozen (what `npm test` runs of `package.json`, the pytest section of `pyproject.toml`,
  * `tox.ini` and `setup.cfg`).
  */
 export function isFrozenHarness(path: string): boolean {
   const name = fileName(path);
-  return isTestHarnessFile(path) || TEST_PART.has(name) || /^(?:conftest\.py|tsconfig(?:\.[\w-]+)*\.json)$/.test(name);
+  return isTestHarnessFile(path) || TEST_PART.has(name) || /^(?:conftest\.py|[tj]sconfig(?:\.[\w-]+)*\.json|bunfig\.toml)$/.test(name) || isToolConfig(path);
 }
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
