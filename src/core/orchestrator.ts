@@ -80,7 +80,7 @@ import { runSealedSetup } from './sealed-setup.js';
 import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
-import { inlineComment, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
+import { inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -1880,13 +1880,13 @@ export class Orchestrator {
       return;
     }
     const findings = await store.findingsOf(project.id, t.ticketId, c.sha);
-    const comments = await Promise.all(findings.map(async (f) => ({ path: f.file, line: f.line, body: await this.policy.comment(inlineComment(f)) })));
-    const post = async (inline: boolean) =>
-      writer.postReview(project.repoPath, t.prNumber!, { sha: c.sha, body: await this.policy.comment(reviewBody(c.sha, findings, { inline })), comments: inline ? comments : [], externalId: `review:${key.id}` });
-    const posted = await post(true).catch((err: unknown) => {
+    const placed = findings.filter(onItsLine);
+    const [body, ...texts] = await this.vetTogether([reviewBody(c.sha, findings, { inline: true }), ...placed.map(inlineComment)]);
+    const post = (review: { body: string; comments: { path: string; line: number; body: string }[] }) => writer.postReview(project.repoPath, t.prNumber!, { sha: c.sha, ...review, externalId: `review:${key.id}` });
+    const posted = await post({ body: body!, comments: placed.map((f, i) => ({ path: f.file, line: f.line, body: texts[i]! })) }).catch(async (err: unknown) => {
       if (!(err instanceof ReviewLinesRefused)) throw err;
       this.log('info', `AI review of ${t.ticketId}: a finding is on a line the PR does not show, all listed in the review's text`);
-      return post(false);
+      return post({ body: await this.policy.comment(reviewBody(c.sha, findings, { inline: false })), comments: [] });
     });
     const verdict = reviewVerdict(findings);
     await writer
@@ -1896,6 +1896,24 @@ export class Orchestrator {
         throw err;
       });
     return { deduplicated: posted.deduplicated };
+  }
+
+  /**
+   * Texts the factory publishes together (a review's), through the `OutputPolicy`: each checked for its size and blobs, then one
+   * secret scan for them all; only when one is refused, each on its own, one after the other, a refused one replaced by its notice.
+   */
+  private async vetTogether(texts: readonly string[]): Promise<string[]> {
+    if (texts.every((s) => !this.policy.check(s).length)) {
+      try {
+        await this.policy.vet(texts.join('\n\n'), 'review', Infinity);
+        return [...texts];
+      } catch (err) {
+        if (!(err instanceof OutputRefused)) throw err;
+      }
+    }
+    const out: string[] = [];
+    for (const s of texts) out.push(await this.policy.comment(s));
+    return out;
   }
 
   /**
@@ -2450,7 +2468,7 @@ export class Orchestrator {
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
         // An AI review reads and searches, nothing else: no write tool, no shell (ORC-183).
-        ...(job.step === 'review' ? { tools: REVIEW_TOOLS } : {}),
+        ...(job.workspace === 'published' ? { tools: REVIEW_TOOLS } : {}),
         limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).

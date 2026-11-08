@@ -868,7 +868,7 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
   }
   if (!state.reviewSha) {
     // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
-    return backToReview(out, 'I am not merging: no reviewed commit is recorded for this ticket (the factory records one only at the end of its own work, an AI review or a dev run that brings the ticket back to Human Review, and only if the head of the PR is the commit that work ended on; a move back to Human Review after a refusal records none). Move the ticket to AI Review: the AI review brings it back to Human Review on the head of the PR, which becomes the reviewed commit.');
+    return backToReview(out, 'I am not merging: no reviewed commit is recorded for this ticket (the factory records one only at the end of its own work, an AI review or a dev run that brings the ticket back to Human Review, and only if the head of the PR is the commit that work ended on; a move back to Human Review after a refusal records none). Move the ticket to AI Review: the AI review brings it back to Human Review on the head of the PR, which becomes the reviewed commit. Commits pushed by a human first need a reply in this thread, so that the agent takes them in and the factory verifies and publishes them: the AI review reads only what the factory published.');
   }
   if (!mayPublish(state, state.reviewSha, workflow)) {
     return backThroughAiReview(out, event, state, workflow, `I am not merging: the reviewed commit (${state.reviewSha.slice(0, 12)}) has no green verification, the last one is on ${state.verifiedSha?.slice(0, 12) ?? 'no commit'}.`);

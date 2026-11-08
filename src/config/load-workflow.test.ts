@@ -118,6 +118,10 @@ on:
     it('refuses a lens on a job of no review step, and a published workspace out of one', () => {
       expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { lens: security }\n') })).toThrow(/jobs\.dev\.lens/);
       expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { workspace: published }\n') })).toThrow(/jobs\.dev\.workspace/);
+      // A review job without its lens, or a review posted by another job, would drop the findings in silence.
+      const lensless = 'version: 1\njobs:\n  extra: { step: review, queue: dev, model: opus, workspace: published, skill: "factory:review" }\n';
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile(lensless) })).toThrow(/jobs\.extra\.lens/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { on_success: { post: review } }\n') })).toThrow(/jobs\.dev\.on_success\.post/);
     });
 
     it('lets a project narrow the turns of a step, never widen them', () => {

@@ -100,7 +100,8 @@ const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefine
 function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network'> {
   const name = raw.step;
   // Read by the AI review only (ORC-183): the rest of the review's contract is the preset's step.
-  if (name !== 'review' && raw.lens) throw new WorkflowError(`jobs.${job}.lens: only a job of the review step has one`);
+  if ((name === 'review') !== !!raw.lens) throw new WorkflowError(`jobs.${job}.lens: a job of the review step has one, and only it`);
+  if (raw.on_success?.post === 'review' && name !== 'review') throw new WorkflowError(`jobs.${job}.on_success.post: review publishes the findings of a job of the review step`);
   if ((name === 'review') !== (raw.workspace === 'published')) throw new WorkflowError(`jobs.${job}.workspace: published is the AI review's, and only a job of the review step has it`);
   if (name === undefined) return { ...(settings.effort?.default ? { effort: settings.effort.default } : {}), limits: own };
   const step = agentStep(name);

@@ -78,7 +78,9 @@ describe('the AI review (ORC-183)', () => {
     const h = createHarness({ aiReview: true });
     await published(h, { correctness: [outOfScope], security: [minor] });
     expect(check(h)).toMatchObject({ conclusion: 'success', title: '0 blocking findings, 1 minor, 1 out of scope' });
-    expect(h.forge.reviews[0]!.comments).toHaveLength(2);
+    // The minor one on its line; the out-of-scope one, on code the diff does not change, in the review's text.
+    expect(h.forge.reviews[0]!.comments.map((c) => [c.path, c.line])).toEqual([['src/export.ts', 3]]);
+    expect(h.forge.reviews[0]!.body).toContain('`src/list.ts:40`');
   });
 
   it('criterion 4: a review session gets the Claude API alone from the proxy, whatever the repository allows', async () => {
@@ -118,7 +120,7 @@ describe('the AI review (ORC-183)', () => {
 
   it('lists the findings in the review text when GitHub cannot place one on its line', async () => {
     const h = createHarness({ aiReview: true });
-    h.forge.unplaceable.add('src/list.ts:40');
+    h.forge.unplaceable.add('src/export.ts:7');
     await published(h, { correctness: [outOfScope], security: [blocking] });
     const [review] = h.forge.reviews;
     expect(review!.comments).toEqual([]);
