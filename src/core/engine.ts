@@ -55,6 +55,23 @@ export function historyTaint(events: readonly FactoryEvent[]): Taint {
   return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
 }
 
+/** The events of the ticket's conversation whose text `ingestedConversation` gives: a command is control, not knowledge. */
+const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented', 'pr.reviewed']);
+
+/**
+ * What `learn` after a merge is given of the ticket's conversation, in place of reading the PR itself (ORC-361): the messages
+ * and reviews the factory ingested, in their order. Only trusted ones: untrusted content is never read as knowledge, whatever
+ * `historyTaint` lets through (an untrusted approval without a word). What the forge holds that was never ingested (a
+ * comment on the PR's conversation, any review with GitHub webhooks off) is not in the journal, so not here either.
+ */
+export function ingestedConversation(events: readonly FactoryEvent[]): FeedbackItem[] {
+  return events.flatMap((e) => {
+    if (e.taint === 'untrusted' || !CONVERSATION.has(e.type)) return [];
+    const { author, body } = (e as FactoryEvent<'ticket.commented' | 'pr.reviewed'>).payload;
+    return body.trim() ? [{ author, body, at: e.at, source: e.type === 'pr.reviewed' ? ('review' as const) : ('session' as const), taint: 'trusted' as const }] : [];
+  });
+}
+
 /** A review without a word (an approval, most often): it brings nothing a run reads. */
 function silentReview(e: FactoryEvent): boolean {
   return e.type === 'pr.reviewed' && !(e as FactoryEvent<'pr.reviewed'>).payload.body.trim();

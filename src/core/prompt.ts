@@ -21,6 +21,8 @@ export interface PromptInput {
   /** The repository's CLAUDE.md, AGENTS.md, .claude/CLAUDE.md (`readConventions`), injected as data. */
   conventions?: string;
   input?: { kind: InputKind; text: string };
+  /** `learn` after a merge: what the factory ingested of the ticket's conversation (`ingestedConversation`, ORC-361). */
+  conversation?: readonly FeedbackItem[];
   reviewRounds: number;
   /** The step starts again on its session, after an attempt cut by a restart or a lost lease (ORC-220). */
   resumedAfterCut?: boolean;
@@ -32,6 +34,9 @@ const HEADINGS: Record<InputKind, string> = {
   verify_failures: 'Failed checks',
   thread: 'Message',
 };
+
+const CONVERSATION_HEADING = 'What the factory received on this ticket';
+const NO_CONVERSATION = '(no message: the ticket and the merged diff are all there is)';
 
 export function buildPrompt(p: PromptInput): string {
   const lines = [`/${p.skill}`, '', `## Ticket ${p.issue.identifier} — ${p.issue.title}`, `URL: ${p.issue.url}`];
@@ -56,6 +61,7 @@ export function buildPrompt(p: PromptInput): string {
     );
   }
   if (p.input) lines.push(`## ${HEADINGS[p.input.kind]}`, p.input.text, '');
+  if (p.conversation) lines.push(`## ${CONVERSATION_HEADING}`, p.conversation.length ? formatFeedback(p.conversation) : NO_CONVERSATION, '');
   if (p.resumedAfterCut) {
     lines.push('## Resumed after a cut', "Your previous attempt was cut (a factory restart or a silent runner), through no fault of yours. The worktree is as it left it: read it again, pick up where you were, do not redo what is done.", '');
   }
@@ -118,7 +124,7 @@ function utc(ts: number): string {
   return new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 
-export function formatFeedback(items: FeedbackItem[]): string {
+export function formatFeedback(items: readonly FeedbackItem[]): string {
   return items.map((i) => `- **${i.author}** (${utc(i.at)}): ${i.body}`).join('\n');
 }
 
