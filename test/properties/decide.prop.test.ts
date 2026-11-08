@@ -7,6 +7,7 @@ import type { Effect } from '../../src/core/decision.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
+  higherRisk,
   newTicketState,
   TRUSTED,
   type EventPayloads,
@@ -262,7 +263,30 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     it.todo('I3 on the writes: no write effect targets a frozen file (the agent writes in its sandbox; checked by factory/tests-gelés, ORC-151)');
   });
-  it.todo('I4 — the risk of a run never goes down (no risk in the state yet: recorded by intake, ORC-206)');
+  describe('I4 — the risk of a run never goes down', () => {
+    // intake assesses a high risk, then a later intake proposes a low one.
+    const assessedRisk = (id: string, risk: 'low' | 'high') => [
+      sh({ type: 'run.started', runId: id, job: 'intake', queue: 'dev', claudeSessionId: `claude-${id}` }),
+      ext('run.finished', {
+        runId: id, job: 'intake', outcome: 'success', costUsd: 0.1, turns: 3, lastText: 'lu', attempt: 'succeeded',
+        output: { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], intake: { size: 'm', risk, complete: true, missing: [], screen: false } },
+      }),
+    ];
+    const lowered = seq(...delegated(), ...assessedRisk('r1', 'high'), ...assessedRisk('r2', 'low'));
+    it(
+      'once assessed, the risk stays and never goes below what it was; the visual proof, once required, stays required',
+      () => {
+        holds((s) => {
+          for (const step of run(s).steps) {
+            const before = step.before?.risk;
+            if (before) expect(step.after?.risk && higherRisk(before, step.after.risk)).toBe(step.after?.risk);
+            if (step.before?.visualProof) expect(step.after?.visualProof).toBe('required');
+          }
+        }, [lowered]);
+      },
+      TIMEOUT,
+    );
+  });
 
   describe('I5 — every loop has a bounded counter, red CI included', () => {
     it(

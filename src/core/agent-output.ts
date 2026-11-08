@@ -1,6 +1,21 @@
 import { z } from 'zod';
 import type { Store } from '../store/types.js';
-import type { RunOutcome } from './types.js';
+import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
+
+/**
+ * What `intake` makes of the ticket (ORC-206): its size and risk, whether it is complete enough to start, and whether it
+ * speaks of a screen. `missing` are the questions a human must answer before the run starts: required when not complete.
+ */
+export const intakeAssessmentSchema = z
+  .object({
+    size: z.enum(TICKET_SIZES),
+    risk: z.enum(RISKS),
+    complete: z.boolean(),
+    missing: z.array(z.string().min(1)).max(3),
+    screen: z.boolean(),
+  })
+  .strict()
+  .refine((a) => a.complete || a.missing.length > 0, { path: ['missing'], message: 'at least one question when the ticket is not complete' });
 
 /**
  * What the agent hands back through the factory MCP's `submit_result` (ORC-188): the engine never
@@ -22,6 +37,8 @@ export const agentOutputSchema = z
     untested: z.array(z.string()),
     review_hints: z.array(z.object({ file: z.string().min(1), reason: z.string().min(1) }).strict()),
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
+    /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
+    intake: intakeAssessmentSchema.optional(),
   })
   .strict()
   .superRefine((o, ctx) => {

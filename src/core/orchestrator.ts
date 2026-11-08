@@ -2166,21 +2166,22 @@ export class Orchestrator {
       const t = await state(this.ticket(project.id, ticketId));
       if (taken(t)) return { lost: t } as const;
       const issue = await tracker.getIssue(ticketId);
-      if (job.pickup && !t.claudeSessionId) {
-        const failures = await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces);
-        if (failures.length) {
-          this.d.scheduler.release(key);
-          const reason = failures.join(' ');
-          const refused = await this.apply(t, blockedOn(project.workflow, reason, job.name));
-          await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
-            const session = await this.sessionFor(blocked);
-            await tracker.activity(session, {
-              type: 'elicitation',
-              body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
-            });
+      // The deterministic checks, before the ticket's first run: at intake, inputs of its guard, journaled with its end
+      // (ORC-206); else they block a job that picks up the ticket.
+      const intake = job.step === 'intake';
+      const failures = (intake || job.pickup) && !t.claudeSessionId ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
+      if (!intake && failures.length) {
+        this.d.scheduler.release(key);
+        const reason = failures.join(' ');
+        const refused = await this.apply(t, blockedOn(project.workflow, reason, job.name));
+        await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
+          const session = await this.sessionFor(blocked);
+          await tracker.activity(session, {
+            type: 'elicitation',
+            body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
           });
-          return undefined;
-        }
+        });
+        return undefined;
       }
       const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
       let ws = await workspaces.prepare(asked);
@@ -2191,11 +2192,11 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
-    const { issue, ws } = head;
+    const { issue, ws, pickup } = head;
     // Read again before the first write: the workspace took time.
     let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -2321,7 +2322,7 @@ export class Orchestrator {
         resumedAfterCut: !!opts.relaunchOf && resume,
       };
       const prompt = buildPrompt(promptInput);
-      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit });
+      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
 
       const run: RunRecord = {
         id: runId,
@@ -2345,6 +2346,7 @@ export class Orchestrator {
         ...(input ? { input } : {}),
         repoConfig: config,
         ...(limits !== job.limits ? { limits } : {}),
+        ...(pickup ? { pickup } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
@@ -2605,6 +2607,7 @@ export class Orchestrator {
         attempt: attemptOutcome({ outcome: result.outcome, infraError: result.infra || unreadable }, output),
         ...(output ? { output } : {}),
         ...(result.stagnation ? { stagnation: result.stagnation } : {}),
+        ...(run.pickup ? { pickup: run.pickup } : {}),
         ...(usageLimit ? { usageLimit } : {}),
       },
     };

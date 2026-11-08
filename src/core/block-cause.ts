@@ -18,6 +18,11 @@ const CAUSE_ONLY: Partial<Record<BlockCause, readonly string[]>> = {
 
 export const onlyRestatesCause = (cause: BlockCause, reason: string): boolean => CAUSE_ONLY[cause]?.includes(reason) ?? false;
 
+/** The head of the guard before In Progress refusing a ticket `intake` found incomplete (ORC-206): the ticket's to complete. */
+export const INCOMPLETE = 'The ticket is not complete enough to start:';
+/** The reason of an `intake` whose result carries no assessment (ORC-206): the ticket does not start. */
+export const NO_ASSESSMENT = 'Intake returned no assessment of the ticket.';
+
 /** The head of a launch refused on the repository's `.factory/config.yml` (ORC-209 C): the repository's to fix. */
 export const REPO_CONFIG_REFUSED = 'Repository configuration to fix: ';
 
@@ -48,10 +53,12 @@ const CAUSES: readonly (readonly [Exclude<BlockCause, 'other'>, RegExp])[] = [
   ['failed', /^Checks failing after /],
   ['loop', /^Loop: /],
   ['failed', /^The run .+ failed\.$/],
+  ['failed', new RegExp(`^${NO_ASSESSMENT}`)],
   ['pickup', /^The description (is shorter than|has no)/],
   ['pickup', /^A branch .+ already exists on origin\./],
   ['pickup', /^No repository known for the Linear team /],
   ['pickup', /^Repository to specify: /],
+  ['pickup', new RegExp(`^${INCOMPLETE}`)],
   ['repo_config', new RegExp(`^${REPO_CONFIG_REFUSED}`)],
   ['dead_letter', /^Event .+ set aside /],
   ['pr_closed', /^PR #\d+ closed without merge$/],
