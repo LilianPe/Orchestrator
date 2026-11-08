@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { addTokens, NO_TOKENS, spentTokens, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
+import { addTokens, NO_TOKENS, spentTokens, type OverBudget, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
 import { execCmd, systemEnv } from '../exec.js';
 import { Channel } from './channel.js';
 import { failedCommand, LoopDetector, WORKTREE_TREE } from './stagnation.js';
@@ -63,7 +63,6 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     '--setting-sources', '',
     '--strict-mcp-config',
     '--mcp-config', FACTORY_MCP,
-    '--max-budget-usd', String(req.limits.usd),
   ];
   if (req.readOnly) args.push('--permission-mode', 'plan');
   return args;
@@ -335,6 +334,7 @@ export class ClaudeCodeRunner implements Runner {
     const totalUsage = () => [...usage.values()].reduce(addTokens, NO_TOKENS);
     let stopped = false;
     let limited = false;
+    let overBudget: OverBudget | undefined;
     let usageLimit: RunResult['usageLimit'];
     let model = a.model;
 
@@ -359,12 +359,14 @@ export class ClaudeCodeRunner implements Runner {
       killTimer.unref();
     };
     transcript.on('error', (e) => (transcriptError = `\n[transcript] ${e.message}`));
-    const limit = () => {
+    /** `over`: the budget the attempt spent (ORC-216), for its turn and token caps; none for its duration or the detector. */
+    const limit = (over?: OverBudget) => {
       if (limited || stopped) return;
       limited = true;
+      overBudget = over;
       interrupt();
     };
-    const timer = setTimeout(limit, Math.max(0, a.remainingMs));
+    const timer = setTimeout(() => limit(), Math.max(0, a.remainingMs));
 
     let stagnation: Stagnation | undefined;
     // Its end seen, or its result: a read that comes late signals no process and changes no outcome.
@@ -411,12 +413,12 @@ export class ClaudeCodeRunner implements Runner {
           const id = typeof raw.message?.id === 'string' ? raw.message.id : undefined;
           if (id === undefined || !turnIds.has(id)) {
             if (id !== undefined) turnIds.add(id);
-            if (++assistantTurns > a.limits.turns) limit();
+            if (++assistantTurns > a.limits.turns) limit('turns');
           }
           const used = id !== undefined ? parseUsage(raw.message?.usage) : undefined;
           if (used) {
             usage.set(id!, used);
-            if (a.limits.tokens !== undefined && spentTokens(totalUsage()) > a.limits.tokens) limit();
+            if (a.limits.tokens !== undefined && spentTokens(totalUsage()) > a.limits.tokens) limit('tokens');
           }
         }
         watchLoops(raw);
@@ -497,7 +499,7 @@ export class ClaudeCodeRunner implements Runner {
         const costUsd = Math.max(result?.costUsd ?? 0, tokens ? estimateCostUsd(model, tokens) : 0);
         // Told only of a run that did not succeed: what to do of it is the factory's (`on_usage_limit`), `infra` stays as without it.
         const cutByLimit = usageLimit && outcome !== 'success' ? { usageLimit } : {};
-        transcript.end(() => resolve({ outcome, costUsd, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}), ...cutByLimit }));
+        transcript.end(() => resolve({ outcome, costUsd, turns: result?.turns ?? assistantTurns, lastText: text, ...(tokens ? { tokens } : {}), ...(broke ? { infra: true as const } : {}), ...(stagnation ? { stagnation } : {}), ...(outcome === 'limit' && overBudget ? { overBudget } : {}), ...cutByLimit }));
       };
       poll = setInterval(() => {
         read(true);

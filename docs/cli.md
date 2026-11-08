@@ -53,7 +53,9 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 
 ### `factory validate [repo]`
 
-Checks the repository's `.factory/config.yml` (the current repository by default) against the baseline: a configuration adds checks or prohibitions, it never removes any. Exits 1 with one line per violation (unknown key, negative pattern, widened `max_diff`, `full` network), 0 otherwise or without a file. Does not need an instance. See [repository configuration](repository-configuration.md) (ORC-209).
+Checks the repository's `.factory/config.yml` (the current repository by default) against the baseline: a configuration adds checks or prohibitions, it never removes any. Exits 1 with one line per violation (unknown key, negative pattern, widened `max_diff`, `full` network). See [repository configuration](repository-configuration.md) (ORC-209).
+
+It then computes the worst case of the `factory/default` preset (ORC-216) with the `budgets` of `factory.yml` (in `FACTORY_HOME`) and the repository's `budgets.per_ticket_tokens`, which only lowers the ticket's cap: every way back taken as often as its counter allows, where it costs the most, Σ attempts × `per_step_tokens` over the agent steps (and the same in turns, with each step's `maxTurns` lowered by `max_turns`). It refuses (`Budgets of factory/default refused:`) a worst case over `per_ticket_tokens`, and refuses while a cap is still unset (`per_step_tokens` of an agent step, or `per_ticket_tokens`) rather than passing. Accepted, it prints `Worst case of factory/default: <tokens> tokens and <turns> turns per ticket, within budgets.per_ticket_tokens <cap>.` and exits 0. An invalid `factory.yml` is refused too.
 
 ### `factory doctor [repo]`
 
