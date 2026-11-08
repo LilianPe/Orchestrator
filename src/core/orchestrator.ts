@@ -31,6 +31,7 @@ import { workflowVersion } from '../runtime/workflow-version.js';
 import {
   LEASE_MS,
   RUN_LEASE_MS,
+  RUN_SILENT_MS,
   type DecisionOutcome,
   type DecisionRequest,
   type EffectOutcome,
@@ -388,6 +389,12 @@ export class Orchestrator {
   /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
   private liveRuns = new Set<string>();
   private handles = new Map<string, RunHandle>();
+  /**
+   * The attempts this process follows (ORC-344), until their end is delivered: the token of their lease, which each of its
+   * writes of them carries, when they last showed progress, how long a silence their lease outlives, and whether a stop
+   * was asked of them. `ending`: their stream is over, their end on its way: no beat renews them, none takes them over.
+   */
+  private held = new Map<string, { token: number; seenAt: number; silentMs: number; stopped?: true; ending?: true }>();
   private beating = false;
   private stopping = false;
   private newId: () => string;
@@ -587,15 +594,18 @@ export class Orchestrator {
       if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost' || row.type === 'publish.done' || row.type === 'publish.refused') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
     const interrupted = await store.runsByStatus('interrupted');
-    for (const run of [...cut, ...interrupted]) {
-      if (attached.has(run.id)) continue;
+    for (const found of [...cut, ...interrupted]) {
+      if (attached.has(found.id)) continue;
+      // Taken over before it is closed (ORC-344): a daemon that still follows it writes nothing more of it; one that took it first keeps it.
+      const run = found.status === 'running' ? await this.takeOver(found.id) : found;
+      if (!run) continue;
       // A dev attempt its ticket no longer holds (stopped, replaced) leaves nothing to start again.
       const lost = run.queue === 'dev' ? ticketOf(run)?.activeRunId === run.id : run.linearSessionId !== undefined;
       if (lost && !settled.has(run.id)) {
         await store.appendInbox(lostEvent(run, 'restart', clock.now()));
         settled.add(run.id);
       }
-      await store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? clock.now() });
+      await store.putRun({ ...run, status: run.status === 'interrupted' ? 'stopped' : 'failure', endedAt: run.endedAt ?? clock.now() }, run.leaseToken ?? 0);
     }
     for (const t of tickets) {
       if (t.activeRunId && !attached.has(t.activeRunId) && !settled.has(t.activeRunId)) await this.recoverActive(t, t.activeRunId);
@@ -607,30 +617,68 @@ export class Orchestrator {
    * Its ticket still holds it, its sandbox still runs and its runner can take it up: the attempt goes on
    * under this process. A dev attempt the ticket let go of is not taken up, alive or not: another may have its place.
    */
-  private async attach(run: RunRecord, ticket: TicketState | undefined): Promise<boolean> {
+  private async attach(cut: RunRecord, ticket: TicketState | undefined): Promise<boolean> {
     const { sandboxes, runner, clock, store, scheduler } = this.d;
-    if (run.queue === 'dev' && ticket?.activeRunId !== run.id) return false;
+    if (cut.queue === 'dev' && ticket?.activeRunId !== cut.id) return false;
+    let handle: RunHandle | undefined;
     try {
-      const project = await this.runtimeFor(run.projectId, run.ticketId, ticket ?? null);
-      const job = project?.workflow.jobs[run.job];
+      const project = await this.runtimeFor(cut.projectId, cut.ticketId, ticket ?? null);
+      const job = project?.workflow.jobs[cut.job];
       if (!project || !job || !runner.attach) return false;
+      // Taken from whoever followed it, a daemon stopped or still alive: from now on its writes of it are refused (ORC-344).
+      const run = await this.takeOver(cut.id);
+      if (!run) return false;
       const sandbox = sandboxes && (await sandboxes.reattach(run.id));
       if (sandboxes && !sandbox) return false;
       // The limits it was launched with: the ticket's token budget may have lowered the job's (ORC-340).
-      const handle = runner.attach({ runId: run.id, limits: run.limits ?? job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...stagnationBounds(project.workflow, job) });
+      const bounds = stagnationBounds(project.workflow, job);
+      handle = runner.attach({ runId: run.id, limits: run.limits ?? job.limits, model: job.model, elapsedMs: clock.now() - run.startedAt, env: this.d.agentEnv(run), ...bounds });
       if (!handle) return false;
+      await store.renewRun(run.id, clock.now() + RUN_LEASE_MS, run.leaseToken);
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
-      await store.renewRun(run.id, clock.now() + RUN_LEASE_MS);
-      this.handles.set(run.id, handle);
+      this.follow(run.id, handle, run.leaseToken!, bounds.stagnation?.silentMs);
       this.liveRuns.add(run.id);
       this.track(this.pump(run, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
       return true;
     } catch (err) {
-      this.log('warn', `run ${run.id} not reattached, its step starts again: ${(err as Error).message}`);
+      // Taken up and not followed: stopped, since its step starts again.
+      handle?.stop();
+      this.log('warn', `run ${cut.id} not reattached, its step starts again: ${(err as Error).message}`);
       return false;
     }
+  }
+
+  /**
+   * Takes an attempt over from whoever held its lease (ORC-344): its record as it is now, under the token raised for this
+   * process. Undefined when it ended, or when another daemon took it first.
+   */
+  private async takeOver(id: string): Promise<RunRecord | undefined> {
+    const rec = await this.d.store.getRun(id);
+    if (rec?.status !== 'running') return undefined;
+    const token = await this.d.store.claimRun(id, rec.leaseToken ?? 0);
+    return token === undefined ? undefined : { ...rec, leaseToken: token };
+  }
+
+  /** An attempt this process follows from now on (ORC-344): its handle, its lease token, its progress counted from now. */
+  private follow(runId: string, handle: RunHandle, token: number, silentMs = RUN_SILENT_MS): void {
+    this.handles.set(runId, handle);
+    this.held.set(runId, { token, seenAt: this.d.clock.now(), silentMs });
+  }
+
+  /** Followed no more, and left running (ORC-344): nothing of it is written here (its pump finds it no longer `held`), its sandbox and its workspace stay. */
+  private letGo(runId: string): void {
+    this.handles.get(runId)?.detach?.();
+    this.handles.delete(runId);
+    this.held.delete(runId);
+  }
+
+  /** A stop asked of an attempt (a human, a session stopped): a shutdown then waits for its end rather than letting it run on. */
+  private stopRun(runId: string): void {
+    const held = this.held.get(runId);
+    if (held) held.stopped = true;
+    this.handles.get(runId)?.stop();
   }
 
   /** The ticket's active run, cut and not settled: its result was never sent, or its launch never wrote it. */
@@ -677,9 +725,10 @@ export class Orchestrator {
   }
 
   /**
-   * One heartbeat (ORC-220): an attempt this process runs, and that still lives, has its lease renewed;
-   * an attempt whose lease expired is lost. `factory up` calls it every `RUN_BEAT_MS`. A process stuck
-   * mid-flight lets its lease run out with its beats, and whoever looks next takes the attempt over.
+   * One heartbeat (ORC-220): an attempt this process runs, that still lives and that showed progress within its silence
+   * bound (ORC-344), has its lease renewed under its token; an attempt whose lease expired is lost. `factory up` calls it
+   * every `RUN_BEAT_MS`. A process stuck mid-flight lets its lease run out with its beats, as does an attempt that writes
+   * nothing more, and whoever looks next takes the attempt over. One another daemon took over is let go of, still running.
    */
   async supervise(): Promise<void> {
     // One beat at a time: an engine or a store that answers slowly does not pile them up.
@@ -687,14 +736,22 @@ export class Orchestrator {
     this.beating = true;
     try {
       const { store, clock } = this.d;
-      for (const runId of this.handles.keys()) {
-        if (await this.alive(runId)) await store.renewRun(runId, clock.now() + RUN_LEASE_MS);
+      for (const [runId, held] of this.held) {
+        if (held.ending || clock.now() - held.seenAt >= held.silentMs || !(await this.alive(runId))) continue;
+        if (await store.renewRun(runId, clock.now() + RUN_LEASE_MS, held.token)) continue;
+        // Refused: `leaseExpired` closed it, or another daemon took it over and follows it now, with its slot.
+        const rec = await store.getRun(runId);
+        if (rec?.status === 'running' && (rec.leaseToken ?? 0) !== held.token) {
+          this.log('warn', `lease of run ${runId} of ${rec.ticketId} taken over by another daemon: let go of here`);
+          this.letGo(runId);
+          this.d.scheduler.release(`${rec.ticketId}:${rec.queue}`);
+        }
       }
       // Before the leases: a run whose result is kept is still `running` in the store, its lease run out, and only its result tells its end.
       await this.deliverKept();
       for (const run of await store.runsByStatus('running')) {
-        // Its result is kept (`deliver`): ended, not lost, whatever its lease says.
-        if (this.unwritten.has(endKey(run.id))) continue;
+        // Its result is kept (`deliver`), or on its way: ended, not lost, whatever its lease says.
+        if (this.unwritten.has(endKey(run.id)) || this.held.get(run.id)?.ending) continue;
         if (run.leaseUntil !== undefined && run.leaseUntil < clock.now()) await this.leaseExpired(run);
       }
     } finally {
@@ -728,11 +785,14 @@ export class Orchestrator {
       this.log('warn', `lease of run ${expired.id} of ${expired.ticketId} expired, not relaunched yet: ${(err as Error).message}`);
       return;
     }
-    // Read again: it may have ended, or been seen alive, while the engine was asked.
-    const run = await store.getRun(expired.id);
-    if (run?.status !== 'running') return;
+    // Taken over, so read again: it may have ended while the engine was asked, or another daemon took it first (ORC-344).
+    const run = await this.takeOver(expired.id);
+    if (!run) return;
+    // Taken from itself: its pump still records what the attempt spent, under the new token, and sends nothing.
+    const mine = this.held.get(run.id);
+    if (mine) mine.token = run.leaseToken!;
     this.log('warn', `lease of run ${run.id} of ${run.ticketId} expired`);
-    await store.putRun({ ...run, status: 'failure', endedAt: clock.now() });
+    await store.putRun({ ...run, status: 'failure', endedAt: clock.now() }, run.leaseToken);
     if (box) await this.destroySandbox(box.id, run.id);
     this.handles.get(run.id)?.stop();
     scheduler.release(`${run.ticketId}:${run.queue}`);
@@ -1076,12 +1136,18 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * A clean shutdown: nothing more is taken, and the attempts under way are let go of, still running (ORC-344). The
+   * next start reattaches to them, or starts their step again if they are gone, as after a SIGKILL (`recover`).
+   */
   stopAll(): void {
     this.stopping = true;
     this.worker.stop();
-    for (const h of this.handles.values()) h.stop();
-    // Stopped runs are no longer "live": drained() must wait for their pumps to persist the final status.
-    this.liveRuns.clear();
+    for (const runId of [...this.handles.keys()]) {
+      // Ended already, its end on its way, or stopped on request: drained() waits for its end, written here.
+      if (this.liveRuns.has(runId) && !this.held.get(runId)?.stopped) this.letGo(runId);
+      else this.liveRuns.delete(runId);
+    }
   }
 
   project(id: string): ProjectRuntime {
@@ -1489,14 +1555,14 @@ export class Orchestrator {
       case 'stop_run': {
         if (c.linearSessionId) {
           for (const r of await store.runsByStatus('running')) {
-            if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.handles.get(r.id)?.stop();
+            if (r.projectId === project.id && r.ticketId === ticketId && r.linearSessionId === c.linearSessionId) this.stopRun(r.id);
           }
           return;
         }
         // The ticket's timers were deleted by the decision itself (`clearTimers`).
         // The ticket's dev work only: a question waiting for its slot is still answered.
         await store.removeFromQueue(project.id, ticketId, 'dev');
-        if (t.activeRunId) this.handles.get(t.activeRunId)?.stop();
+        if (t.activeRunId) this.stopRun(t.activeRunId);
         return;
       }
       case 'run_verify': {
@@ -1969,7 +2035,7 @@ export class Orchestrator {
     const events: InternalEvent[] = [];
     if (runId !== undefined && fresh.activeRunId === runId) {
       const r = await this.d.store.getRun(fresh.activeRunId);
-      if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() });
+      if (r && r.status === 'running' && !this.handles.has(r.id)) await this.d.store.putRun({ ...r, status: 'failure', endedAt: this.d.clock.now() }, r.leaseToken ?? 0);
       if (!this.handles.has(fresh.activeRunId)) events.push({ type: 'run.cleared' });
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
@@ -2291,6 +2357,7 @@ export class Orchestrator {
         turns: 0,
         lastText: '',
         token: this.newId(),
+        leaseToken: 1,
         cwd: ws.path,
         labels,
         sensitivePaths,
@@ -2336,7 +2403,8 @@ export class Orchestrator {
       if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
 
       // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` took. A failure leaves it to the next beat.
-      await store.renewRun(runId, clock.now() + RUN_LEASE_MS).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
+      await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
+      const bounds = stagnationBounds(wf, job);
       const handle = this.d.runner.start({
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
@@ -2345,7 +2413,7 @@ export class Orchestrator {
         resume,
         model: job.model,
         ...(job.effort ? { effort: job.effort } : {}),
-        ...stagnationBounds(wf, job),
+        ...bounds,
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
@@ -2366,7 +2434,7 @@ export class Orchestrator {
         sensitivePaths,
         ...(sandbox ? { sandboxId: sandbox.id } : {}),
       });
-      this.handles.set(runId, handle);
+      this.follow(runId, handle, run.leaseToken!, bounds.stagnation?.silentMs);
       this.liveRuns.add(runId);
       this.track(this.pump(run, handle, sandbox?.id), runId);
       handedOver = true;
@@ -2392,10 +2460,33 @@ export class Orchestrator {
     }
   }
 
-  /** Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. */
+  /**
+   * Streams a run to its end, destroys its sandbox whatever the outcome, then writes its result to the inbox. Each event
+   * is progress, which keeps its lease (ORC-344). Its writes carry its lease token: refused once another daemon took it
+   * over. Let go of (a shutdown, a takeover), it ends here: nothing written, its sandbox and its workspace kept.
+   */
   private async pump(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
+    try {
+      await this.stream(run, handle, sandboxId);
+    } finally {
+      this.held.delete(run.id);
+    }
+  }
+
+  private async stream(run: RunRecord, handle: RunHandle, sandboxId?: string): Promise<void> {
     const { tracker, bus, store, clock } = this.d;
     let result: RunResult | undefined;
+    let fence = run.leaseToken ?? 0;
+    /**
+     * Its stream over: no beat renews it and none takes it over until its end is delivered. Its token, as a `leaseExpired`
+     * of this process may have raised it before, is what it writes under.
+     */
+    const ending = () => {
+      const held = this.held.get(run.id);
+      if (held) held.ending = true;
+      fence = held?.token ?? fence;
+      this.handles.delete(run.id);
+    };
     try {
       const relay = new ActivityRelay(
         (a) => (run.linearSessionId ? tracker.activity(run.linearSessionId, a) : Promise.resolve()),
@@ -2403,35 +2494,43 @@ export class Orchestrator {
         () => clock.now(),
       );
       for await (const ev of handle.events) {
+        const held = this.held.get(run.id);
+        if (held) held.seenAt = clock.now();
+        // Its result given, a process that lingers is not silent: its end comes, whatever it writes until then.
+        if (held && ev.kind === 'result') held.silentMs = Infinity;
         bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
         relay.push(ev);
       }
       this.liveRuns.delete(run.id);
+      if (!this.held.has(run.id)) return;
       result = await handle.done;
       await relay.flush().catch((err: Error) => this.log('warn', `run ${run.id}: last activities not relayed: ${err.message}`));
-      this.handles.delete(run.id);
+      ending();
     } catch (err) {
       const message = (err as Error).message;
       this.liveRuns.delete(run.id);
+      if (!this.held.has(run.id)) return;
       this.log('error', `run ${run.id} failed: ${message}`);
       try {
         handle.stop();
       } catch {
         /* best effort */
       }
-      this.handles.delete(run.id);
+      ending();
       try {
         const rec = (await store.getRun(run.id)) ?? run;
         if (rec.status !== 'running') return;
-        await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message, infra: true });
+        if (!(await store.putRun({ ...rec, status: 'failure', endedAt: clock.now(), lastText: message, infra: true }, fence))) return;
       } catch (e) {
         this.log('error', `could not record failure of run ${run.id}: ${(e as Error).message}`);
       }
       // The runner broke (stream, sandbox): nothing for the agent to fix (ORC-289).
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
     } finally {
-      if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
-      await this.d.workspaces.release(run.projectId, run.id).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
+      if (this.held.has(run.id)) {
+        if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
+        await this.d.workspaces.release(run.projectId, run.id).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
+      }
     }
     const ended = result;
     // Recording the attempt and sending its result is the store's work, not the agent's nor the runner's (ORC-289):
@@ -2443,13 +2542,17 @@ export class Orchestrator {
     await this.deliver(endKey(run.id), `the end of run ${run.id}`, async () => {
       try {
         end ??= await this.endOf(run, ended);
-        if (end.record) await this.d.store.putRun(end.record);
+        if (end.record && !(await this.d.store.putRun(end.record, fence))) {
+          // Another daemon took it over (ORC-344): what this one saw of it is not written, nor sent.
+          this.log('warn', `run ${run.id} ended, but another daemon holds its lease: neither recorded nor sent here`);
+          end.send = false;
+        }
         end.record = undefined;
       } catch (err) {
         if (isTransient(err)) throw err;
         // Not recorded for good: its result still goes, the attempt did end.
         this.log('error', `run ${run.id} ended, but was not recorded: ${(err as Error).message}`);
-        end = { send: !(this.stopping && ended.outcome === 'stopped') };
+        end = { send: true };
       }
       if (end.send) await this.accept((finished ??= await this.finishedFor(run, ended)));
     });
@@ -2457,16 +2560,15 @@ export class Orchestrator {
 
   /**
    * An ended attempt's record, its status and what it spent, and whether its result is to be sent: not for an attempt
-   * closed before its end (`leaseExpired`: `run.lost` speaks for it), nor for one a shutdown stopped, whose ticket keeps
-   * its `activeRunId` so that the next start's recover() starts its step again.
+   * closed before its end (`leaseExpired`: `run.lost` speaks for it). A shutdown stops no attempt any more (ORC-344): one
+   * that ends `stopped` meanwhile was stopped for its own sake, and its result goes.
    */
   private async endOf(run: RunRecord, result: RunResult): Promise<{ record: RunRecord; send: boolean }> {
     const rec = (await this.d.store.getRun(run.id)) ?? run;
-    const interrupted = this.stopping && result.outcome === 'stopped';
     const closed = rec.status !== 'running';
     const record: RunRecord = {
       ...rec,
-      status: closed ? rec.status : interrupted ? 'interrupted' : result.outcome,
+      status: closed ? rec.status : result.outcome,
       endedAt: rec.endedAt ?? this.d.clock.now(),
       costUsd: result.costUsd,
       turns: result.turns,
@@ -2474,7 +2576,7 @@ export class Orchestrator {
       ...(result.tokens ? { tokens: result.tokens } : {}),
       ...endFacts(result),
     };
-    return { record, send: !(interrupted || closed) };
+    return { record, send: !closed };
   }
 
   /** The result of an attempt, whoever sends it: its pump, or recover() when the process died between the two (ORC-220). */

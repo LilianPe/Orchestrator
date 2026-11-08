@@ -5,6 +5,7 @@ import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
+import { factoryDefault } from '../presets/factory-default.js';
 
 /**
  * Lease of a claimed outbox row or queue item (ORC-129): 60 s, renewed every 20 s by its holder
@@ -16,6 +17,11 @@ export const LEASE_MS = 60_000;
 export const RUN_BEAT_MS = 30_000;
 /** Lease of an attempt: three beats, as for an outbox row (`LEASE_MS`), so one missed beat is no expiry. */
 export const RUN_LEASE_MS = 3 * RUN_BEAT_MS;
+/**
+ * How long an attempt may write nothing and keep its lease (ORC-344), when its workflow sets no silence bound
+ * (`silentAfterMs`, ORC-136): that of `factory/default`. Alive is not progress: past it, the beat renews it no more.
+ */
+export const RUN_SILENT_MS = factoryDefault.silentRun.minutes * 60_000;
 /**
  * Automatic relaunches after a cut, per ticket and per sliding window (ORC-220): a crash loop must not launch an
  * agent at each restart, without limit and out of the budget's reach. Read by `decide`: changing them changes what
@@ -32,7 +38,7 @@ export interface RunRecord {
   ticketId: string;
   job: string;
   queue: QueueName;
-  /** `interrupted`: cut by a daemon shutdown; recover() settles it on the next start. */
+  /** `interrupted`: cut by the shutdown of a daemon from before ORC-344, which stopped its attempts; recover() settles it on the next start. */
   status: 'running' | 'interrupted' | RunOutcome;
   claudeSessionId: string;
   /**
@@ -67,6 +73,11 @@ export interface RunRecord {
   usageLimit?: { resetAt?: number };
   /** Renewed by the heartbeat while the attempt lives (ORC-220, `renewRun`); absent on older records. */
   leaseUntil?: number;
+  /**
+   * The fencing token of its lease (ORC-344): raised by each daemon that takes the attempt over (`claimRun`), checked at
+   * each write of its holder (`renewRun`, `putRun`), so that a daemon that lost it writes nothing more. Absent: 0.
+   */
+  leaseToken?: number;
   /** What the attempt was given to read (ORC-220): a relaunch of its step reads the same, the feedback it consumed included. */
   input?: { kind: InputKind; text: string };
   /**
@@ -472,9 +483,21 @@ export interface Store {
   /** Journals an event. False when an event with this id was already journaled. */
   recordEvent(e: FactoryEvent): Promise<boolean>;
   recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]>;
-  putRun(r: RunRecord): Promise<void>;
-  /** The heartbeat of an attempt (ORC-220): its lease up to `until`. Nothing is written once it is no longer `running`. */
-  renewRun(id: string, until: number): Promise<void>;
+  /**
+   * Writes the attempt. Under `fence` (ORC-344), only while its stored `leaseToken` is that one: false, and nothing
+   * written, once another daemon took it over.
+   */
+  putRun(r: RunRecord, fence?: number): Promise<boolean>;
+  /**
+   * The heartbeat of an attempt (ORC-220): its lease up to `until`. Nothing is written once it is no longer `running`,
+   * nor under `fence` once its `leaseToken` is another (ORC-344). True when written.
+   */
+  renewRun(id: string, until: number, fence?: number): Promise<boolean>;
+  /**
+   * Takes a running attempt over (ORC-344): its `leaseToken` goes from `fence` to `fence + 1`, which it returns. Undefined
+   * when it is no longer running or another took it first: one daemon wins.
+   */
+  claimRun(id: string, fence: number): Promise<number | undefined>;
   getRun(id: string): Promise<RunRecord | undefined>;
   runsByStatus(status: RunRecord['status']): Promise<RunRecord[]>;
   /** The attempts of one ticket, oldest first: `runs` of `measureFacts`, without the rest of its facts. */

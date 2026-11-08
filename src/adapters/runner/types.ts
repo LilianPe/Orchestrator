@@ -64,6 +64,11 @@ export interface RunHandle {
   readonly events: AsyncIterable<RunStreamEvent>;
   readonly done: Promise<RunResult>;
   stop(): void;
+  /**
+   * Lets go of the attempt without stopping it, at a clean shutdown (ORC-344): its events end, `done` never settles,
+   * and the attempt goes on for the next daemon to `attach`. Absent: the handle is just no longer read.
+   */
+  detach?(): void;
 }
 
 /** What the supervisor knows of an attempt started by an earlier process (ORC-220). */
