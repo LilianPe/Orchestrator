@@ -112,7 +112,7 @@ describe('factory validate (ORC-209)', () => {
 
   it('refuses an option where the repository path goes', () => {
     const out: string[] = [];
-    expect(runValidateCommand({ repoPath: '--json', out: (l) => out.push(l) })).toBe(1);
+    expect(runValidateCommand({ repoPath: '--json', out: (l) => out.push(l), factoryYml: () => undefined })).toBe(1);
     expect(out).toEqual(['Usage: factory validate [repo] (no options)']);
   });
 
