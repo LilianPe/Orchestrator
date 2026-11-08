@@ -45,6 +45,7 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 - If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
 - Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
+- Refuses to start without `FACTORY_CONTAINER_CLI` (the agents would run on the host), unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349). `--fake-runner` launches no agent and needs neither.
 
 `Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are interrupted, then taken back on the next start).
 

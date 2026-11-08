@@ -237,7 +237,7 @@ Network egress of the sandboxes (ORC-213, [decision](decisions/ORC-213.md)).
 |---|---|---|---|
 | `src/app/bootstrap.ts` | Daemon wiring (store, adapters, orchestrator, server, `FACTORY_*` variables); role resolver (ORC-186) | adapt | ORC-147 (done: all sources write to the inbox, replay at startup), ORC-149 (done: worker started with a pickup every second), ORC-167, ORC-179 (`PORT`), ORC-192, ORC-201, remaining wiring removed by ORC-169, ORC-279 (`read_guard.max_lines` in the runs' environment, frozen tests read in full) |
 | `src/app/repo-variables.ts` | `makeRepoConfig`: `.factory/config.yml` read once at each launch on the default branch, fetched just before (`origin/HEAD`), an invalid file or one that is not a file refused; the repository's variables: its entry in `factory.yml`, found by `origin`, and the names from the config read; any failure of the variables yields no variables and a log line | keep | ORC-211 (done), ORC-209 C (done) |
-| `src/app/sandbox-wiring.ts` | Sandboxes of real runs from `FACTORY_CONTAINER_CLI`, instance id derived from `FACTORY_HOME` | keep | ORC-204 |
+| `src/app/sandbox-wiring.ts` | Sandboxes of real runs from `FACTORY_CONTAINER_CLI`, instance id derived from `FACTORY_HOME`, refusal of host runs without `FACTORY_ALLOW_HOST_RUNS=1` (ORC-349) | keep | ORC-204 |
 | `src/app/root.ts` | Finds the repository root through the `package.json` named `factory` | adapt | ORC-167 (the package rename breaks it, the ticket does not name it) |
 | `src/app/tracker-switch.ts` | Substitute `Tracker` while Linear is not connected through OAuth | keep | ORC-208, ORC-162 (port methods followed) |
 | `src/version.ts` | Package version | keep | ORC-167 |
