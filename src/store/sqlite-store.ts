@@ -130,10 +130,10 @@ function outboxRow(r: OutboxSqlRow): OutboxRow {
 
 const rank = (priority: number) => (priority === 0 ? 5 : priority);
 
-/** The SQLite store, kept until ORC-178: synchronous `node:sqlite` calls behind the async `Store` port. */
 /** The lease token of a stored attempt (ORC-344), 0 on a record from before it. */
 const LEASE_TOKEN = `coalesce(json_extract(runs.data, '$.leaseToken'), 0)`;
 
+/** The SQLite store, kept until ORC-178: synchronous `node:sqlite` calls behind the async `Store` port. */
 export class SqliteStore implements Store {
   private db: DatabaseSync;
 

@@ -38,10 +38,12 @@ export const TIMED_OUT = 124;
  */
 export const DEFAULT_EXEC_TIMEOUT_MS = 30 * 60_000;
 
+/** Each command in its own process group, so the kill at its deadline reaches the grandchildren too (POSIX; Windows kills the child alone). */
+const GROUP = process.platform !== 'win32';
+
 export const execCmd: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve, reject) => {
-    // Its own process group, so the kill at its deadline reaches the grandchildren too (POSIX; Windows kills the child alone).
-    const group = process.platform !== 'win32';
+    const group = GROUP;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
     const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'], detached: group });
     const out: Buffer[] = [];

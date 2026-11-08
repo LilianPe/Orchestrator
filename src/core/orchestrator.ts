@@ -398,8 +398,6 @@ export class Orchestrator {
    * was asked of them. `ending`: their stream is over, their end on its way: no beat renews them, none takes them over.
    */
   private held = new Map<string, { token: number; seenAt: number; silentMs: number; stopped?: true; ending?: true }>();
-  /** Attempts this process let go of, still running: a shutdown, or another daemon that took them over. Nothing of them is written here. */
-  private released = new Set<string>();
   private beating = false;
   private stopping = false;
   private newId: () => string;
@@ -642,7 +640,7 @@ export class Orchestrator {
       await store.renewRun(run.id, clock.now() + RUN_LEASE_MS, run.leaseToken);
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
-      this.follow(run.id, handle, run.leaseToken!, bounds);
+      this.follow(run.id, handle, run.leaseToken!, bounds.stagnation?.silentMs);
       this.liveRuns.add(run.id);
       this.track(this.pump(run, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
@@ -667,14 +665,13 @@ export class Orchestrator {
   }
 
   /** An attempt this process follows from now on (ORC-344): its handle, its lease token, its progress counted from now. */
-  private follow(runId: string, handle: RunHandle, token: number, bounds: { stagnation?: StagnationBounds }): void {
+  private follow(runId: string, handle: RunHandle, token: number, silentMs = RUN_SILENT_MS): void {
     this.handles.set(runId, handle);
-    this.held.set(runId, { token, seenAt: this.d.clock.now(), silentMs: bounds.stagnation?.silentMs ?? RUN_SILENT_MS });
+    this.held.set(runId, { token, seenAt: this.d.clock.now(), silentMs });
   }
 
-  /** Followed no more, and left running (ORC-344): nothing of it is written here, its sandbox and its workspace stay. */
+  /** Followed no more, and left running (ORC-344): nothing of it is written here (its pump finds it no longer `held`), its sandbox and its workspace stay. */
   private letGo(runId: string): void {
-    this.released.add(runId);
     this.handles.get(runId)?.detach?.();
     this.handles.delete(runId);
     this.held.delete(runId);
@@ -2416,7 +2413,7 @@ export class Orchestrator {
         sensitivePaths,
         ...(sandbox ? { sandboxId: sandbox.id } : {}),
       });
-      this.follow(runId, handle, run.leaseToken!, bounds);
+      this.follow(runId, handle, run.leaseToken!, bounds.stagnation?.silentMs);
       this.liveRuns.add(runId);
       this.track(this.pump(run, handle, sandbox?.id), runId);
       handedOver = true;
@@ -2452,7 +2449,6 @@ export class Orchestrator {
       await this.stream(run, handle, sandboxId);
     } finally {
       this.held.delete(run.id);
-      this.released.delete(run.id);
     }
   }
 
@@ -2485,14 +2481,14 @@ export class Orchestrator {
         relay.push(ev);
       }
       this.liveRuns.delete(run.id);
-      if (this.released.has(run.id)) return;
+      if (!this.held.has(run.id)) return;
       result = await handle.done;
       await relay.flush().catch((err: Error) => this.log('warn', `run ${run.id}: last activities not relayed: ${err.message}`));
       ending();
     } catch (err) {
       const message = (err as Error).message;
       this.liveRuns.delete(run.id);
-      if (this.released.has(run.id)) return;
+      if (!this.held.has(run.id)) return;
       this.log('error', `run ${run.id} failed: ${message}`);
       try {
         handle.stop();
@@ -2510,7 +2506,7 @@ export class Orchestrator {
       // The runner broke (stream, sandbox): nothing for the agent to fix (ORC-289).
       result = { outcome: 'failure', costUsd: 0, turns: 0, lastText: message, infra: true };
     } finally {
-      if (!this.released.has(run.id)) {
+      if (this.held.has(run.id)) {
         if (sandboxId) await this.destroySandbox(sandboxId, run.id, run);
         await this.d.workspaces.release(run.projectId, run.id).catch((err: Error) => this.log('warn', `trunk of run ${run.id} not removed: ${err.message}`));
       }

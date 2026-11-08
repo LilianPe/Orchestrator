@@ -5,6 +5,7 @@ import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { TRUSTED, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
+import { factoryDefault } from '../presets/factory-default.js';
 
 /**
  * Lease of a claimed outbox row or queue item (ORC-129): 60 s, renewed every 20 s by its holder
@@ -20,7 +21,7 @@ export const RUN_LEASE_MS = 3 * RUN_BEAT_MS;
  * How long an attempt may write nothing and keep its lease (ORC-344), when its workflow sets no silence bound
  * (`silentAfterMs`, ORC-136): that of `factory/default`. Alive is not progress: past it, the beat renews it no more.
  */
-export const RUN_SILENT_MS = 30 * 60_000;
+export const RUN_SILENT_MS = factoryDefault.silentRun.minutes * 60_000;
 /**
  * Automatic relaunches after a cut, per ticket and per sliding window (ORC-220): a crash loop must not launch an
  * agent at each restart, without limit and out of the budget's reach. Read by `decide`: changing them changes what

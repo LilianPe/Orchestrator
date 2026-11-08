@@ -109,10 +109,7 @@ export class FakeRunner implements Runner {
   private handle(run: LiveRun, events: Channel<RunStreamEvent>): RunHandle {
     // Detached, it never settles: the attempt's end is the next follower's.
     const never = new Promise<RunResult>(() => {});
-    const done = run.done.then(
-      (r) => (run.streams.has(events) ? r : never),
-      (err: unknown) => (run.streams.has(events) ? Promise.reject(err as Error) : never),
-    );
+    const done = run.done.catch(() => {}).then(() => (run.streams.has(events) ? run.done : never));
     return {
       events,
       done,

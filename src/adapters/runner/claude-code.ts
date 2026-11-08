@@ -460,13 +460,18 @@ export class ClaudeCodeRunner implements Runner {
     if (!a.child && result && !a.writer) clearTimeout(timer);
 
     let poll: NodeJS.Timeout | undefined;
+    /** No more reading, no more timer: the end of the handle, whether the attempt ended or was let go of. False if it was already. */
+    const halt = (): boolean => {
+      if (finished) return false;
+      finished = true;
+      clearInterval(poll);
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      return true;
+    };
     const done = new Promise<RunResult>((resolve) => {
       const finish = (spawnError?: Error) => {
-        if (finished) return;
-        finished = true;
-        clearInterval(poll);
-        clearTimeout(timer);
-        clearTimeout(killTimer);
+        if (!halt()) return;
         read(true);
         if (partial) onLine(partial, true);
         ch.close();
@@ -515,11 +520,7 @@ export class ClaudeCodeRunner implements Runner {
       },
       // Its process and its stream file stay: the next daemon's `attach` follows them from there (ORC-344).
       detach: () => {
-        if (finished) return;
-        finished = true;
-        clearInterval(poll);
-        clearTimeout(timer);
-        clearTimeout(killTimer);
+        if (!halt()) return;
         ch.close();
         transcript.end();
       },
