@@ -252,7 +252,7 @@ describe('recorded journals (test/replay/journals)', () => {
   });
 
   // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
-  it('keeps the frozen copy of every scenario journal as main held it before the freshness check (ORC-310)', () => {
+  it('keeps the frozen copies of the 13 journals main held before the freshness check (ORC-310)', () => {
     // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
     const expected = [
       'authz-refused-then-allowed', 'blocked-then-comment-resumes', 'build-loop-blocked', 'check-failed-then-feedback',
