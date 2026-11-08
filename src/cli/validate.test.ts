@@ -25,6 +25,16 @@ describe('factory validate (ORC-209)', () => {
     expect(out.join('\n')).toContain('.factory/config.yml valid');
   });
 
+  it('warns of a sensitive path that names nothing, without refusing the file (ORC-338)', () => {
+    const { code, out } = run(repo('sensitive_paths: [infra, "../x"]\n'));
+    expect(code).toBe(0);
+    expect(out).toEqual([
+      '.factory/config.yml valid: it only adds checks or prohibitions to the baseline.',
+      'Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):',
+      '- sensitive_paths[1]: "../x": a path from the repository root is expected (no drive, no `..`, no absolute path in a brace)',
+    ]);
+  });
+
   it('refuses a configuration that takes from the socle, one line per violation', () => {
     const { code, out } = run(repo('network: { level: full }\nmax_diff: { files: 99 }\n'));
     expect(code).toBe(1);

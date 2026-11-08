@@ -154,7 +154,8 @@ function push(body: any, t: TicketState, branch: string): Draft[] {
       type: 'push.human',
       // What the push brought was verified by no one in the factory (I12).
       taint: 'untrusted',
-      payload: { branch, sha: body.after, author },
+      // `before`: so that only the commits of this push are the human's (ORC-338).
+      payload: { branch, sha: body.after, author, ...(typeof body.before === 'string' ? { before: body.before } : {}) },
     },
   ];
 }

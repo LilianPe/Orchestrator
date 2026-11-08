@@ -258,14 +258,14 @@ describe('the path rules of verify on the host', () => {
   it('a human push the branch took in is the human\'s: only the agent\'s commits since the mark count', async () => {
     const h = onHost(['infra/human.tf', 'src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'p1', type: 'push.human', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { branch: 'factory/rel-1-export-csv', sha: 'human-head', author: 'mate' } });
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'p1', type: 'push.human', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { branch: 'factory/rel-1-export-csv', sha: 'human-head', author: 'mate', before: 'agent-head' } });
     await h.orch.drained();
-    expect((await h.ticket()).humanHeads).toEqual(['human-head']);
+    expect((await h.ticket()).humanPushes).toEqual([{ before: 'agent-head', after: 'human-head' }]);
     await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'u1', type: 'session.prompted', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1', body: 'tidy infra', author: 'stranger' } });
     await h.orch.drained();
     await h.advance(600_000);
     expect((await h.ticket()).untrustedSince).toBe('head-before');
-    expect(h.workspaces.sinceAsked).toEqual([{ rev: 'head-before', humanHeads: ['human-head'] }]);
+    expect(h.workspaces.sinceAsked).toEqual([{ rev: 'head-before', humanPushes: [{ before: 'agent-head', after: 'human-head' }] }]);
     expect(await failed(h)).toEqual([]);
   });
 

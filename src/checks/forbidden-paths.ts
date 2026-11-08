@@ -94,6 +94,8 @@ export function repoPatternError(pattern: string): string | undefined {
     const segments = expanded.split('/');
     if (expanded.startsWith('/') || /^[a-zA-Z]:/.test(expanded) || segments.includes('..')) return 'a path from the repository root is expected (no drive, no `..`, no absolute path in a brace)';
     if (expanded === '' || segments.every((s) => s === '.' || s === '')) return 'it names the whole repository, or nothing: name a directory or a file';
+    // The paths compared have no `.` segment: `a/./b`, or `./infra` inside a brace, would match nothing.
+    if (segments.includes('.') || segments.slice(0, -1).includes('')) return 'a `.` or empty segment matches no path: write `a/b`, not `a/./b` or `a//b`';
   }
   if (glob.empty || glob.makeRe() === false) return 'not a glob that can match a path';
   return undefined;

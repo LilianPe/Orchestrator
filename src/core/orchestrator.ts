@@ -72,7 +72,7 @@ import {
   spentTokens,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -899,7 +899,7 @@ export class Orchestrator {
     const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd);
     if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
     const untrusted = await this.untrustedMark(project, t);
-    return checkBranchPaths(reader, untrusted && { ...untrusted, sensitivePaths: parseRepoConfig(await reader.baseConfig()).sensitivePaths });
+    return checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, parseRepoConfig(await reader.baseConfig())));
   }
 
   /**
@@ -908,14 +908,17 @@ export class Orchestrator {
    * answer kept on it: `''` (its whole branch) when an untrusted run of a worktree job worked on it, the scope of the mark, else `null`.
    */
   private async untrustedMark(project: ProjectRuntime, t: TicketState): Promise<UntrustedMark | undefined> {
-    let since = t.untrustedSince;
-    if (since === undefined) {
-      const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId);
-      // A job gone from the workflow counts: fail closed.
-      const read = runs.some((r) => !!r.sensitivePaths?.length && (project.workflow.jobs[r.job]?.workspace ?? 'worktree') === 'worktree') ? '' : null;
-      since = (await this.apply(t, { type: 'untrusted.read', since: read })).untrustedSince;
-    }
-    return since === null || since === undefined ? undefined : { since, humanHeads: t.humanHeads ?? [] };
+    const since = (await this.readUntrusted(project, t)).untrustedSince;
+    return since === null || since === undefined ? undefined : { since, humanPushes: t.humanPushes ?? [] };
+  }
+
+  /** The one-time read of `untrustedMark`, for a ticket the mark has not seen; the ticket as it is otherwise. */
+  private async readUntrusted(project: ProjectRuntime, t: TicketState): Promise<TicketState> {
+    if (t.untrustedSince !== undefined) return t;
+    const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId);
+    // A job gone from the workflow counts: fail closed.
+    const read = runs.some((r) => !!r.sensitivePaths?.length && (project.workflow.jobs[r.job]?.workspace ?? 'worktree') === 'worktree') ? '' : null;
+    return this.apply(t, { type: 'untrusted.read', since: read });
   }
 
   /**
@@ -2008,6 +2011,8 @@ export class Orchestrator {
       if (opts.startMark) await store.setMeta(opts.startMark, runId);
       // In the ticket's worktree by its job, whatever the ticket still says of its path (ORC-338).
       const untrusted = sensitivePaths && job.workspace === 'worktree' ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
+      // A ticket from before the mark is read first: earlier untrusted commits then keep its whole branch checked (`reduce`).
+      if (sensitivePaths && job.workspace === 'worktree') t = await this.readUntrusted(project, t);
       await this.apply(t, { type: 'run.started', runId, job: job.name, queue: job.queue, claudeSessionId, ...(ticketSession ? {} : { ticketSession: false as const }), ...untrusted });
       await store.putRun(run);
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed' });

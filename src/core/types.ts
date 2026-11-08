@@ -202,7 +202,8 @@ export interface EventPayloads {
   /** `otherRepo`: the label names another repo of the ticket's team (ORC-291). */
   'label.changed': { label: string; change: 'added' | 'removed'; otherRepo?: true };
   /** A commit pushed by a human on the ticket's branch. */
-  'push.human': { branch: string; sha: string; author: string };
+  /** `before`: the branch's head before the push (all zeros for a new branch); absent on events recorded before ORC-338. */
+  'push.human': { branch: string; sha: string; author: string; before?: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
   command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
@@ -437,8 +438,8 @@ export interface TicketState {
    * `null` once read that no such run worked on it (`untrusted.read`); absent until then.
    */
   untrustedSince?: string | null;
-  /** The heads humans pushed to the ticket's branch (`push.human`, ORC-338): what they bring in is theirs, not the agent's. */
-  humanHeads?: string[];
+  /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
+  humanPushes?: { before?: string; after: string }[];
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */

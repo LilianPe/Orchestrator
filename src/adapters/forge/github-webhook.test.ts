@@ -141,6 +141,8 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('push', pushBody({ login: 'lilian', type: 'User' }), ctx())).toMatchObject([
       { id: 'push:REL-1:c0ffee', type: 'push.human', taint: 'untrusted', payload: { branch: BRANCH, sha: 'c0ffee', author: 'lilian' } },
     ]);
+    // ORC-338: the head before the push, so that only its own commits are the human's.
+    expect(await mapGithubWebhook('push', { ...pushBody({ login: 'lilian', type: 'User' }), before: 'b0' }, ctx())).toMatchObject([{ payload: { sha: 'c0ffee', before: 'b0' } }]);
     expect(await mapGithubWebhook('push', pushBody({ login: 'factory[bot]', type: 'Bot' }), ctx())).toEqual([]);
     expect(await mapGithubWebhook('push', { ...pushBody({ login: 'lilian', type: 'User' }), deleted: true }, ctx())).toEqual([]);
     expect(await mapGithubWebhook('push', { ...pushBody({ login: 'lilian', type: 'User' }), ref: 'refs/tags/v1' }, ctx())).toEqual([]);

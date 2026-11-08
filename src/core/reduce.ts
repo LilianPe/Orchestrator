@@ -5,7 +5,7 @@ const MAX_QUESTION_SESSIONS = 50;
 
 const MAX_ANSWERED_MESSAGES = 50;
 
-const MAX_HUMAN_HEADS = 50;
+const MAX_HUMAN_PUSHES = 50;
 
 /**
  * Only an implementer's run empties the human inbox, and a ticket may never see one. What already had its answer (a
@@ -29,8 +29,8 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'ticket.undelegated':
       return { ...t, delegated: false };
     case 'push.human':
-      // What a human pushed is theirs (ORC-338); the newest heads are kept, each one reaching those before it.
-      return { ...t, humanHeads: [...(t.humanHeads ?? []).filter((h) => h !== e.payload.sha), e.payload.sha].slice(-MAX_HUMAN_HEADS) };
+      // What a human pushed is theirs (ORC-338): the newest pushes are kept, once each.
+      return { ...t, humanPushes: [...(t.humanPushes ?? []).filter((p) => p.after !== e.payload.sha), { ...(e.payload.before ? { before: e.payload.before } : {}), after: e.payload.sha }].slice(-MAX_HUMAN_PUSHES) };
     case 'session.mentioned':
     case 'command': {
       const id = e.payload.linearSessionId;
@@ -103,7 +103,9 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
       // The first untrusted run in the ticket's worktree marks its branch, for good (ORC-338).
-      const next = e.untrusted && (t.untrustedSince === undefined || t.untrustedSince === null) ? { ...t, untrustedSince: e.untrusted.head } : { ...t };
+      // Over `null` only, the read that found no untrusted run before; a ticket never read (the launch reads it first) takes its whole branch: fail closed.
+      const mark = !e.untrusted ? t.untrustedSince : t.untrustedSince === null ? e.untrusted.head : (t.untrustedSince ?? '');
+      const next = { ...t, ...(mark === undefined ? {} : { untrustedSince: mark }) };
       if (e.queue !== 'dev') return next;
       const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       return { ...next, activeRunId: e.runId, activeJob: e.job, claudeSessionId };

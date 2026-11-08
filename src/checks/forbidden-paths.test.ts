@@ -118,6 +118,12 @@ describe('sensitivePattern', () => {
     for (const p of ['C:/infra', 'C:\\infra', 'a/../b', 'a\\..\\b', '..', '.', './', '', '/', '{src,/etc}', 'a/{b,..}', '{.,src}', 'x'.repeat(70_000)]) expect(repoPatternError(p), p.slice(0, 20)).toBeDefined();
   });
 
+  it('refuses a `.` or empty segment, in any expansion, that would match no path', () => {
+    for (const p of ['{./infra,db}/**', 'a/./b', 'a//b', '{a,b/./c}']) expect(repoPatternError(p), p).toMatch(/segment matches no path/);
+    // As the matcher would read it: nothing under infra/ (that is why it is refused).
+    expect(sensitivePattern('infra/x', ['{./infra,db}/**'])).toBeUndefined();
+  });
+
   it('reads a leading `/` from the root, as `./`', () => {
     expect(sensitivePattern('infra/main.tf', ['/infra/**'])).toBe('/infra/**');
   });

@@ -37,7 +37,9 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     if (!entry) return parseRepoConfig(undefined);
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
     if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} is not a file on ${name} (symbolic link, folder or submodule)`]);
-    return parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} unreadable on ${name} (git object missing or damaged)`));
+    const config = parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} unreadable on ${name} (git object missing or damaged)`));
+    for (const w of config.sensitivePathWarnings ?? []) o.log?.(`${REPO_CONFIG_PATH} on ${name}: ignored ${w}; a branch that took untrusted content is refused until it is fixed`);
+    return config;
   };
 }
 

@@ -7,7 +7,7 @@ import { NoCommitsBetween, type ForgeWriter } from '../adapters/forge/types.js';
 import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
 import { WORKSPACE_TARGET, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { RepoConfigError, REPO_CONFIG_PATH } from '../config/repo-config.js';
-import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, withDeadline, within } from '../core/clean-verify.js';
+import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, untrustedCheck, withDeadline, within } from '../core/clean-verify.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
@@ -99,8 +99,8 @@ export class GitPublisher implements Publisher {
     const from = await forkPoint(git, req.sha);
     if (from === req.sha) throw nothingToPublish(req.branch);
 
-    const untrusted = req.untrusted && { ...req.untrusted, sensitivePaths: (await refusedConfig(() => baseConfig(git))).sensitivePaths };
-    const failures = await checkClone(git, from, req.sha, undefined, untrusted);
+    const untrusted = req.untrusted && untrustedCheck(req.untrusted, await refusedConfig(() => baseConfig(git)));
+    const failures = await refusedConfig(() => checkClone(git, from, req.sha, undefined, untrusted));
     if (this.d.gitleaks !== false) failures.push(...(await inBox('publish-secrets', cloneDir, [], (id) => scanSecrets(sandboxes, id, from, req.sha))));
     if (failures.length) throw new PublishRefused('diff', failures.map((f) => `${f.command}: ${f.output}`).join('\n'));
 

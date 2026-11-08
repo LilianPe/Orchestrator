@@ -141,6 +141,9 @@ describe('GitWorkspaces', () => {
     put(w.path, 'claims/.env.example', 'A=\n');
     put(w.path, 'package.json', '{"scripts":{"postinstall":"x"}}');
     commit(w.path, 'untrusted work');
+    // Published: the teammate's push below builds on the untrusted commit, which stays the agent's.
+    git(w.path, 'push', '-q', origin, 'HEAD:refs/heads/factory/rel-1-export-csv');
+    const before = git(w.path, 'rev-parse', 'HEAD');
     // A teammate, from a clone of their own: a commit on the ticket's branch, and one on the default branch, both on infra.
     const mate = join(base, 'mate');
     git(base, 'clone', '-q', origin, mate);
@@ -150,7 +153,7 @@ describe('GitWorkspaces', () => {
     put(mate, 'infra/human.tf', 'a human on the branch\n');
     commit(mate, 'human push');
     git(mate, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
-    const humanHead = git(mate, 'rev-parse', 'HEAD');
+    const human = [{ before, after: git(mate, 'rev-parse', 'HEAD') }];
     git(mate, 'checkout', '-q', 'main');
     put(mate, 'infra/main.tf', 'a human on main\n');
     commit(mate, 'main moves on');
@@ -175,17 +178,25 @@ describe('GitWorkspaces', () => {
     const reader = (await ws.branchReader(repo, w.path))!;
     expect(parseRepoConfig(await reader.baseConfig()).sensitivePaths).toEqual(sensitivePaths);
     for (const since of [undefined, '', mark, '0123456789012345678901234567890123456789']) {
-      const untrusted = since === undefined ? undefined : { since, humanHeads: [humanHead], sensitivePaths };
+      const untrusted = since === undefined ? undefined : { since, humanPushes: human, sensitivePaths };
       const onClone = await checkBranchPaths(gitReader(clone, BASE, from, head), untrusted);
       expect(await checkBranchPaths(reader, untrusted), String(since)).toEqual(onClone);
     }
-    const [marked] = await checkBranchPaths(reader, { since: mark, humanHeads: [humanHead], sensitivePaths });
+    const [marked] = await checkBranchPaths(reader, { since: mark, humanPushes: human, sensitivePaths });
     for (const path of ['infra/new.tf', '` space.tf`', 'CODEOWNERS', 'claims/.env.example', 'package.json#scripts']) expect(marked!.output).toContain(path);
     // Neither what came before the mark, nor what a human pushed and the branch took in, nor what the default branch brought.
     for (const path of ['infra/old.tf', 'infra/human.tf', 'infra/main.tf']) expect(marked!.output).not.toContain(path);
-    const whole = (await checkBranchPaths(reader, { since: '', humanHeads: [humanHead], sensitivePaths }))[0]!.output;
+    // The whole branch, the `''` mark, still leaves out what a human pushed.
+    const whole = (await checkBranchPaths(reader, { since: '', humanPushes: human, sensitivePaths }))[0]!.output;
     expect(whole).toContain('infra/old.tf');
-    expect(whole).toContain('infra/human.tf');
+    expect(whole).not.toContain('infra/human.tf');
+    // The agent's commits only: not the human's (only theirs, not the agent's they built on), nor the default branch's merged in after the mark.
+    const sinceMark = await reader.agentChanges(mark, human);
+    expect([...sinceMark].sort()).toEqual([' space.tf', 'CODEOWNERS', 'claims/.env.example', 'infra/new.tf', 'package.json']);
+    const sinceFork = await reader.agentChanges('', human);
+    expect([...sinceFork].sort()).toEqual([' space.tf', 'CODEOWNERS', 'claims/.env.example', 'infra/new.tf', 'infra/old.tf', 'package.json', 'src/a.ts']);
+    // A push recorded without its `before` leaves out nothing: its range cannot be told.
+    expect(await reader.agentChanges(mark, [{ after: human[0]!.after }])).toContain('infra/human.tf');
     expect(await ws.branchReader(repo, join(root, 'nowhere'))).toBeUndefined();
   });
 

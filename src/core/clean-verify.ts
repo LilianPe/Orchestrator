@@ -7,7 +7,7 @@ import { ANTI_CHEAT_CHECK, antiCheatCheck } from '../checks/anti-cheat.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -140,7 +140,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const setup = config.setup ? [config.setup] : req.setup;
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
-    const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && { ...req.untrusted, sensitivePaths: config.sensitivePaths });
+    const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
     if (req.gitleaks || (commands.length && !failures.length)) {
       await inBox('prepare', cloneDir, [], async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
@@ -254,11 +254,12 @@ export interface BranchReader {
   /** What the head changed since it left the default branch; `link`, the target of one that is a symbolic link at the head. */
   changed(): Promise<ForbiddenView['changed']>;
   /**
-   * The paths the head's commits since `rev` touched, but for the commits `humanHeads` reach (what a human pushed, and the
-   * branch took in); a merge counts by what it changed beyond the clean merge. Undefined when `rev` is not one of the
-   * head's ancestors (unknown, or a rewritten history).
+   * The paths the agent's commits touched since `since`: the head's commits from the mark, or from the fork point when the
+   * mark is `''` or not one of the head's ancestors (a rewritten history), but for those the default branch reaches and
+   * those a human pushed (`before..after` of each push the branch took in; a push whose range cannot be read leaves out
+   * nothing). A merge counts by what it changed beyond the clean merge.
    */
-  changedSince(rev: string, humanHeads: readonly string[]): Promise<readonly string[] | undefined>;
+  agentChanges(since: string, humanPushes: readonly HumanPush[]): Promise<readonly string[]>;
   showAtFork(path: string): Promise<string | undefined>;
   showAtHead(path: string): Promise<string | undefined>;
   /** `.factory/config.yml` as the default branch holds it, never as the branch does. */
@@ -279,6 +280,25 @@ export function parseRawDiff(out: string): { path: string; deleted: boolean; mod
   return files;
 }
 
+/**
+ * `git log --format=%x00%H --name-only -z`: each commit as `\0<sha>\0`, then its paths, the first after a `\n`, each ending in
+ * `\0`. A path is never empty, so an empty field always comes before a commit: no path, whatever its name, reads as one.
+ */
+export function logPaths(out: string): { commit: string; paths: string[] }[] {
+  const commits: { commit: string; paths: string[] }[] = [];
+  const fields = out.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    if (fields[i] === '') {
+      if (i + 1 < fields.length && fields[i + 1] !== '') commits.push({ commit: fields[++i]!, paths: [] });
+      continue;
+    }
+    const current = commits.at(-1);
+    if (!current) continue;
+    current.paths.push(current.paths.length === 0 ? fields[i]!.replace(/^\n/, '') : fields[i]!);
+  }
+  return commits;
+}
+
 /** A branch read by git: `base`, the default branch's ref; `from`, where `sha` left it. */
 export function gitReader(git: CloneGit, base: string, from: string, sha: string): BranchReader {
   const ancestor = async (rev: string) => (await git.status('merge-base', '--is-ancestor', rev, sha)).code === 0;
@@ -290,12 +310,18 @@ export function gitReader(git: CloneGit, base: string, from: string, sha: string
       }
       return changed;
     },
-    changedSince: async (rev, humanHeads) => {
-      if (!(await ancestor(rev))) return undefined;
-      // A human head the branch no longer holds excludes nothing, and an unknown object would fail the listing.
-      const humans = [];
-      for (const h of humanHeads) if (await ancestor(h)) humans.push(h);
-      return zFields(await git.raw('log', '--format=', '--name-only', '-z', '--no-renames', '--diff-merges=remerge', `${rev}..${sha}`, ...(humans.length ? ['--not', ...humans] : [])));
+    agentChanges: async (since, humanPushes) => {
+      const start = since && (await ancestor(since)) ? since : from;
+      // The commits a human pushed: only theirs, not the agent's they were built on, which `--not <after>` would also leave out.
+      const human = new Set<string>();
+      for (const { before, after } of humanPushes) {
+        if (!before || !(await ancestor(after))) continue;
+        const r = await git.status('rev-list', ...(/^0+$/.test(before) ? [after, '--not', base] : [`${before}..${after}`]));
+        if (r.code === 0) for (const c of r.stdout.split('\n').filter(Boolean)) human.add(c);
+      }
+      const range = start === EMPTY_TREE ? sha : `${start}..${sha}`;
+      const out = await git.raw('log', '--format=%x00%H', '--name-only', '-z', '--no-renames', '--diff-merges=remerge', range, '--not', base);
+      return logPaths(out).filter(({ commit }) => !human.has(commit)).flatMap(({ paths }) => paths);
     },
     showAtFork: (p) => show(git, from, p),
     showAtHead: (p) => show(git, sha, p),
@@ -303,27 +329,39 @@ export function gitReader(git: CloneGit, base: string, from: string, sha: string
   };
 }
 
-/** A branch that took untrusted content (ORC-338): its mark (`TicketState.untrustedSince`) and the heads humans pushed to it. */
+/** A push a human made to the ticket's branch (`push.human`): `before` absent on an event recorded without it. */
+export interface HumanPush {
+  before?: string;
+  after: string;
+}
+
+/** A branch that took untrusted content (ORC-338): its mark (`TicketState.untrustedSince`) and the pushes humans made to it. */
 export interface UntrustedMark {
   since: string;
-  humanHeads: readonly string[];
+  humanPushes: readonly HumanPush[];
 }
+
+/** What the check of an untrusted branch needs: its mark, and the default branch's `sensitive_paths` as its caller parsed them. */
+export type UntrustedCheck = UntrustedMark & Pick<RepoConfig, 'sensitivePaths' | 'sensitivePathWarnings'>;
+
+export const untrustedCheck = (mark: UntrustedMark, config: RepoConfig): UntrustedCheck => ({
+  ...mark,
+  sensitivePaths: config.sensitivePaths,
+  ...(config.sensitivePathWarnings ? { sensitivePathWarnings: config.sensitivePathWarnings } : {}),
+});
 
 /**
  * `factory/chemins-interdits` on a branch, whoever reads it: the forbidden paths, outward links and `package.json#scripts`
  * on all it changed since the fork point; and on a branch that took untrusted content (`untrusted`, ORC-338), the default
- * branch's `sensitive_paths` (`sensitivePaths`, as its caller parsed them) among what the agent's commits since the mark
- * touched: a human's push, taken in, is the human's. A mark that is `''`, or that is not one of the head's ancestors, reads
- * the whole branch: the stricter reading. Only paths changed since the fork point count, so a merge of the default branch
- * brings none of its own changes.
+ * branch's `sensitive_paths` among what the agent's commits touched since the mark (`agentChanges`). Only paths changed
+ * since the fork point count. An entry of `sensitive_paths` that names nothing (`sensitivePathWarnings`) leaves the
+ * untrusted branch unchecked on it, so the branch is refused with a `RepoConfigError`, a config failure the agent is not sent.
  */
-export async function checkBranchPaths(reader: BranchReader, untrusted?: UntrustedMark & { sensitivePaths: readonly string[] }): Promise<VerifyFailure[]> {
+export async function checkBranchPaths(reader: BranchReader, untrusted?: UntrustedCheck): Promise<VerifyFailure[]> {
+  if (untrusted?.sensitivePathWarnings?.length) throw new RepoConfigError(untrusted.sensitivePathWarnings.map((w) => `${w}; a branch that took untrusted content is refused until it is fixed`));
   const changed = await reader.changed();
   let sensitive: ForbiddenView['sensitive'];
-  if (untrusted?.sensitivePaths.length) {
-    const since = untrusted.since ? await reader.changedSince(untrusted.since, untrusted.humanHeads) : undefined;
-    sensitive = { patterns: untrusted.sensitivePaths, changed: new Set(since ?? changed.map((f) => f.path)) };
-  }
+  if (untrusted?.sensitivePaths.length) sensitive = { patterns: untrusted.sensitivePaths, changed: new Set(await reader.agentChanges(untrusted.since, untrusted.humanPushes)) };
   const r = await checkForbiddenPaths({ changed, showAtBase: (p) => reader.showAtFork(p), showAtHead: (p) => reader.showAtHead(p), ...(sensitive ? { sensitive } : {}) });
   return r.ok ? [] : [{ command: FORBIDDEN_CHECK, exitCode: 1, output: r.summary }];
 }
@@ -333,7 +371,7 @@ export async function checkBranchPaths(reader: BranchReader, untrusted?: Untrust
  * (ORC-158) on all it changed since it left the base, whatever it says of its own history, and `factory/tests-gelés` on the frozen files as they are at
  * its head, which needs no frozen commit: a rebase can take it away, not its fingerprints. A read that fails rejects.
  */
-export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, untrusted?: UntrustedMark & { sensitivePaths: readonly string[] }): Promise<VerifyFailure[]> {
+export async function checkClone(git: CloneGit, from: string, sha: string, frozen: FrozenTests | undefined, untrusted?: UntrustedCheck): Promise<VerifyFailure[]> {
   const showAtHead = (p: string) => show(git, sha, p);
   const failures = await checkBranchPaths(gitReader(git, BASE, from, sha), untrusted);
   failures.push(...(await checkAdded(git, from, sha)));
