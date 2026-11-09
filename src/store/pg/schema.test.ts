@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { PG_TABLES, PG_TABLE_NAMES } from './schema.js';
 
 describe('Postgres store schema', () => {
-  it('declares exactly the twelve ORC-132 tables, the three of the security log (ORC-296) and the known flaky tests (ORC-164)', () => {
+  it('declares exactly the twelve ORC-132 tables, the three of the security log (ORC-296) the known flaky tests (ORC-164) and the changelog (ORC-197)', () => {
     expect(Object.values(PG_TABLES).map((table) => getTableName(table))).toEqual([...PG_TABLE_NAMES]);
-    expect(PG_TABLE_NAMES).toHaveLength(16);
-    expect(new Set(PG_TABLE_NAMES).size).toBe(16);
+    expect(PG_TABLE_NAMES).toHaveLength(17);
+    expect(new Set(PG_TABLE_NAMES).size).toBe(17);
   });
 
   it('keeps pg-boss out of the dependency tree', () => {

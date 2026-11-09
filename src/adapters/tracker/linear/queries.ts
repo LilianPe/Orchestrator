@@ -8,7 +8,8 @@ const ISSUE_FIELDS = `id identifier title description url priority createdAt upd
   delegate { id } team { id key }`;
 
 export const Q = {
-  issue: `query Issue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`,
+  /** With its creator (ORC-197), read for one issue only: the list of delegated tickets stays under Linear's cost bound. */
+  issue: `query Issue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} creator { id name url } } }`,
   /** An issue's labels past the page `ISSUE_FIELDS` read (ORC-347). */
   issueLabels: `query IssueLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 250, after: $after) { nodes { id name parent { id } } ${PAGE} } } }`,
   /** An issue's relations past the page `ISSUE_FIELDS` read (ORC-363). */

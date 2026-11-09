@@ -14,6 +14,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { FactoryEvent, FeedbackItem } from '../../core/types.js';
+import type { ChangelogEntry } from '../types.js';
 
 /** Every timestamp is `timestamptz`, so Postgres stores it in UTC and returns it in the session zone. */
 const createdAt = () => timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow();
@@ -366,7 +367,20 @@ export const knownFlakyTests = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.test] })],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296), then the known flaky tests (ORC-164). */
+/** The changelog (ORC-197), append-only: one row per `after_merge` step, by the id of its effect, the entry whole in `entry`. */
+export const changelog = pgTable(
+  'changelog',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    entry: jsonb('entry').$type<ChangelogEntry>().notNull(),
+  },
+  (t) => [index('changelog_at_idx').on(t.at)],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -384,6 +398,7 @@ export const PG_TABLES = {
   egressRequests,
   refusals,
   knownFlakyTests,
+  changelog,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -403,6 +418,7 @@ export const PG_TABLE_NAMES = [
   'egress_requests',
   'refusals',
   'known_flaky_tests',
+  'changelog',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

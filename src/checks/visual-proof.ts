@@ -55,6 +55,9 @@ export interface Judged {
   files: { capture: VisualCapture; png: Uint8Array }[];
 }
 
+/** The id of the artifact kept of a capture `verify` took for `runId` (ORC-176), by which a changelog entry names it (ORC-197). */
+export const captureArtifactId = (runId: string, c: Pick<VisualCapture, 'side' | 'width'>): string => `visual:${runId}:${c.side}:${c.width}`;
+
 /** A capture as the factory names it, in its caption and in the published check. */
 export const captureLabel = (c: Pick<VisualCapture, 'side' | 'sha' | 'width'>): string => `${c.side === 'before' ? 'Before' : 'After'}, ${c.sha.slice(0, 12)}, ${c.width} px`;
 
