@@ -10,9 +10,10 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import type { SecurityLog } from '../store/types.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { agentOnly, createApp } from './app.js';
+import { agentOnly, createApp, type TakeOverDesk } from './app.js';
+import { TAKEN_OVER } from '../core/block-cause.js';
 
-async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined>; perTicketTokens?: number; clock?: FakeClock } = {}) {
+async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined>; perTicketTokens?: number; clock?: FakeClock; takeOver?: TakeOverDesk } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -443,6 +444,75 @@ describe('server', () => {
       const res = await app.request('http://localhost/api/runs/r1/stop', { method: 'POST', headers: { origin: 'https://evil.test' } });
       expect(res.status).toBe(403);
       expect(submitted).toEqual([]);
+    });
+  });
+
+  describe('a human takes over a run (ORC-234)', () => {
+    const atWork = async (store: SqliteStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), activeRunId: 'r1' });
+    const takenOver = async (store: SqliteStore) => store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), blocked: true, blockKind: 'taken_over', blockReason: TAKEN_OVER });
+    const desk = (): TakeOverDesk & { kept: { projectId: string; ticketId: string; bytes: number }[] } => {
+      const kept: { projectId: string; ticketId: string; bytes: number }[] = [];
+      return {
+        kept,
+        attach: async (projectId, ticketId) => (projectId === 'p' && ticketId === 'REL-1' ? { command: ['docker', 'exec', '-it', 'c1', 'sh'], env: { DOCKER_HOST: 'unix:///run/user/1000/docker.sock' } } : undefined),
+        keepBundle: async (projectId, ticketId, bytes) => (kept.push({ projectId, ticketId, bytes: bytes.byteLength }), `/runs/take-over-${projectId}-${ticketId}/1.bundle`),
+      };
+    };
+
+    it('takes over that run alone: the stop names it and asks the take-over, its author and the role the guard gives journaled with it', async () => {
+      const { app, store, submitted } = await setup({ takeOver: desk() });
+      await atWork(store);
+      expect((await app.request('/api/runs/r1/take-over', { method: 'POST' })).status).toBe(200);
+      expect(submitted).toEqual([expect.objectContaining({ type: 'control.stop', projectId: 'p', ticketId: 'REL-1', actor: 'dashboard:local', roles: ['operator'], payload: { runId: 'r1', takeOver: true } })]);
+    });
+
+    it('refuses a take-over without sandboxes: never a shell on the server', async () => {
+      const { app, store, submitted } = await setup();
+      await atWork(store);
+      const res = await app.request('/api/runs/r1/take-over', { method: 'POST' });
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toMatch(/sandbox/);
+      expect(submitted).toEqual([]);
+    });
+
+    it("answers 409 for a run that is not its ticket's at work, and refuses another origin", async () => {
+      const { app, store, submitted } = await setup({ takeOver: desk() });
+      expect((await app.request('/api/runs/r1/take-over', { method: 'POST' })).status).toBe(409);
+      await atWork(store);
+      expect((await app.request('http://localhost/api/runs/r1/take-over', { method: 'POST', headers: { origin: 'https://evil.test' } })).status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+
+    it("gives the command that opens a shell in the take-over's container, for a ticket taken over only", async () => {
+      const { app, store } = await setup({ takeOver: desk() });
+      expect((await app.request('/api/tickets/p/REL-1/take-over')).status).toBe(409);
+      await takenOver(store);
+      const res = await app.request('/api/tickets/p/REL-1/take-over');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ command: ['docker', 'exec', '-it', 'c1', 'sh'], env: { DOCKER_HOST: 'unix:///run/user/1000/docker.sock' } });
+    });
+
+    it('keeps a bundle handed back and submits it, journaled with its author: the factory checks it before any push', async () => {
+      const d = desk();
+      const { app, store, submitted } = await setup({ takeOver: d });
+      await takenOver(store);
+      const res = await app.request('/api/tickets/p/REL-1/take-over/bundle', { method: 'POST', body: new Uint8Array([1, 2, 3]) });
+      expect(res.status).toBe(200);
+      expect(d.kept).toEqual([{ projectId: 'p', ticketId: 'REL-1', bytes: 3 }]);
+      expect(submitted).toEqual([expect.objectContaining({ type: 'control.bundle', projectId: 'p', ticketId: 'REL-1', actor: 'dashboard:local', roles: ['operator'], payload: { file: '/runs/take-over-p-REL-1/1.bundle' } })]);
+    });
+
+    it('takes no bundle for a ticket not taken over, nor an empty one, nor without sandboxes', async () => {
+      const d = desk();
+      const { app, store, submitted } = await setup({ takeOver: d });
+      expect((await app.request('/api/tickets/p/REL-1/take-over/bundle', { method: 'POST', body: new Uint8Array([1]) })).status).toBe(409);
+      await takenOver(store);
+      expect((await app.request('/api/tickets/p/REL-1/take-over/bundle', { method: 'POST', body: new Uint8Array() })).status).toBe(400);
+      const none = await setup();
+      await takenOver(none.store);
+      expect((await none.app.request('/api/tickets/p/REL-1/take-over/bundle', { method: 'POST', body: new Uint8Array([1]) })).status).toBe(409);
+      expect([...submitted, ...none.submitted]).toEqual([]);
+      expect(d.kept).toEqual([]);
     });
   });
 

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
+import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
+import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
 import { feedKey, initialState, reducer } from './state.js';
@@ -172,15 +173,14 @@ export function App() {
 
   // A pause or a stop of a run, from its inspection or Working (ORC-301): a refusal is said in its inspection, a success reads the Flow again.
   const [notice, setNotice] = useState<{ runId: string; text: string }>();
-  const control = (run: WorkingRunView, action: 'pause' | 'stop') => () =>
+  const control = (run: WorkingRunView, action: 'pause' | 'stop' | 'take-over') => () =>
     void post(`/api/runs/${run.runId}/${action}`).then(
       async (res) => {
         if (res.ok) {
           setNotice(undefined);
           return loadFlow();
         }
-        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
-        setNotice({ runId: run.runId, text: error ?? `${action} refused (${res.status})` });
+        setNotice({ runId: run.runId, text: await refusal(res, action) });
       },
       () => setNotice({ runId: run.runId, text: `${action} not sent: the server did not answer` }),
     );
@@ -188,6 +188,28 @@ export function App() {
   const snap = s.snapshot;
   const lines = s.selectedRun ? (s.runLines[s.selectedRun] ?? []) : [];
   const inspected = s.flow?.working.find((w) => w.runId === s.selectedRun);
+  // The tickets a human took over (ORC-234): how to reach their container, and the bundles handed back.
+  const takenOver = s.flow?.needsYou.blocked.flatMap((g) => g.tickets).filter((t) => t.kind === 'taken_over') ?? [];
+  const [shells, setShells] = useState<Record<string, ShellCommand>>({});
+  const [takeOverNotice, setTakeOverNotice] = useState<Record<string, string | undefined>>({});
+  const tell = (key: string, text?: string) => setTakeOverNotice((n) => ({ ...n, [key]: text }));
+  const unanswered = (key: string) => () => tell(key, 'not sent: the server did not answer');
+  const askShell = (t: { projectId: string; ticketId: string }) => () => {
+    const key = feedKey(t.projectId, t.ticketId);
+    void fetchTakeOverShell(t.projectId, t.ticketId).then(async (res) => {
+      if (!res.ok) return tell(key, await refusal(res, 'shell'));
+      const shell = (await res.json()) as ShellCommand;
+      setShells((sh) => ({ ...sh, [key]: shell }));
+      tell(key);
+    }, unanswered(key));
+  };
+  const handBack = (t: { projectId: string; ticketId: string }) => (file: File) => {
+    const key = feedKey(t.projectId, t.ticketId);
+    void postBundle(t.projectId, t.ticketId, file).then(
+      async (res) => tell(key, res.ok ? 'Bundle handed back: the factory checks it, then pushes it if it passes. Its verdict comes on the ticket.' : await refusal(res, 'bundle')),
+      unanswered(key),
+    );
+  };
 
   return (
     <div className="page">
@@ -223,8 +245,12 @@ export function App() {
           ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
         {inspected && (
-          <Inspection run={inspected} feed={s.feeds[feedKey(inspected.projectId, inspected.ticketId)] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} />
+          <Inspection run={inspected} feed={s.feeds[feedKey(inspected.projectId, inspected.ticketId)] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} onTakeOver={control(inspected, 'take-over')} />
         )}
+        {takenOver.map((t) => {
+          const key = feedKey(t.projectId, t.ticketId);
+          return <TakenOver key={key} ticket={t} shell={shells[key]} notice={takeOverNotice[key]} onShell={askShell(t)} onBundle={handBack(t)} />;
+        })}
         <section className="run">
           <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
           <div className="lines">

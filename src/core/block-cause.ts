@@ -8,12 +8,13 @@ export type BlockCause = (typeof BLOCK_CAUSES)[number];
  * `asked`, a question the agent asks during its run, whose reason says no more than its cause; `stuck`, a pending job
  * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts;
  * `budget`, a step or a ticket past its budget in tokens or in turns (ORC-216); `paused`, a run paused from the dashboard
- * (ORC-301), a stop that says so.
+ * (ORC-301), a stop that says so; `taken_over`, a run a human took over from the dashboard (ORC-234), a stop too, whose
+ * work goes on in a container of the human's or comes back as a bundle.
  * `human_push`: a human pushed to the ticket's branch, and the agent's work is paused while `verify` checks the push (ORC-159).
  */
-export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'budget' | 'paused';
+export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'budget' | 'paused' | 'taken_over';
 
-const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit', budget: 'limit', paused: 'stopped' };
+const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit', budget: 'limit', paused: 'stopped', taken_over: 'stopped' };
 
 /** The cause the Flow shows a block under; `other` for a ticket blocked without a kind, never a guess. */
 export const causeOf = (kind: BlockKind | undefined): BlockCause => {
@@ -49,10 +50,15 @@ export function blockPareto(kinds: readonly (BlockKind | undefined)[]): ParetoCa
 /** The kinds whose reason says no more than their cause: the Flow does not repeat it under it (ORC-332). */
 export const restatesCause = (kind: BlockKind | undefined): boolean => kind === 'stopped' || kind === 'asked';
 
+/** A ticket a human took over (ORC-234), and holds still. */
+export const isTakenOver = (t: { blocked?: boolean; blockKind?: BlockKind } | undefined): boolean => !!t?.blocked && t.blockKind === 'taken_over';
+
 /** The reason of a stop: the label of its cause in the Flow too. */
 export const STOPPED = 'Stopped on request';
 /** The reason of a run paused from the dashboard (ORC-301), shown under the cause of a stop. */
 export const PAUSED = 'Paused from the dashboard';
+/** The reason of a run taken over from the dashboard (ORC-234), shown under the cause of a stop. */
+export const TAKEN_OVER = 'Taken over from the dashboard';
 /** The reason of a question the agent asks during its run: the label of its cause in the Flow too. */
 export const AGENT_QUESTION = 'Question asked by the agent';
 
