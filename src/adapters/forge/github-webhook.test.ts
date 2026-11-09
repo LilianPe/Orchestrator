@@ -154,6 +154,8 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('pull_request_review', review, ctx(t))).toMatchObject([
       { id: 'pr:REL-1:3:review:9', taint: 'untrusted', payload: { kind: 'review', author: 'lilian', body: 'ok ?', state: 'commented' } },
     ]);
+    // Signed by the sender of the body, its GitHub login, which the matrix checks (ORC-190).
+    expect(await mapGithubWebhook('pull_request_review', { ...review, sender: { login: 'lilian', type: 'User' } }, ctx(t))).toMatchObject([{ actor: 'github:lilian' }]);
     const comment = { ...pullRequestBody('created'), comment: { id: 12, body: 'renomme', path: 'src/a.ts', line: 4, user: { login: 'lilian', type: 'User' } } };
     expect(await mapGithubWebhook('pull_request_review_comment', comment, ctx(t))).toMatchObject([
       { id: 'pr:REL-1:3:comment:12', taint: 'untrusted', payload: { kind: 'comment', body: 'src/a.ts:4 — renomme' } },

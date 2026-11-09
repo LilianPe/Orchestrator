@@ -171,6 +171,7 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSe
     onStart: raw.on_start ?? {},
     onSuccess: raw.on_success ?? {},
     ...(raw.on_blocking ? { onBlocking: raw.on_blocking } : {}),
+    ...(raw.counter ? { counter: raw.counter } : {}),
   };
 }
 
@@ -261,6 +262,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
       // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
       verifyAttempts: raw.limits?.verify_attempts ?? presetBound(preset, 'verify') + 1,
       ciFixAttempts: raw.limits?.ci_fix_attempts ?? presetBound(preset, 'review_ci'),
+      humanReviewRounds: raw.limits?.human_review_rounds ?? presetBound(preset, 'human_review'),
       repeatedFailures: preset.sameFailure.limit,
       silentAfterMs: preset.silentRun.minutes * 60_000,
       specCheckReturns: presetBound(preset, 'spec_check'),

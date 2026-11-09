@@ -1,3 +1,4 @@
+import { githubActor } from '../../core/authz.js';
 import { TRUSTED, type CiRunPayload, type FactoryEvent, type PrPayload, type PushedCommit, type Taint, type TicketState } from '../../core/types.js';
 import { verifyLinearSignature } from '../tracker/linear/webhook.js';
 import { checkRunBucket } from './github-app.js';
@@ -41,7 +42,8 @@ export interface GithubMapContext {
 }
 
 /** `ticket`: the ticket of this event when a webhook concerns several (a push on the default branch). */
-type Draft = { id: string; type: FactoryEvent['type']; payload: unknown; taint?: Taint; ticket?: TicketState };
+/** `actor`: the signed author, as `githubActor` names a GitHub login (ORC-190). */
+type Draft = { id: string; type: FactoryEvent['type']; payload: unknown; taint?: Taint; ticket?: TicketState; actor?: string };
 type Mapped = { ticket?: TicketState; events: Draft[] };
 
 const NOTHING: Mapped = { events: [] };
@@ -322,6 +324,8 @@ function review(body: any, t: TicketState, kind: 'review' | 'comment'): Draft[] 
       type: 'pr.reviewed',
       // Written by whoever can review the PR.
       taint: 'untrusted',
+      // The sender of the signed body: the matrix checks its rights on the repository before the review is fed back (ORC-190).
+      ...(typeof body.sender?.login === 'string' ? { actor: githubActor(body.sender.login) } : {}),
       payload: {
         ...prPayload(body.pull_request),
         kind,
@@ -372,8 +376,8 @@ async function partials(name: string, body: any, ctx: GithubMapContext): Promise
 export async function mapGithubWebhook(name: string, body: any, ctx: GithubMapContext): Promise<FactoryEvent[]> {
   const { ticket, events } = await partials(name, body, ctx);
   const at = ctx.now();
-  return events.flatMap(({ id, type, payload, taint, ticket: own }) => {
+  return events.flatMap(({ id, type, payload, taint, ticket: own, actor }) => {
     const t = own ?? ticket;
-    return t ? [{ ...TRUSTED, ...(taint ? { taint } : {}), id, type, at, projectId: t.projectId, ticketId: t.ticketId, payload } as FactoryEvent] : [];
+    return t ? [{ ...TRUSTED, ...(taint ? { taint } : {}), ...(actor ? { actor } : {}), id, type, at, projectId: t.projectId, ticketId: t.ticketId, payload } as FactoryEvent] : [];
   });
 }

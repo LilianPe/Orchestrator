@@ -124,9 +124,9 @@ describe('decide — authorization matrix (ORC-186)', () => {
     });
   });
 
-  it('checks a status change that starts a run (rework, review), and nothing else', () => {
+  it('checks a status change that starts a run (a review again), and nothing else', () => {
     const review = ticket({ logical: 'human_review' });
-    const rework = ev('status.changed', { from: 'human_review', to: 'dev' }, 'u-out', []);
+    const rework = ev('status.changed', { from: 'human_review', to: 'ai_review' }, 'u-out', []);
     expect(decide(review, rework, workflow).effects).toEqual([expect.objectContaining({ kind: 'comment' })]);
     expect(starts(decide(review, { ...rework, actor: 'u-dev', roles: WRITER } as FactoryEvent, workflow).effects)).toHaveLength(1);
     // A label that starts nothing (agent:stop) and a move no rule answers are not checked.
@@ -140,7 +140,7 @@ describe('decide — authorization matrix (ORC-186)', () => {
     const reconciled = decide(ticket({ delegated: false }), ev('ticket.delegated', {}, undefined, []), workflow);
     expect(refused(reconciled.trace)).toBe(true);
     expect(reconciled.effects).toEqual([]);
-    const integration = decide(ticket({ logical: 'human_review' }), ev('status.changed', { from: 'human_review', to: 'dev' }, undefined, []), workflow);
+    const integration = decide(ticket({ logical: 'human_review' }), ev('status.changed', { from: 'human_review', to: 'ai_review' }, undefined, []), workflow);
     expect(refused(integration.trace)).toBe(true);
     expect(integration.effects).toEqual([]);
   });
@@ -152,7 +152,13 @@ describe('decide — authorization matrix (ORC-186)', () => {
     expect(mayCheck(e('label.changed', { label: 'relance', change: 'added' }), labelled)).toBe(true);
     expect(mayCheck(e('label.changed', { label: 'relance', change: 'removed' }), labelled)).toBe(false);
     expect(mayCheck(e('label.changed', { label: 'agent:stop', change: 'added' }), workflow)).toBe(false);
-    expect(mayCheck(e('status.changed', { from: 'human_review', to: 'dev' }), workflow)).toBe(true);
+    expect(mayCheck(e('status.changed', { from: 'human_review', to: 'ai_review' }), workflow)).toBe(true);
+    // A move back to In Progress starts nothing since ORC-190: the feedback does, a review on the PR checked on its author.
+    expect(mayCheck(e('status.changed', { from: 'human_review', to: 'dev' }), workflow)).toBe(false);
+    expect(mayCheck(e('pr.reviewed', { number: 3, url: 'u', branch: 'b', kind: 'review', author: 'octo', body: 'x' }), workflow)).toBe(true);
+    // A review that asks nothing waits on no read of Linear or GitHub.
+    expect(mayCheck(e('pr.reviewed', { number: 3, url: 'u', branch: 'b', kind: 'review', author: 'octo', body: 'LGTM', state: 'APPROVED' }), workflow)).toBe(false);
+    expect(mayCheck(e('pr.reviewed', { number: 3, url: 'u', branch: 'b', kind: 'review', author: 'octo', body: ' ' }), workflow)).toBe(false);
     expect(mayCheck(e('status.changed', { from: 'dev', to: 'human_review' }), workflow)).toBe(false);
     expect(mayCheck(e('session.stopped', {}), workflow)).toBe(false);
   });

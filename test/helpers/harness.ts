@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse, stringify } from 'yaml';
 import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
@@ -48,6 +49,15 @@ export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean; 
     job.onSuccess = job.name === 'dev' ? { move: 'human_review', post: 'summary' } : { ...(job.onSuccess.post ? { post: job.onSuccess.post } : {}) };
   }
   return wf;
+}
+
+/**
+ * A project file whose move from Human Review back to In Progress starts `dev-feedback`, as the pack did before ORC-190: a start
+ * a human makes at will, for the scenarios about what such a start reads or waits behind. Over `yaml` (a test preset's), if given.
+ */
+export function withMoveBack(yaml?: string): string {
+  const raw = (yaml ? parse(yaml) : { version: 1 }) as { on?: Record<string, unknown> };
+  return stringify({ ...raw, on: { ...raw.on, 'status.changed': [{ from: 'human_review', to: 'dev', run: 'dev-feedback' }, { to: 'ai_review', run: 'review' }] } });
 }
 
 function withProjectFile(projectYaml: string, pack: string): Workflow {
