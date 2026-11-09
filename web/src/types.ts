@@ -131,6 +131,25 @@ export interface MeasuredTicketView extends FlowTicketView {
   measures: TicketMeasuresView | null;
 }
 
+/** `GET /api/overview` (ORC-299): `Overview` of src/core/overview.ts over `[since, until)`. */
+export interface OverviewView {
+  since: number;
+  until: number;
+  tickets: number;
+  unmeasured: number;
+  delivered: number;
+  medianLeadTimeMs: number | null;
+  tokensPerMerged: { mean: number | null; leftOut: number };
+  usageLimitShare: { mean: number | null; leftOut: number };
+  firstTry: { yes: number; of: number; reworks: { cause: string; tickets: number }[] };
+  reverted: { yes: number; known: number };
+  ciPerMerged: { meanMs: number | null; leftOut: number };
+  red: { verified: number; wouldHaveBlocked: number };
+  messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
+  /** The 90-day baseline: null until ORC-230 computes it. */
+  baseline: null;
+}
+
 /** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */
 export interface SecurityPeriodView {
   since: number;

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
+import { fetchBlocks, fetchFlow, fetchMeasures, fetchOverview, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
+import { Overview } from './Overview.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
 import { feedKey, initialState, reducer } from './state.js';
@@ -25,8 +26,9 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'measures' | 'run' | 'security';
-const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
+type View = 'flow' | 'overview' | 'measures' | 'run' | 'security';
+const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'measures', '#security': 'security' };
+const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : PAGES[hash] ?? 'flow');
 
 /**
  * What `read` gives, read now and every 30 s while the page is shown and its tab visible, again when `deps` change; an
@@ -50,6 +52,17 @@ function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?
     // `read` is rebuilt each render: `deps` say when it changes.
   }, deps);
   return state;
+}
+
+/** The reduced overview (ORC-299), read when shown and every 30 s while it is: the factory computes it over the last 90 days. */
+function OverviewPage() {
+  const { data, failed } = usePolled(fetchOverview, []);
+  return (
+    <div className="flow">
+      {failed && <p className="flow-failed" role="alert">{data ? 'Overview out of date: reading it failed. Retrying within 30 s.' : 'Overview unavailable: reading it failed. Retrying within 30 s.'}</p>}
+      {data ? <Overview overview={data} /> : !failed && <section><p className="empty">Loading the overview…</p></section>}
+    </div>
+  );
 }
 
 /** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
@@ -195,6 +208,7 @@ export function App() {
         <h1>{PRODUCT_NAME}</h1>
         <nav className="views">
           <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
+          <a href="#overview" aria-current={view === 'overview' ? 'page' : undefined}>Overview</a>
           <a href="#measures" aria-current={view === 'measures' || view === 'run' ? 'page' : undefined}>Measures</a>
           <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
         </nav>
@@ -215,7 +229,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
+      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

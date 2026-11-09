@@ -1,4 +1,4 @@
-import type { BlockParetoView, BusMessage, FlowView, MeasuredTicketView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
+import type { BlockParetoView, BusMessage, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
 
 export async function fetchSnapshot(): Promise<Snapshot> {
   return (await fetch('/api/state')).json();
@@ -13,6 +13,9 @@ async function getJson<T>(path: string): Promise<T> {
 export const fetchFlow = () => getJson<FlowView>('/api/flow');
 
 export const fetchMeasures = async () => (await getJson<{ tickets: MeasuredTicketView[] }>('/api/measures')).tickets;
+
+/** The reduced overview over the last 90 days (ORC-299), computed by the factory. */
+export const fetchOverview = () => getJson<OverviewView>('/api/overview');
 
 /** The security log and the Pareto of the blocks over `[since, until)` (ORC-300). */
 export const fetchSecurity = (since: number, until: number) => getJson<SecurityPeriodView>(`/api/security?since=${since}&until=${until}`);

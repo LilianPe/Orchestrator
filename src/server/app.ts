@@ -11,6 +11,7 @@ import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf } from '../core/block-cause.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
+import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
@@ -63,18 +64,21 @@ const MEASURES_AT_ONCE = 2;
 
 /** Runs `GET /api/security` serves, the most refused: the others are counted. */
 const SECURITY_RUNS = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
 /** The period the security log and the Pareto read when none is asked (ORC-300). */
-const DEFAULT_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_PERIOD_MS = 7 * DAY_MS;
+/** The period the overview reads when none is asked (ORC-299): as long as the baseline it is to be compared with (ORC-230). */
+const OVERVIEW_PERIOD_MS = 90 * DAY_MS;
 
-/** `[since, until)` from the query, in ms, `until` now and `since` 7 days before by default; undefined when it is not a period. */
-function periodOf(c: Context, now: number): { since: number; until: number } | undefined {
+/** `[since, until)` from the query, in ms, `until` now and `since` `length` before by default; undefined when it is not a period. */
+function periodOf(c: Context, now: number, length = DEFAULT_PERIOD_MS): { since: number; until: number } | undefined {
   const ms = (name: string, fallback: number) => {
     const raw = c.req.query(name);
     if (raw === undefined || raw === '') return fallback;
     return /^\d{1,15}$/.test(raw) ? Number(raw) : NaN;
   };
   const until = ms('until', now);
-  const since = ms('since', until - DEFAULT_PERIOD_MS);
+  const since = ms('since', until - length);
   return Number.isNaN(since) || Number.isNaN(until) || since >= until ? undefined : { since, until };
 }
 
@@ -223,6 +227,12 @@ export function createApp(d: ServerDeps): Hono {
     });
   });
 
+  // A route over a period, `length` long by default: 400 when the query asks for one that is not.
+  const overPeriod = (serve: (c: Context, period: { since: number; until: number }) => Promise<Response>, length?: number) => (c: Context) => {
+    const period = periodOf(c, d.clock.now(), length);
+    return period ? serve(c, period) : c.json({ error: 'since and until: whole ms, since before until' }, 400);
+  };
+
   // The measures of a ticket, or null when they cannot be read: the error is logged, and that ticket alone loses them.
   const measuresOf = (t: { projectId: string; ticketId: string }): Promise<TicketMeasures | null> =>
     measureTicket(d.store, t.projectId, t.ticketId, d.perTicketTokens).catch((err: Error) => {
@@ -252,24 +262,30 @@ export function createApp(d: ServerDeps): Hono {
     blockCause: t.blocked ? causeOf(t.blockKind) : null,
     measures,
   });
+  // Two tickets at a time: each read is five queries at once, on a pool of ten that also serves the webhooks and the worker.
+  const measuresOfAll = async (tickets: TicketState[]): Promise<(TicketMeasures | null)[]> => {
+    const out: (TicketMeasures | null)[] = [];
+    for (let i = 0; i < tickets.length; i += MEASURES_AT_ONCE) out.push(...(await Promise.all(tickets.slice(i, i + MEASURES_AT_ONCE).map(measuresOf))));
+    return out;
+  };
   app.get('/api/measures', async (c) => {
     const tickets = (await d.store.listTickets()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MEASURED_TICKETS);
-    // Two tickets at a time: each read is five queries at once, on a pool of ten that also serves the webhooks and the worker.
-    const served = [];
-    for (let i = 0; i < tickets.length; i += MEASURES_AT_ONCE) {
-      served.push(...(await Promise.all(tickets.slice(i, i + MEASURES_AT_ONCE).map(async (t) => measuredTicket(t, await measuresOf(t))))));
-    }
-    return c.json({ tickets: served });
+    const measures = await measuresOfAll(tickets);
+    return c.json({ tickets: tickets.map((t, i) => measuredTicket(t, measures[i]!)) });
   });
+
+  // The reduced overview (ORC-299), read-only, over a period, the last 90 days by default. Only the tickets the factory
+  // updated since the period began are read: each event it decides updates its ticket, so the others hold no merge nor
+  // message of the period. A ticket whose measures cannot be read is counted, the error logged.
+  app.get('/api/overview', overPeriod(async (c, period) => {
+    const measures = await measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since));
+    const measured = measures.filter((m) => m !== null);
+    return c.json(overview(period, measured, measures.length - measured.length));
+  }, OVERVIEW_PERIOD_MS));
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
   // rules and runs over a period; a run's refusals and hosts. Never a command, a path nor a host that is not a plain name:
   // they can hold a secret.
-  // A route over a period: 400 when the query asks for one that is not.
-  const overPeriod = (serve: (c: Context, period: { since: number; until: number }) => Promise<Response>) => (c: Context) => {
-    const period = periodOf(c, d.clock.now());
-    return period ? serve(c, period) : c.json({ error: 'since and until: whole ms, since before until' }, 400);
-  };
   app.get('/api/security', overPeriod(async (c, period) => {
     const { hosts, rules, runs } = await d.store.securityStats(period.since, period.until);
     return c.json({ ...period, hosts: shownHosts(hosts), rules, runs: runs.slice(0, SECURITY_RUNS), runsLeftOut: Math.max(0, runs.length - SECURITY_RUNS) });
