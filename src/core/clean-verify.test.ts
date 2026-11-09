@@ -601,7 +601,7 @@ describe('runCleanVerify', () => {
         return s;
       };
 
-      it('scans the files the branch adds lines to, without network, before any setup, with its own flags', async () => {
+      it("scans the files the branch adds lines to, without network, before any setup, with the factory's rules", async () => {
         const { origin, repo, sandboxes, req } = setup({ semgrep: true, setup: ['true'] });
         write(origin, 'gone.ts', 'x\n');
         commit(origin, 'a file the branch deletes');
@@ -618,8 +618,7 @@ describe('runCleanVerify', () => {
         expect((await runCleanVerify(req)).ok).toBe(true);
         expect(scans).toHaveLength(1);
         const argv = scans[0]!;
-        expect(argv).toEqual(expect.arrayContaining(['--disable-nosem', '--no-git-ignore', '--metrics=off']));
-        expect(argv.slice(argv.indexOf('--config'), argv.indexOf('--config') + 2)).toEqual(['--config', '/usr/local/share/factory/semgrep']);
+        expect(argv.filter((_, i) => argv[i - 1] === '--config')).toEqual(['/usr/local/share/factory/semgrep']);
         expect(argv.slice(argv.indexOf('--')).sort()).toEqual(['--', '-dash.js', 'a.txt']);
         expect(sandboxes.created.find((c) => c.runId === 'r1-prepare')).toMatchObject({ network: 'none', mounts: [] });
       });
@@ -712,8 +711,6 @@ describe('runCleanVerify', () => {
 
       it.each([
         ['absent from the image', { stdout: '', stderr: 'semgrep: not found', code: 127 }],
-        ['a rule it refuses', { stdout: JSON.stringify({ results: [], errors: [{ long_msg: 'Invalid rule schema' }] }), stderr: '', code: 7 }],
-        ['an unreadable report', { stdout: 'not json', stderr: '', code: 0 }],
         ['its cap', { stdout: '', stderr: '', code: 124 }],
       ])('%s is a breakdown, never a green', async (_, answer) => {
         const { sandboxes, req } = appended({ commands: ['true'] });

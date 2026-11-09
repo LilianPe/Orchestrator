@@ -10,7 +10,7 @@ import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { addedLines, FACTORY_RULES, isRepoRuleFile, REPO_RULES_DIR, semgrepArgv, semgrepCheck, semgrepFindings } from '../checks/semgrep.js';
+import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
 import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
@@ -199,12 +199,14 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
-    if (req.gitleaks || ((runs || added.size) && !failures.length)) {
+    // The checkout is needed: for what runs, or for Semgrep to read.
+    const checkout = runs || added.size > 0;
+    if (req.gitleaks || (checkout && !failures.length)) {
       const mounts = rules.length ? [{ host: rulesDir, target: REPO_RULES_TARGET, readOnly: true }] : [];
       await inBox('prepare', cloneDir, mounts, async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
         // Refused already: nothing of it is installed or run. A forbidden `.npmrc` would be read by the install it forbids, and a breakdown of that install would hide the verdict.
-        if (failures.length || (!runs && !added.size)) return;
+        if (failures.length || !checkout) return;
         // `-c`: the clone's config is ours, and from the first command on it is no longer to be trusted.
         const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
         if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
@@ -413,8 +415,7 @@ function checkSize(diff: DiffFile[] | undefined, config: RepoConfig): VerifyFail
   return r.ok ? [] : [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: r.summary }];
 }
 
-/** Where the repository's Semgrep rules are mounted, read-only, in the sandbox that runs it. */
-const REPO_RULES_TARGET = '/factory/semgrep';
+const isRegular = (mode: string) => mode === '100644' || mode === '100755';
 
 /**
  * The repository's Semgrep rules as its default branch holds them, never as the branch does, written under `dir` before any
@@ -423,8 +424,10 @@ const REPO_RULES_TARGET = '/factory/semgrep';
 async function repoRules(git: CloneGit, dir: string): Promise<string[]> {
   const rules: string[] = [];
   for (const entry of zFields(await git.raw('ls-tree', '-r', '-z', BASE, '--', REPO_RULES_DIR))) {
-    const [meta, path] = [entry.slice(0, entry.indexOf('\t')), entry.slice(entry.indexOf('\t') + 1)];
-    if (!/^100(644|755) blob /.test(meta) || !isRepoRuleFile(path)) continue;
+    // `<mode> <type> <id>\t<path>`
+    const tab = entry.indexOf('\t');
+    const path = entry.slice(tab + 1);
+    if (!isRegular(entry.slice(0, entry.indexOf(' '))) || !isRepoRuleFile(path)) continue;
     const content = (await show(git, BASE, path))!;
     if (content.startsWith('\0too large')) throw new Error(`${path}: Semgrep rules over ${MAX_READ_BYTES / 2 ** 20} MB`);
     const rel = path.slice(REPO_RULES_DIR.length);
@@ -439,7 +442,7 @@ async function repoRules(git: CloneGit, dir: string): Promise<string[]> {
 async function scanned(git: CloneGit, from: string, sha: string, diff: readonly DiffFile[]): Promise<Map<string, Set<number>>> {
   const added = addedLines(diff);
   for (const { path, mode } of parseRawDiff(await git.raw('diff', '--raw', '--no-renames', '-z', from, sha))) {
-    if (!/^100(644|755)$/.test(mode)) added.delete(path);
+    if (!isRegular(mode)) added.delete(path);
   }
   return added;
 }
@@ -449,11 +452,10 @@ const SCAN_BATCH = 500;
 
 /** `factory/semgrep` (ORC-333) on the checkout in sandbox `id`: the factory's rules and the repository's (`rules`), on the lines the diff adds. */
 async function scanCode(sandboxes: Boxes, id: string, added: ReadonlyMap<string, ReadonlySet<number>>, rules: readonly string[]): Promise<VerifyFailure[]> {
-  const configs = [FACTORY_RULES, ...rules.map((r) => `${REPO_RULES_TARGET}/${r}`)];
   const targets = [...added.keys()];
-  const read: ReturnType<typeof semgrepFindings> = { found: [], unread: [] };
+  const read: SemgrepRead = { found: [], unread: [] };
   for (let i = 0; i < targets.length; i += SCAN_BATCH) {
-    const argv = semgrepArgv(configs, targets.slice(i, i + SCAN_BATCH), { maxBytes: MAX_READ_BYTES, timeoutS: VERIFY_TIMEOUT_MS / 1000 });
+    const argv = semgrepArgv(rules, targets.slice(i, i + SCAN_BATCH), { maxBytes: MAX_READ_BYTES, timeoutS: VERIFY_TIMEOUT_MS / 1000 });
     const { found, unread } = semgrepFindings(await sandboxes.exec(id, argv), added);
     read.found.push(...found);
     read.unread.push(...unread);

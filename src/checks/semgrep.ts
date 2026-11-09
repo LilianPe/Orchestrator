@@ -22,11 +22,14 @@ export const REPO_RULES_DIR = '.factory/semgrep/';
 
 export const isRepoRuleFile = (path: string): boolean => path.startsWith(REPO_RULES_DIR) && /\.ya?ml$/.test(path);
 
-/** `semgrep scan` with the factory's flags on `targets`, under `timeoutS`: its report as JSON on stdout. */
-export function semgrepArgv(configs: readonly string[], targets: readonly string[], opts: { maxBytes: number; timeoutS: number }): string[] {
+/** Where the repository's rules are mounted, read-only, in the sandbox that runs Semgrep: their paths under `REPO_RULES_DIR`, the same here. */
+export const REPO_RULES_TARGET = '/factory/semgrep';
+
+/** `semgrep scan` with the factory's flags, its rules and the repository's (`repoRules`, paths under `REPO_RULES_DIR`), on `targets`, under `timeoutS`: its report as JSON on stdout. */
+export function semgrepArgv(repoRules: readonly string[], targets: readonly string[], opts: { maxBytes: number; timeoutS: number }): string[] {
   return [
     'timeout', String(opts.timeoutS), 'semgrep', 'scan',
-    ...configs.flatMap((c) => ['--config', c]),
+    ...[FACTORY_RULES, ...repoRules.map((r) => `${REPO_RULES_TARGET}/${r}`)].flatMap((c) => ['--config', c]),
     '--metrics=off', '--disable-version-check', '--disable-nosem', '--no-git-ignore',
     '--timeout', '0', '--max-target-bytes', String(opts.maxBytes), '--json', '--quiet',
     // A path may start with a dash.
@@ -54,6 +57,12 @@ export interface SemgrepUnread {
   message: string;
 }
 
+/** What a run of Semgrep says of the lines the branch adds. */
+export interface SemgrepRead {
+  found: SemgrepFinding[];
+  unread: SemgrepUnread[];
+}
+
 type Span = { start: { line: number }; end: { line: number } };
 
 interface Report {
@@ -66,7 +75,7 @@ interface Report {
  * branch's; so is a part of a file it could not parse. Anything but a clean exit with a readable report is a breakdown,
  * never a green: it throws.
  */
-export function semgrepFindings({ code, stdout, stderr }: ExecResult, added: ReadonlyMap<string, ReadonlySet<number>>): { found: SemgrepFinding[]; unread: SemgrepUnread[] } {
+export function semgrepFindings({ code, stdout, stderr }: ExecResult, added: ReadonlyMap<string, ReadonlySet<number>>): SemgrepRead {
   let report: Report | undefined;
   try {
     report = JSON.parse(stdout) as Report;
@@ -77,7 +86,11 @@ export function semgrepFindings({ code, stdout, stderr }: ExecResult, added: Rea
   if (code !== 0) throw new Error(`semgrep could not run (code ${code}): ${report?.errors?.map(said).filter(Boolean).join('; ') || stderr.trim().slice(-2000)}`);
   if (!Array.isArray(report?.results)) throw new Error(`semgrep returned no readable report (code ${code})`);
   // The first added line in `span`, if any.
-  const addedIn = (path: string, span: Span) => [...(added.get(path) ?? [])].filter((l) => l >= span.start.line && l <= span.end.line).sort((a, b) => a - b)[0];
+  const addedIn = (path: string, span: Span) => {
+    const lines = added.get(path);
+    for (let l = span.start.line; lines && l <= span.end.line; l++) if (lines.has(l)) return l;
+    return undefined;
+  };
   const found: SemgrepFinding[] = [];
   for (const r of report.results) {
     const line = addedIn(r.path, r);
@@ -91,7 +104,7 @@ export function semgrepFindings({ code, stdout, stderr }: ExecResult, added: Rea
 }
 
 /** The `factory/semgrep` check run on what was found. */
-export function semgrepCheck({ found, unread }: { found: readonly SemgrepFinding[]; unread: readonly SemgrepUnread[] }): CheckResult {
+export function semgrepCheck({ found, unread }: SemgrepRead): CheckResult {
   if (!found.length && !unread.length) return { check: SEMGREP_CHECK, ok: true, summary: 'No security rule broken on the lines the branch adds.' };
   const parts = [];
   if (found.length) {

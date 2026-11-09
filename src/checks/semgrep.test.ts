@@ -47,8 +47,8 @@ describe('semgrep (ORC-333)', () => {
   });
 
   it('turns off what the branch could write to silence it, and ends the options before the paths', () => {
-    const argv = semgrepArgv(['/rules'], ['-a.js'], { maxBytes: 9, timeoutS: 5 });
-    expect(argv.slice(0, 4)).toEqual(['timeout', '5', 'semgrep', 'scan']);
+    const argv = semgrepArgv(['house.yml'], ['-a.js'], { maxBytes: 9, timeoutS: 5 });
+    expect(argv.slice(0, 8)).toEqual(['timeout', '5', 'semgrep', 'scan', '--config', '/usr/local/share/factory/semgrep', '--config', '/factory/semgrep/house.yml']);
     expect(argv).toEqual(expect.arrayContaining(['--disable-nosem', '--no-git-ignore', '--metrics=off', '--disable-version-check', '--json']));
     expect(argv.slice(-2)).toEqual(['--', '-a.js']);
   });

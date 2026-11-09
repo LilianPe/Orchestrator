@@ -10,60 +10,46 @@ rules:
           - pattern: eval($X)
           - pattern: new Function(..., $X)
           - pattern: Function(..., $X)
-      - pattern-not: eval("...")
-      - pattern-not: new Function(..., "...")
-      - pattern-not: Function(..., "...")
+      - pattern-not: $F(..., "...")
+      - pattern-not: new $F(..., "...")
   - id: js-shell-injection
     languages: [javascript, typescript]
     severity: ERROR
     message: A shell command built from a value runs what the value says. Pass the arguments as a list (`execFile`, `spawn` without `shell`).
     patterns:
       - pattern-either:
-          - pattern-inside: |
-              import $CP from 'child_process';
-              ...
-          - pattern-inside: |
-              import * as $CP from 'child_process';
-              ...
-          - pattern-inside: |
-              import $CP from 'node:child_process';
-              ...
-          - pattern-inside: |
-              import * as $CP from 'node:child_process';
-              ...
-          - pattern-inside: |
-              $CP = require('child_process');
-              ...
-          - pattern-inside: |
-              $CP = require('node:child_process');
-              ...
-      - pattern-either:
-          - pattern: $CP.exec($CMD, ...)
-          - pattern: $CP.execSync($CMD, ...)
-      - pattern-not: $CP.$F("...", ...)
-  - id: js-shell-injection-named
-    languages: [javascript, typescript]
-    severity: ERROR
-    message: A shell command built from a value runs what the value says. Pass the arguments as a list (`execFile`, `spawn` without `shell`).
-    patterns:
-      - pattern-either:
-          - pattern-inside: |
-              import { ..., $F, ... } from 'child_process';
-              ...
-          - pattern-inside: |
-              import { ..., $F, ... } from 'node:child_process';
-              ...
-          - pattern-inside: |
-              const { ..., $F, ... } = require('child_process');
-              ...
-          - pattern-inside: |
-              const { ..., $F, ... } = require('node:child_process');
-              ...
+          # The module, by any name.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      import $CP from '$MOD';
+                      ...
+                  - pattern-inside: |
+                      import * as $CP from '$MOD';
+                      ...
+                  - pattern-inside: |
+                      $CP = require('$MOD');
+                      ...
+              - pattern-either:
+                  - pattern: $CP.exec($CMD, ...)
+                  - pattern: $CP.execSync($CMD, ...)
+          # Its functions, imported by name.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      import { ..., $F, ... } from '$MOD';
+                      ...
+                  - pattern-inside: |
+                      const { ..., $F, ... } = require('$MOD');
+                      ...
+              - metavariable-regex:
+                  metavariable: $F
+                  regex: ^(exec|execSync)$
+              - pattern: $F($CMD, ...)
       - metavariable-regex:
-          metavariable: $F
-          regex: ^(exec|execSync)$
-      - pattern: $F($CMD, ...)
-      - pattern-not: $F("...", ...)
+          metavariable: $MOD
+          regex: ^(node:)?child_process$
+      - pattern-not: $FN("...", ...)
   - id: js-tls-verification-off
     languages: [javascript, typescript]
     severity: ERROR
@@ -85,8 +71,7 @@ rules:
       - pattern-either:
           - pattern: eval($X, ...)
           - pattern: exec($X, ...)
-      - pattern-not: eval("...", ...)
-      - pattern-not: exec("...", ...)
+      - pattern-not: $F("...", ...)
   - id: py-shell-injection
     languages: [python]
     severity: ERROR
@@ -96,9 +81,7 @@ rules:
           - pattern: subprocess.$F($CMD, ..., shell=True, ...)
           - pattern: os.system($CMD)
           - pattern: os.popen($CMD, ...)
-      - pattern-not: subprocess.$F("...", ..., shell=True, ...)
-      - pattern-not: os.system("...")
-      - pattern-not: os.popen("...", ...)
+      - pattern-not: $FN("...", ...)
   - id: py-unsafe-deserialization
     languages: [python]
     severity: ERROR
@@ -108,17 +91,13 @@ rules:
       - pattern: pickle.loads(...)
       - pattern: yaml.unsafe_load(...)
       - pattern: yaml.load($S)
-  - id: py-unsafe-yaml-loader
-    languages: [python]
-    severity: ERROR
-    message: Deserializing with `yaml.load` without a safe loader runs code the data carries. Use `yaml.safe_load`.
-    patterns:
-      - pattern-either:
-          - pattern: yaml.load($S, Loader=$L)
-          - pattern: yaml.load($S, $L)
-      - metavariable-regex:
-          metavariable: $L
-          regex: ^(?!(yaml\.)?(C?SafeLoader|BaseLoader)$)
+      - patterns:
+          - pattern-either:
+              - pattern: yaml.load($S, Loader=$L)
+              - pattern: yaml.load($S, $L)
+          - metavariable-regex:
+              metavariable: $L
+              regex: ^(?!(yaml\.)?(C?SafeLoader|BaseLoader)$)
   - id: py-tls-verification-off
     languages: [python]
     severity: ERROR
