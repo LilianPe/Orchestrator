@@ -94,6 +94,7 @@ export function promptTemplate(p: PromptInput): string {
     decisions: p.decisions && [{ question: '<QUESTION>', answer: '<REPONSE>', author: '<AUTEUR>' }],
     conventions: p.conventions && '<CONVENTIONS>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
+    conversation: p.conversation && (p.conversation.length ? [{ author: '<AUTEUR>', body: '<MESSAGE>', at: 0, source: 'session' }] : []),
   });
 }
 

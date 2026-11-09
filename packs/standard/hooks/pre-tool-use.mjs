@@ -111,8 +111,16 @@ function git(words) {
 /** The ref a push refspec writes: `+HEAD:refs/heads/main` → `main`. */
 const dest = (spec) => spec.replace(/^\+/, '').split(':').pop().replace(/^(refs\/)?heads\//, '');
 
-/** Set by the factory on a run of a `knowledge` job (`learn`, `remember`): of the forge, it reads the merged diff only. */
+/** Set by the factory on a run of a `knowledge` job (`learn`, `remember`): of the forge, it reads its ticket's merged diff only. */
 const KNOWLEDGE_RUN = process.env.FACTORY_KNOWLEDGE_RUN === '1';
+const PR_URL = process.env.FACTORY_PR_URL || null;
+
+/** `gh pr diff <the ticket's PR URL>`, its options aside: no other PR, no other repository (`-R`). */
+function ownDiff(args) {
+  if (args.some((a) => /^(-R|--repo)(=|$)/.test(a))) return false;
+  const words = args.filter((a) => !a.startsWith('-'));
+  return words.length === 3 && words[0] === 'pr' && words[1] === 'diff' && words[2] === PR_URL;
+}
 
 const SHELL_NAMES = 'sh|bash|zsh|dash|ksh';
 const FETCH_NAMES = 'curl|wget';
@@ -146,7 +154,7 @@ function rule(tool, command) {
       if (sub === 'pr merge') return 'merge';
       if (/^(pr (create|edit)|run rerun)$/.test(sub)) return 'gh-write';
       // A knowledge run is given what the factory ingested of the ticket (ORC-361): a comment it never ingested has no taint.
-      if (KNOWLEDGE_RUN && sub !== 'pr diff') return 'forge-read';
+      if (KNOWLEDGE_RUN && !ownDiff(args)) return 'forge-read';
     }
     if (prog !== 'git') continue;
     const [sub, ...rest] = git(words);

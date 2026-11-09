@@ -50,7 +50,7 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { AUTHZ_REFUSED, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { openBlockers, pickupFailures } from './pickup.js';
@@ -1043,9 +1043,14 @@ export class Orchestrator {
     return since === null || since === undefined ? undefined : { since, humanPushes: t.humanPushes ?? [] };
   }
 
-  /** The ticket's journal, as a knowledge job reads the ticket: its taint (`historyTaint`, ORC-349), its conversation (ORC-361). */
-  private async journalOf(project: ProjectRuntime, t: TicketState): Promise<FactoryEvent[]> {
-    return (await this.d.store.ticketJournal(project.id, t.ticketId)).map((j) => upcast(j.event));
+  /**
+   * The ticket's journal, as a knowledge job reads the ticket: its taint (`historyTaint`, ORC-349) and its conversation
+   * (`ingestedConversation`, ORC-361), with the events whose decision the authorization matrix refused.
+   */
+  private async journalOf(project: ProjectRuntime, t: TicketState): Promise<{ events: FactoryEvent[]; refused: Set<string> }> {
+    const entries = await this.d.store.ticketJournal(project.id, t.ticketId);
+    const refused = new Set(entries.filter((j) => j.decision?.trace?.some((l) => l.startsWith(AUTHZ_REFUSED))).map((j) => j.event.id));
+    return { events: entries.map((j) => upcast(j.event)), refused };
   }
 
   /** The one-time read of `untrustedMark`, for a ticket the mark has not seen; the ticket as it is otherwise. */
@@ -2251,8 +2256,8 @@ export class Orchestrator {
       const readsTicket = !fedUntrusted && (resume || knowledge);
       const seen = readsTicket ? await state(this.readUntrusted(project, t)) : t;
       const marked = typeof seen.untrustedSince === 'string';
-      const journal = readsTicket && knowledge ? await state(this.journalOf(project, t)) : undefined;
-      const history = readsTicket && (marked || (!!journal && historyTaint(journal) === 'untrusted'));
+      const journal = readsTicket && knowledge && !marked ? await state(this.journalOf(project, t)) : undefined;
+      const history = readsTicket && (marked || (!!journal && historyTaint(journal.events) === 'untrusted'));
       const sensitivePaths = fedUntrusted ?? (history ? SENSITIVE_PATHS : undefined);
       if (sensitivePaths && knowledge) {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
@@ -2311,7 +2316,7 @@ export class Orchestrator {
         input,
         // A knowledge job without an input (`learn` after a merge) is given what the factory ingested of the ticket, and reads
         // nothing else of the forge but the merged diff (ORC-361): a comment never ingested carries no taint.
-        conversation: journal && !input ? ingestedConversation(journal) : undefined,
+        conversation: journal && !input ? ingestedConversation(journal.events, journal.refused) : undefined,
         reviewRounds: wf.limits.reviewRounds,
         resumedAfterCut: !!opts.relaunchOf && resume,
       };
@@ -2400,8 +2405,8 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
-          // Read by the pack's PreToolUse hook: a knowledge run reads of the forge only the merged diff (ORC-361).
-          ...(knowledge ? { FACTORY_KNOWLEDGE_RUN: '1' } : {}),
+          // Read by the pack's PreToolUse hook: a knowledge run reads of the forge only its ticket's merged diff (ORC-361).
+          ...(knowledge ? { FACTORY_KNOWLEDGE_RUN: '1', FACTORY_PR_URL: t.prUrl ?? '' } : {}),
           ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
