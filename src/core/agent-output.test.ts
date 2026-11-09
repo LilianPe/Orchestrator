@@ -59,6 +59,24 @@ describe('findings of a review lens (ORC-183)', () => {
   });
 });
 
+describe('what the fix of the review loop did with each finding (ORC-184)', () => {
+  it('criterion 1: takes each finding fixed by its own commit, or contested with a justification', () => {
+    const out = { ...done, fixed: [{ finding: 'correctness-1', commit: 'a1b2c3d' }, { finding: 'security-1', commit: 'e4f5a6b7c8d9' }], contested: [{ finding: 'security-2', justification: 'Hashed first.' }] };
+    expect(parseAgentOutput(out).ok).toBe(true);
+  });
+
+  it('criterion 1: refuses two findings fixed by one commit, a short sha of the same commit included', () => {
+    expect(parseAgentOutput({ ...done, fixed: [{ finding: 'correctness-1', commit: 'a1b2c3d' }, { finding: 'correctness-2', commit: 'a1b2c3d' }] })).toEqual({ ok: false, error: expect.stringContaining('one commit per finding') });
+    expect(parseAgentOutput({ ...done, fixed: [{ finding: 'correctness-1', commit: 'a1b2c3d' }, { finding: 'correctness-2', commit: 'a1b2c3d4e5f6' }] }).ok).toBe(false);
+  });
+
+  it('refuses a finding both fixed and contested, a contest without its justification, and a commit that is no sha', () => {
+    expect(parseAgentOutput({ ...done, fixed: [{ finding: 'security-1', commit: 'a1b2c3d' }], contested: [{ finding: 'security-1', justification: 'No.' }] })).toEqual({ ok: false, error: expect.stringContaining('each finding once') });
+    expect(parseAgentOutput({ ...done, contested: [{ finding: 'security-1', justification: '' }] })).toEqual({ ok: false, error: expect.stringContaining('contested.0.justification') });
+    expect(parseAgentOutput({ ...done, fixed: [{ finding: 'security-1', commit: 'HEAD' }] })).toEqual({ ok: false, error: expect.stringContaining('fixed.0.commit') });
+  });
+});
+
 describe('attemptOutcome', () => {
   const blocked = (reason?: 'needs_input' | 'spec_impossible'): AgentOutput => ({ ...done, status: 'blocked', question: '?', ...(reason ? { reason } : {}) });
   it.each([

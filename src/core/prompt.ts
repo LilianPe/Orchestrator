@@ -40,6 +40,7 @@ const HEADINGS: Record<InputKind, string> = {
   spec_check: 'Spec refused by spec_check',
   thread: 'Message',
   diff: 'Diff to review',
+  findings: 'Blocking findings to address',
 };
 
 const CONVERSATION_HEADING = 'What the factory received on this ticket';
