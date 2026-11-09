@@ -51,7 +51,7 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork } from './intake-checks.js';
@@ -2033,6 +2033,10 @@ export class Orchestrator {
     // not launch a run on it.
     if (job.queue === 'dev' && t.blocked) {
       this.log('warn', `refused ${job.name} on ${ticketId}: the ticket is blocked (${t.blockReason ?? 'no reason'})`);
+      return 'done';
+    }
+    if (staleRelaunch(t, job, opts.input)) {
+      this.log('info', `refused ${job.name} on ${ticketId}: a check passed since the failures it was to fix`);
       return 'done';
     }
     if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
