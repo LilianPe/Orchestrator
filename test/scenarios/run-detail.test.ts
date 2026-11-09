@@ -42,7 +42,11 @@ describe('the run detail on the engine (ORC-298)', () => {
     expect(d.timeline.filter((e: { ofRun: boolean }) => e.ofRun)).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'run.finished', what: expect.stringContaining('dev ended: succeeded') })]));
     // The delegation came signed through the webhook; the move to AI review and the merge are the humans'.
     expect(d.decisions.map((x: { type: string }) => x.type)).toEqual(expect.arrayContaining(['ticket.delegated', 'session.mentioned', 'pr.merged']));
-    expect(d.gates).toEqual([expect.objectContaining({ gate: 'merge', outcome: 'merged' })]);
+    // Handed over, sent back to AI review by a human, handed over again, then moved to done by the factory once merged.
+    expect(d.gates).toEqual([
+      expect.objectContaining({ gate: 'merge', to: 'ai_review', closedBy: 't-1' }),
+      expect.objectContaining({ gate: 'merge', to: 'done', closedAt: expect.any(Number) }),
+    ]);
     expect(d.findings).toEqual([expect.objectContaining({ source: 'ai', job: 'review', status: 'success', outcome: 'succeeded' })]);
     expect(d.checks).toEqual([
       expect.objectContaining({ check: 'verify', result: 'passed', runId: dev.id, job: 'dev' }),

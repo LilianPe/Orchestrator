@@ -34,16 +34,19 @@ export interface HumanDecision {
 }
 
 /**
- * A human gate the ticket went through. `merge`: opened by the factory's move to Human Review, closed by the human decision that
- * ends it (a merge, a PR closed, changes requested, the ticket sent back to dev, a stop). The `spec` gate has no step yet (ORC-212).
+ * A human gate the ticket went through. `merge`: the time the ticket spent in Human Review, from the factory's move there (an
+ * executed `move` effect) to whatever moved it out: the factory's next move (to done once merged, back after a refused merge) or a
+ * human's (back to dev or to AI review, a cancel). Read from what moved the ticket, not guessed from the events a human sent: a
+ * review asking for changes moves nothing yet (ORC-190). The `spec` gate has no step yet (ORC-212).
  */
 export interface Gate {
   gate: 'merge';
   openedAt: number;
   closedAt: number | null;
-  outcome: 'merged' | 'closed' | 'changes_requested' | 'sent_back' | 'stopped' | null;
-  /** The journal event of the decision that closed it. */
-  decisionId: string | null;
+  /** Where the ticket went: a logical state, `cancelled`, or null for a status the factory does not map; null while open. */
+  to: LogicalState | 'cancelled' | null;
+  /** The journal event that moved it out: the factory's `effect.done`, or a human's `status.changed`. */
+  closedBy: string | null;
 }
 
 /**
@@ -196,7 +199,7 @@ function describe(e: FactoryEvent): string {
  * The decision a human made by this event, if any. A move or a label counts only with a signed actor: the factory's own,
  * echoed back by Linear, carry none. A merge the factory carried out (`mergedByFactory`) is its own.
  */
-function decisionOf(e: FactoryEvent, mergedByFactory: boolean): Pick<HumanDecision, 'channel' | 'who'> | undefined {
+function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, 'channel' | 'who'> | undefined {
   const actor = e.actor ?? null;
   switch (e.type) {
     case 'ticket.delegated':
@@ -215,7 +218,7 @@ function decisionOf(e: FactoryEvent, mergedByFactory: boolean): Pick<HumanDecisi
     case 'pr.reviewed':
       return { channel: 'github', who: e.payload.author };
     case 'pr.merged':
-      return mergedByFactory ? undefined : { channel: 'github', who: actor };
+      return mergedByFactory(e, facts) ? undefined : { channel: 'github', who: actor };
     case 'pr.closed':
       return { channel: 'github', who: actor };
     case 'control.stop':
@@ -226,27 +229,6 @@ function decisionOf(e: FactoryEvent, mergedByFactory: boolean): Pick<HumanDecisi
       return { channel: 'cli', who: e.payload.by };
     default:
       return undefined;
-  }
-}
-
-/** How a human decision closes an open merge gate, if it does. */
-function closesGate(e: FactoryEvent): Gate['outcome'] {
-  switch (e.type) {
-    case 'pr.merged':
-      return 'merged';
-    case 'pr.closed':
-      return 'closed';
-    case 'pr.reviewed':
-      return e.payload.kind === 'review' && e.payload.state?.toLowerCase() === 'changes_requested' ? 'changes_requested' : null;
-    case 'status.changed':
-      return e.payload.to === 'dev' || e.payload.to === 'todo' ? 'sent_back' : null;
-    case 'control.stop':
-    case 'session.stopped':
-      return 'stopped';
-    case 'command':
-      return e.payload.name === 'stop' ? 'stopped' : null;
-    default:
-      return null;
   }
 }
 
@@ -283,7 +265,27 @@ function stepCosts(attempts: RunMeasure[]): StepCost[] {
   return [...steps.values()];
 }
 
-const movedToHumanReview = (row: OutboxRow | undefined): boolean => row?.status === 'done' && row.effect.kind === 'move' && row.effect.to === ('human_review' satisfies LogicalState);
+/**
+ * Where an event moved the ticket, if it did: the factory's executed `move` effect, or a status change in Linear (a human's, or
+ * the echo of the factory's own move, which moves it where it already is). `undefined`: it did not move the ticket.
+ */
+function movedTo(e: FactoryEvent, effects: ReadonlyMap<string, OutboxRow>): Gate['to'] | undefined {
+  if (e.type === 'effect.done') {
+    const row = effects.get(e.payload.effectId);
+    return row?.status === 'done' && row.effect.kind === 'move' ? row.effect.to : undefined;
+  }
+  if (e.type === 'status.changed') return e.payload.cancelled ? 'cancelled' : e.payload.to;
+  return undefined;
+}
+
+/**
+ * A merge the factory carried out (ORC-148): a `merge` effect done on the PR's head. A row older than ORC-278 names no head: then
+ * any merge effect of the ticket done counts.
+ */
+function mergedByFactory(e: FactoryEvent<'pr.merged'>, facts: MeasureFacts): boolean {
+  const shas = new Set(facts.effects.flatMap((r) => (r.status === 'done' && r.effect.kind === 'merge' ? [r.effect.sha] : [])));
+  return e.payload.headSha === undefined ? shas.size > 0 : shas.has(e.payload.headSha);
+}
 
 /**
  * The detail of `run` (ORC-298) from its ticket's facts, as `measureFacts` reads them. Pure: the journal read as `decide` reads
@@ -292,30 +294,26 @@ const movedToHumanReview = (row: OutboxRow | undefined): boolean => row?.status 
 export function runDetail(run: RunRecord, facts: MeasureFacts): RunDetail {
   const events = facts.events.map((e) => upcast(e as StoredEvent));
   const effects = new Map(facts.effects.map((r) => [r.id, r]));
-  const mergedByFactory = facts.effects.some((r) => r.status === 'done' && r.effect.kind === 'merge');
   const timeline: TimelineEntry[] = [];
   const decisions: HumanDecision[] = [];
   const gates: Gate[] = [];
   const checks: CheckVerdict[] = [];
   const findings: Finding[] = [];
   let open: Gate | undefined;
+  let state: Gate['to'] | undefined;
   let finished: FactoryEvent<'run.finished'> | undefined;
   for (const e of events) {
     timeline.push({ id: e.id, type: e.type, at: e.at, ofRun: runIdOf(e) === run.id, what: describe(e) });
     if (e.type === 'run.finished' && e.payload.runId === run.id) finished = e;
-    if (e.type === 'effect.done' && !open && movedToHumanReview(effects.get(e.payload.effectId))) {
-      open = { gate: 'merge', openedAt: e.at, closedAt: null, outcome: null, decisionId: null };
-      gates.push(open);
+    const to = movedTo(e, effects);
+    if (to !== undefined && to !== state) {
+      state = to;
+      if (open) Object.assign(open, { closedAt: e.at, to, closedBy: e.id });
+      open = to === 'human_review' ? { gate: 'merge', openedAt: e.at, closedAt: null, to: null, closedBy: null } : undefined;
+      if (open) gates.push(open);
     }
-    const decision = decisionOf(e, mergedByFactory);
-    if (decision) {
-      decisions.push({ id: e.id, type: e.type, at: e.at, ...decision, what: describe(e) });
-      const outcome = open && closesGate(e);
-      if (open && outcome) {
-        Object.assign(open, { closedAt: e.at, outcome, decisionId: e.id });
-        open = undefined;
-      }
-    }
+    const decision = decisionOf(e, facts);
+    if (decision) decisions.push({ id: e.id, type: e.type, at: e.at, ...decision, what: describe(e) });
     const check = checkOf(e);
     if (check) checks.push(check);
     if (e.type === 'pr.reviewed') findings.push({ source: 'human', id: e.id, at: e.at, author: e.payload.author, pr: e.payload.number, kind: e.payload.kind, state: e.payload.state?.toLowerCase() ?? null });

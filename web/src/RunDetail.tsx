@@ -4,6 +4,13 @@ import type { RunDetailView, RunLine } from './types.js';
 
 const time = (at: number) => new Date(at).toLocaleString('en-US');
 
+/** The attempt's labels (ORC-226): each scalar one, `—` for one still null with the tickets that will fill it. */
+export function labelsLine(labels: Record<string, unknown>): string {
+  const pending = (labels['pending'] ?? {}) as Record<string, string[]>;
+  const shown = Object.entries(labels).filter(([, v]) => v === null || typeof v !== 'object');
+  return `Labels: ${shown.map(([k, v]) => (v === null ? `${k} — ${pending[k] ? `(${pending[k].join(', ')})` : ''}`.trimEnd() : `${k} ${String(v)}`)).join(' · ')}`;
+}
+
 /** A line of an agent's session, live or from its transcript. */
 export function Line({ line }: { line: RunLine }) {
   switch (line.kind) {
@@ -44,7 +51,7 @@ function GatesAndDecisions({ gates, decisions }: Pick<RunDetailView, 'gates' | '
         <ul>
           {gates.map((g) => (
             <li key={`${g.gate}-${g.openedAt}`}>
-              <strong>{g.gate}</strong> gate opened {time(g.openedAt)}: {g.outcome ? `${g.outcome}, ${time(g.closedAt!)}` : 'still open'}
+              <strong>{g.gate}</strong> gate opened {time(g.openedAt)}: {g.closedAt === null ? 'still open' : `left for ${g.to ?? 'an unmapped status'}, ${time(g.closedAt)}`}
             </li>
           ))}
         </ul>
@@ -172,7 +179,7 @@ export function RunDetail({ detail, now }: { detail: RunDetailView; now: number 
           {r.status}{r.outcome ? ` (${r.outcome})` : ''}{r.infra ? ', infrastructure failure' : ''} · {runDuration(r, now)} · {r.tokens ? `${formatTokens(totalTokens(r.tokens))} tokens` : 'no tokens reported'} · {plural(r.turns, 'turn')}
           {' · '}started {time(r.startedAt)}
         </p>
-        {r.labels && <p className="note">Labels: {Object.entries(r.labels).filter(([k, v]) => k !== 'pending' && typeof v !== 'object').map(([k, v]) => `${k} ${v ?? '—'}`).join(' · ')}</p>}
+        {r.labels && <p className="note">{labelsLine(r.labels)}</p>}
       </section>
       <Timeline entries={detail.timeline} />
       <GatesAndDecisions gates={detail.gates} decisions={detail.decisions} />

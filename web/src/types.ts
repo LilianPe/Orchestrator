@@ -134,7 +134,7 @@ export interface RunDetailView {
   run: RunMeasureView & { projectId: string; ticketId: string; queue: string; outcome: string | null; infra: boolean; labels: Record<string, unknown> | null };
   timeline: { id: string; type: string; at: number; ofRun: boolean; what: string }[];
   decisions: { id: string; type: string; at: number; channel: 'linear' | 'github' | 'dashboard' | 'cli'; who: string | null; what: string }[];
-  gates: { gate: string; openedAt: number; closedAt: number | null; outcome: string | null; decisionId: string | null }[];
+  gates: { gate: string; openedAt: number; closedAt: number | null; to: string | null; closedBy: string | null }[];
   findings: (
     | { source: 'human'; id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }
     | { source: 'ai'; runId: string; at: number; job: string; status: string; outcome: string | null }

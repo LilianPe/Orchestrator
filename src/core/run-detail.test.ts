@@ -85,32 +85,54 @@ describe('runDetail (ORC-298)', () => {
     ]);
   });
 
-  it('a merge done by the factory is no human decision; one on GitHub is', () => {
-    const merged = [ev('mg', 'pr.merged', 10, pr)];
-    expect(runDetail(run({}), facts({ events: merged })).decisions.map((d) => d.what)).toEqual(['Merged PR #3']);
-    const byFactory = facts({ events: [done('e1', 'merge', 9), ...merged], effects: [row('e1', { kind: 'merge', sha: 's' })] });
-    expect(runDetail(run({}), byFactory).decisions).toEqual([]);
+  it('a merge done by the factory on the PR head is no human decision; one on GitHub is, an earlier PR merged by a human included', () => {
+    const merged = (id: string, number: number, headSha: string) => ev(id, 'pr.merged', 10, { ...pr, number, headSha });
+    expect(runDetail(run({}), facts({ events: [merged('m3', 3, 'aaa')] })).decisions.map((d) => d.what)).toEqual(['Merged PR #3']);
+    const byFactory = facts({ events: [merged('m3', 3, 'aaa'), done('e1', 'merge', 19), merged('m5', 5, 'bbb')], effects: [row('e1', { kind: 'merge', sha: 'bbb' })] });
+    expect(runDetail(run({}), byFactory).decisions.map((d) => d.id)).toEqual(['m3']);
+    // A row from before ORC-278 names no head: any merge the factory carried out on the ticket counts.
+    const old = facts({ events: [done('e1', 'merge', 9), ev('m', 'pr.merged', 10, pr)], effects: [row('e1', { kind: 'merge', sha: 'bbb' })] });
+    expect(runDetail(run({}), old).decisions).toEqual([]);
   });
 
-  it('the merge gate: opened by the factory move to Human Review, closed by the decision that ends it, or still open', () => {
-    const toReview = row('e1', { kind: 'move', to: 'human_review' });
-    const opened = [done('e1', 'move', 20)];
+  it('the merge gate: the time in Human Review, from the factory move there to whatever moved the ticket out', () => {
+    const move = (id: string, to: 'human_review' | 'done', status: OutboxRow['status'] = 'done') => row(id, { kind: 'move', to }, status);
+    // The factory merges on a human's move to done: the gate ends with the factory's move to done, not with a guess.
     const merged = runDetail(run({}), facts({
-      events: [...opened, ev('ai', 'status.changed', 25, { from: 'human_review', to: 'ai_review' }, { actor: 'u' }), ev('mg', 'pr.merged', 30, pr)],
-      effects: [toReview],
+      events: [
+        done('e1', 'move', 20),
+        // The echo of the factory's own move moves nothing.
+        ev('echo', 'status.changed', 21, { from: 'dev', to: 'human_review' }),
+        ev('cr', 'pr.reviewed', 25, { ...pr, kind: 'review', author: 'h', body: 'no', state: 'CHANGES_REQUESTED' }),
+        ev('ok', 'status.changed', 30, { from: 'human_review', to: 'done' }, { actor: 'u' }),
+        done('e2', 'merge', 31),
+        ev('mg', 'pr.merged', 32, { ...pr, headSha: 'h1' }),
+        done('e3', 'move', 33),
+      ],
+      effects: [move('e1', 'human_review'), row('e2', { kind: 'merge', sha: 'h1' }), move('e3', 'done')],
     }));
-    expect(merged.gates).toEqual([{ gate: 'merge', openedAt: 20, closedAt: 30, outcome: 'merged', decisionId: 'mg' }]);
+    // A review asking for changes moves nothing yet (ORC-190): the gate stays open until the human's move to done.
+    expect(merged.gates).toEqual([{ gate: 'merge', openedAt: 20, closedAt: 30, to: 'done', closedBy: 'ok' }]);
+    expect(merged.decisions.map((d) => d.id)).toEqual(['cr', 'ok']);
 
-    const sentBack = runDetail(run({}), facts({
-      events: [...opened, ev('cr', 'pr.reviewed', 30, { ...pr, kind: 'review', author: 'h', body: 'no', state: 'CHANGES_REQUESTED' }), done('e2', 'move', 40)],
-      effects: [toReview, row('e2', { kind: 'move', to: 'human_review' })],
+    // Sent back to AI review, then handed over again: two gates; a cancel closes the second.
+    const twice = runDetail(run({}), facts({
+      events: [
+        done('e1', 'move', 20),
+        ev('ai', 'status.changed', 25, { from: 'human_review', to: 'ai_review' }, { actor: 'u' }),
+        done('e2', 'move', 40),
+        ev('x', 'status.changed', 50, { from: 'human_review', to: null, cancelled: true }, { actor: 'u' }),
+      ],
+      effects: [move('e1', 'human_review'), move('e2', 'human_review')],
     }));
-    expect(sentBack.gates).toEqual([
-      { gate: 'merge', openedAt: 20, closedAt: 30, outcome: 'changes_requested', decisionId: 'cr' },
-      { gate: 'merge', openedAt: 40, closedAt: null, outcome: null, decisionId: null },
+    expect(twice.gates).toEqual([
+      { gate: 'merge', openedAt: 20, closedAt: 25, to: 'ai_review', closedBy: 'ai' },
+      { gate: 'merge', openedAt: 40, closedAt: 50, to: 'cancelled', closedBy: 'x' },
     ]);
-    // A move the factory did not carry out opens nothing.
-    expect(runDetail(run({}), facts({ events: opened, effects: [row('e1', { kind: 'move', to: 'human_review' }, 'dead')] })).gates).toEqual([]);
+
+    // Still open; and a move the factory did not carry out opens nothing.
+    expect(runDetail(run({}), facts({ events: [done('e1', 'move', 20)], effects: [move('e1', 'human_review')] })).gates).toEqual([{ gate: 'merge', openedAt: 20, closedAt: null, to: null, closedBy: null }]);
+    expect(runDetail(run({}), facts({ events: [done('e1', 'move', 20)], effects: [move('e1', 'human_review', 'dead')] })).gates).toEqual([]);
   });
 
   it('the findings: the human reviews of the PR and the AI review rounds, with the closed outcome of each', () => {

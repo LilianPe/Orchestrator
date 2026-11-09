@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
@@ -103,8 +103,12 @@ export function createApp(d: ServerDeps): Hono {
 
   /** The lines of a run's transcript, a half-written last one included; undefined without a file (never written, or purged). */
   const transcriptLines = (runId: string): string[] | undefined => {
-    const file = join(d.transcriptsDir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`);
-    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : undefined;
+    try {
+      return readFileSync(join(d.transcriptsDir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`), 'utf8').split('\n').filter(Boolean);
+    } catch {
+      // No file, or the purge removed it meanwhile.
+      return undefined;
+    }
   };
 
   if (d.uiPassword) {

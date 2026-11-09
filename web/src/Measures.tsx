@@ -17,7 +17,15 @@ function median(values: number[]): number | null {
 
 /** Where a run's detail is (ORC-298): `#run/<id>`. */
 export const runHash = (runId: string): string => `#run/${encodeURIComponent(runId)}`;
-export const runIdOf = (hash: string): string | undefined => (hash.startsWith('#run/') ? decodeURIComponent(hash.slice(5)) || undefined : undefined);
+export function runIdOf(hash: string): string | undefined {
+  if (!hash.startsWith('#run/')) return undefined;
+  try {
+    return decodeURIComponent(hash.slice(5)) || undefined;
+  } catch {
+    // A malformed link: no run, the Flow instead of a blank page.
+    return undefined;
+  }
+}
 
 /** An attempt that ended its duration; one running its time so far; one cut without an end none. */
 export function runDuration(run: RunMeasureView, now: number): string {

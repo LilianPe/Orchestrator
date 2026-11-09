@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Measures, runHash, runIdOf } from './Measures.js';
-import { RunDetail } from './RunDetail.js';
+import { labelsLine, RunDetail } from './RunDetail.js';
 import type { MeasuredTicketView, RunDetailView, RunMeasureView, TicketMeasuresView } from './types.js';
 
 const tokens = { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 };
@@ -17,7 +17,7 @@ const detail = (patch: Partial<RunDetailView> = {}): RunDetailView => ({
     { id: 'f', type: 'run.finished', at: 60_000, ofRun: true, what: 'dev ended: succeeded, 5 turns' },
   ],
   decisions: [{ id: 'd', type: 'ticket.delegated', at: 0, channel: 'linear', who: 'Lilian', what: 'Delegated to the factory' }],
-  gates: [{ gate: 'merge', openedAt: 70_000, closedAt: 90_000, outcome: 'merged', decisionId: 'mg' }],
+  gates: [{ gate: 'merge', openedAt: 70_000, closedAt: 90_000, to: 'done', closedBy: 'mg' }],
   findings: [
     { source: 'human', id: 'rv', at: 80_000, author: 'lilian-gh', pr: 3, kind: 'review', state: 'changes_requested' },
     { source: 'ai', runId: 'r2', at: 75_000, job: 'review', status: 'success', outcome: 'succeeded' },
@@ -41,7 +41,7 @@ describe('the run detail page (ORC-298)', () => {
     for (const text of [
       'REL-1', 'succeeded',
       'Timeline', 'Delegated to the factory', 'dev ended: succeeded, 5 turns',
-      'Gates and human decisions', 'merge', 'merged', 'Lilian', 'linear',
+      'Gates and human decisions', 'merge', 'left for done', 'Lilian', 'linear',
       'Findings', 'lilian-gh', 'changes_requested', 'AI review',
       'Checks', 'factory/anti-triche, factory/taille-du-diff', 'failed',
       'Cost per step', '37.0 k', '9 turns', '1 without tokens',
@@ -64,10 +64,17 @@ describe('the run detail page (ORC-298)', () => {
     }
   });
 
+  it('shows the labels, those still null with the tickets that will fill them', () => {
+    expect(labelsLine({ task: 'dev', model: 'sonnet', image: null, effort: null, fingerprints: { prompt: 'sha256:x' }, pending: { image: ['ORC-204'] } }))
+      .toBe('Labels: task dev · model sonnet · image — (ORC-204) · effort —');
+  });
+
   it('a run is addressed by #run/<id>; each attempt of the Measures page links to its detail', () => {
     expect(runHash('r-1')).toBe('#run/r-1');
     expect(runIdOf('#run/r-1')).toBe('r-1');
     expect(runIdOf('#measures')).toBeUndefined();
+    // A malformed link opens no run, and throws nothing into the render.
+    expect(runIdOf('#run/%E0')).toBeUndefined();
     const m = { mergedAt: null, tokens, attempts: 1, attemptsWithoutTokens: 0, firstTry: null, reworks: [], revertedWithin14Days: null, ciCost: null, messages: [], startedAt: 0, leadTimeMs: null, workMs: 60_000, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [attempt()] } satisfies TicketMeasuresView;
     const t: MeasuredTicketView = { projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'dev', blocked: false, blockCause: null, measures: m };
     const html = renderToStaticMarkup(createElement(Measures, { tickets: [t], now: 0, selected: 'p/REL-1', onSelect: () => undefined }));
