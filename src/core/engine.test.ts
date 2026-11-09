@@ -183,10 +183,22 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(decide(ticket({ logical: 'dev', delegated: false }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
   });
 
-  it('merge moves to done, cleans up and learns', () => {
+  it('merge moves to done, runs the after_merge step, then cleans up and learns (ORC-197)', () => {
     const out = decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
-    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
-    expect(out.effects[3]).toMatchObject({ job: 'learn' });
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'after_merge', 'cleanup', 'start_run']);
+    // When GitHub does not say when it merged, the event's time.
+    expect(out.effects[2]).toEqual({ kind: 'after_merge', number: 3, url: 'u', at: 1000 });
+    expect(out.effects[4]).toMatchObject({ job: 'learn' });
+  });
+
+  it('the after_merge step carries the merge as GitHub tells it: its commits and its time (ORC-197)', () => {
+    const out = decide(ticket({ logical: 'done' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b', headSha: 'h', mergeSha: 'm', mergedAt: 900 }), workflow);
+    expect(out.effects.find((e) => e.kind === 'after_merge')).toEqual({ kind: 'after_merge', number: 3, url: 'u', at: 900, headSha: 'h', mergeSha: 'm' });
+  });
+
+  it('a version frozen before ORC-197 cleans up on a merge, with no after_merge step', () => {
+    const frozen: Workflow = { ...workflow, on: { ...workflow.on, 'pr.merged': [{ move: 'done', do: 'cleanup', run: 'learn' }] } };
+    expect(kinds(decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), frozen)).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
   });
 
   it('a PR closed without merge cancels the run: stopped, nothing pending, blocked until a human relaunches (ORC-134)', () => {
@@ -233,13 +245,14 @@ describe('decide — after the merge (ORC-268)', () => {
   const merged = (patch: Partial<TicketState> = {}) => ticket({ logical: 'done', prState: 'MERGED', ...patch });
   const devStarts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
 
-  it('a merge stops the dev work in flight, pending, queued or debounced, before its rule cleans up and learns', () => {
+  it('a merge stops the dev work in flight, pending, queued or debounced, before the after_merge step, the cleanup and learn of its rule', () => {
     const t = ticket({ logical: 'ready', activeRunId: 'r1', pendingJob: { job: 'dev-feedback' }, verifyingRunId: 'r1' });
     const out = decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
     expect(out.events).toEqual([{ type: 'work.cancelled' }]);
     expect(out.effects).toEqual([
       { kind: 'stop_run' },
       { kind: 'move', to: 'done' },
+      { kind: 'after_merge', number: 3, url: 'u', at: 1000 },
       { kind: 'cleanup' },
       { kind: 'start_run', job: 'learn', input: undefined, inputText: undefined, linearSessionId: undefined },
     ]);
@@ -433,8 +446,8 @@ describe('decide — taint', () => {
 
   it('keeps the other effects of an untrusted event when it refuses its knowledge run', () => {
     const out = decide(ticket({ logical: 'ready' }), untrusted(ev('pr.merged', { number: 3, url: 'u', branch: 'b' })), workflow);
-    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'activity']);
-    expect(out.effects[3]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'after_merge', 'cleanup', 'activity']);
+    expect(out.effects[4]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
   });
 
   it('starts the other runs of an untrusted event with the sensitive paths of the repository', () => {

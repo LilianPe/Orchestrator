@@ -208,6 +208,8 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
     on[type as EventType] = rules.map((r, i) => {
       const path = `on.${type}[${i}]`;
       if (r.run && !jobs[r.run]) throw new WorkflowError(`${path}.run: unknown job "${r.run}"`);
+      // The step of a merged PR (ORC-197): no other event carries one.
+      if (r.do === 'after_merge' && type !== 'pr.merged') throw new WorkflowError(`${path}.do: after_merge is the step of a merged PR, on pr.merged only`);
       let when;
       if (r.when !== undefined) {
         try {

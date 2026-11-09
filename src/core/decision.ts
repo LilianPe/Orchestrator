@@ -54,6 +54,11 @@ export type Effect =
   | { kind: 'close_take_over' }
   /** The bundle `by` handed back (ORC-234), checked by the factory and pushed if it passes: then the human's push (`push.human`). */
   | { kind: 'publish_bundle'; file: string; by: string }
+  /**
+   * The `after_merge` step (ORC-197), once the ticket's PR `number` is merged at `at`: its changelog entry appended, once by the
+   * effect's id, then the ticket's requester told in its session, with the PR's link. `headSha`, `mergeSha`: as GitHub gave them.
+   */
+  | { kind: 'after_merge'; number: number; url: string; at: number; headSha?: string; mergeSha?: string }
   | { kind: 'cleanup' }
   | { kind: 'set_paused'; paused: boolean };
 
