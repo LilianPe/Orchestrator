@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { EgressPolicy } from '../../network/levels.js';
 import type { Exec, ExecResult } from '../exec.js';
@@ -12,11 +11,11 @@ const QUIET = '--log-level=error';
 const sub = (args: string[]) => (args[0] === QUIET ? args.slice(1) : args);
 
 /** A scripted engine: `answer` gets the args after the cli (and podman's global flag) and says what the cli prints. */
-function engine(answer: (args: string[]) => ExecResult) {
+function engine(answer: (args: string[], env?: Record<string, string>) => ExecResult) {
   const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
   const exec: Exec = async (cmd, args, opts) => {
     calls.push({ cmd, args, ...(opts?.env ? { env: opts.env } : {}) });
-    return answer(sub(args));
+    return answer(sub(args), opts?.env);
   };
   return { calls, exec };
 }
@@ -160,8 +159,8 @@ describe('ContainerSandboxProvider.create', () => {
     await p.create(req());
     await p.destroy('c1');
     expect(egress.closed).toEqual(['r1']);
-    // The last `ps`: the services it would own (ORC-309).
-    expect(e.calls.map((c) => c.args[0])).toEqual(['ps', 'run', 'rm', 'ps']);
+    // No lookup of services: it joined none (ORC-309).
+    expect(e.calls.map((c) => c.args[0])).toEqual(['ps', 'run', 'rm']);
     const failing = engine((a) => (a[0] === 'run' ? { stdout: '', stderr: 'no such image', code: 125 } : ok()));
     const f = fakeEgress();
     await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: failing.exec, egress: f }).create(req())).rejects.toThrow(/no such image/);
@@ -466,16 +465,16 @@ describe('ContainerSandboxProvider lookups and destroy', () => {
 describe('ContainerSandboxProvider services (ORC-309)', () => {
   interface Container { labels: Record<string, string>; env: Record<string, string>; running: boolean; args: string[] }
 
-  /** An engine that keeps its containers: their labels and the env file read at `run`, looked up by `ps --filter`. */
+  /** An engine that keeps its containers: their labels and env at `run` (a bare `-e NAME` from the CLI's env), looked up by `ps --filter`. */
   function stateful(over: { ready?: () => number; role?: () => ExecResult; failRun?: (args: string[]) => boolean } = {}) {
     const containers = new Map<string, Container>();
     let made = 0;
     const pair = (x: string): [string, string] => [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1)];
-    const e = engine((a) => {
+    const e = engine((a, cliEnv = {}) => {
       if (a[0] === 'run') {
         if (over.failRun?.(a)) return { stdout: '', stderr: 'run failed', code: 125 };
         const labels = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === '--label' ? [pair(x)] : [])));
-        const env = a.includes('--env-file') ? Object.fromEntries(readFileSync(a[a.indexOf('--env-file') + 1]!, 'utf8').trim().split('\n').map(pair)) : {};
+        const env = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === '-e' ? [x.includes('=') ? pair(x) : [x, cliEnv[x]!]] : [])));
         const id = labels['factory.services'] ? `svc${++made}` : `c${++made}`;
         containers.set(id, { labels, env, running: true, args: a });
         return ok(`${id}\n`);
@@ -514,7 +513,8 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
       '--pids-limit', '512', '--memory', '4g', '--memory-swap', '4g', '--cpus', String(defaultLimits().cpus),
       '--user', 'postgres',
       '--mount', 'type=tmpfs,target=/var/lib/postgresql/data,tmpfs-mode=1777',
-      '--env-file', expect.any(String),
+      '-e', 'POSTGRES_DB=factory', '-e', 'PGDATA=/var/lib/postgresql/data/pgdata', '-e', 'POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust',
+      '-e', 'POSTGRES_PASSWORD', '-e', 'FACTORY_DB_PASSWORD',
       '--network', 'none',
       POSTGRES_IMAGE,
     ]);
@@ -532,10 +532,9 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     expect(role[4]).not.toMatch(/SUPERUSER/i);
     const box = e.containers.get('c2')!;
     expect(box.args.slice(box.args.indexOf('--network'), box.args.indexOf('--network') + 2)).toEqual(['--network', 'container:svc1']);
-    expect(box.env).toEqual({ DATABASE_URL: `postgres://factory:${password}@127.0.0.1:5432/factory` });
-    // Neither the password nor the URL on a command line, which the host's process list shows; the files are gone.
-    expect(e.calls.flatMap((c) => c.args).some((x) => x.includes(password))).toBe(false);
-    for (const c of [svc, box]) expect(existsSync(c.args[c.args.indexOf('--env-file') + 1]!)).toBe(false);
+    expect(box.env['DATABASE_URL']).toBe(`postgres://factory:${password}@127.0.0.1:5432/factory`);
+    // Neither the passwords nor the URL on a command line, which the host's process list shows.
+    expect(e.calls.flatMap((c) => c.args).some((x) => x.includes(password) || x.includes(svc.env['POSTGRES_PASSWORD']!))).toBe(false);
   });
 
   it('waits until Postgres accepts connections on the loopback before the sandbox starts', async () => {
@@ -567,7 +566,7 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     expect([...e.containers.keys()]).toEqual(['svc1']);
     const agent = await p.create(req({ requirements: pg }));
     expect(agent.services).toBe('svc1');
-    expect(e.containers.get(agent.id)!.env).toEqual({ DATABASE_URL: `postgres://factory:${e.containers.get('svc1')!.env['FACTORY_DB_PASSWORD']}@127.0.0.1:5432/factory` });
+    expect(e.containers.get(agent.id)!.env['DATABASE_URL']).toBe(`postgres://factory:${e.containers.get('svc1')!.env['FACTORY_DB_PASSWORD']}@127.0.0.1:5432/factory`);
     const verify = await p.create(req({ runId: 'r1-verify', requirements: pg }));
     expect(verify.services).not.toBe('svc1');
     expect(e.containers.get(verify.id)!.env['DATABASE_URL']).not.toBe(e.containers.get(agent.id)!.env['DATABASE_URL']);

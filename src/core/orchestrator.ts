@@ -853,13 +853,14 @@ export class Orchestrator {
       return;
     }
     // ponytail: a red check's sandbox (`<run>-red`) has no run record: its log is left to the files' purge.
-    const dead = new Map<string, typeof live>();
-    for (const l of live) if (!this.handles.has(l.runId) && !takenOver.has(l.runId)) dead.set(l.runId, [...(dead.get(l.runId) ?? []), l]);
-    // An attempt's containers one after the other, its services (ORC-309) last as `list()` gives them: its security log read once, after them all.
+    const dead = new Map<string, string[]>();
+    for (const { runId, sandbox } of live) if (!this.handles.has(runId) && !takenOver.has(runId)) dead.set(runId, [...(dead.get(runId) ?? []), sandbox.id]);
+    // An attempt's containers, its services among them (ORC-309), one after the other: its security log once they are all gone.
     await Promise.all(
-      [...dead].map(async ([runId, boxes]) => {
+      [...dead].map(async ([runId, ids]) => {
+        for (const id of ids) await this.destroySandbox(id, runId);
         const owner = await this.d.store.getRun(runId);
-        for (const [i, { sandbox }] of boxes.entries()) await this.destroySandbox(sandbox.id, runId, i === boxes.length - 1 ? owner : undefined);
+        if (owner) await this.ingestSecurityLog(runId, owner);
       }),
     );
   }
@@ -2581,14 +2582,12 @@ export class Orchestrator {
       const sessionRole = roleOf(job, ticketSession);
 
       const vars = await this.repoVariablesOf(project, config);
-      if (!setUp) {
-        await state(store.setMeta(setupPendingKey(ws.path), '1'));
+      // A set-up worktree's setup runs again for each attempt's new services (ORC-309), without the secrets (the worktree
+      // is an agent's), unmarked: the worktree stays if it fails.
+      if (!setUp || (this.d.sandboxes && config.services.length && setup.length)) {
+        if (!setUp) await state(store.setMeta(setupPendingKey(ws.path), '1'));
         await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
-        await state(store.setMeta(setupPendingKey(ws.path), ''));
-      } else if (this.d.sandboxes && config.services.length && setup.length) {
-        // Each attempt's services are new (ORC-309): the setup fills them again, without the secrets (the worktree is an
-        // agent's). Its worktree, set up already, stays if it fails.
-        await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
+        if (!setUp) await state(store.setMeta(setupPendingKey(ws.path), ''));
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).

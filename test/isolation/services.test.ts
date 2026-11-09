@@ -72,7 +72,7 @@ describe.skipIf(!enabled)(`an attempt's Postgres (${cli}, ORC-309)`, () => {
     expect((await psql(box, await urlOf(box), `create table s (v text); insert into s values ('${SECRET}')`)).code).toBe(0);
     const dump = await provider.exec(box.services!, POSTGRES_DUMP, { cwd: '/' });
     expect(dump.code).toBe(0);
-    expect(holdsSecret(Buffer.from(dump.stdout), [SECRET])).toBe(true);
+    expect(holdsSecret(Buffer.from(dump.stdout), SECRET)).toBe(true);
   });
 
   it('a daemon restart finds the services under the attempt they serve, for recover() to destroy', async () => {

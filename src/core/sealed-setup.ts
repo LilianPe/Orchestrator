@@ -64,9 +64,9 @@ function spellings(secret: string): Buffer[] {
   return [...new Set(forms)].map((f) => Buffer.from(f));
 }
 
-/** Whether `data` holds one of `secrets`, in one of the spellings `sealSecrets` finds. */
-export function holdsSecret(data: Buffer, secrets: readonly string[]): boolean {
-  return secrets.filter(Boolean).flatMap(spellings).some((n) => data.includes(n));
+/** Whether `data` holds `secret`, in one of the spellings `sealSecrets` finds. */
+export function holdsSecret(data: Buffer, secret: string): boolean {
+  return !!secret && spellings(secret).some((n) => data.includes(n));
 }
 
 /** `buffer`, of `CHUNK + overlap` bytes, is the caller's: one for the whole scan, not a megabyte per file of a `node_modules`. */
@@ -184,7 +184,7 @@ async function checkDatabase(sandboxes: Pick<SandboxProvider, 'exec'>, services:
   const dump = await sandboxes.exec(services, POSTGRES_DUMP, { cwd: '/' });
   if (dump.code !== 0) throw new Error(`The worktree setup failed: its database could not be checked for the secrets (${dump.stderr.trim()})`);
   const data = Buffer.from(dump.stdout);
-  const found = Object.keys(secrets).filter((name) => holdsSecret(data, [secrets[name]!]));
+  const found = Object.entries(secrets).filter(([, value]) => holdsSecret(data, value)).map(([name]) => name);
   // Its name, never its value.
   if (found.length) throw new Error(`The worktree setup failed: a secret of the setup is in its database (${found.join(', ')})`);
 }
