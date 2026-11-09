@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, execFailure, HARDENING, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 
 /**
@@ -57,30 +57,58 @@ export async function extractWork(o: ExtractRequest): Promise<{ sha: string }> {
   };
   const sha = await inSandbox('rev-parse', '--verify', `${ref}^{commit}`);
   // Named by its ref alone, the bundle carries the whole history: no prerequisite, so verifying and
-  // cloning it need no repository on the host.
+  // cloning it need no repository on the host (`cloneBundle`).
   await inSandbox('bundle', 'create', `${o.bundleTarget ?? BUNDLE_TARGET}/${BUNDLE}`, ref);
-  const bundle = join(o.bundleDir, BUNDLE);
-  if (!lstatSync(bundle).isFile()) throw new Error(`${bundle} is not a plain file`);
-  if (existsSync(o.cloneDir)) throw new Error(`${o.cloneDir} already exists`);
+  const { sha: head } = await cloneBundle({ bundle: join(o.bundleDir, BUNDLE), branch: o.branch, cloneDir: o.cloneDir, ...(o.exec ? { exec: o.exec } : {}) });
+  if (head !== sha) {
+    rmSync(o.cloneDir, { recursive: true, force: true });
+    throw new Error(`bundle head ${head} is not the branch head ${sha} reported by the sandbox`);
+  }
+  return { sha };
+}
 
-  // Host git runs no hook and no fsmonitor, and starts outside any repository.
+/** A bundle that is not one of the branch: it does not verify, or does not carry the branch. Any other failure is the host's. */
+export class BundleInvalid extends Error {
+  override name = 'BundleInvalid';
+}
+
+export interface CloneBundleRequest {
+  /** A file on the host that someone else wrote: the agent's sandbox, or a human after a take-over (ORC-234). */
+  bundle: string;
+  branch: string;
+  /** Must not exist: the fresh clone lands here, and is removed on any failure. */
+  cloneDir: string;
+  exec?: Exec;
+}
+
+/**
+ * A bundle into a fresh clone, on the host, as data: checked to be a plain file, `git bundle verify` in an empty repository
+ * of ours, then a clone without checkout, fsck on. Host git runs no hook and no fsmonitor, reads no config but ours, and
+ * starts outside any repository. A bundle that needs commits it does not carry fails the verify. Returns the branch's head.
+ */
+export async function cloneBundle(o: CloneBundleRequest): Promise<{ sha: string }> {
+  if (!lstatSync(o.bundle, { throwIfNoEntry: false })?.isFile()) throw new BundleInvalid(`${o.bundle} is not a plain file`);
+  if (existsSync(o.cloneDir)) throw new Error(`${o.cloneDir} already exists`);
   const scratch = mkdtempSync(join(tmpdir(), 'factory-extract-'));
   const env = hostGitEnv(scratch, dirname(scratch));
   const exec = o.exec ?? execCmd;
-  const onHost = async (...args: string[]) =>
-    (await mustExec(exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { cwd: scratch, env })).trim();
+  /** `ofBundle`: a git that ran and said no is the bundle's fault (`BundleInvalid`). One that did not run throws as it is, the host's. */
+  const onHost = async (args: string[], ofBundle = false) => {
+    const r = await exec('git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { cwd: scratch, env });
+    if (r.code !== 0) throw ofBundle ? new BundleInvalid(r.stderr.trim().slice(0, 500) || `git ${args[0]}: code ${r.code}`) : execFailure('git', args, r);
+    return r.stdout.trim();
+  };
   try {
     // `bundle verify` wants a repository even for a bundle without prerequisites: an empty one of ours.
     const empty = join(scratch, 'empty.git');
-    await onHost('init', '--quiet', '--bare', '--template=', empty);
-    await onHost('-C', empty, 'bundle', 'verify', '--quiet', bundle);
-    // fsck: the agent wrote these objects. --config keeps the hardening in the clone's own config,
+    await onHost(['init', '--quiet', '--bare', '--template=', empty]);
+    await onHost(['-C', empty, 'bundle', 'verify', '--quiet', o.bundle], true);
+    // fsck: someone else wrote these objects. --config keeps the hardening in the clone's own config,
     // for whoever runs git in it next.
-    await onHost('-c', 'transfer.fsckObjects=true', 'clone', '--quiet', '--no-checkout', '--template=', `--branch=${o.branch}`,
-      ...HARDENING.flatMap((c) => ['--config', c]), '--', bundle, o.cloneDir);
-    const head = await onHost('-C', o.cloneDir, 'rev-parse', 'HEAD');
-    if (head !== sha) throw new Error(`bundle head ${head} is not the branch head ${sha} reported by the sandbox`);
-    return { sha };
+    // A bundle without the branch fails here too.
+    await onHost(['-c', 'transfer.fsckObjects=true', 'clone', '--quiet', '--no-checkout', '--template=', `--branch=${o.branch}`,
+      ...HARDENING.flatMap((c) => ['--config', c]), '--', o.bundle, o.cloneDir], true);
+    return { sha: await onHost(['-C', o.cloneDir, 'rev-parse', 'HEAD']) };
   } catch (e) {
     rmSync(o.cloneDir, { recursive: true, force: true });
     throw e;

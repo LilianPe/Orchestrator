@@ -29,6 +29,17 @@ export async function fetchRunDetail(runId: string): Promise<RunDetailView | und
 
 export const post = (path: string) => fetch(path, { method: 'POST' });
 
+/** A ticket taken over (ORC-234): `take-over` gives the command of a shell in its container, `take-over/bundle` takes a bundle. */
+const takeOverPath = (projectId: string, ticketId: string, rest = '') => `/api/tickets/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}/take-over${rest}`;
+export const fetchTakeOverShell = (projectId: string, ticketId: string) => fetch(takeOverPath(projectId, ticketId));
+export const postBundle = (projectId: string, ticketId: string, file: File) => fetch(takeOverPath(projectId, ticketId, '/bundle'), { method: 'POST', body: file });
+
+/** What the server answers to a refused action: its `error`, or its status. */
+export async function refusal(res: Response, what: string): Promise<string> {
+  const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+  return error ?? `${what} refused (${res.status})`;
+}
+
 export function subscribe(onMessage: (m: BusMessage) => void, onConnection: (c: boolean) => void): () => void {
   const es = new EventSource('/api/events');
   for (const kind of ['event', 'command', 'run', 'activity', 'ticket', 'log']) {
