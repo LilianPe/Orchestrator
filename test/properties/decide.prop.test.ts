@@ -366,7 +366,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       expect(r.steps[lift]!.after).toMatchObject({ blocked: false });
       const started = r.steps.slice(lift).flatMap(launches).filter((e) => e.job === pendingJob.job && e.input === pendingJob.input);
       expect(started).toHaveLength(1);
-      expect(r.steps[lift + 1]).toMatchObject({ kind: 'settled', start: { job: pendingJob.job, input: pendingJob.input } });
+      // By the lift itself, not by a later run's end.
+      expect(r.steps.slice(lift).find((s) => s.kind === 'settled')).toMatchObject({ event: { type: 'pr.checks_passed' }, start: { job: pendingJob.job, input: pendingJob.input } });
     });
   });
 

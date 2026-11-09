@@ -10,6 +10,16 @@ import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } f
 /** Events after which `handle` settles the ticket: the pending job starts once nothing is in flight. */
 export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'publish.done', 'publish.refused']);
 
+/**
+ * Whether `handle` settles the ticket after a decision: a run result, or a block lifted over a pending job (ORC-362). A
+ * settle that died on a ticket blocked already left that job pending, and no run of the ticket would start it.
+ */
+export function settles(event: FactoryEvent, decision: Decision, ticket: TicketState | undefined): boolean {
+  if (!ticket) return false;
+  if (SETTLES_RUN.has(event.type)) return true;
+  return !!ticket.pendingJob && !ticket.blocked && decision.events.some((e) => e.type === 'ticket.unblocked');
+}
+
 /** The log line of an action the authorization matrix refused (ORC-186); the refusal itself is in the trace. */
 function refusedNote(event: FactoryEvent, trace: readonly string[]): string | undefined {
   const refused = trace.find((t) => t.startsWith(AUTHZ_REFUSED));
@@ -58,7 +68,7 @@ export function planDecision({ event, known, workflow, hash, now }: PlanInput): 
   const ticket = next && { ...next, updatedAt: now, workflowHash: hash };
   const effects: OutboxEffect[] = [...decision.effects];
   // After the effects, as before: start the ticket's pending job, then drain the queues.
-  if (ticket && SETTLES_RUN.has(decided.type)) effects.push({ kind: 'settle' });
+  if (settles(decided, decision, ticket)) effects.push({ kind: 'settle' });
   return {
     ticket,
     effects,
