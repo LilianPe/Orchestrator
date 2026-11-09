@@ -410,7 +410,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewSha'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -491,8 +491,11 @@ export interface TicketState {
   prUrl?: string;
   prChecks?: 'pending' | 'pass' | 'fail' | 'none';
   prState?: 'OPEN' | 'MERGED' | 'CLOSED';
-  /** The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148). */
-  reviewSha?: string;
+  /**
+   * The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148).
+   * `null` once a human pushed since (ORC-159): no approval from before the push passes a gate (I2).
+   */
+  reviewSha?: string | null;
   /** The status the factory itself moved the ticket to, while no human moved it since: its late webhook is an echo (ORC-148). */
   recordedStatus?: LogicalState;
   worktreePath?: string;
@@ -514,6 +517,11 @@ export interface TicketState {
   untrustedSince?: string | null;
   /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
   humanPushes?: { before?: string; after: string }[];
+  /**
+   * The last commit a human pushed to the branch that no publication of the factory carries yet (ORC-159): every check
+   * refuses a commit without it. `null` once a publication carried it, or the branch went back to the commit verified last.
+   */
+  humanHead?: string | null;
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */
