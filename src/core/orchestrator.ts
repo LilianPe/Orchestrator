@@ -60,6 +60,7 @@ import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, wit
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
+import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
@@ -2475,16 +2476,19 @@ export class Orchestrator {
         input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
       } else if (kind === 'ci_failures') {
         input = { kind, text: opts.inputText ?? 'The PR\'s CI is failing. Run `gh pr checks` for the details.' };
-      } else if (kind === 'thread') {
+      } else if (kind === 'thread' || kind === 'spec_check') {
         input = { kind, text: opts.inputText ?? '' };
       }
       if (carried.length) input = withHumanInbox(input, carried);
 
+      // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
+      const specShown = !!t.spec && job.queue === 'dev' && (job.step === 'spec_draft' ? !t.spec.approval : !!t.spec.approval);
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
+        spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
         // What `clarify`'s answers decided (ORC-210), for the steps after the guard: intake reads them as its feedback.
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,

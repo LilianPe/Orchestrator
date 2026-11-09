@@ -468,6 +468,20 @@ on:
 
 Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket gets its questions (`clarify`, ORC-210) instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
 
+### A spec approved by a human before the tests
+
+```yaml
+version: 1
+on:
+  ticket.delegated:
+    - { when: "state in [todo, dev] && !blocked", run: intake }
+jobs:
+  intake:
+    on_success: { run: spec }
+```
+
+A complete ticket then gets its spec (`spec_draft`, `spec_check`), published in its session; a designated validator approves it with `/approve`, which starts `tests` (ORC-212, [preset](preset.md#spec_draft-spec_check-and-the-spec_review-gate-orc-212)). Without validators in `config.yaml` (`projects[].authz.validators`), nobody can approve.
+
 ## 7. Common errors and validation
 
 Relais validates the file when `relais up` starts and refuses to start if it is invalid; the message names the faulty key. There is no dedicated validation command: restart `relais up`, or run `relais plan` (which also loads the workflows, once Linear is connected). Only the **first** error is shown: fix it and run again.

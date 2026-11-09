@@ -22,6 +22,8 @@ export interface FrozenTests {
    * `package.json` part it was made with: a deploy blocks no ticket frozen before it on files it did not freeze.
    */
   rules?: number;
+  /** The acceptance criteria of the approved spec the tests were frozen with (ORC-212): the contract they hold the code to. */
+  criteria?: readonly string[];
   /** The answers to the `clarify` questions the tests were frozen with (ORC-210): what the tests hold the code to, as decided. */
   decisions?: readonly ClarifyAnswer[];
 }
