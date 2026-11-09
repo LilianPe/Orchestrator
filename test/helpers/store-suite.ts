@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -310,6 +310,26 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putArtifact({ ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 });
     await s.putArtifact({ ...a, id: 'other', ticketId: 'REL-2' });
     expect(await s.artifacts('REL-1')).toEqual([a, { ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 }]);
+  });
+
+  it('appends a changelog entry once by its id, never changes one, and lists those of a period most recent first (ORC-197)', async () => {
+    const s = await store();
+    const capture = { artifactId: 'visual:r1:after:1280', side: 'after' as const, sha: 'c'.repeat(40), width: 1280, sha256: 'a'.repeat(64) };
+    const e: ChangelogEntry = {
+      id: 'REL-1:7:2', projectId: 'p', ticketId: 'REL-1', title: 'Export CSV', summary: 'Audits export to CSV.', prNumber: 3, prUrl: 'https://gh/pr/3',
+      mergeSha: 'm'.repeat(40), page: '/audits', paths: ['app/audits.tsx'], visualProof: { status: 'taken', captures: [capture] }, at: 1_700_000_000_000,
+    };
+    expect(await s.changelog(0, Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect(await s.appendChangelog(e)).toBe(true);
+    // Replayed, or the same id with other words: nothing written, the entry as it was.
+    expect(await s.appendChangelog({ ...e, summary: 'rewritten', visualProof: { status: 'not_applicable' } })).toBe(false);
+    const later: ChangelogEntry = { ...e, id: 'REL-2:4:1', ticketId: 'REL-2', prNumber: 4, paths: [], visualProof: { status: 'unavailable', reason: 'no browser' }, at: 1_700_000_000_005 };
+    // No merge commit nor page: kept without them.
+    const old: ChangelogEntry = { id: 'REL-3:1:1', projectId: 'q', ticketId: 'REL-3', title: 'Old', summary: 'Old', prNumber: 1, prUrl: 'https://gh/pr/1', paths: [], visualProof: { status: 'not_applicable' }, at: 1_600_000_000_000 };
+    expect(await s.appendChangelog(later)).toBe(true);
+    expect(await s.appendChangelog(old)).toBe(true);
+    expect(await s.changelog(1_700_000_000_000, 1_800_000_000_000)).toEqual([later, e]);
+    expect(await s.changelog(0, 1_700_000_000_000)).toEqual([old]);
   });
 
   it("keeps a project's known flaky tests, a human's list: replaced by test, listed oldest first, taken off (ORC-164)", async () => {

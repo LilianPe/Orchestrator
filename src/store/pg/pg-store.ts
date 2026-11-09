@@ -45,6 +45,7 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  type ChangelogEntry,
   type SecurityLog,
   type SecurityStats,
   type TimerRecord,
@@ -958,6 +959,22 @@ export class PgStore implements AsyncStore {
       select id, attempt_id, kind, path, sha256, round(extract(epoch from created_at) * 1000) as at from artifacts where ticket_id = ${ticketId} order by created_at, id
     `);
     return rows.rows.map((r) => ({ id: r.id, ticketId, ...(r.attempt_id === null ? {} : { attemptId: r.attempt_id }), kind: r.kind, path: r.path, sha256: r.sha256, createdAt: Number(r.at) }));
+  }
+
+  async appendChangelog(e: ChangelogEntry): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.changelog)
+      .values({ id: e.id, projectId: e.projectId, ticketId: e.ticketId, at: new Date(e.at), entry: e })
+      .onConflictDoNothing()
+      .returning({ id: schema.changelog.id });
+    return rows.length === 1;
+  }
+
+  async changelog(since: number, until: number): Promise<ChangelogEntry[]> {
+    const rows = await this.db.execute<{ entry: ChangelogEntry }>(sql`
+      select entry from changelog where at >= to_timestamp(${since / 1000}) and at < to_timestamp(${until / 1000}) order by at desc, id desc
+    `);
+    return rows.rows.map((r) => r.entry);
   }
 
   async knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]> {
