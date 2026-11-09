@@ -39,6 +39,8 @@ export interface GithubMapContext {
   /** The ticket's PR as the forge reads it now: the verdict of all its checks, which one webhook does not carry. */
   findPr(ticket: TicketState): Promise<PrInfo | undefined>;
   now(): number;
+  /** The factory's GitHub App, whose check runs are its own verdict (ORC-353); without it, they are known by their name. */
+  factoryAppId?: string;
 }
 
 /** `ticket`: the ticket of this event when a webhook concerns several (a push on the default branch). */
@@ -117,7 +119,7 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
   const check = body[kind];
   if (body.action !== 'completed' || typeof check?.head_sha !== 'string') return NOTHING;
   // The factory's own verdict is no CI; its check suite, named by no check, the forge's reading below leaves out.
-  if (kind === 'check_run' && isFactoryCheck(check.name ?? '')) return NOTHING;
+  if (kind === 'check_run' && isFactoryCheck({ name: check.name ?? '', ...(typeof check.app?.id === 'number' ? { appId: check.app.id } : {}) }, ctx.factoryAppId)) return NOTHING;
   const found = await checkedPr(repo, check, ctx);
   if (!found) return NOTHING;
   const { ticket: t, ref } = found;

@@ -127,6 +127,38 @@ describe('a disposable sandbox per attempt', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
 
+  it("verify's sandbox takes a slot of the queue: with one slot, another ticket waits for its end (ORC-353)", async () => {
+    let entered!: () => void;
+    const inVerify = new Promise<void>((resolve) => (entered = resolve));
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const h = createHarness({
+      sandboxed: true,
+      concurrency: 1,
+      projectYaml: VERIFIED,
+      cleanVerify: async () => {
+        entered();
+        await gate;
+        return { ok: true, failures: [], sha: 'abc', tree: 'tree' };
+      },
+    });
+    const until = async (cond: () => Promise<boolean>) => {
+      for (let i = 0; i < 2000 && !(await cond()); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(await cond()).toBe(true);
+    };
+    const first = delegate(h);
+    await inVerify;
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    const second = h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    // REL-2 is in line behind the check, not started beside it.
+    const runsOf = (id: string) => h.runner.requests.filter((r) => r.prompt.includes(id));
+    await until(async () => runsOf('REL-2').length > 0 || (await h.store.listQueue()).some((q) => q.ticketId === 'REL-2'));
+    expect(runsOf('REL-2')).toEqual([]);
+    open();
+    await Promise.all([first, second]);
+    expect(runsOf('REL-2')).not.toEqual([]);
+  });
+
   it("verify gets the project's known flaky tests, and its verdict journals the tests it reran with their causes (ORC-164)", async () => {
     const seen: CleanVerifyRequest[] = [];
     const flaky = [{ command: 'npm test', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total', attempts: [{ on: 'head' as const, attempt: 1, outcome: 'failed' as const, output: 'boom' }], indicative: true as const }];

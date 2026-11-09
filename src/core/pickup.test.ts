@@ -21,6 +21,37 @@ describe('pickupFailures', () => {
       'The description has no acceptance criteria.',
     ]);
   });
+
+  describe('has_acceptance_criteria recognizes criteria written otherwise (ORC-353)', () => {
+    const passes = (d: string) => expect(pickupFailures(['has_acceptance_criteria'], issue(d)), d).toEqual([]);
+    const fails = (d: string) => expect(pickupFailures(['has_acceptance_criteria'], issue(d)), d).toEqual(['The description has no acceptance criteria.']);
+
+    it('a section of its own, whatever it is called among the usual names', () => {
+      passes('Export the list.\n\n## Definition of done\n- the file opens in a spreadsheet');
+      passes('Export the list.\n\n**Expected behavior**\n- the file opens in a spreadsheet');
+      passes('Exporter la liste.\n\n### Résultat attendu :\n- le fichier s’ouvre dans un tableur');
+      passes('Export the list.\n\nAcceptance tests:\n1. the file opens');
+    });
+
+    it('numbered or bulleted « Given / Étant donné … then / alors » examples, on one line or several', () => {
+      passes('Exporter la liste.\n\n1. Étant donné une liste de 3 lignes, quand j’exporte, alors le CSV a 3 lignes.\n2. Étant donné une liste vide, quand j’exporte, alors le CSV n’a que l’en-tête.');
+      passes('Export the list.\n\n- Given a list of 3 rows\n  When I export it\n  Then the CSV has 3 rows');
+      passes('Export the list.\n\nScenario: empty list\n  Given an empty list\n  When I export it\n  Then the CSV holds the header only');
+    });
+
+    it('a checklist', () => {
+      passes('Export the list.\n\n- [ ] the CSV has a header row\n- [x] the dates are ISO 8601');
+    });
+
+    it('still refuses a description with none of them', () => {
+      fails('Export the list of tickets as a CSV file for the finance team.');
+      fails('Export the list.\n\n- one column per field\n- dates as ISO 8601');
+      // A « given » in passing, with no « then » of its own: no example.
+      fails('Given the deadline, export the list as a CSV file for the finance team.');
+      // A section named but empty is no criteria.
+      fails('Export the list.\n\n## Definition of done\n');
+    });
+  });
 });
 
 describe('the duplicate search (ORC-207)', () => {

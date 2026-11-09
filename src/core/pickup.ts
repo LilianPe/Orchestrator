@@ -11,6 +11,40 @@ import type { Blocker } from './types.js';
 export const openBlockers = (issue: TrackerIssue): Blocker[] =>
   (issue.blockedBy ?? []).filter((b) => b.stateType !== 'completed').map(({ identifier, stateName }) => ({ identifier, stateName }));
 
+/** The names a section of acceptance criteria goes by (ORC-353), its heading's text once its marks are taken off. */
+const CRITERIA_SECTION =
+  /^(acceptance (criteria|tests?)|crit[eè]res? d['’]acceptation|tests? d['’]acceptation|definition of done|dod|d[ée]finition de (fini|termin[ée])|done when|expected (behaviou?rs?|results?)|(r[ée]sultats?|comportements?) attendus?|conditions? de satisfaction)$/i;
+const LIST_ITEM = /^\s*([-*+]|\d+[.)])\s/;
+/** A line that opens an example: « Given » or « Étant donné », after a list mark, an emphasis or a `Scenario:` line's indent. */
+const GIVEN = /^\s*(([-*+]|\d+[.)])\s+)?(\*\*|__)?\s*(given|[ée]tant donn[ée]e?s?)(?=[\s,:*_]|$)/i;
+const THEN = /(^|[\s,;:*_(])(then|alors)(?=[\s,:*_]|$)/i;
+const CHECKBOX = /^\s*[-*+]\s+\[[ xX]\]\s+\S/m;
+
+/** A heading's text: its `#`, its emphasis and its trailing colon taken off. */
+const headingText = (line: string): string =>
+  line.trim().replace(/^#+\s*/, '').replace(/^(\*\*|__)(.*)\1$/, '$2').replace(/\s*:\s*$/, '').replace(/^(\*\*|__)(.*)\1$/, '$2').trim();
+
+/**
+ * Whether a description holds acceptance criteria (ORC-353), however they are written, without a model: the words
+ * « critères d'acceptation » or "acceptance criteria" anywhere, a section of its own under one of the usual names with
+ * something in it, one « Given … then » / « Étant donné … alors » example, on one line or the lines of its item, or a
+ * checklist. `intake` judges whether they are enough (ORC-206); this check only sees that there are some.
+ */
+export function hasAcceptanceCriteria(description: string): boolean {
+  if (/(crit[eè]res? d['’]acceptation|acceptance criteria)/i.test(description) || CHECKBOX.test(description)) return true;
+  const lines = description.split(/\r?\n/);
+  return lines.some((line, i) => {
+    if (CRITERIA_SECTION.test(headingText(line))) {
+      const body = lines.slice(i + 1).findIndex((l) => l.trim() !== '');
+      return body !== -1 && !lines[i + 1 + body]!.trim().startsWith('#');
+    }
+    if (!GIVEN.test(line)) return false;
+    // The example's lines: this one, then the ones of its item, up to a blank line or the next item.
+    const end = lines.slice(i + 1).findIndex((l) => l.trim() === '' || LIST_ITEM.test(l));
+    return lines.slice(i, end === -1 ? undefined : i + 1 + end).some((l) => THEN.test(l));
+  });
+}
+
 /**
  * The checks of `checks` that fail. `ownWork`: the ticket's own work already on the forge, as the duplicate search found it
  * (`ownWork` of intake-checks, ORC-207), or on origin for `factory plan`: the `not_started` failure when that check is listed.
@@ -22,7 +56,7 @@ export function pickupFailures(checks: PickupCheck[], issue: TrackerIssue, ownWo
       out.push('The description is shorter than 30 characters.');
     }
     if (check === 'not_started' && ownWork) out.push(ownWork);
-    if (check === 'has_acceptance_criteria' && !/(crit[eè]res? d['’]acceptation|acceptance criteria)/i.test(issue.description)) {
+    if (check === 'has_acceptance_criteria' && !hasAcceptanceCriteria(issue.description)) {
       out.push('The description has no acceptance criteria.');
     }
   }

@@ -418,6 +418,27 @@ describe('GitHubAppForge.findPr', () => {
     }
   });
 
+  it("leaves out the runs of the factory's App, whatever their name, and only those (ORC-353)", async () => {
+    const { forge } = makeForge([
+      tokenRoute(42),
+      pullsRoute([openPr()]),
+      (url) =>
+        url.pathname === '/repos/acme/app/commits/abc123/check-runs'
+          ? {
+              body: {
+                check_runs: [
+                  { id: 1, name: 'verify', status: 'completed', conclusion: 'failure', app: { id: 123 } },
+                  { id: 2, name: 'factory/lint', status: 'completed', conclusion: 'failure', app: { id: 15368 } },
+                  { id: 3, name: 'test', status: 'completed', conclusion: 'success', app: { id: 15368 } },
+                ],
+              },
+            }
+          : undefined,
+      (url) => (url.pathname === '/repos/acme/app/commits/abc123/status' ? { body: { statuses: [] } } : undefined),
+    ], { installationId: 42 });
+    expect(await forge.findPr('/repo', 'factory/REL-1')).toMatchObject({ checks: 'fail', failedChecks: ['factory/lint'] });
+  });
+
   it('rejects, past ten pages, check runs a server answers the same whatever the page: never loops', async () => {
     const full = Array.from({ length: 100 }, (_, i) => ({ id: i, name: `job-${i}`, status: 'completed', conclusion: 'success' }));
     const { forge, calls } = makeForge([
@@ -1011,7 +1032,8 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     });
     expect(out).toEqual({ id: 12, deduplicated: true });
     const list = new URL(calls.find((c) => c.url.includes('/check-runs?'))!.url);
-    expect(Object.fromEntries(list.searchParams)).toEqual({ check_name: 'factory/verify', filter: 'all', per_page: '100', page: '1' });
+    // Its own runs only (ORC-353): another App's run of that name and external id is not the factory's to update.
+    expect(Object.fromEntries(list.searchParams)).toEqual({ check_name: 'factory/verify', app_id: '123', filter: 'all', per_page: '100', page: '1' });
     expect(writes(calls)).toEqual([
       expect.objectContaining({
         method: 'PATCH',

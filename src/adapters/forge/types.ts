@@ -72,10 +72,13 @@ export interface GitAccess {
 }
 
 /**
- * The factory's own checks (`factory/…`, ORC-151): its verdict, published once it pushed, never the repository's CI. Read as
- * CI, a head with them alone would pass for green, and merge before the real CI ran.
+ * The factory's own checks (ORC-151): its verdict, published once it pushed, never the repository's CI. Read as CI, a head
+ * with them alone would pass for green, and merge before the real CI ran. Known by the GitHub App that created them when both
+ * Apps are known (ORC-353): another App may name a check as the factory names its own. By their `factory/` prefix otherwise,
+ * as the `gh` fallback, which reads no App, knows them.
  */
-export const isFactoryCheck = (name: string): boolean => name.startsWith('factory/');
+export const isFactoryCheck = (check: { name: string; appId?: string | number }, factoryAppId?: string | number): boolean =>
+  factoryAppId !== undefined && check.appId !== undefined ? String(check.appId) === String(factoryAppId) : check.name.startsWith('factory/');
 
 /** A check run the factory publishes on a sha (ORC-162): `externalId` is the id of the effect that created it (ORC-138, point 5). */
 export type CheckRunRequest = {

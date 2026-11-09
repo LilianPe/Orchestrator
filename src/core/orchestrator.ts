@@ -1184,7 +1184,29 @@ export class Orchestrator {
         if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
       }
     };
-    this.track(this.submitVerdict(project, t, c.runId, job, check));
+    this.withSlot(project, t.ticketId, job.queue, c.runId, () => this.submitVerdict(project, t, c.runId, job, check));
+  }
+
+  /**
+   * A check runs the agent's code within the slots of `queue` (ORC-353), as its runs do: `concurrency` bounds both. It waits
+   * for a slot, checks nothing if the ticket no longer awaits it by then, and drains the queue once done. A daemon that
+   * stops gives up the wait; `recover` takes the check up at the next start.
+   */
+  private withSlot(project: ProjectRuntime, ticketId: string, queue: QueueName, runId: string, check: () => Promise<void>): void {
+    const key = `verify:${runId}`;
+    void this.d.scheduler.acquire(queue, key).then((slot) => {
+      if (slot === null) return;
+      this.track(
+        (async () => {
+          try {
+            if ((await this.ticket(project.id, ticketId)).verifyingRunId === runId) await check();
+          } finally {
+            this.d.scheduler.release(key);
+            await this.drain(queue);
+          }
+        })(),
+      );
+    });
   }
 
   /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
@@ -1316,6 +1338,7 @@ export class Orchestrator {
   stopAll(): void {
     this.stopping = true;
     this.worker.stop();
+    this.d.scheduler.cancelWaits();
     for (const runId of [...this.handles.keys()]) {
       // Ended already, its end on its way, or stopped on request: drained() waits for its end, written here.
       if (this.liveRuns.has(runId) && !this.held.get(runId)?.stopped) this.letGo(runId);
@@ -1753,23 +1776,21 @@ export class Orchestrator {
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
         if (!run || !job || t.verifyingRunId !== c.runId) return;
         if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
-        this.track(
-          (async () => {
-            if (job.red) {
-              const red = await this.checkRed(project, run, job.red.command, !!t.frozenTests);
-              const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
-              const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
-              const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
-              await this.submitResult(
-                red.verified
-                  ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
-                  : { ...base, type: 'verify.failed', payload: { ...common, failures } },
-              );
-              return;
-            }
-            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job, c.output), c.output);
-          })(),
-        );
+        this.withSlot(project, t.ticketId, job.queue, c.runId, async () => {
+          if (job.red) {
+            const red = await this.checkRed(project, run, job.red.command, !!t.frozenTests);
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+            const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
+            const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
+            await this.submitResult(
+              red.verified
+                ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
+                : { ...base, type: 'verify.failed', payload: { ...common, failures } },
+            );
+            return;
+          }
+          await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job, c.output), c.output);
+        });
         return;
       }
       case 'move':

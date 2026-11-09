@@ -98,6 +98,8 @@ describe('factory doctor', () => {
     const ci = `name: ci
 on:
   pull_request:
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -124,7 +126,7 @@ jobs:
     const result = await doctor([workflow(ci)], [protectedEnvironment]);
     expect(result.code).toBe(0);
     expect(result.text).toContain('protected environment: yes');
-    expect(result.text).toContain('secrets limited to jobs under a protected environment');
+    expect(result.text).toContain('limited to jobs under a protected environment');
   });
 
   it('accepts an environment object with a name', async () => {
@@ -282,7 +284,8 @@ jobs:
 `;
     const result = await doctor([workflow(ci)]);
     expect(result.code).toBe(1);
-    expect(result.text).toContain('secrets exposed');
+    expect(result.text).toContain('secrets: yes');
+    expect(result.text).toContain("exposed on the factory's branches");
   });
 
   it('refuses when only one of several secret-exposing jobs is protected', async () => {
@@ -364,7 +367,7 @@ jobs:
     );
 
     const now = Date.parse('2026-10-22T10:00:00Z');
-    const ci = 'on: pull_request\njobs:\n  test:\n    steps:\n      - run: npm test\n';
+    const ci = 'on: pull_request\npermissions: read-all\njobs:\n  test:\n    steps:\n      - run: npm test\n';
     const routes: ((url: URL, init: HttpRequest) => { body?: unknown } | undefined)[] = [
       (url) =>
         url.pathname === '/app/installations/42/access_tokens'
@@ -406,5 +409,142 @@ jobs:
     });
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('verdict: accepted');
+  });
+
+  describe("the factory's real branch names (ORC-353)", () => {
+    const pushOn = (filter: string): string => `on:
+  push:
+${filter}
+jobs:
+  test:
+    steps:
+      - run: echo "\${{ secrets.NPM_TOKEN }}"
+`;
+
+    it('refuses a filter that reaches the branches the factory names, though no made-up name matches it', async () => {
+      // factory/<id>-<slug>: at least two dashes after the prefix, as branchName writes them.
+      const result = await doctor([workflow(pushOn('    branches: ["*/*-*-*"]'))]);
+      expect(result.code).toBe(1);
+      expect(result.text).toContain('factory branches: reached');
+    });
+
+    it("says so when a filter excludes the factory's real branches, and accepts the workflow", async () => {
+      const ignored = await doctor([workflow(pushOn('    branches-ignore: ["factory/*-*"]'))]);
+      expect(ignored.code).toBe(0);
+      expect(ignored.text).toContain('factory branches: not reached');
+
+      const negated = await doctor([workflow(pushOn('    branches: ["**", "!factory/[a-z]*-*"]'))], [], { json: true });
+      expect(negated.code).toBe(0);
+      const report = JSON.parse(negated.text) as { workflows: { factoryBranches: boolean }[] };
+      expect(report.workflows[0]!.factoryBranches).toBe(false);
+    });
+
+    it('keeps refusing a negation that leaves some of the real branches in', async () => {
+      const result = await doctor([workflow(pushOn('    branches: ["**", "!factory/[a-m]*"]'))]);
+      expect(result.code).toBe(1);
+    });
+  });
+
+  describe('the workflow read as YAML: secrets.* and the GITHUB_TOKEN (ORC-353)', () => {
+    it('reads secrets in expressions only: a shell text that names them references none', async () => {
+      const ci = `on: pull_request
+permissions: read-all
+jobs:
+  test:
+    steps:
+      - run: echo "see secrets.NPM_TOKEN in the docs"
+`;
+      const result = await doctor([workflow(ci)]);
+      expect(result.code).toBe(0);
+      expect(result.text).toContain('secrets: no');
+    });
+
+    it('reads an `if:` as the expression it is', async () => {
+      const ci = `on: pull_request
+permissions: read-all
+jobs:
+  test:
+    if: secrets.NPM_TOKEN != ''
+    steps:
+      - run: npm test
+`;
+      const result = await doctor([workflow(ci)]);
+      expect(result.code).toBe(1);
+      expect(result.text).toContain('secrets: yes');
+    });
+
+    it('counts secrets.GITHUB_TOKEN as the token, by its rights, not as a repository secret', async () => {
+      const ci = `on: pull_request
+permissions:
+  contents: read
+jobs:
+  test:
+    steps:
+      - run: gh pr view
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+`;
+      const result = await doctor([workflow(ci)]);
+      expect(result.code).toBe(0);
+      expect(result.text).toContain('secrets: no');
+      expect(result.text).toContain('GITHUB_TOKEN: read only');
+    });
+
+    it('refuses an exposed job whose GITHUB_TOKEN keeps the repository default rights, which the App cannot read', async () => {
+      const ci = `on: pull_request
+jobs:
+  test:
+    steps:
+      - run: npm test
+`;
+      const result = await doctor([workflow(ci)]);
+      expect(result.code).toBe(1);
+      expect(result.text).toContain('GITHUB_TOKEN: test (repository default)');
+      expect(result.text).toContain('declare `permissions:`');
+    });
+
+    it('refuses a GITHUB_TOKEN with write rights, workflow-wide or raised by one job', async () => {
+      const all = await doctor([workflow('on: pull_request\npermissions: write-all\njobs:\n  test:\n    steps:\n      - run: npm test\n')]);
+      expect(all.code).toBe(1);
+      expect(all.text).toContain('GITHUB_TOKEN: test (write-all)');
+
+      const raised = `on: pull_request
+permissions: read-all
+jobs:
+  lint:
+    steps:
+      - run: npm run lint
+  release:
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - run: npm publish
+`;
+      const result = await doctor([workflow(raised)], [], { json: true });
+      expect(result.code).toBe(1);
+      const report = JSON.parse(result.text) as { workflows: { githubToken: { job: string; rights: string }[]; reasons: string[] }[] };
+      expect(report.workflows[0]!.githubToken).toEqual([{ job: 'release', rights: 'write: contents, packages' }]);
+      expect(report.workflows[0]!.reasons.join(' ')).toContain('job(s) without an environment: release');
+    });
+
+    it('accepts a writable GITHUB_TOKEN under a protected environment, or on triggers that do not reach the factory', async () => {
+      const guarded = `on: pull_request
+permissions: write-all
+jobs:
+  deploy:
+    environment: ci-protected
+    steps:
+      - run: ./deploy
+`;
+      expect((await doctor([workflow(guarded)], [protectedEnvironment])).code).toBe(0);
+      expect((await doctor([workflow('on:\n  push:\n    branches: [main]\njobs:\n  test:\n    steps:\n      - run: npm test\n')])).code).toBe(0);
+    });
+
+    it('refuses permissions it cannot read', async () => {
+      const result = await doctor([workflow('on: pull_request\npermissions:\n  contents: maybe\njobs:\n  test:\n    steps:\n      - run: npm test\n')]);
+      expect(result.code).toBe(1);
+      expect(result.text).toContain('ambiguous `permissions`');
+    });
   });
 });
