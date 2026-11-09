@@ -9,9 +9,11 @@ import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/a
 import { checkDependencies, DEPENDENCY_CHECK, manifestKind, type ManifestChange } from '../checks/deps.js';
 import { parseDiff, type DiffFile } from '../checks/diff.js';
 import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
+import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
+import { REPORT_FLAGS, runnerOfCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
@@ -54,6 +56,8 @@ export interface CleanVerifyRequest {
   registries?: RegistryOpener;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
+  /** The repository's known flaky tests (ORC-164), a human's list: failing, they are indicative and do not count. */
+  knownFlaky?: readonly KnownFlaky[];
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
   untrusted?: UntrustedMark;
   /** A human's push (ORC-159): this commit is checked as the forge's branch holds it, fetched from the forge; the worktree is not read. */
@@ -83,8 +87,11 @@ export interface VisualRequest {
   gate: CaptureGate;
 }
 
-/** `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again. */
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; visual?: { proof: VisualProof; files: Judged['files'] } };
+/**
+ * `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again.
+ * `flaky`: the failing tests the factory reran (ORC-164), with what each attempt found, those that do not count `indicative`.
+ */
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] } };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -146,7 +153,8 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  *    registries through the egress proxy, before the setup installs anything: no sandbox opens to the network for it;
  * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout, and Semgrep on the files the diff adds
  *    lines to (ORC-333), with the factory's rules and the base's, read at step 3;
- * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted;
+ * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted; each failing test their
+ *    runner's report names rerun once there, and a few on the base, set up in a sandbox of its own (ORC-164, `runAndRerun`, `rerunOnBase`);
  * 6. the visual proof (ORC-176), when it is required and the commands passed: the application started and shot by the
  *    factory's browser, after on the commit and before on the base, each in a sandbox of its own at network `none`. The
  *    base is checked out from the clone's objects at step 3, before any code of the agent has run in it.
@@ -196,10 +204,15 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
-    if (shooting) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
+    // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
+    const runners = await testRunners(git, sha, commands);
+    const onBase = from !== EMPTY_TREE && runners.size > 0 && !failures.length;
+    if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
+    let flaky: FlakyTest[] = [];
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
       ok: !failures.length, failures, sha, tree, commands,
+      ...(flaky.length ? { flaky } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
     const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
@@ -228,13 +241,22 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);
+    const ran: CommandRun[] = [];
+    const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
-        const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(command), { env });
-        // 124: the cap's, whose failure stays the agent's (a test that hangs), as on the host.
-        if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
+        const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
+        if (failed) ran.push(failed);
       }
     }, withServices);
+    // The base's tests get services as the commit's do, new ones.
+    if (onBase && needsBase(ran, standing)) {
+      await setUp('verify-base', beforeDir, config.services);
+      await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing), withServices);
+    }
+    const settled = settle(ran, standing);
+    failures.push(...settled.failures);
+    flaky = settled.flaky;
     if (!shooting || failures.length) return verdict();
     const judged = await shootBoth(sandboxes, inBox, shooting, { from, sha, env, cloneDir, beforeDir, setUp });
     failures.push(...judged.failures);
@@ -249,6 +271,38 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 };
 
 export const BASE = 'refs/factory/base';
+
+/** What a report may weigh on its way to the daemon: past it, it is cut, unreadable, and nothing is rerun. */
+const MAX_REPORT_BYTES = 16 * 1024 * 1024;
+/** What its read may take: the agent's code, still running, could have put a pipe in its place, which a regular-file test refuses. */
+const REPORT_READ_S = 60;
+
+/**
+ * Runs a line in sandbox `id` as a command of `verify` (`verifyCommand`), its exit 124 the cap's, whose failure stays the
+ * agent's (a test that hangs), as on the host. With a runner, the line asks it for its report in a file of the sandbox, read
+ * back by an exec of its own, capped: not through the command's output, whose tail alone reaches the daemon.
+ */
+function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): Run {
+  return async (line, runner) => {
+    const f = `"\${TMPDIR:-/tmp}"/factory-report-${randomUUID()}`;
+    const started = Date.now();
+    const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(runner ? `f=${f}\n${line} ${REPORT_FLAGS[runner]}` : line), { env });
+    const run = { exitCode: code === 124 ? null : code, output: stdout + stderr, ms: Date.now() - started };
+    if (!runner) return run;
+    const report = await sandboxes.exec(id, ['bash', '--norc', '-c', `[ -f ${f} ] && timeout ${REPORT_READ_S} head -c ${MAX_REPORT_BYTES} ${f}; rm -f ${f}`], { env });
+    return report.stdout ? { ...run, report: report.stdout } : run;
+  };
+}
+
+/** The runner of each command that names one, from the commit's `package.json` for an npm script: read before any of its code runs. */
+async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, Runner>> {
+  const runners = new Map<string, Runner>();
+  for (const command of commands) {
+    const runner = await runnerOfCommand(command, { showAtHead: (p) => show(git, sha, p) });
+    if (runner) runners.set(command, runner);
+  }
+  return runners;
+}
 
 type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>>;
 

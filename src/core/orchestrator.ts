@@ -399,7 +399,7 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
 }
 
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
-type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual'] };
+type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
@@ -1096,6 +1096,7 @@ export class Orchestrator {
         commands: job.verify,
         gitleaks: true,
         semgrep: true,
+        knownFlaky: await this.d.store.knownFlakyTests(project.id),
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
@@ -1175,8 +1176,8 @@ export class Orchestrator {
     }
     await this.submitResult(
       res.ok
-        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}) } }
-        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } },
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}), ...(res.flaky ? { flaky: res.flaky } : {}) } }
+        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}), ...(res.flaky ? { flaky: res.flaky } : {}) } },
     );
   }
 

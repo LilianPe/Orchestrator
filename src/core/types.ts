@@ -3,6 +3,7 @@ import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
 import type { SpecVersion } from './spec.js';
+import type { FlakyTest } from '../checks/flaky.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
 import type { VisualProof } from '../checks/visual-proof.js';
@@ -336,9 +337,10 @@ export interface EventPayloads {
    */
   /** `commands`: what `verify` ran on `sha`, for its check on the forge (ORC-151); absent when it ran nothing again. */
   /** `visualProof`: what `verify` decided and took of the visual proof (ORC-176), the captures by their hash. */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof };
+  /** `flaky`: the failing tests `verify` reran (ORC-164), with the cause of each attempt; on a pass, only indicative ones. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof; flaky?: FlakyTest[] };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
-  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests };
+  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests; flaky?: FlakyTest[] };
   /**
    * An attempt gone without a result (ORC-220): `restart`, cut by a restart of the factory, and no
    * container left to reattach to; `lease`, its lease expired under a living factory. `decide` starts

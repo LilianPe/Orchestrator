@@ -42,6 +42,7 @@ import {
   type RunRecord,
   type Artifact,
   type FindingsRecord,
+  type KnownFlakyTest,
   type SecurityLog,
   type SecurityStats,
   type Store,
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TE
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS known_flaky_tests (project_id TEXT NOT NULL, test TEXT NOT NULL, added_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, test));
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 `;
 
@@ -791,6 +793,21 @@ export class SqliteStore implements Store {
 
   async artifacts(ticketId: string): Promise<Artifact[]> {
     return (this.db.prepare('SELECT data FROM artifacts WHERE ticket_id = ? ORDER BY seq').all(ticketId) as { data: string }[]).map((r) => JSON.parse(r.data) as Artifact);
+  }
+
+  async knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]> {
+    const rows = this.db.prepare('SELECT data FROM known_flaky_tests WHERE project_id = ? ORDER BY added_at, test').all(projectId) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as KnownFlakyTest);
+  }
+
+  async putKnownFlakyTest(t: KnownFlakyTest): Promise<void> {
+    this.db
+      .prepare('INSERT INTO known_flaky_tests (project_id, test, added_at, data) VALUES (?, ?, ?, ?) ON CONFLICT (project_id, test) DO UPDATE SET added_at = excluded.added_at, data = excluded.data')
+      .run(t.projectId, t.test, t.addedAt, JSON.stringify(t));
+  }
+
+  async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
+    return Number(this.db.prepare('DELETE FROM known_flaky_tests WHERE project_id = ? AND test = ?').run(projectId, test).changes) === 1;
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {

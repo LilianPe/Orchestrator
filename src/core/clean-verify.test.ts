@@ -97,13 +97,14 @@ const commit = (repo: string, message: string) => {
 };
 
 /** The forge's repository, its default branch holding `config`, and the agent's clone of it on its branch, one commit ahead. */
-function setup(over: Partial<CleanVerifyRequest> = {}, config?: string) {
+function setup(over: Partial<CleanVerifyRequest> = {}, config?: string, baseFiles: Record<string, string> = {}) {
   const base = mkdtempSync(join(tmpdir(), 'factory-clean-'));
   const origin = join(base, 'origin');
   git(base, 'init', '-q', '-b', 'main', origin);
   identity(origin);
   write(origin, 'README.md', 'base\n');
   if (config) write(origin, '.factory/config.yml', config);
+  for (const [path, content] of Object.entries(baseFiles)) write(origin, path, content);
   commit(origin, 'base');
   const repo = join(base, 'agent');
   git(base, 'clone', '-q', origin, repo);
@@ -930,7 +931,8 @@ describe('runCleanVerify', () => {
       git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
       const files = pythonRepoFiles();
       const frozen = await freezeTests(['tests/test_export.py'], { head: 'freeze', changed: [], filesAtHead: async () => Object.keys(files), showAtHead: async (p) => files[p] });
-      s.sandboxes.answer = (command) => (command.startsWith('uv ') ? { stdout: '', stderr: '', code: 0 } : undefined);
+      // pytest's line comes after the path of its report (ORC-164).
+      s.sandboxes.answer = (command) => (/^(?:f=.*\n)?uv /.test(command) ? { stdout: '', stderr: '', code: 0 } : undefined);
       return { ...s, req: { ...s.req, frozen } };
     }
 
@@ -942,9 +944,10 @@ describe('runCleanVerify', () => {
     it('runs its setup, then the commands init proposes for it: green', async () => {
       const { sandboxes, req } = await python();
       expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
-      const ran = sandboxes.ran.map((r) => r.command);
+      // Without the reads of pytest's report (ORC-164).
+      const ran = sandboxes.ran.map((r) => r.command).filter((c) => !c.startsWith('[ -f '));
       expect(ran).toContain('uv sync --frozen');
-      expect(ran.slice(-3)).toEqual(COMMANDS);
+      expect(ran.slice(-3)).toEqual([COMMANDS[0], COMMANDS[1], expect.stringMatching(/\nuv run --frozen pytest --junitxml="\$f" -o junit_family=xunit1$/)]);
     });
 
     it('criterion 3: a conftest.py the agent changed after the freeze blocks as factory/tests-gelés', async () => {
@@ -1168,5 +1171,83 @@ describe("a human's push on the agent's branch (ORC-159)", () => {
       commit(repo, 'the agent goes on');
       expect(await runCleanVerify({ ...req, humanHead: pushed })).toMatchObject({ ok: true, failures: [] });
     });
+  });
+});
+
+/**
+ * A vitest of the test's making, on the base and the commit: it writes its JSON report where `--outputFile.json` says, each
+ * test of `plan` (by side: the commit holds `a.txt`, the base does not) with its next outcome, or its last; `-t` runs one.
+ */
+const fakeVitest = (state: string, plan: Record<'head' | 'base', Record<string, ('passed' | 'failed')[]>>) => `
+const fs = require('fs');
+const args = process.argv.slice(2);
+const out = args.find((a) => a.startsWith('--outputFile.json=')).slice('--outputFile.json='.length);
+const t = args.indexOf('-t');
+const side = fs.existsSync('a.txt') ? 'head' : 'base';
+const results = [];
+for (const [name, seq] of Object.entries(${JSON.stringify(plan)}[side])) {
+  if (t >= 0 && !new RegExp(args[t + 1]).test(name)) continue;
+  const count = ${JSON.stringify(state)} + '/' + side + '-' + name.replace(/[^A-Za-z0-9]/g, '_');
+  const n = fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0;
+  fs.writeFileSync(count, String(n + 1));
+  const status = seq[Math.min(n, seq.length - 1)];
+  results.push({ fullName: name, title: name, status, duration: 5, failureMessages: status === 'failed' ? ['AssertionError: ' + name + ' broke'] : [] });
+}
+fs.writeFileSync(out, JSON.stringify({ testResults: [{ name: '/work/src/a.test.ts', assertionResults: results }] }));
+process.exit(results.some((r) => r.status === 'failed') ? 1 : 0);
+`;
+
+describe('flaky tests in verify (ORC-164)', () => {
+  const withVitest = (plan: Parameters<typeof fakeVitest>[1], over: Partial<CleanVerifyRequest> = {}) => {
+    const state = mkdtempSync(join(tmpdir(), 'factory-flaky-'));
+    return setup({ commands: ['node bin/vitest run'], ...over }, undefined, { 'bin/vitest': fakeVitest(state, plan) });
+  };
+
+  it('criteria 1 and 2: reruns a failing test once on the commit and once on the base, each in its sandbox, the cause of each attempt recorded', async () => {
+    const { sandboxes, req } = withVitest({ head: { 'cart total': ['failed'], 'cart ok': ['passed'] }, base: { 'cart total': ['failed'] } });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.flaky).toEqual([
+      {
+        command: 'node bin/vitest run', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total',
+        attempts: [
+          { on: 'head', attempt: 1, outcome: 'failed', durationMs: 5, output: 'AssertionError: cart total broke' },
+          { on: 'head', attempt: 2, outcome: 'failed', durationMs: expect.any(Number), output: 'AssertionError: cart total broke' },
+          { on: 'base', attempt: 1, outcome: 'failed', durationMs: expect.any(Number), output: 'AssertionError: cart total broke' },
+        ],
+      },
+    ]);
+    expect(res.failures).toHaveLength(1);
+    expect(res.failures[0]!.output).toContain('`src/a.test.ts > cart total`: failed again on its rerun; fails on the base commit too: not caused by this ticket');
+    // Each run, then the read of its report.
+    expect(sandboxes.ran.map((r) => r.box)).toEqual(['r1-verify', 'r1-verify', 'r1-verify', 'r1-verify', 'r1-verify-base', 'r1-verify-base']);
+    const baseBox = sandboxes.created.find((c) => c.runId === 'r1-verify-base')!;
+    expect(baseBox).toMatchObject({ network: 'none', mounts: [] });
+    expect(baseBox.workspacePath).toBe(join(req.workDir, 'before'));
+  });
+
+  it('a test that passes on its rerun is said flaky to the agent, still counted: only a known flaky test is indicative', async () => {
+    const { req } = withVitest({ head: { 'cart total': ['failed', 'passed'] }, base: { 'cart total': ['passed'] } });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.failures[0]!.output).toContain('`src/a.test.ts > cart total`: failed, then passed on its rerun: flaky on this commit; passes on the base commit');
+  });
+
+  it('criterion 3: a known flaky test is marked indicative before the agent sees the verdict: alone failing, the commit passes', async () => {
+    const { req } = withVitest(
+      { head: { 'cart total': ['failed'], 'cart ok': ['passed'] }, base: { 'cart total': ['passed'] } },
+      { knownFlaky: [{ test: 'src/a.test.ts > cart total', coversFrozen: false }] },
+    );
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.flaky).toEqual([expect.objectContaining({ test: 'src/a.test.ts > cart total', indicative: true })]);
+  });
+
+  it('a passing run reruns nothing', async () => {
+    const { sandboxes, req } = withVitest({ head: { 'cart ok': ['passed'] }, base: {} });
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.flaky).toBeUndefined();
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-base');
   });
 });
