@@ -99,15 +99,19 @@ describe('a human takes over a run (ORC-234)', () => {
     const { h, runId, app } = await atWork();
     await takeOver(h, app, runId);
     h.publisher.bundleHead = sha('c');
+    const read: string[] = [];
+    const publishBundle = h.publisher.publishBundle.bind(h.publisher);
+    h.publisher.publishBundle = async (req) => (read.push(readFileSync(req.bundle, 'utf8')), publishBundle(req));
     expect((await handBack(app)).status).toBe(200);
     await h.advance(0);
 
     // Kept where the factory reads it, and handed to the publisher, which verifies it in a fresh clone (extract.test.ts, publish.test.ts).
     expect(h.publisher.bundles).toHaveLength(1);
     const asked = h.publisher.bundles[0]!;
-    expect(asked).toMatchObject({ projectId: 'p', ticketId: 'REL-1', runId: TAKE_OVER, branch: (await h.ticket()).branch });
-    expect(existsSync(asked.bundle)).toBe(true);
-    expect(readFileSync(asked.bundle, 'utf8')).toBe('# v2 git bundle\n');
+    expect(asked).toMatchObject({ projectId: 'p', ticketId: 'REL-1', runId: 'bundle-p-REL-1', branch: (await h.ticket()).branch });
+    expect(read).toEqual(['# v2 git bundle\n']);
+    // Read once: then removed.
+    expect(existsSync(asked.bundle)).toBe(false);
     // The take-over ends with it: its container is closed.
     expect(await takeOverOpen(h)).toBe(false);
     const journal = (await h.store.ticketJournal('p', 'REL-1')).map((e) => e.event);
@@ -128,6 +132,15 @@ describe('a human takes over a run (ORC-234)', () => {
     expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'taken_over' });
     expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'response', body: expect.stringMatching(/^The bundle handed back is refused, nothing was pushed: factory\/chemins-interdits/) });
     expect(await takeOverOpen(h)).toBe(true);
+    expect(existsSync(h.publisher.bundles[0]!.bundle)).toBe(false);
+  });
+
+  it("a human's direct push to the branch ends the take-over: its container is closed while verify checks the push", async () => {
+    const { h, runId, app } = await atWork();
+    await takeOver(h, app, runId);
+    await h.send('push.human', { branch: (await h.ticket()).branch!, sha: sha('d'), author: 'lilian' }, 'REL-1', { taint: 'untrusted' });
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'human_push' });
+    expect(await takeOverOpen(h)).toBe(false);
   });
 
   it("a reply relaunches the agent: the human's container is closed before the agent's opens", async () => {
@@ -145,5 +158,9 @@ describe('a human takes over a run (ORC-234)', () => {
     await takeOver(h, app, runId);
     await h.restart();
     expect(await takeOverOpen(h)).toBe(true);
+    // And the relaunch after it still closes it.
+    h.runner.enqueue({ hold: true });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'Lilian', kind: 'instruction' });
+    expect(await takeOverOpen(h)).toBe(false);
   });
 });

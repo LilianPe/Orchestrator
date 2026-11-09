@@ -80,5 +80,10 @@ describe('decide — a human takes over a run (ORC-234)', () => {
       expect(out.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked', kind: 'human_push' }));
       expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'run_verify', head: 'a'.repeat(40) }));
     });
+
+    it('a delivered ticket stays delivered: a push on it after its merge checks nothing', () => {
+      const out = decide(ticket({ blocked: true, blockKind: 'taken_over', prState: 'MERGED' }), ev('push.human', { branch: 'factory/rel-1', sha: 'a'.repeat(40), author: 'x' }, undefined, undefined, 'untrusted'), workflow);
+      expect(out.effects.filter((e) => e.kind === 'run_verify')).toEqual([]);
+    });
   });
 });

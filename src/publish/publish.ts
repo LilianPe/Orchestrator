@@ -8,7 +8,7 @@ import { PublishRefused, type BundlePush, type BundleRequest, type Publication, 
 import { WORKSPACE_TARGET, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { RepoConfigError, REPO_CONFIG_PATH } from '../config/repo-config.js';
 import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, untrustedCheck, withDeadline, within, type UntrustedMark } from '../core/clean-verify.js';
-import { BUNDLE_TARGET, cloneBundle, extractWork, HARDENING, hostGitEnv } from './extract.js';
+import { BUNDLE_TARGET, BundleInvalid, cloneBundle, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
 const PUBLISH_DEADLINE_MS = 10 * 60_000;
@@ -92,9 +92,11 @@ export class GitPublisher implements Publisher {
       if (req.branch === onForge.base) throw new PublishRefused('trunk', `the ticket's branch is the default branch (${onForge.base}).`);
       const cloneDir = join(workDir, 'clone');
       const { sha } = await cloneBundle({ bundle: req.bundle, branch: req.branch, cloneDir, exec: this.exec }).catch((err: Error) => {
-        throw new PublishRefused('bundle', `the bundle does not verify as a bundle of ${req.branch}: ${err.message.slice(0, 500)}`);
+        // The bundle's fault is an answer; a failure of the host (a full disk, git gone) is retried.
+        throw err instanceof BundleInvalid ? new PublishRefused('bundle', `the bundle does not verify as a bundle of ${req.branch}: ${err.message.slice(0, 500)}`) : err;
       });
-      if (onForge.head !== sha) await this.checkAndPush({ ...req, sha, untrusted: { since: '', humanPushes: [] } }, access.url, env, workDir, cloneDir, onForge.head);
+      if (onForge.head === sha) throw new PublishRefused('empty', `the bundle brings nothing the branch ${req.branch} does not already have on the forge (${sha.slice(0, 12)}).`);
+      await this.checkAndPush({ ...req, sha, untrusted: { since: '', humanPushes: [] } }, access.url, env, workDir, cloneDir, onForge.head);
       return { sha, ...(onForge.head ? { before: onForge.head } : {}) };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.d.log(`bundle of ${req.ticketId}: ${workDir} not removed: ${err.message}`));

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { cloneBundle, extractWork } from './extract.js';
+import { BundleInvalid, cloneBundle, extractWork } from './extract.js';
 
 const BRANCH = 'factory/orc-1-x';
 // Forward slashes: the trap commands run under sh, Git for Windows' too.
@@ -169,5 +169,18 @@ describe('cloneBundle: a bundle a human hands back (ORC-234)', () => {
   it('refuses what is not a plain file', async () => {
     const { base, cloneDir } = await handed();
     await expect(cloneBundle({ bundle: base, branch: BRANCH, cloneDir })).rejects.toThrow(/not a plain file/);
+  });
+
+  it("tells the bundle's fault (`BundleInvalid`) from the host's, which is retried", async () => {
+    const { base, bundle, cloneDir } = await handed();
+    const cut = join(base, 'cut.bundle');
+    writeFileSync(cut, readFileSync(bundle).subarray(0, 40));
+    await expect(cloneBundle({ bundle: cut, branch: BRANCH, cloneDir })).rejects.toBeInstanceOf(BundleInvalid);
+    const broken: Exec = async () => {
+      throw new Error('spawn git ENOENT');
+    };
+    const err = await cloneBundle({ bundle, branch: BRANCH, cloneDir, exec: broken }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BundleInvalid);
   });
 });

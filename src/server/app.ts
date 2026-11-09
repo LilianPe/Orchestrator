@@ -52,6 +52,31 @@ export type { TakeOverDesk };
 /** The largest bundle handed back after a take-over (ORC-234), held in memory once before it is written. */
 const MAX_BUNDLE_BYTES = 100 * 2 ** 20;
 
+/** A request body read up to `max` bytes, whatever its `Content-Length` says; undefined past it, the rest not read. */
+async function readCapped(body: ReadableStream<Uint8Array> | null, max: number): Promise<Uint8Array | undefined> {
+  if (!body) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = body.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return out;
+}
+
 /**
  * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
  * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
@@ -361,9 +386,8 @@ export function createApp(d: ServerDeps): Hono {
   app.post('/api/tickets/:projectId/:ticketId/take-over/bundle', async (c) => {
     const at = await takenOver(c);
     if (at instanceof Response) return at;
-    if (Number(c.req.header('content-length') ?? 0) > MAX_BUNDLE_BYTES) return c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413);
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (bytes.byteLength > MAX_BUNDLE_BYTES) return c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413);
+    const bytes = await readCapped(c.req.raw.body, MAX_BUNDLE_BYTES);
+    if (!bytes) return c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413);
     if (!bytes.byteLength) return c.json({ error: 'empty bundle' }, 400);
     const file = await at.desk.keepBundle(at.projectId, at.ticketId, bytes);
     const now = d.clock.now();

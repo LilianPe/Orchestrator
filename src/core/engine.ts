@@ -1164,8 +1164,9 @@ function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: Tick
   // The commit shown to the reviewer is no longer the branch's: no approval from before the push passes a gate (I2).
   if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
   // A take-over (ORC-234) is held as a stop, and its bundle the factory pushed is the human's push, as any.
-  const takenOver = ticket?.blocked && ticket.blockKind === 'taken_over';
-  if (!ticket?.delegated || (settledTicket(ticket) && !takenOver) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
+  const settled = ticket && settledTicket(ticket);
+  const takenOver = settled === 'stopped' && ticket?.blockKind === 'taken_over';
+  if (!ticket?.delegated || (settled && !takenOver) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
   if (!ticket.blocked || ticket.blockKind === 'human_push' || takenOver) {
     cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
     // A push on a paused ticket keeps the job the first one interrupted.
@@ -1606,8 +1607,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       }
       if (takeOver && runId) {
         // The stop first (ORC-234): the human's container opens on a worktree the agent no longer writes.
-        stop(out, workflow, TAKEN_OVER, `Taken over from the dashboard: a human works on the branch in a container of their own, or hands back a bundle the factory checks before any push. ${relaunch(workflow)}`, 'taken_over');
-        out.effects.splice(1, 0, { kind: 'take_over', runId });
+        out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: TAKEN_OVER, kind: 'taken_over' });
+        const body = `Taken over from the dashboard: a human works on the branch in a container of their own, or hands back a bundle the factory checks before any push. ${relaunch(workflow)}`;
+        out.effects.push({ kind: 'stop_run' }, { kind: 'take_over', runId }, { kind: 'activity', type: 'response', body });
         return out;
       }
       return pause ? stop(out, workflow, PAUSED, `Paused from the dashboard. ${relaunch(workflow)}`, 'paused') : stop(out, workflow);

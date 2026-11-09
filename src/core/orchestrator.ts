@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
@@ -382,6 +382,8 @@ const blockedOn = (workflow: Workflow, kind: BlockKind, reason: string, job: str
 /** The sandboxes of the take-overs (ORC-234): one per ticket, `take-over-<project>-<ticket>`, no attempt of an agent. */
 const TAKE_OVER = 'take-over-';
 export const takeOverKey = (projectId: string, ticketId: string): string => `${TAKE_OVER}${projectId}-${ticketId}`;
+/** Where a bundle handed back is checked (`<runsDir>/<key>/`, its secret scan's sandbox `<key>-publish-secrets`): an attempt like any, which `recover()` reaps. */
+const bundleKey = (projectId: string, ticketId: string): string => `bundle-${projectId}-${ticketId}`;
 
 /** What the dashboard reaches of a take-over (ORC-234): absent without sandboxes, where there is none. */
 export interface TakeOverDesk {
@@ -1622,6 +1624,8 @@ export class Orchestrator {
         // The ticket's dev work only: a question waiting for its slot is still answered.
         await store.removeFromQueue(project.id, ticketId, 'dev');
         if (t.activeRunId) this.stopRun(t.activeRunId);
+        // So does its take-over (ORC-234): a human's push, a stop. A new take-over opens its container after this.
+        await this.closeTakeOver(project.id, ticketId);
         return;
       }
       case 'run_verify': {
@@ -1900,16 +1904,18 @@ export class Orchestrator {
     if (!sandboxes || !runsDir) return undefined;
     return {
       attach: async (projectId, ticketId) => {
-        const box = await sandboxes.findByAttempt(takeOverKey(projectId, ticketId));
+        const key = takeOverKey(projectId, ticketId);
+        // After a restart its container is alive but not this process's yet: taken back, as an attempt is.
+        const box = (await sandboxes.findByAttempt(key)) ?? (await sandboxes.reattach(key));
         if (!box) return undefined;
         this.log('info', `take-over of ${ticketId}: the command of a shell in its container ${box.id} given to the dashboard`);
         return sandboxes.spawnCommand(box.id, ['sh', '-i'], { cwd: WORKSPACE_TARGET });
       },
       keepBundle: async (projectId, ticketId, bytes) => {
-        const dir = join(runsDir, takeOverKey(projectId, ticketId));
-        mkdirSync(dir, { recursive: true });
+        const dir = join(runsDir, bundleKey(projectId, ticketId));
+        await mkdir(dir, { recursive: true });
         const file = join(dir, `${randomUUID()}.bundle`);
-        writeFileSync(file, bytes);
+        await writeFile(file, bytes);
         return file;
       },
     };
@@ -1930,13 +1936,16 @@ export class Orchestrator {
     this.log('info', `take-over of ${t.ticketId}: container ${box.id} open on its worktree, without network nor secret`);
   }
 
-  /** The ticket's take-over container closed, if one is open (ORC-234). */
+  /** The ticket's take-over container closed, if one is alive (ORC-234): found by its label, even one a restart left unusable. */
   private async closeTakeOver(projectId: string, ticketId: string): Promise<void> {
+    const sandboxes = this.d.sandboxes;
+    if (!sandboxes) return;
     const key = takeOverKey(projectId, ticketId);
-    const box = await this.d.sandboxes?.findByAttempt(key);
-    if (!box) return;
-    await this.destroySandbox(box.id, key);
-    this.log('info', `take-over of ${ticketId}: container ${box.id} closed`);
+    for (const { runId, sandbox } of await sandboxes.list()) {
+      if (runId !== key) continue;
+      await this.destroySandbox(sandbox.id, key);
+      this.log('info', `take-over of ${ticketId}: container ${sandbox.id} closed`);
+    }
   }
 
   /**
@@ -1957,8 +1966,9 @@ export class Orchestrator {
     else if (!t.branch) reason = `no branch for ${t.ticketId}.`;
     else {
       try {
-        const pushed = await publisher.publishBundle({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: takeOverKey(project.id, t.ticketId), branch: t.branch, bundle: c.file });
+        const pushed = await publisher.publishBundle({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: bundleKey(project.id, t.ticketId), branch: t.branch, bundle: c.file });
         await this.closeTakeOver(project.id, t.ticketId);
+        await rm(c.file, { force: true });
         const payload = { branch: t.branch, sha: pushed.sha, author: c.by, ...(pushed.before ? { before: pushed.before } : {}) };
         await this.accept({ schemaVersion: SCHEMA_VERSION, taint: 'untrusted', projectId: project.id, ticketId: t.ticketId, id: `push:${t.ticketId}:${pushed.sha}`, type: 'push.human', at: this.d.clock.now(), payload });
         return;
@@ -1969,6 +1979,7 @@ export class Orchestrator {
     }
     await this.d.store.setMeta(mark, reason);
     await refuse(reason);
+    await rm(c.file, { force: true });
   }
 
   /**

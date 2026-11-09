@@ -622,7 +622,7 @@ describe('GitPublisher.publishBundle: a bundle a human hands back after a take-o
     git(s.repo, 'bundle', 'create', '-q', bundle, BRANCH);
     return bundle;
   };
-  const request = (s: ReturnType<typeof setup>, bundle: string): BundleRequest => ({ projectId: 'p', repoPath: s.repo, ticketId: 'ORC-1', runId: 'take-over-p-ORC-1', branch: BRANCH, bundle });
+  const request = (s: ReturnType<typeof setup>, bundle: string): BundleRequest => ({ projectId: 'p', repoPath: s.repo, ticketId: 'ORC-1', runId: 'bundle-p-ORC-1', branch: BRANCH, bundle });
   const refusedPush = async (s: ReturnType<typeof setup>, code: string, summary: RegExp) => {
     const r = await refusal(s.publisher.publishBundle(request(s, handBack(s))));
     expect(r.code).toBe(code);
@@ -649,6 +649,14 @@ describe('GitPublisher.publishBundle: a bundle a human hands back after a take-o
     expect(s.onForge()).toBe(sha);
   });
 
+  it('refuses a bundle that brings nothing the forge does not have: no push, nothing for verify to check', async () => {
+    const s = setup();
+    await s.publisher.publish(s.request());
+    const r = await refusal(s.publisher.publishBundle(request(s, handBack(s))));
+    expect(r.code).toBe('empty');
+    expect(s.pushes).toHaveLength(1);
+  });
+
   it('refuses the push of a bundle that touches a forbidden path', async () => {
     const s = setup();
     write(s.repo, '.github/workflows/ci.yml', 'trap\n');
@@ -671,7 +679,7 @@ describe('GitPublisher.publishBundle: a bundle a human hands back after a take-o
     const t = setup({ gitleaks: true });
     t.sandboxes.scan = () => ({ stdout: JSON.stringify([{ File: 'a.txt', StartLine: 1, RuleID: 'aws' }]), stderr: '', code: 7 });
     await refusedPush(t, 'diff', /secret/);
-    expect(t.sandboxes.created.map((c) => [c.runId, c.network, c.mounts])).toEqual([['take-over-p-ORC-1-publish-secrets', 'none', []]]);
+    expect(t.sandboxes.created.map((c) => [c.runId, c.network, c.mounts])).toEqual([['bundle-p-ORC-1-publish-secrets', 'none', []]]);
   });
 
   it("checks it as an untrusted branch's: the base's sensitive_paths refuse it", async () => {

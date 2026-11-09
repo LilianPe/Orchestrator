@@ -67,6 +67,11 @@ export async function extractWork(o: ExtractRequest): Promise<{ sha: string }> {
   return { sha };
 }
 
+/** A bundle that is not one of the branch: it does not verify, or does not carry the branch. Any other failure is the host's. */
+export class BundleInvalid extends Error {
+  override name = 'BundleInvalid';
+}
+
 export interface CloneBundleRequest {
   /** A file on the host that someone else wrote: the agent's sandbox, or a human after a take-over (ORC-234). */
   bundle: string;
@@ -82,7 +87,7 @@ export interface CloneBundleRequest {
  * starts outside any repository. A bundle that needs commits it does not carry fails the verify. Returns the branch's head.
  */
 export async function cloneBundle(o: CloneBundleRequest): Promise<{ sha: string }> {
-  if (!lstatSync(o.bundle, { throwIfNoEntry: false })?.isFile()) throw new Error(`${o.bundle} is not a plain file`);
+  if (!lstatSync(o.bundle, { throwIfNoEntry: false })?.isFile()) throw new BundleInvalid(`${o.bundle} is not a plain file`);
   if (existsSync(o.cloneDir)) throw new Error(`${o.cloneDir} already exists`);
   const scratch = mkdtempSync(join(tmpdir(), 'factory-extract-'));
   const env = hostGitEnv(scratch, dirname(scratch));
@@ -93,10 +98,17 @@ export async function cloneBundle(o: CloneBundleRequest): Promise<{ sha: string 
     // `bundle verify` wants a repository even for a bundle without prerequisites: an empty one of ours.
     const empty = join(scratch, 'empty.git');
     await onHost('init', '--quiet', '--bare', '--template=', empty);
-    await onHost('-C', empty, 'bundle', 'verify', '--quiet', o.bundle);
+    // A git that ran and said no is the bundle's fault (`BundleInvalid`); one that did not run throws as it is, the host's.
+    const ofBundle = async (...args: string[]) => {
+      const r = await exec('git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { cwd: scratch, env });
+      if (r.code !== 0) throw new BundleInvalid(r.stderr.trim().slice(0, 500) || `git ${args[0]}: code ${r.code}`);
+      return r.stdout.trim();
+    };
+    if (!(await ofBundle('-C', empty, 'bundle', 'list-heads', o.bundle, `refs/heads/${o.branch}`))) throw new BundleInvalid(`no refs/heads/${o.branch} in the bundle`);
+    await ofBundle('-C', empty, 'bundle', 'verify', '--quiet', o.bundle);
     // fsck: someone else wrote these objects. --config keeps the hardening in the clone's own config,
     // for whoever runs git in it next.
-    await onHost('-c', 'transfer.fsckObjects=true', 'clone', '--quiet', '--no-checkout', '--template=', `--branch=${o.branch}`,
+    await ofBundle('-c', 'transfer.fsckObjects=true', 'clone', '--quiet', '--no-checkout', '--template=', `--branch=${o.branch}`,
       ...HARDENING.flatMap((c) => ['--config', c]), '--', o.bundle, o.cloneDir);
     return { sha: await onHost('-C', o.cloneDir, 'rev-parse', 'HEAD') };
   } catch (e) {
