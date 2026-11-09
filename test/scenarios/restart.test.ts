@@ -22,10 +22,10 @@ describe('a brutal restart in the middle of the processing', () => {
     const h = createHarness({ effectLeaseMs: LEASE_MS });
     await inReview(h);
 
-    // A timer: the reply arms the 3-minute debounce of dev-feedback, in the database.
+    // A timer: the reply arms the 3-minute debounce of fix-human (ORC-190), in the database.
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'L' });
-    expect((await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
+    expect((await h.store.dueTimers(Number.MAX_SAFE_INTEGER)).map((t) => t.key)).toEqual(['REL-1:fix-human']);
 
     // An effect claimed, half done, never settled: REL-2's start moves the issue in Linear, then its
     // process hangs there, before the run is launched.
@@ -58,11 +58,11 @@ describe('a brutal restart in the middle of the processing', () => {
     await h.restart({ mode: 'brutal' });
     // The new process found everything in the database: the timer still due, the event still in the
     // inbox, the effect still claimed by the dead process, whose lease runs until it expires.
-    expect((await h.store.dueTimers(h.clock.now())).map((t) => t.key)).toEqual(['REL-1:dev-feedback']);
+    expect((await h.store.dueTimers(h.clock.now())).map((t) => t.key)).toEqual(['REL-1:fix-human']);
     expect((await h.store.pendingInbox(10)).map((e) => e.id)).toContain('p2');
     expect((await h.store.listEffects('p', 'REL-2')).find((r) => r.id === claimed.id)).toMatchObject({ status: 'running', attempts: 1 });
 
-    // The timer fires through the inbox: the dev-feedback job runs once.
+    // The timer fires through the inbox: the fix-human job runs once.
     await h.advance(0);
     expect(await h.store.dueTimers(h.clock.now())).toEqual([]);
     expect(h.runner.requests.slice(runs).map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:feedback']);

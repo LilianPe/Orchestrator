@@ -39,6 +39,24 @@ describe('CachedRoleResolver (ORC-186)', () => {
     expect(await roles.rolesOf('unknown', 'u-dev')).toEqual([]);
   });
 
+  it('resolves a GitHub actor (ORC-190) by its own login: its rights on the repository, and the Linear roles of the user it is configured for', async () => {
+    const { roles, forge } = setup();
+    expect(await roles.rolesOf('p', 'github:dev-gh')).toEqual(['team_member', 'repo_writer', 'repo_merger']);
+    expect(await roles.rolesOf('p', 'github:reader-gh')).toEqual(['team_member']);
+    forge.setRepoPermission('outsider', 'maintain');
+    expect(await roles.rolesOf('p', 'github:outsider')).toEqual(['repo_writer', 'repo_merger']);
+    expect(await roles.rolesOf('p', 'github:stranger')).toEqual([]);
+  });
+
+  it('maps a GitHub actor to its Linear user whatever the case of its login, and reads no team for a login configured for no one', async () => {
+    const { roles, tracker } = setup();
+    expect(await roles.rolesOf('p', 'github:Dev-GH')).toContain('team_member');
+    const reads = tracker.calls.filter((c) => c.method === 'teamMembers').length;
+    tracker.setTeamMembers('REL', []);
+    await roles.rolesOf('p', 'github:nobody-configured');
+    expect(tracker.calls.filter((c) => c.method === 'teamMembers')).toHaveLength(reads);
+  });
+
   it('reads no GitHub right for a Linear user without a configured login', async () => {
     const { roles, forge } = setup();
     forge.setRepoPermission('u-maint', 'admin');

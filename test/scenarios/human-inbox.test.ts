@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { linearIngest, signedReply } from '../helpers/linear-webhook.js';
 import type { MessageClassifier } from '../../src/adapters/runner/message-classifier.js';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, withMoveBack } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 type Harness = ReturnType<typeof createHarness>;
@@ -114,7 +114,7 @@ describe('the human inbox (ORC-180)', () => {
     });
 
     it('a command that came in behind a pending job: the launch takes its taint, not only the decision', async () => {
-      const h = createHarness();
+      const h = createHarness({ projectYaml: withMoveBack() });
       const running = await atWork(h);
       // Out and back by a human: its own move to dev would be the echo of the factory's.
       await h.send('status.changed', { from: 'dev', to: 'human_review' });

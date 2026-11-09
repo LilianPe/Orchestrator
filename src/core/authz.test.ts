@@ -9,9 +9,22 @@ const check = (action: AuthzAction, channel: Channel, actor: string | undefined,
   allowed({ action, channel }, actor, t, DEFAULT_MATRIX, roles);
 
 describe('authorization matrix (ORC-186)', () => {
-  it('has the six rows of the default matrix and the three of the dashboard, no more', () => {
+  it('has the six rows of the default matrix, the PR review of ORC-190 and the three of the dashboard, no more', () => {
     expect(Object.keys(DEFAULT_MATRIX).sort()).toEqual([...AUTHZ_ACTIONS].sort());
-    expect(AUTHZ_ACTIONS).toHaveLength(9);
+    expect(AUTHZ_ACTIONS).toHaveLength(10);
+  });
+
+  describe('a review on the PR (ORC-190) needs write access to the repository, on the PR', () => {
+    it('allows a writer of the repository, a team member or not', () => {
+      expect(check('review_feedback', 'pr', 'github:octo', ['repo_writer', 'repo_merger']).ok).toBe(true);
+    });
+    it('refuses a team member without write access, and anyone else', () => {
+      expect(check('review_feedback', 'pr', 'github:octo', ['team_member'])).toEqual({ ok: false, reason: 'roles' });
+      expect(check('review_feedback', 'pr', 'github:stranger', [])).toEqual({ ok: false, reason: 'roles' });
+    });
+    it('refuses it outside the PR', () => {
+      expect(check('review_feedback', 'linear_session', 'github:octo', ['repo_writer'])).toEqual({ ok: false, reason: 'channel' });
+    });
   });
 
   describe('row 1: trigger (delegate, mention) needs a Linear team member with write access to the repo, on Linear', () => {

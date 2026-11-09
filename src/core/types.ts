@@ -105,6 +105,11 @@ export interface FeedbackItem {
   /** Its class when it came in; absent on items written before ORC-180, which only a run that reads the feedback takes. */
   kind?: MessageKind;
   /**
+   * An inline comment of a review on the PR (ORC-190): its thread is what the agent reads, from the PR at the launch, so a thread
+   * resolved meanwhile is not fixed. Kept in the inbox all the same, as what started the round.
+   */
+  thread?: true;
+  /**
    * Taint of the event that brought the item; a run that consumes the pending feedback is as untrusted
    * as its least trusted item (I12). Absent on items written before ORC-269, when no source marked an
    * event untrusted (ORC-160): `decide` reads them as trusted, as `upcast` reads a version 1 event.
@@ -271,7 +276,8 @@ export interface EventPayloads {
   'pr.closed': PrPayload;
   /**
    * A human review on the PR, or a comment on its diff, from the GitHub webhook (ORC-134). Untrusted:
-   * its body is written by whoever can review. No reaction yet: `decide` traces it (ORC-190).
+   * its body is written by whoever can review. Human review feedback (ORC-190): signed by the sender's GitHub login, checked
+   * on the matrix, kept in `humanInbox` and read through the reply rules.
    */
   'pr.reviewed': PrPayload & { kind: 'review' | 'comment'; author: string; body: string; state?: string };
   /** The PR conflicts with its base branch, seen by the GitHub webhook (ORC-134). No reaction yet: `decide` traces it (ORC-146). */
@@ -425,7 +431,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -567,6 +573,11 @@ export interface TicketState {
    * publishes reads their sum. Absent on a ticket never reviewed since ORC-184.
    */
   reviewBlocking?: { sha: string; counts: Partial<Record<ReviewLens, number>> };
+  /**
+   * Rounds of human review feedback (ORC-190): starts of the job of the `human_review` counter (`fix-human`), bounded by
+   * `limits.humanReviewRounds`, apart from `ciFixAttempts`. A human relaunch or another PR starts it over. Absent before ORC-190.
+   */
+  humanReviewRounds?: number;
   /**
    * The findings of the review on `sha` the fix of the review loop contested, with its justification (ORC-184): they stay open,
    * and the next review's lenses read them. `null` once that review has published; absent when none was contested.
