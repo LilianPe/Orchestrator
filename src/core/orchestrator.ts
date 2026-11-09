@@ -64,7 +64,7 @@ import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
-import { MERGE_PUSHED, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
+import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
@@ -1821,7 +1821,7 @@ export class Orchestrator {
    * The mention is best effort, as an ack: a dead effect would hold back the cleanup and the run its decision starts after it.
    */
   private async afterMerge(project: ProjectRuntime, t: TicketState, c: MergedPr, key: EffectKey): Promise<EffectOutcome | void> {
-    const { events } = await this.journalOf(project, t);
+    const events = (await this.d.store.ticketJournal(project.id, t.ticketId)).map((j) => upcast(j.event));
     const appended = await this.d.store.appendChangelog(changelogEntry(t, c, mergedWork(events, c.headSha)));
     try {
       const { creator } = await this.d.tracker.getIssue(t.ticketId);
