@@ -17,6 +17,7 @@ interface Service {
   environment?: Record<string, string | null>;
   privileged?: boolean;
 }
+const runner = read('docker/runner.Dockerfile');
 const compose = parse(read('compose.yaml')) as { services: Record<string, Service>; networks: Record<string, { internal?: boolean }> };
 const { factoryd, proxy, postgres, caddy } = compose.services as Record<'factoryd' | 'proxy' | 'postgres' | 'caddy', Service>;
 const ENGINE = /docker\.sock|podman\.sock|ENGINE_SOCKET/;
@@ -102,7 +103,6 @@ describe('compose.yaml (ORC-203)', () => {
 });
 
 describe('the images (ORC-203)', () => {
-  const runner = read('docker/runner.Dockerfile');
   const daemon = read('Dockerfile');
 
   it('pins pnpm and uv in the runner image, at the versions the sealed setup was measured on', () => {
@@ -127,5 +127,32 @@ describe('the images (ORC-203)', () => {
     expect(daemon).toMatch(/ARG FACTORY_COMMIT/);
     expect(daemon).toMatch(/ENV [^\n]*FACTORY_COMMIT=\$FACTORY_COMMIT/);
     expect(read('compose.yaml')).toMatch(/FACTORY_COMMIT: \$\{FACTORY_COMMIT:-\}/);
+  });
+});
+
+/** ORC-369: a 504 from GitHub's releases turned the isolation job red, unrelated to the diff. */
+describe('the gitleaks archive of the isolation job (ORC-369)', () => {
+  type Step = { uses?: string; with?: Record<string, string>; run?: string };
+  const job = (parse(read('.github/workflows/ci.yml')) as { jobs: Record<string, { env: Record<string, string>; steps: Step[] }> }).jobs['isolation']!;
+  const [, version, sha256] = /gitleaks_([\d.]+)_linux_x64\.tar\.gz[\s\S]*?\b([0-9a-f]{64}) {2}\/tmp\/gitleaks\.tgz/.exec(runner) ?? [];
+
+  it('caches the archive the runner image pins, keyed on its version and checksum', () => {
+    expect(job.env).toMatchObject({ GITLEAKS_VERSION: version, GITLEAKS_SHA256: sha256 });
+    const restore = job.steps.find((s) => s.uses?.startsWith('actions/cache/restore@'));
+    expect(restore?.with?.['key']).toMatch(/\$\{\{ env\.GITLEAKS_VERSION \}\}.*\$\{\{ env\.GITLEAKS_SHA256 \}\}/);
+    // On a miss: downloaded with retries and checked, before both builds of it, the runner image's and verify-hostile's.
+    const download = job.steps.find((s) => s.run?.includes('releases/download'));
+    expect(download?.run).toMatch(/curl [^\n]*--retry \d+/);
+    expect(download?.run).toMatch(/sha256sum -c/);
+    expect(job.steps.indexOf(download!)).toBeLessThan(job.steps.findIndex((s) => s.run?.includes('podman build')));
+  });
+
+  it('takes the archive from the build context when it is there, its checksum checked either way', () => {
+    const install = /^RUN --mount=type=bind,target=\/context[\s\S]*?rm \/tmp\/gitleaks\.tgz$/m.exec(runner)?.[0].replace(/\s*\\\n\s*/g, ' ');
+    // The copy, else the download, and then, for either one, the checksum.
+    expect(install).toMatch(/ cp \/context\/(\S+) \/tmp\/gitleaks\.tgz 2>\/dev\/null \|\| node -e "fetch\('https:\/\/github\.com\/[^']*\/\1'\)[^"]*" && echo "\S+ {2}\/tmp\/gitleaks\.tgz" \| sha256sum -c - && /);
+    // The copied file and the release's tag and file: one version, the cache's.
+    expect(install?.match(/\d+\.\d+\.\d+/g)).toEqual(Array(3).fill(version));
+    expect(install).toContain(`echo "${sha256}  /tmp/gitleaks.tgz"`);
   });
 });

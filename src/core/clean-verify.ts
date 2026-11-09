@@ -1,13 +1,16 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { WIDTHS, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
+import { parseDiff, type DiffFile } from '../checks/diff.js';
+import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
+import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
 import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
@@ -42,6 +45,8 @@ export interface CleanVerifyRequest {
   green?: string;
   /** `factory/secrets`, by the image's gitleaks. Only an isolation test on a public image without it turns it off. */
   gitleaks: boolean;
+  /** `factory/semgrep` (ORC-333), by the image's Semgrep. Only an isolation test on a public image without it turns it off. */
+  semgrep: boolean;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
@@ -132,7 +137,8 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  * 3. the base branch fetched into the clone from the forge, and `.factory/config.yml` read on it, never on the agent's
  *    branch nor on a ref of the repository it can write. Every read of the clone happens here, before any code of the
  *    agent has run in it, the checks of the commit included;
- * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout;
+ * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout, and Semgrep on the files the diff adds
+ *    lines to (ORC-333), with the factory's rules and the base's, read at step 3;
  * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted;
  * 6. the visual proof (ORC-176), when it is required and the commands passed: the application started and shot by the
  *    factory's browser, after on the commit and before on the base, each in a sandbox of its own at network `none`. The
@@ -152,6 +158,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   const cloneDir = join(req.workDir, 'clone');
   const beforeDir = join(req.workDir, 'before');
   const beforeIndex = join(req.workDir, 'before.index');
+  const rulesDir = join(req.workDir, 'semgrep');
   mkdirSync(bundleDir);
   try {
     const forgeSilent = `the forge no longer responds after ${deadlineMs / 1000} s`;
@@ -175,6 +182,11 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
+    const diff = await readDiff(git, from, sha);
+    failures.push(...checkSize(diff, config));
+    // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
+    const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
+    const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     if (shooting) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     // Every verdict goes out through here: the proof, decided, with it.
@@ -187,14 +199,18 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
-    if (req.gitleaks || (runs && !failures.length)) {
-      await inBox('prepare', cloneDir, [], async (id) => {
+    // The checkout is needed: for what runs, or for Semgrep to read.
+    const checkout = runs || added.size > 0;
+    if (req.gitleaks || (checkout && !failures.length)) {
+      const mounts = rules.length ? [{ host: rulesDir, target: REPO_RULES_TARGET, readOnly: true }] : [];
+      await inBox('prepare', cloneDir, mounts, async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
         // Refused already: nothing of it is installed or run. A forbidden `.npmrc` would be read by the install it forbids, and a breakdown of that install would hide the verdict.
-        if (failures.length || !runs) return;
+        if (failures.length || !checkout) return;
         // `-c`: the clone's config is ours, and from the first command on it is no longer to be trusted.
         const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
         if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
+        if (added.size) failures.push(...(await scanCode(sandboxes, id, added, rules)));
       });
     }
     if (failures.length || !runs) return verdict();
@@ -217,7 +233,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
     await Promise.all(
-      [bundleDir, cloneDir, beforeDir, beforeIndex].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
+      [bundleDir, cloneDir, beforeDir, beforeIndex, rulesDir].map((dir) => rm(dir, { recursive: true, force: true }).catch((err: Error) => req.log(`${dir} not removed: ${err.message}`))),
     );
   }
 };
@@ -386,6 +402,68 @@ export async function scanSecrets(sandboxes: Boxes, id: string, from: string, sh
   if (!leaked) return [];
   const lines = found.map((f) => `- ${f.File}:${f.StartLine} (${f.RuleID})`);
   return [{ command: SECRETS_CHECK, exitCode: 1, output: `Hard-coded secret in the branch's commits, publication blocked. Remove it from its history, and consider it exposed:\n${lines.join('\n')}` }];
+}
+
+/** The diff since the base at `-U0`, renames found (a pure one counts as a file without lines): undefined past `MAX_PATCH_BYTES`. */
+async function readDiff(git: CloneGit, from: string, sha: string): Promise<DiffFile[] | undefined> {
+  const read = await git.capped(MAX_PATCH_BYTES, '-c', `core.bigFileThreshold=${MAX_READ_BYTES}`, 'diff', '-U0', '-M', '--no-ext-diff', '--no-textconv', from, sha);
+  return read === undefined ? undefined : parseDiff(read);
+}
+
+/** `factory/taille-du-diff` (ORC-145, ORC-333) against the base's `max_diff`. A diff too large to read is `factory/anti-triche`'s already, read with more context. */
+function checkSize(diff: DiffFile[] | undefined, config: RepoConfig): VerifyFailure[] {
+  if (!diff) return [];
+  const r = diffSizeCheck(diff, { maxDiff: config.maxDiff });
+  return r.ok ? [] : [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: r.summary }];
+}
+
+const isRegular = (mode: string) => mode === '100644' || mode === '100755';
+
+/**
+ * The repository's Semgrep rules as its default branch holds them, never as the branch does, written under `dir` before any
+ * code of the agent has run in the clone: their paths under `REPO_RULES_DIR`. A link is not followed.
+ */
+async function repoRules(git: CloneGit, dir: string): Promise<string[]> {
+  const rules: string[] = [];
+  for (const entry of zFields(await git.raw('ls-tree', '-r', '-z', BASE, '--', REPO_RULES_DIR))) {
+    // `<mode> <type> <id>\t<path>`
+    const tab = entry.indexOf('\t');
+    const path = entry.slice(tab + 1);
+    if (!isRegular(entry.slice(0, entry.indexOf(' '))) || !isRepoRuleFile(path)) continue;
+    const content = (await show(git, BASE, path))!;
+    if (content.startsWith('\0too large')) throw new Error(`${path}: Semgrep rules over ${MAX_READ_BYTES / 2 ** 20} MB`);
+    const rel = path.slice(REPO_RULES_DIR.length);
+    mkdirSync(dirname(join(dir, rel)), { recursive: true });
+    writeFileSync(join(dir, rel), content);
+    rules.push(rel);
+  }
+  return rules;
+}
+
+/** What Semgrep scans: the regular files the diff adds lines to, with those lines. A link's target is not code of the branch, nor is a submodule. */
+async function scanned(git: CloneGit, from: string, sha: string, diff: readonly DiffFile[]): Promise<Map<string, Set<number>>> {
+  const added = addedLines(diff);
+  for (const { path, mode } of parseRawDiff(await git.raw('diff', '--raw', '--no-renames', '-z', from, sha))) {
+    if (!isRegular(mode)) added.delete(path);
+  }
+  return added;
+}
+
+/** Paths per run of Semgrep: test files do not count in `max_diff`, and a command line has a cap. */
+const SCAN_BATCH = 500;
+
+/** `factory/semgrep` (ORC-333) on the checkout in sandbox `id`: the factory's rules and the repository's (`rules`), on the lines the diff adds. */
+async function scanCode(sandboxes: Boxes, id: string, added: ReadonlyMap<string, ReadonlySet<number>>, rules: readonly string[]): Promise<VerifyFailure[]> {
+  const targets = [...added.keys()];
+  const read: SemgrepRead = { found: [], unread: [] };
+  for (let i = 0; i < targets.length; i += SCAN_BATCH) {
+    const argv = semgrepArgv(rules, targets.slice(i, i + SCAN_BATCH), { maxBytes: MAX_READ_BYTES, timeoutS: VERIFY_TIMEOUT_MS / 1000 });
+    const { found, unread } = semgrepFindings(await sandboxes.exec(id, argv), added);
+    read.found.push(...found);
+    read.unread.push(...unread);
+  }
+  const r = semgrepCheck(read);
+  return r.ok ? [] : [{ command: r.check, exitCode: 1, output: r.summary }];
 }
 
 /** `merge-base`'s own answers, 0 and 1, and no other code: a failure of git is no verdict on the branch, and rejects. */

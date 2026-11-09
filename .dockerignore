@@ -8,3 +8,4 @@ repos
 .env.*
 install
 egress-ca
+docker/gitleaks_*.tar.gz

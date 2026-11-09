@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +31,8 @@ class LocalSandboxes extends FakeSandboxProvider {
   answer?: (command: string, box: string) => ExecResult | undefined;
   hang?: (command: string) => boolean;
   scan?: (argv: readonly string[]) => ExecResult;
+  /** Semgrep's answer, with the request of the sandbox it runs in: no report by default. */
+  semgrep?: (argv: readonly string[], req: SandboxRequest) => ExecResult;
 
   override async create(req: SandboxRequest) {
     const s = await super.create(req);
@@ -44,6 +46,7 @@ class LocalSandboxes extends FakeSandboxProvider {
     const bundle = req.mounts.find((m) => m.target === BUNDLE_TARGET)?.host;
     const args = argv.map((a) => (bundle ? a.replace(BUNDLE_TARGET, bundle) : a));
     if (args.includes('gitleaks')) return this.scan?.(args) ?? { stdout: '[]', stderr: '', code: 0 };
+    if (args.includes('semgrep')) return this.semgrep?.(args, req) ?? { stdout: '{"results":[],"errors":[]}', stderr: '', code: 0 };
     // What a test sets as a command comes as the wrapper's last word; what the factory runs itself comes as it is.
     const wrapped = args[0] === 'bash' && args[1] === '--norc' && args[2] === '-c';
     const shellCommand = wrapped ? args.at(-1)! : args[0] === 'timeout' ? args.at(-1)! : undefined;
@@ -106,6 +109,7 @@ function setup(over: Partial<CleanVerifyRequest> = {}, config?: string) {
     originUrl: origin,
     workDir,
     gitleaks: false,
+    semgrep: false,
     setup: [],
     commands: ['grep committed a.txt'],
     env: async () => ({}),
@@ -550,6 +554,182 @@ describe('runCleanVerify', () => {
         const { sandboxes, req } = setup({ gitleaks: true });
         sandboxes.scan = () => answer;
         await expect(runCleanVerify(req)).rejects.toThrow(/gitleaks/);
+        expect(sandboxes.ran).toEqual([]);
+      });
+    });
+
+    describe('factory/taille-du-diff (ORC-333)', () => {
+      const files = (repo: string, n: number, dir = 'src') => {
+        for (let i = 0; i < n; i++) write(repo, `${dir}/f${i}.ts`, `export const f${i} = ${i};\n`);
+        commit(repo, `${n} files under ${dir}`);
+      };
+
+      it('criterion 1: a diff past max_diff blocks with its cause, before anything of it runs', async () => {
+        const { repo, sandboxes, req } = setup();
+        files(repo, 15);
+        const res = await runCleanVerify(req);
+        expect(res.ok).toBe(false);
+        expect(res.failures).toEqual([{ command: 'factory/taille-du-diff', exitCode: 1, output: expect.stringContaining('16 files outside tests, over 15') }]);
+        expect(res.failures[0]!.output).toContain('split the ticket');
+        expect(sandboxes.ran).toEqual([]);
+      });
+
+      it("tightened by the base's max_diff; tests do not count", async () => {
+        const { repo, req } = setup({ commands: [] }, 'max_diff: { files: 3 }\n');
+        files(repo, 20, 'test');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        files(repo, 3);
+        expect((await runCleanVerify(setupAgain(req))).failures).toEqual([expect.objectContaining({ command: 'factory/taille-du-diff', output: expect.stringContaining('4 files outside tests, over 3') })]);
+      });
+
+      it('a rename counts as one file without lines, a deletion with its lines', async () => {
+        // The branch's a.txt is its one line before these.
+        const { origin, repo, req } = setup({ commands: [] }, 'max_diff: { lines: 4 }\n');
+        write(origin, 'old.ts', 'a\nb\nc\n');
+        write(origin, 'gone.ts', 'a\nb\nc\nd\n');
+        commit(origin, 'base files');
+        git(repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+        git(repo, 'mv', 'old.ts', 'new.ts');
+        commit(repo, 'rename');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        rmSync(join(repo, 'gone.ts'));
+        commit(repo, 'delete');
+        expect((await runCleanVerify(setupAgain(req))).failures[0]!.output).toContain('5 lines outside tests, over 4');
+      });
+    });
+
+    describe('factory/semgrep (ORC-333)', () => {
+      const report = (results: { path: string; line: number; end?: number; rule?: string }[]) => ({
+        stdout: JSON.stringify({ results: results.map((r) => ({ check_id: r.rule ?? 'js-eval', path: r.path, start: { line: r.line }, end: { line: r.end ?? r.line }, extra: { message: 'eval of a dynamic value' } })), errors: [] }),
+        stderr: '',
+        code: 0,
+      });
+      /** The base holds `src/a.js`, two lines; the branch adds a third. */
+      const appended = (over: Partial<CleanVerifyRequest> = {}, config?: string) => {
+        const s = setup({ semgrep: true, commands: [], ...over }, config);
+        write(s.origin, 'src/a.js', 'one();\ntwo();\n');
+        commit(s.origin, 'a.js');
+        git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+        write(s.repo, 'src/a.js', 'one();\ntwo();\neval(input);\n');
+        commit(s.repo, 'eval');
+        return s;
+      };
+
+      it("scans the files the branch adds lines to, without network, before any setup, with the factory's rules", async () => {
+        const { origin, repo, sandboxes, req } = setup({ semgrep: true, setup: ['true'] });
+        write(origin, 'gone.ts', 'x\n');
+        commit(origin, 'a file the branch deletes');
+        git(repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+        rmSync(join(repo, 'gone.ts'));
+        write(repo, '-dash.js', 'dash();\n');
+        commit(repo, 'delete one, add one');
+        const scans: (readonly string[])[] = [];
+        sandboxes.semgrep = (argv) => {
+          expect(sandboxes.created.filter((c) => c.runId.endsWith('-setup'))).toEqual([]);
+          scans.push(argv);
+          return report([]);
+        };
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        expect(scans).toHaveLength(1);
+        const argv = scans[0]!;
+        expect(argv.filter((_, i) => argv[i - 1] === '--config')).toEqual(['/usr/local/share/factory/semgrep']);
+        expect(argv.slice(argv.indexOf('--')).sort()).toEqual(['--', '-dash.js', 'a.txt']);
+        expect(sandboxes.created.find((c) => c.runId === 'r1-prepare')).toMatchObject({ network: 'none', mounts: [] });
+      });
+
+      it('criterion 2: a finding on a line the branch adds blocks, named by its place and rule', async () => {
+        const { sandboxes, req } = appended();
+        sandboxes.semgrep = () => report([{ path: 'src/a.js', line: 3 }]);
+        const res = await runCleanVerify(req);
+        expect(res.ok).toBe(false);
+        expect(res.failures).toEqual([{ command: 'factory/semgrep', exitCode: 1, output: expect.stringContaining('`src/a.js`:3 (js-eval): eval of a dynamic value') }]);
+        expect(res.failures[0]!.output).toContain('`nosemgrep` comment is not read');
+      });
+
+      it('a finding on a line the branch did not write is the base\'s: it does not block', async () => {
+        const { sandboxes, req } = appended();
+        sandboxes.semgrep = () => report([{ path: 'src/a.js', line: 1 }, { path: 'README.md', line: 1 }]);
+        expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
+      });
+
+      it('a finding over several lines blocks when one of them is added', async () => {
+        const { sandboxes, req } = appended();
+        sandboxes.semgrep = () => report([{ path: 'src/a.js', line: 2, end: 3 }]);
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('`src/a.js`:3');
+      });
+
+      it("adds the repository's rules as its default branch holds them, mounted read-only", async () => {
+        const base = setup({ semgrep: true, commands: [] });
+        write(base.origin, '.factory/semgrep/house.yml', 'rules: base\n');
+        write(base.origin, '.factory/semgrep/notes.md', 'not a rule\n');
+        commit(base.origin, 'house rules');
+        git(base.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+        write(base.repo, 'b.js', 'x\n');
+        commit(base.repo, 'work');
+        let seen: { argv: readonly string[]; mounts: SandboxRequest['mounts']; content: string } | undefined;
+        base.sandboxes.semgrep = (argv, box) => {
+          const mount = box.mounts[0]!;
+          seen = { argv, mounts: box.mounts, content: readFileSync(join(mount.host, 'house.yml'), 'utf8') };
+          return report([]);
+        };
+        const res = await runCleanVerify(base.req);
+        expect(seen!.mounts).toEqual([expect.objectContaining({ target: '/factory/semgrep', readOnly: true })]);
+        expect(seen!.content).toBe('rules: base\n');
+        const configs = seen!.argv.flatMap((a, i) => (seen!.argv[i - 1] === '--config' ? [a] : []));
+        expect(configs).toEqual(['/usr/local/share/factory/semgrep', '/factory/semgrep/house.yml']);
+        expect(res.ok).toBe(true);
+      });
+
+      it('a commit the other checks refused is not scanned: a breakdown of the scan would hide the verdict', async () => {
+        const { repo, sandboxes, req } = appended();
+        write(repo, '.factory/semgrep/house.yml', 'rules: []\n');
+        commit(repo, 'the agent empties the rules');
+        sandboxes.semgrep = () => ({ stdout: '', stderr: 'boom', code: 2 });
+        expect((await runCleanVerify(req)).failures.map((f) => f.command)).toEqual(['factory/chemins-interdits']);
+      });
+
+      it.skipIf(process.platform === 'win32')('a symbolic link is not scanned: its target is no code of the branch', async () => {
+        const { repo, sandboxes, req } = setup({ semgrep: true, commands: [] });
+        symlinkSync('a.txt', join(repo, 'link.js'));
+        commit(repo, 'link');
+        const scans: (readonly string[])[] = [];
+        sandboxes.semgrep = (argv) => (scans.push(argv), report([]));
+        await runCleanVerify(req);
+        expect(scans[0]!.slice(scans[0]!.indexOf('--'))).toEqual(['--', 'a.txt']);
+      });
+
+      it('an added line Semgrep could not parse blocks: what it does not read, it cannot judge', async () => {
+        const { sandboxes, req } = appended();
+        const errors = [
+          { level: 'warn', type: 'PartialParsing', message: 'Syntax error at line src/a.js:3:\n `x` was unexpected', path: 'src/a.js', spans: [{ file: 'src/a.js', start: { line: 3 }, end: { line: 3 } }] },
+          { level: 'warn', type: 'PartialParsing', message: 'Syntax error at line src/a.js:1', path: 'src/a.js', spans: [{ file: 'src/a.js', start: { line: 1 }, end: { line: 1 } }] },
+        ];
+        sandboxes.semgrep = () => ({ stdout: JSON.stringify({ results: [], errors }), stderr: '', code: 0 });
+        const { output } = (await runCleanVerify(req)).failures[0]!;
+        expect(output).toContain('- `src/a.js`: Syntax error at line src/a.js:3:');
+        expect(output).not.toContain('src/a.js:1');
+      });
+
+      it('a branch that adds no line runs no scan', async () => {
+        const { origin, repo, sandboxes, req } = setup({ semgrep: true, commands: [] });
+        write(origin, 'gone.ts', 'x\n');
+        commit(origin, 'base');
+        git(repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+        git(repo, 'rm', '-q', 'a.txt', 'gone.ts');
+        commit(repo, 'only deletions');
+        sandboxes.semgrep = () => {
+          throw new Error('scanned');
+        };
+        expect((await runCleanVerify(req)).ok).toBe(true);
+      });
+
+      it.each([
+        ['absent from the image', { stdout: '', stderr: 'semgrep: not found', code: 127 }],
+        ['its cap', { stdout: '', stderr: '', code: 124 }],
+      ])('%s is a breakdown, never a green', async (_, answer) => {
+        const { sandboxes, req } = appended({ commands: ['true'] });
+        sandboxes.semgrep = () => answer;
+        await expect(runCleanVerify(req)).rejects.toThrow(/semgrep/);
         expect(sandboxes.ran).toEqual([]);
       });
     });

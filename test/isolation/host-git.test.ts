@@ -187,6 +187,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
       originUrl: origin,
       workDir,
       gitleaks: false,
+      semgrep: false,
       setup: [],
       commands: ['test "$(cat agent.txt)" = work'],
       env: async () => ({}),

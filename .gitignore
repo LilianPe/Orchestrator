@@ -7,3 +7,5 @@ coverage/
 web/dist/
 .superpowers/
 docs/superpowers/
+# The gitleaks archive CI caches in the runner image's build context (ORC-369).
+docker/gitleaks_*.tar.gz
