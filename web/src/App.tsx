@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchFlow, fetchMeasures, fetchSnapshot, post, subscribe } from './api.js';
+import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
 import { Flow, plural } from './Flow.js';
 import { Measures } from './Measures.js';
+import { Security } from './Security.js';
 import { initialState, reducer } from './state.js';
-import type { FlowView, MeasuredTicketView, RunLine, WorkingRunView } from './types.js';
+import type { BlockParetoView, FlowView, MeasuredTicketView, RunLine, RunSecurityView, SecurityPeriodView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -37,8 +38,8 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'measures';
-const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : 'flow');
+type View = 'flow' | 'measures' | 'security';
+const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
 
 /** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
 function MeasuresPage() {
@@ -64,6 +65,52 @@ function MeasuresPage() {
     <div className="flow">
       {failed && <p className="flow-failed" role="alert">{tickets ? 'Measures out of date: reading them failed. Retrying within 30 s.' : 'Measures unavailable: reading them failed. Retrying within 30 s.'}</p>}
       {tickets ? <Measures tickets={tickets} now={now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
+    </div>
+  );
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PERIODS = [7, 30, 90] as const;
+
+/** The security log and the Pareto of the blocks (ORC-300), over the last days chosen, read when shown and every 30 s while it is. */
+function SecurityPage() {
+  const [days, setDays] = useState<(typeof PERIODS)[number]>(7);
+  const [read, setRead] = useState<{ period: SecurityPeriodView; blocks: BlockParetoView }>();
+  const [failed, setFailed] = useState(false);
+  const [selected, setSelected] = useState<string>();
+  const [run, setRun] = useState<RunSecurityView>();
+  useEffect(() => {
+    let live = true;
+    const load = () => {
+      const until = Date.now();
+      const since = until - days * DAY_MS;
+      void Promise.all([fetchSecurity(since, until), fetchBlocks(since, until)]).then(
+        ([period, blocks]) => live && (setRead({ period, blocks }), setFailed(false)),
+        () => live && setFailed(true),
+      );
+    };
+    load();
+    const timer = setInterval(load, MEASURES_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [days]);
+  useEffect(() => {
+    let live = true;
+    setRun(undefined);
+    if (selected) void fetchRunSecurity(selected).then((r) => live && setRun(r), () => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [selected]);
+  return (
+    <div className="flow">
+      <nav className="periods" aria-label="Period">
+        {PERIODS.map((d) => <button key={d} aria-pressed={d === days} onClick={() => setDays(d)}>Last {d} days</button>)}
+      </nav>
+      {failed && <p className="flow-failed" role="alert">{read ? 'Security log out of date: reading it failed. Retrying within 30 s.' : 'Security log unavailable: reading it failed. Retrying within 30 s.'}</p>}
+      {read ? <Security period={read.period} blocks={read.blocks} run={run} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the security log…</p></section>}
     </div>
   );
 }
@@ -124,6 +171,7 @@ export function App() {
         <nav className="views">
           <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
           <a href="#measures" aria-current={view === 'measures' ? 'page' : undefined}>Measures</a>
+          <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
         </nav>
         {snap && (
           <div className="stats">
@@ -142,7 +190,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'measures' ? <main className="single"><MeasuresPage /></main> : <main>
+      {view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

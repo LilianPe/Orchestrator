@@ -124,3 +124,33 @@ export interface MeasuredTicketView extends FlowTicketView {
   blockCause: BlockCause | null;
   measures: TicketMeasuresView | null;
 }
+
+/** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`. */
+export interface SecurityPeriodView {
+  since: number;
+  until: number;
+  hosts: { host: string; requests: number; refused: number }[];
+  rules: { rule: string; refusals: number }[];
+  runs: { runId: string; projectId: string; ticketId: string; requests: number; refused: number; refusals: number }[];
+}
+
+/** `GET /api/security/runs/:id` (ORC-300): `RunSecurityView` of src/network/security-log.ts, never a command nor a path. */
+export interface RunSecurityView {
+  runId: string;
+  projectId: string;
+  ticketId: string;
+  at: number;
+  rules: { rule: string; refusals: number }[];
+  refusals: { at: number; tool: string; rule: string }[];
+  hosts: { host: string; requests: number; refused: number }[];
+  refusedHosts: { host: string; refused: number }[];
+  skipped: { egress: number; refusals: number };
+}
+
+/** `GET /api/blocks` (ORC-300): the moves into Blocked of `[since, until)`, their causes most frequent first. */
+export interface BlockParetoView {
+  since: number;
+  until: number;
+  total: number;
+  causes: { cause: BlockCause; count: number; share: number; cumulative: number }[];
+}
