@@ -165,6 +165,28 @@ describe('reduce — facts recorded by the orchestrator', () => {
     expect(t.humanPushes).toEqual([{ before: 'a', after: 'b' }, { after: 'a' }]);
   });
 
+  it('a fresh worktree on a branch made anew ends the old branch\'s mark and its human pushes; its session is not resumed (ORC-358)', () => {
+    const anew = { type: 'workspace.prepared', path: '/w', branch: 'b', newBranch: true } as const;
+    const marked = ticket({ untrustedSince: 'h1', humanPushes: [{ before: 'a', after: 'b' }], claudeSessionId: 'c1' });
+    const t = reduce(marked, anew)!;
+    expect([t.untrustedSince, t.humanPushes, t.claudeSessionId, t.newSession]).toEqual([null, undefined, 'c1', true]);
+    // The next implementer run takes its new session, once; a run out of the ticket session leaves it waiting.
+    const run = (id: string, ticketSession?: false) => ({ type: 'run.started', runId: id, job: 'dev', queue: 'dev', claudeSessionId: id, ...(ticketSession === false ? { ticketSession } : {}) }) as const;
+    const outside = reduce(t, run('c2', false))!;
+    expect([outside.claudeSessionId, outside.newSession]).toEqual(['c1', true]);
+    const taken = reduce(t, run('c3'))!;
+    expect([taken.claudeSessionId, taken.newSession]).toEqual(['c3', undefined]);
+    expect(reduce({ ...taken, activeRunId: undefined }, run('c4'))!.claudeSessionId).toBe('c3');
+    // A trusted branch keeps its session: it read nothing untrusted. Its human pushes were the old branch's.
+    const trusted = reduce(ticket({ untrustedSince: null, humanPushes: [{ after: 'b' }], claudeSessionId: 'c1' }), anew)!;
+    expect([trusted.untrustedSince, trusted.humanPushes, trusted.newSession]).toEqual([null, undefined, undefined]);
+    // A ticket the mark has not read yet stays so: its runs are read once, fail closed.
+    expect(reduce(ticket({ claudeSessionId: 'c1' }), anew)!.untrustedSince).toBeUndefined();
+    // A worktree made again on the branch the agent left, or a merge, which says nothing of what the branch still holds: still its mark.
+    expect(reduce(marked, { type: 'workspace.prepared', path: '/w', branch: 'b' })!.untrustedSince).toBe('h1');
+    expect(reduce(marked, ev('pr.merged', { number: 1, url: 'u', branch: 'b' }))!.untrustedSince).toBe('h1');
+  });
+
   it('the read of a ticket the mark has not seen is kept once, and never over a mark; a later untrusted run still marks (ORC-338)', () => {
     const read = (since: '' | null) => ({ type: 'untrusted.read', since }) as const;
     const none = reduce(ticket({ untrustedSince: undefined }), read(null))!;
@@ -220,6 +242,37 @@ describe('reduce — facts recorded by the orchestrator', () => {
       expect(reduce(t, { type: 'pending.cleared', job: { sensitivePaths: ['a'], resume: true, job: 'dev-feedback' } })!.pendingJob).toBeUndefined();
       expect(reduce(t, { type: 'pending.cleared', job: { job: 'dev-feedback', resume: true } })!.pendingJob).toEqual(pendingJob);
       expect(reduce(t, { type: 'pending.cleared', job: { job: 'fix-ci' } })!.pendingJob).toEqual(pendingJob);
+    });
+  });
+
+  describe('the hold of a launch (ORC-359)', () => {
+    const start = { job: 'dev-feedback', resume: true };
+    const hold = (runId: string, at: number, until = at + 60): InternalEvent => ({ type: 'launch.reserved', runId, start, at, until });
+    const started = (runId: string) => ({ type: 'run.started', runId, job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', starts: start }) as const;
+
+    it('one launch at a time: not over a run, nor over another launch whose hold is not over', () => {
+      expect(reduce(ticket(), hold('r1', 0))!.launching).toEqual({ runId: 'r1', start, until: 60 });
+      const held = fold(ticket(), hold('r1', 0))!;
+      expect(reduce(held, hold('r2', 59))).toEqual(held);
+      expect(reduce(ticket({ activeRunId: 'r0' }), hold('r1', 0))!.launching).toBeUndefined();
+      // Its holder keeps it; a hold run out goes to the next launch.
+      expect(reduce(held, hold('r1', 50))!.launching).toEqual({ runId: 'r1', start, until: 110 });
+      expect(reduce(held, hold('r2', 60))!.launching).toEqual({ runId: 'r2', start, until: 120 });
+      // A hold its daemon dropped (its launch ended without letting go of it) is taken over by name, and only that one.
+      expect(reduce(held, { ...hold('r2', 10), over: 'r1' } as InternalEvent)!.launching).toEqual({ runId: 'r2', start, until: 70 });
+      expect(reduce(held, { ...hold('r2', 10), over: 'r0' } as InternalEvent)).toEqual(held);
+    });
+
+    it('only its holder lets go of it, and its run.started ends it', () => {
+      const held = fold(ticket(), hold('r1', 0))!;
+      expect(reduce(held, { type: 'launch.released', runId: 'r2' })).toEqual(held);
+      expect(reduce(held, { type: 'launch.released', runId: 'r1' })!.launching).toBeUndefined();
+      expect(reduce(held, started('r1'))).toMatchObject({ activeRunId: 'r1', launching: undefined });
+    });
+
+    it('a run of a launch whose hold another took over does not take the ticket', () => {
+      const t = fold(ticket(), hold('r1', 0), hold('r2', 60))!;
+      expect(reduce(t, started('r1'))).toEqual(t);
     });
   });
 

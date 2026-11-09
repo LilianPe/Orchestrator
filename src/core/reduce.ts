@@ -33,6 +33,10 @@ export function pendingOf(start: PendingJob): PendingJob {
   };
 }
 
+/** Another dev launch that holds the ticket before its `run.started` (ORC-359), its hold not over at `now`; `runId`'s own is not another. */
+export const heldByOther = (t: TicketState, now: number, runId?: string): TicketState['launching'] =>
+  t.launching && t.launching.runId !== runId && t.launching.until > now ? t.launching : undefined;
+
 /** The same pending job, every field of it (ORC-339): a store's JSON may keep the keys in another order. */
 export const samePending = (a: PendingJob | undefined, b: PendingJob | undefined): boolean =>
   !!a && !!b && isDeepStrictEqual(pendingOf(a), pendingOf(b));
@@ -46,6 +50,17 @@ const itemKey = (i: FeedbackItem): string => JSON.stringify([i.authorId ?? i.aut
 /** A human takes a delivered ticket back: it is no longer merged, and dev work may start again (I8 b ends). */
 function reopened(t: TicketState): TicketState {
   return t.prState === 'MERGED' ? { ...t, prState: undefined } : t;
+}
+
+/**
+ * The ticket's branch made anew on the default branch (ORC-358): its mark and the pushes humans made to it were the old
+ * branch's, and would refuse the trusted commits of the new one. The session that read under the mark is not resumed
+ * (`newSession`): it would carry what it read onto a branch that no longer says so. A ticket the mark has not read yet
+ * keeps its state: its runs are read once, fail closed. The ticket itself when there is nothing to end.
+ */
+export function branchAnew(t: TicketState): TicketState {
+  if (typeof t.untrustedSince === 'string') return { ...t, untrustedSince: null, humanPushes: undefined, ...(t.claudeSessionId ? { newSession: true } : {}) };
+  return t.humanPushes ? { ...t, humanPushes: undefined } : t;
 }
 
 function external(t: TicketState, e: FactoryEvent): TicketState {
@@ -131,20 +146,30 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, pendingJob: e.job };
     case 'pending.cleared':
       return e.job && !samePending(t.pendingJob, e.job) ? { ...t } : { ...t, pendingJob: undefined };
+    case 'launch.reserved': {
+      // One launch at a time (ORC-359): not over a run, nor over another launch whose hold is not over.
+      const held = heldByOther(t, e.at, e.runId);
+      return t.activeRunId || (held && held.runId !== e.over) ? { ...t } : { ...t, launching: { runId: e.runId, start: pendingOf(e.start), until: e.until } };
+    }
+    case 'launch.released':
+      return t.launching?.runId === e.runId ? { ...t, launching: undefined } : { ...t };
     case 'workspace.prepared':
-      return { ...t, worktreePath: e.path, port: e.port, branch: e.branch ?? t.branch };
+      return { ...(e.newBranch ? branchAnew(t) : t), worktreePath: e.path, port: e.port, branch: e.branch ?? t.branch };
     case 'workspace.released':
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {
       // Another launch took the ticket first (a settle whose lease went to another worker, ORC-339): one dev run at a
       // time, this one does not take it, nor marks it. The launch sees it and lets go.
-      if (e.queue === 'dev' && t.activeRunId && t.activeRunId !== e.runId) return { ...t };
+      // Nor a launch whose hold another one took over (ORC-359).
+      if (e.queue === 'dev' && ((t.activeRunId && t.activeRunId !== e.runId) || (t.launching && t.launching.runId !== e.runId))) return { ...t };
       // The first untrusted run in the ticket's worktree marks its branch, for good (ORC-338). Over `null` only, the read
       // that found no untrusted run before; a ticket never read (the launch reads it first) takes its whole branch: fail closed.
       const mark = !e.untrusted ? t.untrustedSince : t.untrustedSince === null ? e.untrusted.head : (t.untrustedSince ?? '');
       const next = { ...t, ...(mark === undefined ? {} : { untrustedSince: mark }) };
       if (e.queue !== 'dev') return next;
-      const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
+      // A ticket whose session read under a mark its branch no longer holds takes the new one (ORC-358).
+      const takesNew = e.ticketSession !== false && !!t.newSession;
+      const claudeSessionId = takesNew ? e.claudeSessionId : e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       // The run that starts the pending job takes it off the ticket in the same write, whoever launched it (settle,
       // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
       // a lost attempt, is not it.
@@ -154,8 +179,10 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
         activeRunId: e.runId,
         activeJob: e.job,
         claudeSessionId,
+        ...(takesNew ? { newSession: undefined } : {}),
         ...(e.starts ? { activeStart: pendingOf(e.starts) } : {}),
         ...(startsPending ? { pendingJob: undefined } : {}),
+        ...(t.launching ? { launching: undefined } : {}),
       };
     }
     case 'feedback.consumed': {

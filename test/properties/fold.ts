@@ -7,7 +7,7 @@ import { carriedAtLaunch } from '../../src/core/human-message.js';
 import { settles } from '../../src/core/decision-plan.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
 import { reduce } from '../../src/core/reduce.js';
-import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type ShellEvent, type TicketState } from '../../src/core/types.js';
+import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type TicketState } from '../../src/core/types.js';
 import { loadTestWorkflow } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
 import type { Entry } from './events.js';
@@ -169,7 +169,7 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
   const journal: (FactoryEvent | InternalEvent)[] = [];
   let state: TicketState | undefined;
   // A fact of the shell, for a tracked ticket only: before its creating event, nothing records it.
-  const record = (event: ShellEvent): void => {
+  const record = (event: InternalEvent): void => {
     const before = state;
     state = before && deepFreeze(reduce(before, event));
     if (before) journal.push(event);

@@ -1080,6 +1080,14 @@ describe('decide — built-ins', () => {
     expect(decide(ticket({ pendingJob, delegated: false }), ev('effect.failed', result), workflow)).toEqual(decision());
   });
 
+  it('a dead settle whose pending job the queue holds blocks nothing: the queue launches it (ORC-359)', () => {
+    const result = { effectId: 'REL-1:4:0', kind: 'settle', eventId: 'run:r1', attempts: 3, error: 'connection reset', queued: true as const };
+    const out = decide(ticket({ pendingJob: { job: 'dev-feedback', resume: true } }), ev('effect.failed', result), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([]);
+    expect(out.trace).toContain('effect.failed (settle): its pending dev-feedback is queued, nothing blocked');
+  });
+
   it('a reply to the block of a pending job no settle could start starts that very job, its input and restrictions with it (ORC-339)', () => {
     const pendingJob = { job: 'fix-ci', input: 'ci_failures' as const, inputText: 'lint failed', sensitivePaths: ['.github/'] };
     const blocked = ticket({ logical: 'dev', blocked: true, blockKind: 'stuck', blockReason: 'Error: the pending fix-ci could not be started: x', blockedJob: 'fix-ci', linearSessionId: 's1', pendingJob });

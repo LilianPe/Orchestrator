@@ -641,7 +641,6 @@ export function logPaths(out: string): { commit: string; paths: string[] }[] {
 
 /** A branch read by git: `base`, the default branch's ref; `from`, where `sha` left it. */
 export function gitReader(git: CloneGit, base: string, from: string, sha: string): BranchReader {
-  const ancestor = async (rev: string) => (await git.status('merge-base', '--is-ancestor', rev, sha)).code === 0;
   return {
     changed: async () => {
       const changed = [];
@@ -651,11 +650,14 @@ export function gitReader(git: CloneGit, base: string, from: string, sha: string
       return changed;
     },
     agentChanges: async (since, humanPushes) => {
-      const start = since && (await ancestor(since)) ? since : from;
+      // Whether the head still holds the mark and each push, in one read (ORC-358): its commits beyond the default branch.
+      // One the default branch holds reads as gone, and changes nothing: `--not base` below leaves out all it reaches.
+      const own = since || humanPushes.length ? new Set((await git('rev-list', sha, '--not', base)).split('\n')) : new Set<string>();
+      const start = since && own.has(since) ? since : from;
       // The commits a human pushed: only theirs, not the agent's they were built on, which `--not <after>` would also leave out.
       const human = new Set<string>();
       for (const { before, after } of humanPushes) {
-        if (!before || !(await ancestor(after))) continue;
+        if (!before || !own.has(after)) continue;
         const r = await git.status('rev-list', ...(/^0+$/.test(before) ? [after, '--not', base] : [`${before}..${after}`]));
         if (r.code === 0) for (const c of r.stdout.split('\n').filter(Boolean)) human.add(c);
       }
