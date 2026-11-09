@@ -842,6 +842,20 @@ describeSandboxContract(
   { violates: [RECREATE] },
 );
 
+const UNPROVIDED = 'create refuses a service `unprovided` names, naming it, and makes no sandbox (ORC-282)';
+
+describeSandboxContract(
+  'a sandbox provider that opens a sandbox without a service it does not provide',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        return super.create({ ...req, requirements: { ...req.requirements, services: req.requirements.services.filter((s) => !this.unprovided([s]).length) } });
+      }
+    },
+  ),
+  { violates: [UNPROVIDED] },
+);
+
 const EXEC = 'exec returns the exit code and the output, a non-zero exit included';
 const EXEC_UNKNOWN = 'exec rejects on an unknown or destroyed sandbox';
 const SPAWN_UNKNOWN = 'spawnCommand throws on an unknown sandbox';

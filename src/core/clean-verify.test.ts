@@ -948,6 +948,23 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     }
   });
 
+  it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {
+    const { req, sandboxes } = setup({ commands: ['true'] }, 'services: [redis]\n');
+    await expect(runCleanVerify(req)).rejects.toThrow('The service redis is not available');
+    expect(sandboxes.ran).toEqual([]);
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify');
+  });
+
+  it("a repository with services: a required proof is unavailable, naming them, as the shots get none of them (ORC-282)", async () => {
+    const { req, shooter, sandboxes } = visual({ page: 'new page\n', config: `${VISUAL}services: [postgres]
+` });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(true);
+    expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.stringContaining('postgres') });
+    expect(shooter.calls).toEqual([]);
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain(`${req.runId}-visual-after`);
+  });
+
   it('the base is read before any code of the agent runs: a command that rewrites the clone changes nothing of the before', async () => {
     const { req, shooter } = visual({ page: 'new page\n', commands: ['git --git-dir=.git update-ref refs/factory/base HEAD; true'] });
     await runCleanVerify(req);

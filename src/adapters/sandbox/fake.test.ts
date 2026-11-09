@@ -28,6 +28,14 @@ describe('FakeSandboxProvider', () => {
     expect(p.destroyed).toEqual(['sbx-1']);
   });
 
+  it("provides the container backend's services, or as few as a test sets (ORC-282)", async () => {
+    const p = new FakeSandboxProvider();
+    expect(p.unprovided(['postgres'])).toEqual([]);
+    p.provides = [];
+    const req = { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' as const, mounts: [] };
+    await expect(p.create({ ...req, requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres'] } })).rejects.toThrow('no services (postgres)');
+  });
+
   it('destroying an unknown or already destroyed sandbox is a no-op', async () => {
     const p = new FakeSandboxProvider();
     const a = await p.create({ runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'full', requirements: DEFAULT_REQUIREMENTS, mounts: [] });
