@@ -13,6 +13,7 @@ import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
+import { guardFindings } from './intake-checks.js';
 import { CHANGES, formatSpec, publishedSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
 import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
@@ -150,9 +151,13 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     const reason = NO_ASSESSMENT;
     return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
   }
-  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}) } });
+  // The code to reuse is the last assessment's (ORC-207): one that found none clears what an earlier one found.
+  const reuse = a.reuse?.length || at.ticket?.reuse?.length ? { reuse: a.reuse ?? [] } : {};
+  out.events.push({ type: 'ticket.patched', patch: { size: a.size, risk: higherRisk(at.ticket?.risk, a.risk), ...(a.screen ? { visualProof: 'required' as const } : {}), ...reuse } });
   const checks = p.pickup ?? [];
-  if (!checks.length && a.complete) {
+  // A probable duplicate or a ticket out of scope (ORC-207) goes to the guard as a failed check does: a question, never dropped.
+  const findings = guardFindings(a);
+  if (!checks.length && !findings.length && a.complete) {
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
     const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
@@ -163,8 +168,10 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   // Incomplete: the questions come first, blocked by a ticket or not; intake runs again after the last answer and comes back here.
   // A failed check is a fact, not a question: the ticket's to complete, answered freely, within the 3 questions.
   const completeIt: ClarifyQuestion[] = checks.length ? [{ question: `${checks.join(' ')} Can you complete the ticket, then reply here?`, options: [] }] : [];
+  // Intake's findings (ORC-207), one question: a human confirms or lifts them, and intake reads the ticket again with the answer.
+  const confirm: ClarifyQuestion[] = findings.length ? [{ question: `${findings.join(' ')} Is this right? Answer here, or change the ticket and reply.`, options: [] }] : [];
   const asked = a.complete ? [] : a.missing.map((m) => (typeof m === 'string' ? { question: m, options: [] } : m));
-  return clarify(out, at.event, job, [...completeIt, ...asked].slice(0, CLARIFY_MAX));
+  return clarify(out, at.event, job, [...completeIt, ...confirm, ...asked].slice(0, CLARIFY_MAX));
 }
 
 /** At most this many questions at once (MVP doc; 5 is EVP 1's). */
