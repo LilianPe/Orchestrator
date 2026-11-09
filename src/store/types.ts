@@ -1,4 +1,3 @@
-import type { KnownFlaky } from '../checks/flaky.js';
 import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
@@ -388,8 +387,10 @@ export interface Artifact {
  * `verify` names it (`<file> > <full name>`, a pytest node id); `coversFrozen`, the human decided it may be indicative
  * while frozen for a ticket too; `addedBy` and `addedAt`, who decided, and when.
  */
-export interface KnownFlakyTest extends KnownFlaky {
+export interface KnownFlakyTest {
   projectId: string;
+  test: string;
+  coversFrozen: boolean;
   reason: string;
   addedBy: string;
   addedAt: number;

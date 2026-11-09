@@ -5,13 +5,14 @@
 import { WORKSPACE_TARGET } from '../adapters/sandbox/types.js';
 import type { VerifyFailure } from '../core/types.js';
 import type { FrozenTests } from './freeze.js';
+import { logExcerpt } from './log-excerpt.js';
 import { attribute, escape, quote, stripAnsi, unescapeXml, type Runner } from './red.js';
 
 /** Failing tests of one command rerun on the commit, past which they are only counted. */
 export const MAX_RERUNS = 20;
 /** Failing tests rerun on the base commit in one check: each run there needs a sandbox set up on the base. */
 export const MAX_BASE_RERUNS = 5;
-/** What an attempt keeps of its output, its tail: it goes into the journal. */
+/** What an attempt keeps of its output (`logExcerpt`): it goes into the journal. */
 const OUTPUT_MAX = 1000;
 
 /** A test as a report names it: `id`, its key in the repository's known-flaky table. */
@@ -77,7 +78,7 @@ export interface CommandRun {
   withoutIndicative?: number | null;
 }
 
-const tail = (s: string): string => (s.length > OUTPUT_MAX ? s.slice(-OUTPUT_MAX) : s);
+const excerpt = (s: string): string => logExcerpt(s, OUTPUT_MAX);
 const fromRoot = (file: string): string => file.replace(new RegExp(`^${escape(WORKSPACE_TARGET)}/`), '').replace(/^\.\//, '');
 
 interface JsonReport {
@@ -143,16 +144,13 @@ export function readTests(report: string | undefined): ReadTest[] | undefined {
   }
 }
 
-/** Each test's file, once. */
-const filesOf = (tests: readonly { file: string }[]): string[] => [...new Set(tests.map((t) => t.file))];
-
 /**
  * The repository's command on `tests`, in one run: their node ids for pytest; their files and a pattern of their names for
  * vitest and jest, whose files are patterns too for jest.
  */
 export function rerunLine(command: string, runner: Runner, tests: readonly { id: string; file: string; name: string }[]): string {
   if (runner === 'pytest') return `${command} ${tests.map((t) => quote(t.id)).join(' ')}`;
-  const files = filesOf(tests).map((f) => quote(runner === 'jest' ? escape(f) : f));
+  const files = [...new Set(tests.map((t) => t.file))].map((f) => quote(runner === 'jest' ? escape(f) : f));
   return `${command} ${files.join(' ')} -t ${quote(tests.map((t) => escape(t.name)).join('|'))}`;
 }
 
@@ -165,10 +163,13 @@ export function withoutLine(command: string, runner: Runner, tests: readonly { i
   return `${command} -t ${quote(`^(?!(?:.* )?(?:${tests.map((t) => escape(t.name)).join('|')})$)`)}`;
 }
 
-/** What a run says of test `id`: its outcome there, absent when its report does not name it. */
-function attemptOf(on: TestAttempt['on'], attempt: number, run: TestRun, id: string): TestAttempt {
-  const found = readTests(run.report)?.find((t) => t.id === id);
-  return { on, attempt, outcome: found?.status ?? 'absent', durationMs: found?.durationMs ?? run.ms, output: tail(found ? found.message : run.output) };
+/** What a run says of each test, its report read once: its outcome there, absent when the report does not name it. */
+function attemptsIn(on: TestAttempt['on'], attempt: number, run: TestRun): (id: string) => TestAttempt {
+  const reported = new Map((readTests(run.report) ?? []).map((t) => [t.id, t]));
+  return (id) => {
+    const found = reported.get(id);
+    return { on, attempt, outcome: found?.status ?? 'absent', durationMs: found?.durationMs ?? run.ms, output: excerpt(found ? found.message : run.output) };
+  };
 }
 
 /** What decides whether a failing test counts: the repository's known flaky tests, and the ticket's freeze. */
@@ -201,13 +202,13 @@ export async function runAndRerun(command: string, runner: Runner | undefined, r
   const res: CommandRun = { command, ...(runner ? { runner } : {}), exitCode: first.exitCode, output: first.output, tests: [], notRerun: Math.max(0, failed.length - MAX_RERUNS) };
   const rerun = failed.slice(0, MAX_RERUNS);
   if (!rerun.length) return res;
-  const again = await run(rerunLine(command, runner!, rerun), runner);
+  const again = attemptsIn('head', 2, await run(rerunLine(command, runner!, rerun), runner));
   for (const t of rerun) {
     res.tests.push({
       command, test: t.id, file: t.file, name: t.name,
       attempts: [
-        { on: 'head', attempt: 1, outcome: 'failed', ...(t.durationMs === undefined ? {} : { durationMs: t.durationMs }), output: tail(t.message) },
-        attemptOf('head', 2, again, t.id),
+        { on: 'head', attempt: 1, outcome: 'failed', ...(t.durationMs === undefined ? {} : { durationMs: t.durationMs }), output: excerpt(t.message) },
+        again(t.id),
       ],
     });
   }
@@ -234,8 +235,8 @@ export async function rerunOnBase(runs: readonly CommandRun[], run: Run, at: Sta
     const tests = chosen.filter((c) => c.r === r).map((c) => c.t);
     r.notOnBase = all.filter((c) => c.r === r).length - tests.length;
     if (!tests.length) continue;
-    const onBase = await run(rerunLine(r.command, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner);
-    for (const t of tests) t.attempts.push(attemptOf('base', 1, onBase, t.test));
+    const onBase = attemptsIn('base', 1, await run(rerunLine(r.command, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner));
+    for (const t of tests) t.attempts.push(onBase(t.test));
   }
 }
 
