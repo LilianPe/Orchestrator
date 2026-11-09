@@ -1,0 +1,103 @@
+# The 10 golden tickets (ORC-236), chosen on the pilot repositories as the ORC-137 decision says:
+# 5 from Intersektion/intersektion-platform, 5 from LilianPe/Orchestrator, 3 low, 4 medium, 3 high risk.
+# Each one is replayed from its start commit, the first parent of the human PR's merge commit,
+# on every change of prompt, skill or preset (docs/tests.md, "Golden tickets").
+#
+# Eligibility, checked on 08/11/2026 with gh (read only) and Linear:
+# - closed ticket, its PR written and merged by a human;
+# - at most 400 changed lines outside tests (`non_test_lines`, ORC-142's provisional threshold);
+# - explicit acceptance criteria: in the Linear ticket for Orchestrator; for Intersektion, whose Linear
+#   workspace the factory cannot read, in the PR description (the behavior it lists and checks);
+# - tests present in the PR and green on the start commit: every test check of the start commit passed
+#   on GitHub Actions (only the staging deploys of 1449, 1392 and 1407 failed or were cancelled);
+# - no fragile external dependency (ORC-315, PR 109, was dropped: its start commit's CI was red).
+#
+# This set is frozen: changing a ticket changes the fingerprint, and the set is refused until an entry of
+# `decisions` names the written decision behind the change, with the new fingerprint.
+version: 1
+passes: 3
+decisions:
+  - date: 2026-11-08
+    decision: ORC-137
+    fingerprint: 712d491db065d9e986cfae14011523dcf5ba4549458a9880d9e01a42760bdd2a
+tickets:
+  - ticket: V3-705
+    repo: Intersektion/intersektion-platform
+    pr: 1465
+    title: Lead an external form on the Home to its link, not to an entry
+    start_commit: 40b07634089f19435fb9bde38d49ed3a0aae024c
+    merge_commit: cc61e9ed372ecc9199d4f989ccced2aae2d8741e
+    non_test_lines: 45
+    risk: low
+  - ticket: AUD-1139
+    repo: Intersektion/intersektion-platform
+    pr: 1449
+    title: Read receipts side by side, two avatars and +X from four readers
+    start_commit: d560bfb6dc4d769bcfddcf8df160dfb7fcfb1d7f
+    merge_commit: f28ac4f5e341de11befb31a54b731d3ccf977e41
+    non_test_lines: 87
+    risk: low
+  - ticket: V3-582
+    repo: Intersektion/intersektion-platform
+    pr: 1392
+    title: Rename a questionnaire from its card's menu
+    start_commit: 4f8568f0bf13ee68ce22f5ca6827c9c6ceb7abf9
+    merge_commit: e11567b36fb473a316ec6bad45aed5b9bc374c59
+    non_test_lines: 246
+    risk: medium
+  - ticket: AUD-1277
+    repo: Intersektion/intersektion-platform
+    pr: 1407
+    title: Show thread tags and filter the thread list by tag
+    start_commit: 2f2cef24a89b79c468f284988eb452335f6ac7b5
+    merge_commit: 1cc8c2f2f5f115c19c0b46d78fd022979aad985b
+    non_test_lines: 110
+    risk: medium
+  - ticket: V3-622
+    repo: Intersektion/intersektion-platform
+    pr: 1490
+    title: Refuse a replay on a base that keeps rows the replay no longer writes
+    start_commit: 098e8245c16c7cfbf48b7206447044f1ed8dde54
+    merge_commit: b7890fb1d2271538922a8cd7d609c590415baa9e
+    non_test_lines: 342
+    risk: high
+  - ticket: ORC-302
+    repo: LilianPe/Orchestrator
+    pr: 90
+    title: Drop a creating event whose issue was deleted instead of retrying it
+    start_commit: 4f6cb7f52226e4b1942a2e756536ea53c769106a
+    merge_commit: 16562c78aeb328e19e08e536d2ccd0ec33aee023
+    non_test_lines: 20
+    risk: low
+  - ticket: ORC-305
+    repo: LilianPe/Orchestrator
+    pr: 95
+    title: An unreadable gh pr checks answer rejects findPr instead of reading as no checks
+    start_commit: 570a441fe5596c4c7af7df0b98331f197ff87bcb
+    merge_commit: 267bf9215f71c252d9b738a8dad3424e8b0fc8c5
+    non_test_lines: 53
+    risk: medium
+  - ticket: ORC-145
+    repo: LilianPe/Orchestrator
+    pr: 54
+    title: Add the factory/taille-du-diff check against max_diff
+    start_commit: 2edceab10d4cf38ab96306b507f1f73851592320
+    merge_commit: 9d9c16a052674436d623ba0c1e142037e7da7b95
+    non_test_lines: 188
+    risk: medium
+  - ticket: ORC-277
+    repo: LilianPe/Orchestrator
+    pr: 66
+    title: Name the run in its start mark before writing it, so a question cut at launch is not run twice
+    start_commit: cfc667572eab9aaeaa77e7afdfd9c3d96eda8b5a
+    merge_commit: 1dbd87cf8f70b9a451cc83bbf2e30d015d37bcbe
+    non_test_lines: 77
+    risk: high
+  - ticket: ORC-341
+    repo: LilianPe/Orchestrator
+    pr: 135
+    title: The agent's repository takes the repository's git config by an allow list
+    start_commit: dd72bcd492787713c4b2bb78d34e5da2a2f61719
+    merge_commit: a8e3c3e6c8685b10ab7f3da1997d74802bf99328
+    non_test_lines: 61
+    risk: high
