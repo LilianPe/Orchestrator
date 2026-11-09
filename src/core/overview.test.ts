@@ -39,13 +39,13 @@ describe('overview (ORC-299)', () => {
       merged('A', 11 * DAY, { tokens: tokens(2_000), usageLimitShare: 0.5, ciCost: { durationMs: 60_000, runs: 1, byPr: [] } }),
       merged('B', 12 * DAY),
     ]);
-    expect(o).toMatchObject({ tokensPerMerged: { mean: 2_000, leftOut: 1 }, usageLimitShare: { mean: 0.5, leftOut: 1 }, ciPerMerged: { meanMs: 60_000, leftOut: 1 } });
+    expect(o).toMatchObject({ tokensPerMerged: { mean: 2_000, leftOut: 1 }, usageLimitShare: { mean: 0.5, leftOut: 1 }, ciPerMerged: { mean: 60_000, leftOut: 1 } });
   });
 
   it('is empty without a ticket merged in the period, never a zero that reads as a measure', () => {
     expect(overview(PERIOD, [measures('WIP')])).toMatchObject({
       delivered: 0, medianLeadTimeMs: null, tokensPerMerged: { mean: null, leftOut: 0 }, usageLimitShare: { mean: null, leftOut: 0 },
-      firstTry: { yes: 0, of: 0, reworks: [] }, ciPerMerged: { meanMs: null, leftOut: 0 }, reverted: { yes: 0, known: 0 },
+      firstTry: { yes: 0, of: 0, reworks: [] }, ciPerMerged: { mean: null, leftOut: 0 }, reverted: { yes: 0, known: 0 },
       messages: { count: 0, medianSignOfLifeMs: null, withoutSignOfLife: 0, questions: 0, medianAnswerMs: null, unanswered: 0 },
     });
   });
@@ -73,6 +73,6 @@ describe('overview (ORC-299)', () => {
   });
 
   it('says how many tickets it could not measure, and has no baseline before ORC-230', () => {
-    expect(overview(PERIOD, [merged('A', 11 * DAY)], 2)).toMatchObject({ tickets: 3, unmeasured: 2, baseline: null });
+    expect(overview(PERIOD, [merged('A', 11 * DAY)], 2)).toMatchObject({ unmeasured: 2, baseline: null });
   });
 });

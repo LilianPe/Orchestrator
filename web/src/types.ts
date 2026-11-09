@@ -138,7 +138,6 @@ export type ReworkCause = 'pr.checks_failed' | 'verify.failed' | 'push.human' | 
 export interface OverviewView {
   since: number;
   until: number;
-  tickets: number;
   unmeasured: number;
   delivered: number;
   medianLeadTimeMs: number | null;
@@ -146,7 +145,7 @@ export interface OverviewView {
   usageLimitShare: { mean: number | null; leftOut: number };
   firstTry: { yes: number; of: number; reworks: { cause: ReworkCause; tickets: number }[] };
   reverted: { yes: number; known: number };
-  ciPerMerged: { meanMs: number | null; leftOut: number };
+  ciPerMerged: { mean: number | null; leftOut: number };
   red: { verified: number; wouldHaveBlocked: number };
   messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
   /** The 90-day baseline: null until ORC-230 computes it. */

@@ -217,7 +217,7 @@ describe('server', () => {
       const res = await app.request('/api/overview?since=0&until=100');
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        since: 0, until: 100, tickets: 1, unmeasured: 0, delivered: 1, medianLeadTimeMs: 6, tokensPerMerged: { mean: 150, leftOut: 0 },
+        since: 0, until: 100, unmeasured: 0, delivered: 1, medianLeadTimeMs: 6, tokensPerMerged: { mean: 150, leftOut: 0 },
         firstTry: { yes: 1, of: 1 }, messages: { count: 1, medianSignOfLifeMs: 2 }, baseline: null,
       });
     });
@@ -229,7 +229,7 @@ describe('server', () => {
       await store.putTicket(newTicketState('p', 'REL-2', 'Import', 'done', 50 * DAY));
       const read = vi.spyOn(store, 'measureFacts');
       const body = await (await app.request('/api/overview')).json();
-      expect(body).toMatchObject({ since: 10 * DAY, until: 100 * DAY, tickets: 1 });
+      expect(body).toMatchObject({ since: 10 * DAY, until: 100 * DAY });
       expect(read.mock.calls.map((c) => c[1])).toEqual(['REL-2']);
     });
 
@@ -240,7 +240,7 @@ describe('server', () => {
         if (m.kind === 'log') logs.push(m.message);
       });
       vi.spyOn(store, 'measureFacts').mockRejectedValue(new Error('journal illisible'));
-      expect(await (await app.request('/api/overview?since=0&until=100')).json()).toMatchObject({ tickets: 1, unmeasured: 1, delivered: 0 });
+      expect(await (await app.request('/api/overview?since=0&until=100')).json()).toMatchObject({ unmeasured: 1, delivered: 0 });
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
     });
 

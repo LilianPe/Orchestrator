@@ -6,9 +6,9 @@ import type { OverviewView } from './types.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const view = (patch: Partial<OverviewView> = {}): OverviewView => ({
-  since: 0, until: 90 * DAY, tickets: 4, unmeasured: 0, delivered: 3, medianLeadTimeMs: 2 * 60 * 60 * 1000, tokensPerMerged: { mean: 37_000, leftOut: 0 },
+  since: 0, until: 90 * DAY, unmeasured: 0, delivered: 3, medianLeadTimeMs: 2 * 60 * 60 * 1000, tokensPerMerged: { mean: 37_000, leftOut: 0 },
   usageLimitShare: { mean: 0.25, leftOut: 0 }, firstTry: { yes: 2, of: 3, reworks: [{ cause: 'pr.checks_failed', tickets: 1 }] }, reverted: { yes: 0, known: 2 },
-  ciPerMerged: { meanMs: 90_000, leftOut: 1 }, red: { verified: 2, wouldHaveBlocked: 1 },
+  ciPerMerged: { mean: 90_000, leftOut: 1 }, red: { verified: 2, wouldHaveBlocked: 1 },
   messages: { count: 5, medianSignOfLifeMs: 4_000, withoutSignOfLife: 1, questions: 3, medianAnswerMs: 90_000, unanswered: 1 }, baseline: null, ...patch,
 });
 const tile = (o: OverviewView, label: string) => overviewTiles(o).find((t) => t.label === label);
@@ -18,9 +18,9 @@ describe('overviewTiles (ORC-299)', () => {
     const o = view();
     expect(tile(o, 'Delivered')?.value).toBe('3');
     expect(tile(o, 'Median lead time')?.value).toBe('2 h 00 min');
-    expect(tile(o, 'Tokens per merged ticket')).toMatchObject({ value: '37.0 k', detail: expect.stringContaining('code runs used 25 % of the ticket budget') });
+    expect(tile(o, 'Tokens per merged ticket')).toMatchObject({ value: '37.0 k', detail: expect.stringContaining('code runs used 25% of the ticket budget') });
     expect(tile(view({ usageLimitShare: { mean: 0.25, leftOut: 2 } }), 'Tokens per merged ticket')?.detail).toContain('2 without a share');
-    expect(tile(o, 'Ready at the first try')).toMatchObject({ value: '67 %', detail: expect.stringContaining('2 of 3') });
+    expect(tile(o, 'Ready at the first try')).toMatchObject({ value: '67%', detail: expect.stringContaining('2 of 3') });
     expect(tile(o, 'Ready at the first try')?.detail).toContain('CI checks failed');
   });
 
@@ -31,15 +31,14 @@ describe('overviewTiles (ORC-299)', () => {
   });
 
   it('shows a dash, never a zero, for a measure without a value, and says what a mean leaves out', () => {
-    const o = view({ red: { verified: 0, wouldHaveBlocked: 0 }, delivered: 0, medianLeadTimeMs: null, tokensPerMerged: { mean: null, leftOut: 0 }, usageLimitShare: { mean: null, leftOut: 0 }, firstTry: { yes: 0, of: 0, reworks: [] }, ciPerMerged: { meanMs: null, leftOut: 0 } });
+    const o = view({ red: { verified: 0, wouldHaveBlocked: 0 }, delivered: 0, medianLeadTimeMs: null, tokensPerMerged: { mean: null, leftOut: 0 }, usageLimitShare: { mean: null, leftOut: 0 }, firstTry: { yes: 0, of: 0, reworks: [] }, ciPerMerged: { mean: null, leftOut: 0 } });
     for (const label of ['Median lead time', 'Tokens per merged ticket', 'Ready at the first try', 'CI per merged ticket', 'Red check']) expect(tile(o, label)?.value, label).toBe('—');
     expect(tile(view({ tokensPerMerged: { mean: 1_000, leftOut: 2 } }), 'Tokens per merged ticket')?.detail).toContain('2 merged without');
   });
 
   it('compares each headline measure with the 90-day baseline, which has no source before ORC-230', () => {
-    const headline = overviewTiles(view()).filter((t) => t.baseline !== undefined);
-    expect(headline.map((t) => t.label)).toEqual(['Delivered', 'Median lead time', 'Tokens per merged ticket', 'Ready at the first try']);
-    expect(headline.every((t) => t.baseline === null)).toBe(true);
+    expect(overviewTiles(view()).filter((t) => t.headline).map((t) => t.label)).toEqual(['Delivered', 'Median lead time', 'Tokens per merged ticket', 'Ready at the first try']);
+    expect(renderToStaticMarkup(createElement(Overview, { overview: view() }))).toContain('— (ORC-230)');
   });
 });
 
@@ -49,7 +48,7 @@ describe('Overview (ORC-299)', () => {
   it('shows the measures, the baseline as not built yet, and the period', () => {
     const html = page(view());
     expect(html).toContain('Ready at the first try');
-    expect(html).toContain('67 %');
+    expect(html).toContain('67%');
     expect(html).toContain('ORC-230');
     expect(html).toContain('Last 90 days');
   });

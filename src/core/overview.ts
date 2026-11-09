@@ -10,8 +10,6 @@ import { totalTokens } from './types.js';
 export interface Overview {
   since: number;
   until: number;
-  /** Tickets read, the unmeasured ones included. */
-  tickets: number;
   /** Tickets whose measures could not be read: left out of everything below. */
   unmeasured: number;
   delivered: number;
@@ -25,7 +23,7 @@ export interface Overview {
   /** Delivered tickets reverted within 14 days, of those for which it is known (ORC-278): a `false` only once its window ended by `until`. */
   reverted: { yes: number; known: number };
   /** Mean CI time of the delivered tickets; `leftOut` had no CI run in the journal. */
-  ciPerMerged: { meanMs: number | null; leftOut: number };
+  ciPerMerged: { mean: number | null; leftOut: number };
   /** Verdicts of the `red` check (ORC-123) of the delivered tickets: verified, and what it would have blocked. */
   red: { verified: number; wouldHaveBlocked: number };
   /** The human messages of the period: sign of life over all, answer over the questions and commands. */
@@ -62,10 +60,8 @@ export function overview(period: { since: number; until: number }, measured: rea
   const answers = questions.flatMap((m) => (m.answerMs === null ? [] : [m.answerMs]));
   const red = delivered.flatMap((m) => m.red);
   const reverted = delivered.filter((m) => m.revertedWithin14Days === true);
-  const ci = meanOf(delivered, (m) => m.ciCost?.durationMs ?? null);
   return {
     ...period,
-    tickets: measured.length + unmeasured,
     unmeasured,
     delivered: delivered.length,
     medianLeadTimeMs: median(delivered.flatMap((m) => (m.leadTimeMs === null ? [] : [m.leadTimeMs]))),
@@ -73,7 +69,7 @@ export function overview(period: { since: number; until: number }, measured: rea
     usageLimitShare: meanOf(delivered, (m) => m.usageLimitShare),
     firstTry: { yes: delivered.filter((m) => m.firstTry === true).length, of: delivered.length, reworks: [...causes].map(([cause, tickets]) => ({ cause, tickets })) },
     reverted: { yes: reverted.length, known: reverted.length + delivered.filter((m) => m.revertedWithin14Days === false && m.revertWindowEndsAt !== null && m.revertWindowEndsAt <= period.until).length },
-    ciPerMerged: { meanMs: ci.mean, leftOut: ci.leftOut },
+    ciPerMerged: meanOf(delivered, (m) => m.ciCost?.durationMs ?? null),
     red: { verified: red.filter((r) => r.verified).length, wouldHaveBlocked: red.filter((r) => !r.verified).length },
     messages: {
       count: messages.length,
