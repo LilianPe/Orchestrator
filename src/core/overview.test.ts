@@ -60,11 +60,13 @@ describe('overview (ORC-299)', () => {
     expect(o.messages).toEqual({ count: 5, medianSignOfLifeMs: 5_000, withoutSignOfLife: 1, questions: 3, medianAnswerMs: 90_000, unanswered: 1 });
   });
 
-  it('counts the reverts within 14 days and the verdicts of the red check of the tickets delivered', () => {
+  it('counts the reverts within 14 days, a `false` once its window ended, and the verdicts of the red check of the tickets delivered', () => {
     const o = overview(PERIOD, [
       merged('A', 11 * DAY, { revertedWithin14Days: true, red: [{ id: 'v1', verified: true, cause: 'assertion' }] }),
-      merged('B', 12 * DAY, { revertedWithin14Days: false, red: [{ id: 'v2', verified: false, cause: 'compile' }, { id: 'v3', verified: true, cause: 'assertion' }] }),
+      merged('B', 12 * DAY, { revertedWithin14Days: false, revertWindowEndsAt: 26 * DAY, red: [{ id: 'v2', verified: false, cause: 'compile' }, { id: 'v3', verified: true, cause: 'assertion' }] }),
       merged('C', 13 * DAY),
+      // Not reverted so far, but its 14 days run past the period: not known yet.
+      merged('D', 30 * DAY, { revertedWithin14Days: false, revertWindowEndsAt: 44 * DAY }),
       measures('WIP', { red: [{ id: 'v4', verified: false, cause: 'compile' }] }),
     ]);
     expect(o).toMatchObject({ reverted: { yes: 1, known: 2 }, red: { verified: 2, wouldHaveBlocked: 1 } });

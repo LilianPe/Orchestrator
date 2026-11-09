@@ -131,6 +131,9 @@ export interface MeasuredTicketView extends FlowTicketView {
   measures: TicketMeasuresView | null;
 }
 
+/** Why a merged ticket was not ready at the first try: `Rework['cause']` of src/core/measures.ts. */
+export type ReworkCause = 'pr.checks_failed' | 'verify.failed' | 'push.human' | 'feedback' | 'sent_back' | 'changes_requested';
+
 /** `GET /api/overview` (ORC-299): `Overview` of src/core/overview.ts over `[since, until)`. */
 export interface OverviewView {
   since: number;
@@ -141,7 +144,7 @@ export interface OverviewView {
   medianLeadTimeMs: number | null;
   tokensPerMerged: { mean: number | null; leftOut: number };
   usageLimitShare: { mean: number | null; leftOut: number };
-  firstTry: { yes: number; of: number; reworks: { cause: string; tickets: number }[] };
+  firstTry: { yes: number; of: number; reworks: { cause: ReworkCause; tickets: number }[] };
   reverted: { yes: number; known: number };
   ciPerMerged: { meanMs: number | null; leftOut: number };
   red: { verified: number; wouldHaveBlocked: number };

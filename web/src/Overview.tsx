@@ -1,5 +1,5 @@
 import { formatDuration, formatTokens, plural } from './Flow.js';
-import type { OverviewView } from './types.js';
+import type { OverviewView, ReworkCause } from './types.js';
 
 /** The measures of the MVP doc that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
 export const NO_SOURCE = [
@@ -8,7 +8,7 @@ export const NO_SOURCE = [
 ] as const;
 
 /** Why a merged ticket was not ready at the first try, in the dashboard's words (`Rework` of src/core/measures.ts). */
-const REWORK_LABELS: Record<string, string> = {
+const REWORK_LABELS: Record<ReworkCause, string> = {
   'pr.checks_failed': 'CI checks failed',
   'verify.failed': 'factory checks failed',
   'push.human': 'a human pushed',
@@ -33,14 +33,17 @@ export interface Tile {
 
 /** The figures of the overview: the four headline ones face the baseline, then the human messages and the quality signals. */
 export function overviewTiles(o: OverviewView): Tile[] {
-  const reworks = o.firstTry.reworks.map((r) => `${REWORK_LABELS[r.cause] ?? r.cause}: ${r.tickets}`).join(', ');
+  const reworks = o.firstTry.reworks.map((r) => `${REWORK_LABELS[r.cause]}: ${r.tickets}`).join(', ');
   return [
     { label: 'Delivered', value: String(o.delivered), detail: 'tickets merged', baseline: o.baseline },
-    { label: 'Median lead time', value: orDash(o.medianLeadTimeMs, formatDuration), detail: 'delegation to merge', baseline: o.baseline },
+    { label: 'Median lead time', value: orDash(o.medianLeadTimeMs, formatDuration), detail: 'delegation (or first attempt) to merge', baseline: o.baseline },
     {
       label: 'Tokens per merged ticket',
       value: orDash(o.tokensPerMerged.mean, (n) => formatTokens(Math.round(n))),
-      detail: join(without(o.tokensPerMerged.leftOut), o.usageLimitShare.mean === null ? '' : `${percent(o.usageLimitShare.mean)} of the ticket budget`),
+      detail: join(
+        without(o.tokensPerMerged.leftOut),
+        o.usageLimitShare.mean === null ? '' : `code runs used ${percent(o.usageLimitShare.mean)} of the ticket budget${o.usageLimitShare.leftOut ? ` (${o.usageLimitShare.leftOut} without a share)` : ''}`,
+      ),
       baseline: o.baseline,
     },
     {
@@ -50,10 +53,10 @@ export function overviewTiles(o: OverviewView): Tile[] {
       baseline: o.baseline,
     },
     { label: 'Median first sign of life', value: orDash(o.messages.medianSignOfLifeMs, formatDuration), detail: join(plural(o.messages.count, 'human message'), o.messages.withoutSignOfLife ? `${o.messages.withoutSignOfLife} without` : '') },
-    { label: 'Median answer', value: orDash(o.messages.medianAnswerMs, formatDuration), detail: join(`over ${o.messages.questions} questions and commands`, o.messages.unanswered ? `${o.messages.unanswered} unanswered` : '') },
+    { label: 'Median answer', value: orDash(o.messages.medianAnswerMs, formatDuration), detail: join(`over ${plural(o.messages.questions, 'question')} or command${o.messages.questions === 1 ? '' : 's'}`, o.messages.unanswered ? `${o.messages.unanswered} unanswered` : '') },
     { label: 'Reverted within 14 days', value: o.reverted.known ? `${o.reverted.yes} of ${o.reverted.known}` : '—', detail: 'merged tickets where it is known' },
     { label: 'CI per merged ticket', value: orDash(o.ciPerMerged.meanMs, formatDuration), detail: without(o.ciPerMerged.leftOut) },
-    { label: 'Red check', value: `${o.red.verified} verified`, detail: `would have blocked ${o.red.wouldHaveBlocked}` },
+    { label: 'Red check', value: o.red.verified + o.red.wouldHaveBlocked ? `${o.red.verified} verified` : '—', detail: o.red.verified + o.red.wouldHaveBlocked ? `would have blocked ${o.red.wouldHaveBlocked}` : 'no verdict' },
   ];
 }
 

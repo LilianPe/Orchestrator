@@ -1,5 +1,5 @@
 import type { Rework, TicketMeasures } from './measures.js';
-import type { TokenUsage } from './types.js';
+import { totalTokens } from './types.js';
 
 /**
  * The reduced overview of the dashboard (ORC-299): what the factory delivered over `[since, until)` and at what price,
@@ -22,7 +22,7 @@ export interface Overview {
   usageLimitShare: { mean: number | null; leftOut: number };
   /** Delivered tickets ready at the first try, and per cause of rework how many delivered tickets had one. */
   firstTry: { yes: number; of: number; reworks: { cause: Rework['cause']; tickets: number }[] };
-  /** Delivered tickets reverted within 14 days, of those for which it is known (ORC-278). */
+  /** Delivered tickets reverted within 14 days, of those for which it is known (ORC-278): a `false` only once its window ended by `until`. */
   reverted: { yes: number; known: number };
   /** Mean CI time of the delivered tickets; `leftOut` had no CI run in the journal. */
   ciPerMerged: { meanMs: number | null; leftOut: number };
@@ -33,9 +33,6 @@ export interface Overview {
   /** The state of reference over 90 days: nothing computes it before ORC-230. */
   baseline: null;
 }
-
-/** A ticket's tokens as the dashboard counts them: input, output, cache read and cache write (web/src/Flow.tsx `totalTokens`). */
-const totalTokens = (t: TokenUsage): number => t.input + t.output + t.cacheRead + t.cacheCreation;
 
 function median(values: readonly number[]): number | null {
   if (!values.length) return null;
@@ -64,6 +61,7 @@ export function overview(period: { since: number; until: number }, measured: rea
   const signs = messages.flatMap((m) => (m.signOfLifeMs === null ? [] : [m.signOfLifeMs]));
   const answers = questions.flatMap((m) => (m.answerMs === null ? [] : [m.answerMs]));
   const red = delivered.flatMap((m) => m.red);
+  const reverted = delivered.filter((m) => m.revertedWithin14Days === true);
   const ci = meanOf(delivered, (m) => m.ciCost?.durationMs ?? null);
   return {
     ...period,
@@ -74,7 +72,7 @@ export function overview(period: { since: number; until: number }, measured: rea
     tokensPerMerged: meanOf(delivered, (m) => (m.tokens ? totalTokens(m.tokens) : null)),
     usageLimitShare: meanOf(delivered, (m) => m.usageLimitShare),
     firstTry: { yes: delivered.filter((m) => m.firstTry === true).length, of: delivered.length, reworks: [...causes].map(([cause, tickets]) => ({ cause, tickets })) },
-    reverted: { yes: delivered.filter((m) => m.revertedWithin14Days === true).length, known: delivered.filter((m) => m.revertedWithin14Days !== null).length },
+    reverted: { yes: reverted.length, known: reverted.length + delivered.filter((m) => m.revertedWithin14Days === false && m.revertWindowEndsAt !== null && m.revertWindowEndsAt <= period.until).length },
     ciPerMerged: { meanMs: ci.mean, leftOut: ci.leftOut },
     red: { verified: red.filter((r) => r.verified).length, wouldHaveBlocked: red.filter((r) => !r.verified).length },
     messages: {

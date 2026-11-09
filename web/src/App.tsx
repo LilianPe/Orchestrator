@@ -13,6 +13,8 @@ import { PRODUCT_NAME } from '../../src/product.js';
 /** A burst of ticket updates reads the Flow once. */
 const FLOW_DEBOUNCE_MS = 300;
 const MEASURES_POLL_MS = 30_000;
+/** The overview reads every ticket of 90 days, one journal each, and moves with merges: read less often (ORC-299). */
+const OVERVIEW_POLL_MS = 5 * 60_000;
 
 /** The durations go on between two reads: only the Flow renders each second, not the session nor the journal. */
 function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: number; frozen: boolean } & Omit<ComponentProps<typeof Flow>, 'flow' | 'elapsedMs'>) {
@@ -31,10 +33,10 @@ const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'mea
 const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : PAGES[hash] ?? 'flow');
 
 /**
- * What `read` gives, read now and every 30 s while the page is shown and its tab visible, again when `deps` change; an
+ * What `read` gives, read now and every `everyMs` (30 s) while the page is shown and its tab visible, again when `deps` change; an
  * answer to an earlier read never replaces a later one. `failed`: the last read failed, `data` still the one before.
  */
-function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?: T; failed: boolean } {
+function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[], everyMs = MEASURES_POLL_MS): { data?: T; failed: boolean } {
   const [state, setState] = useState<{ data?: T; failed: boolean }>({ failed: false });
   useEffect(() => {
     let live = true;
@@ -44,7 +46,7 @@ function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?
         () => live && setState((s) => ({ ...s, failed: true })),
       );
     load();
-    const timer = setInterval(() => document.hidden || load(), MEASURES_POLL_MS);
+    const timer = setInterval(() => document.hidden || load(), everyMs);
     return () => {
       live = false;
       clearInterval(timer);
@@ -54,12 +56,12 @@ function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?
   return state;
 }
 
-/** The reduced overview (ORC-299), read when shown and every 30 s while it is: the factory computes it over the last 90 days. */
+/** The reduced overview (ORC-299), read when shown and every 5 min while it is: the factory computes it over the last 90 days. */
 function OverviewPage() {
-  const { data, failed } = usePolled(fetchOverview, []);
+  const { data, failed } = usePolled(fetchOverview, [], OVERVIEW_POLL_MS);
   return (
     <div className="flow">
-      {failed && <p className="flow-failed" role="alert">{data ? 'Overview out of date: reading it failed. Retrying within 30 s.' : 'Overview unavailable: reading it failed. Retrying within 30 s.'}</p>}
+      {failed && <p className="flow-failed" role="alert">{data ? 'Overview out of date: reading it failed. Retrying within 5 min.' : 'Overview unavailable: reading it failed. Retrying within 5 min.'}</p>}
       {data ? <Overview overview={data} /> : !failed && <section><p className="empty">Loading the overview…</p></section>}
     </div>
   );

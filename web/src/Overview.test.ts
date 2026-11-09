@@ -18,7 +18,8 @@ describe('overviewTiles (ORC-299)', () => {
     const o = view();
     expect(tile(o, 'Delivered')?.value).toBe('3');
     expect(tile(o, 'Median lead time')?.value).toBe('2 h 00 min');
-    expect(tile(o, 'Tokens per merged ticket')).toMatchObject({ value: '37.0 k', detail: expect.stringContaining('25 % of the ticket budget') });
+    expect(tile(o, 'Tokens per merged ticket')).toMatchObject({ value: '37.0 k', detail: expect.stringContaining('code runs used 25 % of the ticket budget') });
+    expect(tile(view({ usageLimitShare: { mean: 0.25, leftOut: 2 } }), 'Tokens per merged ticket')?.detail).toContain('2 without a share');
     expect(tile(o, 'Ready at the first try')).toMatchObject({ value: '67 %', detail: expect.stringContaining('2 of 3') });
     expect(tile(o, 'Ready at the first try')?.detail).toContain('CI checks failed');
   });
@@ -30,8 +31,8 @@ describe('overviewTiles (ORC-299)', () => {
   });
 
   it('shows a dash, never a zero, for a measure without a value, and says what a mean leaves out', () => {
-    const o = view({ delivered: 0, medianLeadTimeMs: null, tokensPerMerged: { mean: null, leftOut: 0 }, usageLimitShare: { mean: null, leftOut: 0 }, firstTry: { yes: 0, of: 0, reworks: [] }, ciPerMerged: { meanMs: null, leftOut: 0 } });
-    for (const label of ['Median lead time', 'Tokens per merged ticket', 'Ready at the first try', 'CI per merged ticket']) expect(tile(o, label)?.value, label).toBe('—');
+    const o = view({ red: { verified: 0, wouldHaveBlocked: 0 }, delivered: 0, medianLeadTimeMs: null, tokensPerMerged: { mean: null, leftOut: 0 }, usageLimitShare: { mean: null, leftOut: 0 }, firstTry: { yes: 0, of: 0, reworks: [] }, ciPerMerged: { meanMs: null, leftOut: 0 } });
+    for (const label of ['Median lead time', 'Tokens per merged ticket', 'Ready at the first try', 'CI per merged ticket', 'Red check']) expect(tile(o, label)?.value, label).toBe('—');
     expect(tile(view({ tokensPerMerged: { mean: 1_000, leftOut: 2 } }), 'Tokens per merged ticket')?.detail).toContain('2 merged without');
   });
 

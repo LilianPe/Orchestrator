@@ -63,6 +63,9 @@ export const NO_TOKENS: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheC
 /** What a token cap counts: what the model read anew and wrote. A cache read costs next to nothing, and grows with each turn. */
 export const spentTokens = (u: TokenUsage): number => u.input + u.output + u.cacheCreation;
 
+/** What the dashboard counts as a ticket's tokens: all four kinds, cache reads included (web/src/Flow.tsx counts them the same). */
+export const totalTokens = (u: TokenUsage): number => u.input + u.output + u.cacheRead + u.cacheCreation;
+
 export function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
   return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheCreation: a.cacheCreation + b.cacheCreation };
 }
