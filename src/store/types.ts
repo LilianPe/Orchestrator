@@ -384,6 +384,20 @@ export interface Artifact {
   createdAt: number;
 }
 
+/**
+ * A test of a project's repository a human listed as flaky (ORC-164): failing, `verify` marks it indicative. `test`, as
+ * `verify` names it (`<file> > <full name>`, a pytest node id); `coversFrozen`, the human decided it may be indicative
+ * while frozen for a ticket too; `addedBy` and `addedAt`, who decided, and when.
+ */
+export interface KnownFlakyTest {
+  projectId: string;
+  test: string;
+  coversFrozen: boolean;
+  reason: string;
+  addedBy: string;
+  addedAt: number;
+}
+
 /** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
 export interface FindingsRecord {
   projectId: string;
@@ -672,6 +686,12 @@ export interface Store {
   putArtifact(a: Artifact): Promise<boolean>;
   /** A ticket's artifacts, oldest first. */
   artifacts(ticketId: string): Promise<Artifact[]>;
+  /** A project's known flaky tests (ORC-164), oldest first. */
+  knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]>;
+  /** Lists a test as known flaky (ORC-164), in place of its entry if it has one. */
+  putKnownFlakyTest(t: KnownFlakyTest): Promise<void>;
+  /** Takes a test off the list (ORC-164): false when it was not on it. */
+  deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */
