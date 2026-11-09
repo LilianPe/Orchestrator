@@ -10,14 +10,15 @@ const WORKTREE = '/tmp/factory-fake/p/REL-1';
 /** The commit `verify` finds green in the ticket's worktree, which the factory publishes. */
 const SHA = 'c0ffee'.padEnd(40, '0');
 
-const lens = (summary: string, findings: Finding[]): AgentOutput => ({ status: 'done', summary, tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings });
+const output = (summary: string, more: Partial<AgentOutput> = {}): AgentOutput => ({ status: 'done', summary, tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...more });
+const lens = (summary: string, findings: Finding[]): AgentOutput => output(summary, { findings });
 
-/** REL-1 delegated, built and published; then the two lenses answer with these findings, or none. */
+/** REL-1 delegated, built and published; then the two lenses answer with these findings, or none. A blocking one starts the fix of the review loop (ORC-184), held there. */
 async function published(h: Harness, findings: { correctness?: Finding[]; security?: Finding[] } = {}, diff?: string): Promise<void> {
   h.workspaces.heads.set(WORKTREE, SHA);
   if (diff) h.workspaces.diffs.set(SHA, diff);
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
-  h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens, standard.', findings.correctness ?? []) }, { output: lens('Security lens, standard.', findings.security ?? []) });
+  h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens, standard.', findings.correctness ?? []) }, { output: lens('Security lens, standard.', findings.security ?? []) }, { hold: true });
   await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 }
 
@@ -69,9 +70,9 @@ describe('the AI review (ORC-183)', () => {
     expect(check(h)).toMatchObject({ sha: SHA, status: 'completed', conclusion: 'failure', title: '1 blocking finding, 1 minor, 0 out of scope' });
     // Kept for the audit of the reviews (ORC-229), by lens.
     expect((await h.store.findingsOf('p', 'REL-1', SHA)).map((f) => [f.lens, f.severity])).toEqual([['correctness', 'minor'], ['security', 'blocking']]);
-    // The fix loop is ORC-184's: nothing is started on the blocking finding.
-    expect(h.runner.requests).toHaveLength(3);
-    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+    // The review loop starts its fix on the blocking finding (ORC-184): the ticket stays in AI Review.
+    expect(h.runner.requests[3]!.prompt.startsWith('/factory:feedback')).toBe(true);
+    expect(await h.ticket()).toMatchObject({ logical: 'ai_review', ciFixAttempts: 1 });
   });
 
   it('criterion 3: minor and out-of-scope findings alone leave factory/review green', async () => {
@@ -151,5 +152,104 @@ describe('the AI review (ORC-183)', () => {
     expect(await h.ticket()).toMatchObject({ blocked: true, blockedJob: 'review', logical: 'ai_review' });
     expect(h.forge.reviews).toEqual([]);
     expect(check(h)).toBeUndefined();
+  });
+});
+
+describe('the review → fix loop (ORC-184)', () => {
+  const SHA2 = 'f1x'.padEnd(40, '1');
+  const fix = output;
+  const fixes = (h: Harness) => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:feedback'));
+  const thread = { author: 'octo', body: 'Why write the header here?', at: 0, source: 'review' as const };
+
+  /** REL-1 built and published, its first review finding `security`; `fix-review` then runs, held until `release`. */
+  async function reviewedThenFixing(h: Harness, security: Finding[], fixOutput: AgentOutput, next: { correctness?: Finding[]; security?: Finding[] } = {}): Promise<void> {
+    h.workspaces.heads.set(WORKTREE, SHA);
+    h.forge.setReviewComments(1, [thread]);
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
+    h.runner.enqueue(
+      { events: [{ kind: 'text', text: 'Built.' }] },
+      { output: lens('Correctness lens, standard.', []) },
+      { output: lens('Security lens, standard.', security) },
+      { hold: true, output: fixOutput },
+      { output: lens('Correctness lens, again.', next.correctness ?? []) },
+      { output: lens('Security lens, again.', next.security ?? []) },
+    );
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+  }
+
+  /** The held fix commits, then ends: verified, published, reviewed again. */
+  async function release(h: Harness): Promise<void> {
+    h.workspaces.heads.set(WORKTREE, SHA2);
+    h.runner.release(fixes(h).at(-1)!.runId);
+    await h.orch.drained();
+  }
+
+  it('criterion 1: a blocking finding resumes the ticket session on the findings, one commit asked per finding, then verify, publish and the review again', async () => {
+    const h = createHarness({ aiReview: true });
+    await reviewedThenFixing(h, [blocking, minor], fix('Fixed the header.', { fixed: [{ finding: 'security-1', commit: 'abc1234' }] }));
+    const [dev] = h.runner.requests;
+    const [running] = fixes(h);
+    // The ticket's session and worktree, never a fresh one.
+    expect(running).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId, cwd: WORKTREE, model: 'sonnet', effort: 'medium', limits: { turns: 60 } });
+    expect(running!.prompt).toContain('## Blocking findings to address\nThe AI review of `c0ffee000000` left 1 blocking finding.');
+    expect(running!.prompt).toContain('### security-1 · `src/export.ts:7`\nThe header row is written twice on an empty list.');
+    expect(running!.prompt).not.toContain('The name `doIt` says nothing.');
+    expect(running!.prompt).toContain('Fix each finding in a commit of its own');
+    // The PR's unresolved threads, as they are.
+    expect(running!.prompt).toContain('## Unresolved review threads\n- **octo**');
+    expect(await h.ticket()).toMatchObject({ logical: 'ai_review', ciFixAttempts: 1, blocked: false });
+    expect(check(h)).toMatchObject({ sha: SHA, conclusion: 'failure' });
+
+    await release(h);
+    // Its commit verified and published, then both lenses on it.
+    expect(reviews(h)).toHaveLength(4);
+    expect(h.workspaces.prepared.filter((p) => p.kind === 'published').map((p) => p.sha)).toEqual([SHA, SHA, SHA2, SHA2]);
+    expect(h.forge.checkRuns.filter((c) => c.name === 'factory/review').map((c) => [c.sha, c.conclusion])).toEqual([[SHA, 'failure'], [SHA2, 'success']]);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifiedSha: SHA2, ciFixAttempts: 1, blocked: false });
+    expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review']);
+  });
+
+  it('criterion 2: a finding the fix contests is still open when the next review starts, with its justification', async () => {
+    const h = createHarness({ aiReview: true });
+    const contested = [{ finding: 'security-1', justification: 'The header is written once: the loop starts at the first row.' }];
+    await reviewedThenFixing(h, [blocking], fix('Contested the header finding.', { contested }));
+    await release(h);
+    const [, , first, second] = reviews(h);
+    for (const r of [first!, second!]) {
+      expect(r.prompt).toContain(`Commit: ${SHA2}`);
+      expect(r.prompt).toContain('## Contested findings\nThe implementer contested these blocking findings of the previous review. Each one is still open');
+      expect(r.prompt).toContain('### security-1 · `src/export.ts:7`\nThe header row is written twice on an empty list.');
+      expect(r.prompt).toContain('**Contested by the implementer**: The header is written once: the loop starts at the first row.');
+    }
+    // That review published, the contest is read: the findings standing are its own.
+    expect((await h.ticket()).contested).toBeNull();
+  });
+
+  it('criterion 2: a contest with no commit, the same commit reviewed again: both lenses read the finding contested, though the first replaced its findings', async () => {
+    const h = createHarness({ aiReview: true });
+    const contested = [{ finding: 'security-1', justification: 'Not a bug: the list is never empty here.' }];
+    await reviewedThenFixing(h, [blocking], fix('Contested, nothing to commit.', { contested }), { correctness: [minor] });
+    // No commit: the head stays the reviewed one.
+    h.runner.release(fixes(h).at(-1)!.runId);
+    await h.orch.drained();
+    const [, , first, second] = reviews(h);
+    for (const r of [first!, second!]) {
+      expect(r.prompt).toContain(`Commit: ${SHA}`);
+      expect(r.prompt).toContain('**Contested by the implementer**: Not a bug: the list is never empty here.');
+    }
+  });
+
+  it('criterion 3: past its 2 rounds, a review that still finds starts no fix and blocks the run, its findings on the PR', async () => {
+    const h = createHarness({ aiReview: true });
+    await reviewedThenFixing(h, [blocking], fix('Tried.', { fixed: [{ finding: 'security-1', commit: 'abc1234' }] }), { security: [blocking] });
+    // The second round's fix, then a third review that still finds.
+    h.runner.enqueue({ output: fix('Tried again.', { fixed: [{ finding: 'security-1', commit: 'def5678' }] }) }, { output: lens('Correctness lens, third.', []) }, { output: lens('Security lens, third.', [blocking]) });
+    await release(h);
+    expect(fixes(h)).toHaveLength(2);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: true, blockKind: 'limit', blockedJob: 'fix-review', ciFixAttempts: 2, logical: 'ai_review' });
+    expect(t.blockReason).toMatch(/still has 1 blocking finding .* used its 2 runs: I am not starting fix-review\./);
+    expect(h.forge.reviews).toHaveLength(3);
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('1 blocking finding(s), published on the PR.');
   });
 });

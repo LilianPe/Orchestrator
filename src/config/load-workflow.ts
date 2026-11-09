@@ -79,6 +79,7 @@ function resolveJob(name: string, jobs: Record<string, RawJob>, seen: string[] =
   // on_start / on_success replace the parent's value instead of merging into it.
   if (own.on_start !== undefined) merged.on_start = own.on_start;
   if (own.on_success !== undefined) merged.on_success = own.on_success;
+  if (own.on_blocking !== undefined) merged.on_blocking = own.on_blocking;
   return merged;
 }
 
@@ -102,6 +103,7 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
   // Read by the AI review only (ORC-183): the rest of the review's contract is the preset's step.
   if ((name === 'review') !== !!raw.lens) throw new WorkflowError(`jobs.${job}.lens: a job of the review step has one, and only it`);
   if (raw.on_success?.post === 'review' && name !== 'review') throw new WorkflowError(`jobs.${job}.on_success.post: review publishes the findings of a job of the review step`);
+  if (raw.on_blocking && raw.on_success?.post !== 'review') throw new WorkflowError(`jobs.${job}.on_blocking: only the lens that publishes the review (on_success.post: review) answers its blocking findings`);
   if ((name === 'review') !== (raw.workspace === 'published')) throw new WorkflowError(`jobs.${job}.workspace: published is the AI review's, and only a job of the review step has it`);
   if (name === undefined) return { ...(settings.effort?.default ? { effort: settings.effort.default } : {}), limits: own };
   const step = agentStep(name);
@@ -168,6 +170,7 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSe
     ...stepFields(name, raw, limits(raw.limits, perRun), settings),
     onStart: raw.on_start ?? {},
     onSuccess: raw.on_success ?? {},
+    ...(raw.on_blocking ? { onBlocking: raw.on_blocking } : {}),
   };
 }
 
@@ -195,6 +198,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   for (const j of Object.values(jobs)) {
     if (j.onSuccess.run && !jobs[j.onSuccess.run]) throw new WorkflowError(`jobs.${j.name}.on_success.run: unknown job "${j.onSuccess.run}"`);
+    if (j.onBlocking && jobs[j.onBlocking.run]?.input !== 'findings') throw new WorkflowError(`jobs.${j.name}.on_blocking.run: "${j.onBlocking.run}" must be a job that reads the findings (input: findings)`);
   }
 
   const on: Partial<Record<EventType, Rule[]>> = {};
