@@ -33,55 +33,11 @@ const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
 /**
- * The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274), the
- * ticket and its PR included (ORC-349).
+ * The refusal of a knowledge job (I12) whose event is untrusted. Only a version frozen before ORC-193 has one (`learn`,
+ * `remember`): decided as it was, the launch refuses it anyway, as the memory in writing sleeps.
  */
-export function taintedKnowledge(job: string, source: 'event' | 'read' | 'history' = 'event'): string {
-  const what = {
-    event: 'the event comes',
-    read: 'the feedback it would read (thread or review comments) comes',
-    history: 'what it would read of the ticket and its PR (reviews, messages, commits) comes in part',
-  }[source];
-  return `I am not starting ${job}: this job writes to the knowledge base, and ${what} from an untrusted source.`;
-}
-
-/**
- * The events whose text or code a run reads later through the ticket or its PR, not only as its input (ORC-349): the
- * ticket a delegation brings, a human message, a review of the PR, the commits a human pushed. The others carry nothing
- * an agent reads (a move, a label, CI's facts) or what the factory wrote itself. `HUMAN_EVENTS` without its move and label, and the
- * forge's two: a human event added there that brings text belongs here too.
- */
-const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
-
-/**
- * The taint of a ticket's history, as a run that reads the ticket and its PR takes it in (ORC-349): untrusted once an
- * untrusted event brought it content, whoever starts that run. `Orchestrator.launch` adds the branch's mark (ORC-338).
- */
-export function historyTaint(events: readonly FactoryEvent[]): Taint {
-  return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
-}
-
-/**
- * The Linear messages whose text `ingestedConversation` gives. A command is control, not knowledge; a review is GitHub's,
- * untrusted whoever wrote it (ORC-160), so never given.
- */
-const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
-
-/**
- * What `learn` after a merge is given of the ticket's conversation, in place of reading the PR itself (ORC-361): the Linear
- * messages the factory ingested, in their order, as it would hand them to an agent (`keepMessage`, `forAgent`). Only trusted
- * ones, never one the matrix refused (`refused`, the ids of those events): untrusted content is never read as knowledge,
- * whatever `historyTaint` lets through. What the forge holds that was never ingested (a comment on the PR's conversation, any
- * review with GitHub webhooks off) is not in the journal, so not here either.
- */
-export function ingestedConversation(events: readonly FactoryEvent[], refused: ReadonlySet<string> = new Set()): FeedbackItem[] {
-  const given = events.filter((e): e is HumanMessage => e.taint !== 'untrusted' && CONVERSATION.has(e.type) && !refused.has(e.id));
-  return forAgent(given.map((e) => messageItem(e, 'session'))).filter((i) => i.body.trim());
-}
-
-/** A review without a word (an approval, most often): it brings nothing a run reads. */
-function silentReview(e: FactoryEvent): boolean {
-  return e.type === 'pr.reviewed' && !(e as FactoryEvent<'pr.reviewed'>).payload.body.trim();
+export function taintedKnowledge(job: string): string {
+  return `I am not starting ${job}: this job writes to the knowledge base, and the event comes from an untrusted source.`;
 }
 
 const BUILT_IN = new Set<EventType>([
@@ -899,7 +855,10 @@ export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKin
   return input === 'verify_failures' && !job.red && !ticket.verifyAttempts;
 }
 
-/** Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12). */
+/**
+ * Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12): a
+ * `knowledge` job of a version frozen before ORC-193, decided as it was.
+ */
 function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, taint = runTaint(event, ticket, job.input)): 'merged' | 'taint' | undefined {
   if (refusesDevWork(ticket, job) === 'merged') return 'merged';
   return job.workspace === 'knowledge' && taint === 'untrusted' ? 'taint' : undefined;
@@ -976,15 +935,10 @@ const commandText = (event: FactoryEvent<'command'>): string => `${event.payload
  * `as`: what of it an agent reads, the comment of a `/changes` (ORC-212).
  */
 function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread', as?: { body: string; kind: MessageKind }): void {
-  out.events.push({ type: 'feedback.appended', item: messageItem(event, source, as) });
-}
-
-/** A human message as an agent is handed it: kept in humanInbox (`keepMessage`), or given to `learn` (`ingestedConversation`). */
-function messageItem(event: HumanMessage, source: 'session' | 'thread', as?: { body: string; kind: MessageKind }): FeedbackItem {
   const { author } = event.payload;
   const kind = as?.kind ?? event.payload.kind;
   const body = as?.body ?? (event.type === 'command' && kind ? commandText(event) : event.payload.body);
-  return { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) };
+  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
 }
 
 /**
@@ -1219,7 +1173,9 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   // A block on a stranded pending job stays until the debounce fires: it is what tells that reply to start that job (ORC-339).
   const keepsBlock = !!rule.debounceMs && !!strandedPending(ticket, workflow);
   const refused = !job || !!refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input));
-  if (!refused && !keepsBlock && ticket?.blocked) unblock(out, event, ticket);
+  // Already lifted by the merge itself (its built-in, ORC-193).
+  const unblocked = event.type === 'pr.merged' && out.events.some((e) => e.type === 'ticket.unblocked');
+  if (!refused && !keepsBlock && ticket?.blocked && !unblocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
@@ -1231,6 +1187,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     out.effects.push({ kind: 'after_merge', number, url, at: mergedAt ?? event.at, ...(headSha ? { headSha } : {}), ...(mergeSha ? { mergeSha } : {}) }, { kind: 'cleanup' });
   }
   if (rule.do === 'cleanup') out.effects.push({ kind: 'cleanup' });
+  // The answer to `fais-le` of a version frozen before ORC-193.
   if (rule.do === 'propose_delegate') {
     out.effects.push({
       kind: 'activity',
@@ -2180,8 +2137,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'pr.merged':
       // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
-      // Before the rule's effects, so its cleanup and learn run come after the stop.
+      // Before the rule's effects, so its cleanup comes after the stop.
       cancelWork(out, 'built-in pr.merged: work cancelled');
+      // And its block lifted: the learn run of a version frozen before ORC-193 lifted it through its rule, which decides as it did.
+      if (ticket?.blocked && !Object.values(workflow.jobs).some((j) => j.workspace === 'knowledge')) unblock(out, event, ticket);
       break;
     case 'pr.closed': {
       // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close

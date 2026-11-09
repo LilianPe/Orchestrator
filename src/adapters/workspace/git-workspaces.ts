@@ -144,7 +144,7 @@ export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
   /** `log`: the detail of a failed fetch (the server's path, git's own words), which the ticket never gets. */
-  constructor(private o: { root: string; knowledgeRepo?: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void }) {
+  constructor(private o: { root: string; exec?: Exec; fetchDeadlineMs?: number; log?: (message: string) => void }) {
     this.exec = o.exec ?? execCmd;
   }
 
@@ -161,7 +161,6 @@ export class GitWorkspaces implements WorkspaceManager {
     assertSafe(req.projectId);
     assertSafe(req.ticketId);
     if (req.kind === 'trunk-readonly') return this.trunkWorkspace(req);
-    if (req.kind === 'knowledge') return this.knowledgeWorkspace(req);
     if (req.kind === 'published') return this.publishedWorkspace(req);
     const path = join(this.o.root, req.projectId, req.ticketId);
     const port = req.portBase + req.slot;
@@ -273,17 +272,6 @@ export class GitWorkspaces implements WorkspaceManager {
     const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
     await this.agentRepository(req.repoPath, path, trunk, ['--detach', req.sha]);
     return { path, diff: await capDiff(diff, () => git.raw('diff', '--name-only', range)) };
-  }
-
-  private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {
-    const kb = this.o.knowledgeRepo;
-    if (!kb) throw new Error('No knowledge repository configured.');
-    await this.fetch(kb);
-    const path = join(this.o.root, '_kb', req.runId);
-    const branch = `learn/${req.ticketId.toLowerCase()}-${req.runId.slice(0, 8)}`;
-    const trunk = await originHead(this.exec, kb);
-    await this.agentRepository(kb, path, trunk, ['-b', branch, trunk]);
-    return { path, branch };
   }
 
   /** No git here: its `.git` goes with it, the commits it did not push too. */
