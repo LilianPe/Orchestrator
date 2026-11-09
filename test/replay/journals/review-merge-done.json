@@ -3575,6 +3575,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3639,6 +3643,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
