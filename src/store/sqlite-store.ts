@@ -18,11 +18,14 @@ import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
   TicketHeldError,
+  blockMoves,
+  byMostRefused,
   decidedOn,
   decisionRecord,
   effectResult,
   timerEvent,
   timerRowId,
+  type BlockEntry,
   type DecisionOutcome,
   type DecisionRecord,
   type JournalEntry,
@@ -770,18 +773,33 @@ export class SqliteStore implements Store {
     const inPeriod = <T extends { at: number }>(xs: T[]) => xs.filter((x) => x.at >= since && x.at < until);
     const hosts = new Map<string, { host: string; requests: number; refused: number }>();
     const rules = new Map<string, { rule: string; refusals: number }>();
+    const runs: SecurityStats['runs'] = [];
     for (const log of logs) {
-      for (const e of inPeriod(log.egress)) {
+      const egress = inPeriod(log.egress);
+      const refusals = inPeriod(log.refusals);
+      for (const e of egress) {
         const h = hosts.get(e.host) ?? hosts.set(e.host, { host: e.host, requests: 0, refused: 0 }).get(e.host)!;
         h.requests++;
         if (!e.ok) h.refused++;
       }
-      for (const r of inPeriod(log.refusals)) (rules.get(r.rule) ?? rules.set(r.rule, { rule: r.rule, refusals: 0 }).get(r.rule)!).refusals++;
+      for (const r of refusals) (rules.get(r.rule) ?? rules.set(r.rule, { rule: r.rule, refusals: 0 }).get(r.rule)!).refusals++;
+      if (egress.length || refusals.length) {
+        runs.push({ runId: log.runId, projectId: log.projectId, ticketId: log.ticketId, requests: egress.length, refused: egress.filter((e) => !e.ok).length, refusals: refusals.length });
+      }
     }
     return {
       hosts: [...hosts.values()].sort((a, b) => b.requests - a.requests || a.host.localeCompare(b.host)),
       rules: [...rules.values()].sort((a, b) => b.refusals - a.refusals || a.rule.localeCompare(b.rule)),
+      runs: runs.sort(byMostRefused),
     };
+  }
+
+  // ponytail: every decision and ticket read; SQLite is kept until ORC-178, Postgres filters in SQL.
+  async blocksEntered(since: number, until: number): Promise<BlockEntry[]> {
+    const decisions = (this.db.prepare('SELECT data FROM decision_trace ORDER BY rowid').all() as { data: string }[]).map((r) => JSON.parse(r.data) as DecisionRecord);
+    return blockMoves(decisions, await this.listTickets())
+      .filter((b) => b.at >= since && b.at < until)
+      .sort((a, b) => a.at - b.at);
   }
 
   async getMeta(key: string): Promise<string | undefined> {

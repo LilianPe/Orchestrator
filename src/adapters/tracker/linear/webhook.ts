@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { REFREEZE } from '../../../checks/freeze.js';
 import { classifyMessage } from '../../../core/human-message.js';
+import { SPEC_COMMANDS } from '../../../core/spec.js';
 import type { MessageClassifier } from '../../runner/message-classifier.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
 import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
@@ -126,6 +127,9 @@ function parseCommand(text: string): { name: string; body: string } {
   return { name: first.toLowerCase(), body: rest.join(' ') };
 }
 
+/** The factory's own commands, not a workflow rule's: `/refreeze` (ORC-131) and the spec gate's (ORC-212). */
+const FACTORY_COMMANDS: readonly string[] = [REFREEZE, ...SPEC_COMMANDS];
+
 function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
@@ -133,8 +137,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     if (!comment) return [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true } }];
     const text = stripMention(comment.body ?? '');
     const command = parseCommand(text);
-    // `/refreeze` is the factory's own (ORC-131), not a workflow rule's.
-    if ([REFREEZE, ...ctx.commands(projectId)].includes(command.name)) {
+    if ([...FACTORY_COMMANDS, ...ctx.commands(projectId)].includes(command.name)) {
       return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
     }
     const said = message(text);
@@ -143,9 +146,9 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
     const reply: string = body.agentActivity?.content?.body ?? '';
-    // A blocked ticket's thread asks for a reply: `/refreeze` there is the command, not feedback that relaunches the agent.
+    // A reply in a session: the factory's commands there are commands, not feedback that relaunches the agent (ORC-212).
     const command = parseCommand(stripMention(reply));
-    if (command.name === REFREEZE) return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, kind: 'command' } }];
+    if (FACTORY_COMMANDS.includes(command.name)) return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, kind: 'command' } }];
     const said = message(reply);
     const bare = stripMention(said.body);
     const kind = classifyMessage(bare);
@@ -160,8 +163,8 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
  * Any other comment stays between humans, and is not journaled. A comment posted once the block's comment is visible
  * finds the block committed: the read cannot miss it. Dropped: what no user signed (the factory's own comments, an
  * integration, Slack), what starts with a mention (`@factory` opens its own session, `@someone` talks to them), and
- * `/refreeze`, which is no instruction for the agent. A thread under any comment counts as well as the ticket's. A reply
- * is masked and classified as a session's is (ORC-180). A comment outside a block does not enter the human inbox: it is
+ * the factory's commands (`/refreeze`, the spec gate's), which are no instruction for the agent. A thread under any
+ * comment counts as well as the ticket's. A reply is masked and classified as a session's is (ORC-180). A comment outside a block does not enter the human inbox: it is
  * not addressed to the factory, and an agent would read it; a session is how one speaks to the agent at work.
  */
 async function commentEvents(body: any, identifier: string, projectId: string, actor: string | undefined, author: string, ctx: MapContext): Promise<PartialEvent[]> {
@@ -170,7 +173,7 @@ async function commentEvents(body: any, identifier: string, projectId: string, a
   // A reply in an agent session comes as its `prompted` webhook: its comment is the same message (`deliveryKey` too).
   if (body.data.agentSessionId || body.data.agentSession) return [];
   const bare = stripMention(text);
-  if (bare !== text.trim() || parseCommand(bare).name === REFREEZE) return [];
+  if (bare !== text.trim() || FACTORY_COMMANDS.includes(parseCommand(bare).name)) return [];
   const ticket = await ctx.ticket(projectId, identifier);
   if (!ticket?.blocked || !ticket.delegated) return [];
   const said = message(text);

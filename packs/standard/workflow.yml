@@ -80,6 +80,18 @@ jobs:
     on_start: { move: dev }
     # Published, then the AI review (ORC-183), whose end shows the PR in Human Review.
     on_success: { move: ai_review, post: summary, run: review }
+  # The `spec_draft` step of factory/default (ORC-212): writes the spec through `submit_result`, nothing in the
+  # worktree. Its end is `spec_check`, then the spec is published and waits for a validator's `/approve`
+  # (`spec_review`), which starts `tests`. Off until a rule runs it (intake's `on_success: { run: spec }`).
+  spec:
+    step: spec_draft
+    queue: dev
+    model: sonnet
+    workspace: worktree
+    session: new
+    skill: "factory:spec"
+    structured_output: true
+    on_success: { run: tests }
   # The `tests` step of factory/default (ORC-123): tests of the acceptance criteria only, then the `red`
   # check, then `dev`. Off until a rule runs it (`ticket.delegated: run: tests`); `red.mode: blocking`
   # once the golden tickets validate it.

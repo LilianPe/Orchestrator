@@ -2,6 +2,7 @@ import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
+import type { SpecVersion } from './spec.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
 import type { VisualProof } from '../checks/visual-proof.js';
@@ -79,10 +80,11 @@ export type Stagnation =
   | { kind: 'silent'; silentMs: number };
 
 /**
+ * `spec_check`: what the factory's check of a spec found wrong, with the refused draft (ORC-212).
  * `diff`: the published commit's diff an AI review reads (ORC-183). `findings`: the blocking findings of the last AI review,
  * which the fix of the review loop reads, with the PR's unresolved threads (ORC-184).
  */
-export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'diff' | 'findings';
+export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'spec_check' | 'diff' | 'findings';
 export type QueueName = 'dev' | 'questions';
 
 /** A finding of the AI review the fix contests (ORC-184): its id in the fix's input (`correctness-1`), and why it does not apply. */
@@ -423,7 +425,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -626,6 +628,16 @@ export interface TicketState {
   visualProof?: 'required' | null;
   /** The existing code `intake` found close to the request (ORC-207), its last assessment: leads `build` is given to reuse. */
   reuse?: ReuseLead[];
+  /**
+   * The ticket's spec (ORC-212), its last version: waiting for review while it has no approval and no run of the ticket
+   * is being drafted, the contract of the later steps once approved. Absent until `spec_draft` wrote one; `null` once a
+   * new delegation started the ticket's work afresh.
+   */
+  spec?: SpecVersion | null;
+  /** The returns to `spec_draft` a failed `spec_check` used on the current draft (ORC-212): the next failure blocks. */
+  specCheckReturns?: number;
+  /** The `/changes` rounds since the last approval (ORC-212): one past the preset's bound blocks. */
+  specChanges?: number;
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }
