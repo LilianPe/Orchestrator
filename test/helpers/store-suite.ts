@@ -283,7 +283,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       refusals: [{ at: 200, tool: 'Bash', rule: 'force-push', command: 'x' }, { at: 210, tool: 'WebSearch', rule: 'web-search', command: 'q' }, { at: 900, tool: 'Bash', rule: 'force-push', command: 'y' }],
       skipped: { egress: 0, refusals: 0 },
     });
-    expect(await s.securityStats(0, 900)).toEqual({
+    expect(await s.securityStats(0, 900)).toMatchObject({
       hosts: [
         { host: 'a.example', requests: 3, refused: 2 },
         { host: 'b.example', requests: 2, refused: 0 },
@@ -294,7 +294,59 @@ export function storeContract(store: () => Store | Promise<Store>): void {
         { rule: 'web-search', refusals: 1 },
       ],
     });
-    expect(await s.securityStats(115, 205)).toEqual({ hosts: [{ host: 'a.example', requests: 1, refused: 1 }, { host: 'b.example', requests: 1, refused: 0 }], rules: [{ rule: 'force-push', refusals: 1 }, { rule: 'push-trunk', refusals: 1 }] });
+    expect(await s.securityStats(115, 205)).toMatchObject({ hosts: [{ host: 'a.example', requests: 1, refused: 1 }, { host: 'b.example', requests: 1, refused: 0 }], rules: [{ rule: 'force-push', refusals: 1 }, { rule: 'push-trunk', refusals: 1 }] });
+  });
+
+  it('counts each run of a period by what its log holds in it, the most refused first (ORC-300)', async () => {
+    const s = await store();
+    const egress = (at: number, host: string, ok = true) => ({ at, method: 'GET', host, ok, up: 0, down: 0 });
+    const refusal = (at: number, rule: string) => ({ at, tool: 'Bash', rule, command: 'secret' });
+    await s.putSecurityLog({ runId: 'quiet', projectId: 'p', ticketId: 'REL-1', at: 500, egress: [egress(100, 'a.example'), egress(110, 'a.example')], refusals: [], skipped: { egress: 0, refusals: 0 } });
+    await s.putSecurityLog({ runId: 'loud', projectId: 'p', ticketId: 'REL-2', at: 500, egress: [egress(100, 'b.example', false), egress(900, 'b.example', false)], refusals: [refusal(120, 'force-push'), refusal(130, 'push')], skipped: { egress: 0, refusals: 0 } });
+    await s.putSecurityLog({ runId: 'later', projectId: 'q', ticketId: 'REL-3', at: 2000, egress: [egress(1500, 'c.example', false)], refusals: [], skipped: { egress: 0, refusals: 0 } });
+    expect((await s.securityStats(0, 900)).runs).toEqual([
+      { runId: 'loud', projectId: 'p', ticketId: 'REL-2', requests: 1, refused: 1, refusals: 2 },
+      { runId: 'quiet', projectId: 'p', ticketId: 'REL-1', requests: 2, refused: 0, refusals: 0 },
+    ]);
+    expect((await s.securityStats(900, 2000)).runs).toEqual([
+      { runId: 'later', projectId: 'q', ticketId: 'REL-3', requests: 1, refused: 1, refusals: 0 },
+      { runId: 'loud', projectId: 'p', ticketId: 'REL-2', requests: 1, refused: 1, refusals: 0 },
+    ]);
+    expect((await s.securityStats(3000, 4000)).runs).toEqual([]);
+  });
+
+  it('lists the moves into Blocked of a period, with their kind, not a block kept nor one outside it (ORC-300)', async () => {
+    const s = await store();
+    const ev = (id: string, ticketId: string, at: number) => delegatedEvent(id, ticketId, at);
+    const decideAs = async (id: string, ticketId: string, at: number, patch: Partial<TicketState>) => {
+      await s.appendInbox(ev(id, ticketId, at));
+      const out = await s.decide({
+        event: ev(id, ticketId, at),
+        workflow: WF,
+        decide: (t) => ({ ticket: { ...(t ?? newTicketState('p', ticketId, 'T', 'todo', 1)), ...patch }, effects: [], timers: [], clearTimers: false, at }),
+      });
+      if (out.status !== 'committed') throw new Error(`expected ${id} committed`);
+    };
+    // Blocked at its first decision: a move into Blocked too.
+    await decideAs('a1', 'REL-1', 100, { blocked: true, blockKind: 'red', blockReason: 'red' });
+    // Still blocked: no new move.
+    await decideAs('a2', 'REL-1', 150, { blocked: true, blockKind: 'red', blockReason: 'red again' });
+    await decideAs('b1', 'REL-2', 110, {});
+    await decideAs('b2', 'REL-2', 200, { blocked: true, blockKind: 'budget', blockReason: 'tokens' });
+    await decideAs('b3', 'REL-2', 300, { blocked: false, blockKind: undefined });
+    // Blocked again: a second move, and one without a kind (written before ORC-345): its kind got back from its reason.
+    await decideAs('b4', 'REL-2', 400, { blocked: true, blockReason: 'Red not verified after 3 attempts' });
+    await decideAs('c1', 'REL-3', 900, { blocked: true, blockKind: 'loop', blockReason: 'loop' });
+    expect(await s.blocksEntered(0, 900)).toEqual([
+      { projectId: 'p', ticketId: 'REL-1', at: 100, kind: 'red' },
+      { projectId: 'p', ticketId: 'REL-2', at: 200, kind: 'budget' },
+      { projectId: 'p', ticketId: 'REL-2', at: 400, kind: 'red' },
+    ]);
+    expect(await s.blocksEntered(150, 1000)).toEqual([
+      { projectId: 'p', ticketId: 'REL-2', at: 200, kind: 'budget' },
+      { projectId: 'p', ticketId: 'REL-2', at: 400, kind: 'red' },
+      { projectId: 'p', ticketId: 'REL-3', at: 900, kind: 'loop' },
+    ]);
   });
 
   it('still reads a run stored without labels', async () => {

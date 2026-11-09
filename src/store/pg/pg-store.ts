@@ -23,6 +23,9 @@ import {
   timerEvent,
   timerRowId,
   LEASE_MS,
+  blockEntry,
+  byMostRefused,
+  type BlockEntry,
   type DecisionOutcome,
   type DecisionRecord,
   type DecisionRequest,
@@ -932,7 +935,7 @@ export class PgStore implements AsyncStore {
   async securityStats(since: number, until: number): Promise<SecurityStats> {
     const from = sql`to_timestamp(${since / 1000})`;
     const to = sql`to_timestamp(${until / 1000})`;
-    const [hosts, rules] = await Promise.all([
+    const [hosts, rules, runs] = await Promise.all([
       this.db.execute<{ host: string; requests: string | number; refused: string | number }>(sql`
         select host, count(*) as requests, count(*) filter (where not ok) as refused from egress_requests
         where at >= ${from} and at < ${to} group by host order by requests desc, host
@@ -940,11 +943,35 @@ export class PgStore implements AsyncStore {
       this.db.execute<{ rule: string; refusals: string | number }>(sql`
         select rule, count(*) as refusals from refusals where at >= ${from} and at < ${to} group by rule order by refusals desc, rule
       `),
+      this.db.execute<{ run_id: string; project_id: string; ticket_id: string; requests: string | number; refused: string | number; refusals: string | number }>(sql`
+        select l.run_id, l.project_id, l.ticket_id, coalesce(e.requests, 0) as requests, coalesce(e.refused, 0) as refused, coalesce(r.refusals, 0) as refusals
+        from security_logs l
+        left join (
+          select run_id, count(*) as requests, count(*) filter (where not ok) as refused from egress_requests where at >= ${from} and at < ${to} group by run_id
+        ) e on e.run_id = l.run_id
+        left join (select run_id, count(*) as refusals from refusals where at >= ${from} and at < ${to} group by run_id) r on r.run_id = l.run_id
+        where e.run_id is not null or r.run_id is not null
+      `),
     ]);
     return {
       hosts: hosts.rows.map((r) => ({ host: r.host, requests: Number(r.requests), refused: Number(r.refused) })),
       rules: rules.rows.map((r) => ({ rule: r.rule, refusals: Number(r.refusals) })),
+      // Sorted here, as SQLite does: the same order on both, whatever the database's collation.
+      runs: runs.rows
+        .map((r) => ({ runId: r.run_id, projectId: r.project_id, ticketId: r.ticket_id, requests: Number(r.requests), refused: Number(r.refused), refusals: Number(r.refusals) }))
+        .sort(byMostRefused),
     };
+  }
+
+  async blocksEntered(since: number, until: number): Promise<BlockEntry[]> {
+    const result = await this.db.execute<{ decision: DecisionRecord & { ticket: TicketState; at: number } }>(sql`
+      select decision from decision_trace
+      where (decision->'ticket'->>'blocked')::boolean
+        and not coalesce((decision->'before'->>'blocked')::boolean, false)
+        and (decision->>'at')::numeric >= ${since} and (decision->>'at')::numeric < ${until}
+      order by (decision->>'at')::numeric, created_at, id
+    `);
+    return result.rows.map((r) => blockEntry(r.decision));
   }
 
   async putTimer(timer: TimerRecord): Promise<void> {

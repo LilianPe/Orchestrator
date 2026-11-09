@@ -1,10 +1,11 @@
 import type { RepoConfig } from '../config/repo-config.js';
 import type { RunLimits } from '../config/workflow-schema.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type OverBudget, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
-import type { StoredEvent } from '../core/upcast.js';
+import { upcastTicket, type StoredEvent } from '../core/upcast.js';
 import { factoryDefault } from '../presets/factory-default.js';
 
 /**
@@ -355,11 +356,40 @@ export interface SecurityLog {
   skipped: { egress: number; refusals: number };
 }
 
-/** What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. */
+/**
+ * What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. `runs`
+ * (ORC-300): each run with an entry in the period, its requests, refused requests and hook refusals there, the most
+ * refused first.
+ */
 export interface SecurityStats {
   hosts: { host: string; requests: number; refused: number }[];
   rules: { rule: string; refusals: number }[];
+  runs: { runId: string; projectId: string; ticketId: string; requests: number; refused: number; refusals: number }[];
 }
+
+/**
+ * A move of a ticket into Blocked (ORC-300): a committed decision whose projection is blocked and was not before (or
+ * did not exist). `at`: the decision's clock. `kind`: the projection's typed kind, got back from its reason for a block
+ * written before ORC-345 (`upcastTicket`), as the Flow reads it.
+ */
+export interface BlockEntry {
+  projectId: string;
+  ticketId: string;
+  at: number;
+  kind: BlockKind;
+}
+
+/** The order of `SecurityStats.runs`: refused requests and hook refusals together, most first, then by run id. */
+export const byMostRefused = (a: SecurityStats['runs'][number], b: SecurityStats['runs'][number]): number =>
+  b.refused + b.refusals - (a.refused + a.refusals) || a.runId.localeCompare(b.runId);
+
+/** The move into Blocked a decision record holds, once the store found its projection blocked and not before. */
+export const blockEntry = (d: DecisionRecord & { ticket: TicketState; at: number }): BlockEntry => ({
+  projectId: d.projectId,
+  ticketId: d.ticket.ticketId,
+  at: d.at,
+  kind: upcastTicket(d.ticket).blockKind ?? 'other',
+});
 
 /** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
 export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string => `${t.projectId}:${t.key}`;
@@ -572,6 +602,8 @@ export interface Store {
   securityLog(runId: string): Promise<SecurityLog | undefined>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
+  /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */
+  blocksEntered(since: number, until: number): Promise<BlockEntry[]>;
   getMeta(key: string): Promise<string | undefined>;
   /**
    * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: false, and nothing
