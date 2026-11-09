@@ -15,6 +15,7 @@ What it shows, live:
   - **Overview**: merged tickets, median lead time, tokens per merged ticket (those that reported none are counted apart), ready at the first try, median delays to the first sign of life and to the answer of the human messages. No baseline to compare with yet (ORC-230).
   - **Tickets**: each ticket's state (a blocked ticket with its cause, from its typed kind as in the Flow), duration (delegation to merge, or so far), work time (its attempts' own durations), tokens (as in the Flow), review rounds (AI reviewer attempts, handovers to Human Review by the factory) and attempts. Clicking an identifier lists its **attempts**: step, role, status, duration, tokens, dollars and turns, with its first try, CI time and revert.
   - **No source yet**: the measures nothing in the factory feeds yet and the ticket that brings each (usage limit share, ORC-216; minutes of human review, ORC-190; baseline, ORC-230). Every figure is computed by the factory from its journal and run records ([operations](operations.md#measures-orc-235)), never from what an agent wrote; a ticket whose measures cannot be read says so instead of showing zeros.
+- **Inspection** (ORC-301), for the run selected in Working: its live feed since the page was opened, on the SSE stream `GET /api/events` (`activity` events): what the agent does in the factory's words, the closed table and the step its Linear session shows (« Running a command », `step build`, ORC-214), never its text nor its tools' parameters, and the events of its ticket's journal. **Pause** and **Stop** of that run (`POST /api/runs/<id>/pause|stop`), checked on the authorization matrix and journaled with their author (below): the run is stopped, and the ticket waits in Needs you under « Stopped on request », a pause with the reason `Paused from the dashboard`, until a reply relaunches it. A refusal (a run no longer at work) is said in the inspection; a refusal by the matrix is only journaled and in the log. **Take over** stays disabled until ORC-234. A loop the detector sees (the same failing command, the same failure, no change of the worktree, ORC-136) stops the run and puts the ticket in Needs you under « Loop ».
 - **Live session**: the output of the selected run (text, tool calls), received live since the page was opened. A run's full transcript remains available via the API (`/api/runs/<id>/transcript`) and in `<RELAIS_HOME>/transcripts/`.
 - **Log**: the daemon's latest messages and the events received.
 
@@ -38,6 +39,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /api/runs/:id/transcript` | A run's transcript | password |
 | `POST /api/control/pause`, `/api/control/resume` | Pause / resume | password + origin check |
 | `POST /api/tickets/:projet/:ticket/stop` | Stop a run | password + origin check |
+| `POST /api/runs/:id/pause`, `POST /api/runs/:id/stop` | Pause or stop that run from its inspection (ORC-301); 409 for a run that is not its ticket's agent run at work (ended, a check) | password + origin check |
 | `GET /oauth/start` | Starts the Linear connection | password |
 | `GET /oauth/callback` | Linear OAuth callback | random, single-use `state` parameter |
 | `POST /webhooks/linear` | Linear webhooks | HMAC signature + 60 s freshness |
@@ -57,6 +59,8 @@ To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `c
 With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401.
 
 The `relais status|pause|resume|stop` commands send `RELAIS_UI_PASSWORD` if the variable is set in the shell.
+
+**Who acts from the dashboard (ORC-301).** A pause or a stop from the dashboard, and the CLI's stop, are checked on the [authorization matrix](linear.md#authorizations-who-can-do-what) and journaled with their author: `dashboard:<user>`, the user name given to the HTTP Basic auth (letters, digits, `.`, `_`, `@`, `-`, 64 at most), or `dashboard:local` on the loopback without a password. Whoever passed the guard (the password, or the loopback without one) holds the `operator` role, which the matrix asks for. The name is not signed: every holder of the password is an operator and names themself, until the dashboard has named authentication (ORC-222).
 
 Basic auth sends the password with every request: when exposed to the Internet, put Relais behind an **HTTPS** proxy (Caddy, nginx, Traefik, Cloudflare tunnel) and set `publicUrl` to the HTTPS URL.
 
