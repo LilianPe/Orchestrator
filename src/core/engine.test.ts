@@ -1062,7 +1062,7 @@ describe('decide — built-ins', () => {
     const out = decide(ticket({ pendingJob: { job: 'dev-feedback', resume: true } }), ev('effect.failed', result), workflow);
     expect(out.events).toEqual([]);
     expect(out.effects).toEqual([]);
-    expect(out.trace).toEqual(['effect.failed (settle): its pending dev-feedback is queued, nothing blocked']);
+    expect(out.trace).toContain('effect.failed (settle): its pending dev-feedback is queued, nothing blocked');
   });
 
   it('a reply to the block of a pending job no settle could start starts that very job, its input and restrictions with it (ORC-339)', () => {

@@ -16,7 +16,6 @@ import {
   type EventType,
   type FactoryEvent,
   type InternalEvent,
-  type ShellEvent,
   type TicketState,
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
@@ -45,7 +44,7 @@ function ext<T extends EventType>(type: T, payload: EventPayloads[T], taint: 'tr
   const event = { id: `ex-${n}`, type, at: 1_000 * n, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, taint, payload };
   return { kind: 'external', event: event as FactoryEvent };
 }
-const sh = (event: ShellEvent): Entry => ({ kind: 'shell', event });
+const sh = (event: InternalEvent): Entry => ({ kind: 'shell', event });
 const seq = (...entries: Entry[]): Sequences => ({ unique: entries, withDuplicates: entries });
 const issue = { title: 'Titre', logical: 'todo' as const, priority: 0 };
 const delegated = (logical: 'todo' | 'dev' = 'todo') => [

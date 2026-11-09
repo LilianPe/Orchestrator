@@ -131,6 +131,13 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, pendingJob: e.job };
     case 'pending.cleared':
       return e.job && !samePending(t.pendingJob, e.job) ? { ...t } : { ...t, pendingJob: undefined };
+    case 'launch.reserved': {
+      // One launch at a time (ORC-359): not over a run, nor over another launch whose hold is not over.
+      const held = !!t.launching && t.launching.runId !== e.runId && t.launching.until > e.at;
+      return t.activeRunId || held ? { ...t } : { ...t, launching: { runId: e.runId, start: pendingOf(e.start), until: e.until } };
+    }
+    case 'launch.released':
+      return t.launching?.runId === e.runId ? { ...t, launching: undefined } : { ...t };
     case 'workspace.prepared':
       return { ...t, worktreePath: e.path, port: e.port, branch: e.branch ?? t.branch };
     case 'workspace.released':
@@ -138,7 +145,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'run.started': {
       // Another launch took the ticket first (a settle whose lease went to another worker, ORC-339): one dev run at a
       // time, this one does not take it, nor marks it. The launch sees it and lets go.
-      if (e.queue === 'dev' && t.activeRunId && t.activeRunId !== e.runId) return { ...t };
+      // Nor a launch whose hold another one took over (ORC-359).
+      if (e.queue === 'dev' && ((t.activeRunId && t.activeRunId !== e.runId) || (t.launching && t.launching.runId !== e.runId))) return { ...t };
       // The first untrusted run in the ticket's worktree marks its branch, for good (ORC-338). Over `null` only, the read
       // that found no untrusted run before; a ticket never read (the launch reads it first) takes its whole branch: fail closed.
       const mark = !e.untrusted ? t.untrustedSince : t.untrustedSince === null ? e.untrusted.head : (t.untrustedSince ?? '');
@@ -156,6 +164,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
         claudeSessionId,
         ...(e.starts ? { activeStart: pendingOf(e.starts) } : {}),
         ...(startsPending ? { pendingJob: undefined } : {}),
+        ...(t.launching ? { launching: undefined } : {}),
       };
     }
     case 'feedback.consumed': {

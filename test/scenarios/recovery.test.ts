@@ -1335,7 +1335,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     await h.orch.drained();
     // The settle's launch had the ticket first: it runs, and the other daemon's start, which found it taken, did nothing.
     expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
-    expect(prepared).toHaveLength(2);
+    expect(prepared).toEqual([h.runner.requests[1]!.runId]);
     expect(resets).toHaveLength(1);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });

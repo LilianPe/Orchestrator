@@ -373,7 +373,8 @@ export interface EventPayloads {
   /** An outbox effect carried out (ORC-150). */
   'effect.done': EffectResultPayload;
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */
-  'effect.failed': EffectResultPayload & { error: string };
+  /** `queued`: a dead `settle` whose pending job the queue holds, read before its decision (ORC-359): nothing is lost, nothing blocked. */
+  'effect.failed': EffectResultPayload & { error: string; queued?: true };
   /** An event whose decision threw, set aside in `dead_letter` (ORC-175): the ticket is blocked. */
   /** `refused`: the store refused the event, this notice goes to the project holding the ticket (ORC-316). */
   'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number; attempts?: number; refused?: { projectId: string; linearSessionId?: string } };
@@ -448,7 +449,11 @@ export type DecidedEvent =
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
   | { type: 'work.cancelled' }
-  | { type: 'verify.started'; runId: string };
+  | { type: 'verify.started'; runId: string }
+  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
+  | { type: 'pending.cleared'; job?: PendingJob }
+  /** The ticket's Linear session: the delegation's that chose its repo (ORC-171), or the one a launch opened. */
+  | { type: 'session.linked'; linearSessionId: string };
 
 /**
  * A dev start kept for when the slot frees. `sensitivePaths`: those its start was decided with; the launch
@@ -461,10 +466,14 @@ export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
   /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */
   | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
-  | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
-  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
-  | { type: 'pending.cleared'; job?: PendingJob }
+  /**
+   * A dev launch takes the ticket before any effect (ORC-359), until `until`: refused while another launch holds it, its
+   * hold not expired at `at`, or a run does. Written again by its holder to keep it; its `run.started` ends it.
+   */
+  | { type: 'launch.reserved'; runId: string; start: PendingJob; at: number; until: number }
+  /** A launch that ends before its `run.started` lets go of the ticket, if it still holds it. */
+  | { type: 'launch.released'; runId: string }
   | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
   | { type: 'workspace.released' }
   | {
@@ -538,6 +547,8 @@ export interface TicketState {
   activeJob?: string;
   /** What `activeRunId` started, in the shape of a pending job (ORC-339): a launch that lost to it tells the same start from another. */
   activeStart?: PendingJob;
+  /** The dev launch under way before its `run.started` (ORC-359): what it starts, and until when its hold lasts unless written again. */
+  launching?: { runId: string; start: PendingJob; until: number };
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
