@@ -30,24 +30,26 @@ import type { TestPreset } from './test-preset.js';
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
 /**
- * The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read.
+ * The standard pack (or `pack`, a copy a test changed: ORC-236) with `projectYaml` on top, as a project's workflow.yml; the
+ * temporary file is removed once read.
  * Without `aiReview`, `dev`'s end goes straight to Human Review, as before ORC-183, instead of starting the AI review's two
  * lenses: what the scenarios of the other steps, the properties and the recorded journals run on, their runs and moves counted
- * without the review's. The review's own scenarios (`test/scenarios/review.test.ts`) run the pack as it ships.
+ * without the review's. The review's own scenarios (`test/scenarios/review.test.ts`) and the golden replay run the pack as it ships.
  */
-export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean } = {}): Workflow {
-  const wf = projectYaml ? withProjectFile(projectYaml) : loadWorkflow({ packDir });
+export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean; pack?: string } = {}): Workflow {
+  const pack = o.pack ?? packDir;
+  const wf = projectYaml ? withProjectFile(projectYaml, pack) : loadWorkflow({ packDir: pack });
   const dev = wf.jobs['dev'];
   if (!o.aiReview && dev?.onSuccess.run === 'review') dev.onSuccess = { move: 'human_review', post: 'summary' };
   return wf;
 }
 
-function withProjectFile(projectYaml: string): Workflow {
+function withProjectFile(projectYaml: string, pack: string): Workflow {
   const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
   try {
     const projectFile = join(dir, 'workflow.yml');
     writeFileSync(projectFile, projectYaml);
-    return loadWorkflow({ packDir, projectFile });
+    return loadWorkflow({ packDir: pack, projectFile });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -239,10 +241,13 @@ export function createHarness(
     outputPolicy?: OrchestratorDeps['outputPolicy'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
+    /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
+    packDir?: string;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
-  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview });
+  const pack = opts.packDir ?? packDir;
+  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview, pack });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
@@ -302,7 +307,7 @@ export function createHarness(
     scheduler: new Scheduler(store, { dev: devCapacity(opts.concurrency, workflow.limits.parallelSessions), questions: workflow.limits.questionSessions }),
     ...outside,
     projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}` }))],
-    packDir,
+    packDir: pack,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
