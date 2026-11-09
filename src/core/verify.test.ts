@@ -158,8 +158,7 @@ describe('runVerify', () => {
     expect(git(dir, 'ls-files', '-t', '.claude')).toBe('H .claude/CLAUDE.md\nS .claude/settings.json');
   });
 
-  // What the agent writes in `.git/config` runs when the fingerprint is read: a clean filter without the daemon's
-  // credentials, an fsmonitor not at all (ORC-319). Not on Windows: the hook is a POSIX script.
+  // Not on Windows: the hook is a POSIX script.
   it.skipIf(process.platform === 'win32')('runs no fsmonitor of the agent, and its clean filter without the daemon env (ORC-319)', async () => {
     const dir = repo();
     git(dir, 'add', '.');
@@ -190,7 +189,7 @@ describe('runVerify', () => {
     expect((await runVerify(dir, ['exit 1'], undefined, {}, warn)).tree).toBeUndefined();
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0]![0]).toMatch(/^unreadable worktree fingerprint: fatal: .*filter.*; the loop guard does not see this failure\.$/);
-    expect(warn.mock.calls[0]![0]).not.toMatch(/forged|[\x00-\x1f]/);
+    expect(warn.mock.calls[0]![0]).not.toMatch(/forged|\p{Cc}/u);
   });
 
   it('has no fingerprint outside a git worktree', async () => {

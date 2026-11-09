@@ -365,7 +365,7 @@ describe('Orchestrator', () => {
   it('logs a worktree fingerprint verify could not read, with the ticket (ORC-319)', async () => {
     const { tracker, orch, bus } = setup({
       verify: async (_cwd, commands, _timeoutMs, _env, warn) => {
-        warn?.('unreadable worktree fingerprint: boom; the loop guard does not see this failure.');
+        warn?.('boom');
         return { ok: false, failures: [{ command: commands[0]!, exitCode: 1, output: '' }] };
       },
       tweak: (w) => {
@@ -377,7 +377,7 @@ describe('Orchestrator', () => {
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
     await orch.accept(delegated());
     await orch.drained();
-    expect(logs).toContain('warn: verify of REL-1: unreadable worktree fingerprint: boom; the loop guard does not see this failure.');
+    expect(logs).toContain('warn: verify of REL-1: boom');
   });
 
   it('never holds the queue on a daily budget in dollars, however much the day cost (ORC-216)', async () => {
