@@ -1,17 +1,33 @@
-import { readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Store } from '../../store/types.js';
 
 /** How long a run transcript is kept (ORC-132): the daemon purges older ones. */
 export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** The lines of a run's transcript, a half-written last one included; undefined without a file (never written, or purged). */
-export function transcriptLines(dir: string, runId: string): string[] | undefined {
+/** Bytes of a transcript's end `transcriptTail` reads: a long session's tail, never the whole file on a launch. */
+export const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+
+/**
+ * The whole lines of the last `bytes` of a run's transcript (ORC-182): the line the cut falls in is dropped, a multibyte
+ * character it splits with it. Undefined without a file.
+ */
+export function transcriptTail(dir: string, runId: string, bytes = TRANSCRIPT_TAIL_BYTES): string[] | undefined {
+  let fd: number;
   try {
-    return readFileSync(join(dir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`), 'utf8').split('\n').filter(Boolean);
+    fd = openSync(join(dir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`), 'r');
   } catch {
-    // No file, or the purge removed it meanwhile.
     return undefined;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - bytes);
+    const buf = Buffer.alloc(size - start);
+    const n = readSync(fd, buf, 0, buf.length, start);
+    const lines = buf.subarray(0, n).toString('utf8').split('\n');
+    return (start > 0 ? lines.slice(1) : lines).filter(Boolean);
+  } finally {
+    closeSync(fd);
   }
 }
 

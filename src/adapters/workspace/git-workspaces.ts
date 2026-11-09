@@ -144,10 +144,10 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
  * A commit's diff against the trunk, capped (`capDiff`), its external diff drivers and text conversions off. Read up to past
  * the cap only: a diff that big is given as its changed files, by name.
  */
-async function trunkDiff(git: CloneGit, trunk: string, head: string): Promise<string> {
+async function trunkDiff(git: CloneGit, trunk: string, head: string, past?: string): Promise<string> {
   const range = `${trunk}...${head}`;
   const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
-  return capDiff(diff, () => git.raw('diff', '--name-only', range));
+  return capDiff(diff, () => git.raw('diff', '--name-only', range), DIFF_MAX, past);
 }
 
 export class GitWorkspaces implements WorkspaceManager {
@@ -284,7 +284,7 @@ export class GitWorkspaces implements WorkspaceManager {
 
   async ticketDiff(repoPath: string, path: string): Promise<string | undefined> {
     const at = await this.worktreeGit(repoPath, path);
-    return at && trunkDiff(at.git, await originHead(this.exec, repoPath), at.head);
+    return at && trunkDiff(at.git, await originHead(this.exec, repoPath), at.head, 'only the changed files are named here, and the clone is the trunk, which holds none of these changes');
   }
 
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {

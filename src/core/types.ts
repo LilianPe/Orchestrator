@@ -439,9 +439,13 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'relayed'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
+  /** A question the answer agent relays to the agent that implements, into the run inbox (ORC-182). */
+  | { type: 'relay.added'; question: RelayedQuestion }
+  /** The end of the run the relayed questions were handed to (ORC-182): they leave the run inbox, answered or not. */
+  | { type: 'relay.done'; runId: string }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
   | { type: 'work.cancelled' }
   | { type: 'verify.started'; runId: string };
@@ -487,6 +491,8 @@ export type ShellEvent =
   | { type: 'feedback.consumed'; items?: readonly FeedbackItem[] }
   /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
   | { type: 'run.cleared' }
+  /** The relayed questions given to a launch of the ticket session (ORC-182), by the answer agent's runs: its end answers them. */
+  | { type: 'relay.handed'; runIds: readonly string[]; to: string }
   /**
    * What a ticket's run records said, read once, of a branch the mark has not seen yet (ORC-338): `''` when an untrusted
    * worktree run came before the mark existed (its whole branch is read), `null` when none did.

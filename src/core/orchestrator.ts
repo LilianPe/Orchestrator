@@ -61,7 +61,7 @@ import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
-import { transcriptLines } from '../adapters/runner/transcript.js';
+import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
@@ -2704,11 +2704,7 @@ export class Orchestrator {
       // Only what this launch read: a message that came in since stays for the next run (ORC-339).
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed', items: t.humanInbox });
       // Handed to this run: its end answers them (`decide`), a question relayed since waits for the next launch.
-      if (relayed.length) {
-        const now = await this.ticket(project.id, ticketId);
-        const relayedTo = (now.relayed ?? []).map((r) => (relayed.some((q) => q.id === r.runId) ? { ...r, handedTo: runId } : r));
-        await this.apply(now, { type: 'ticket.patched', patch: { relayed: relayedTo } });
-      }
+      if (relayed.length) await this.apply(await this.ticket(project.id, ticketId), { type: 'relay.handed', runIds: relayed.map((q) => q.id), to: runId });
       const step = planStepOfJob(job);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
@@ -2786,9 +2782,9 @@ export class Orchestrator {
   }
 
   /**
-   * What the answer agent reads beside the question (ORC-182): the run's state, the ticket's last diff, the transcript of the
-   * session at work (the implementer's last one when none is), the linked tickets. Each read that fails is left out: the
-   * answer starts all the same.
+   * What the answer agent reads beside the question (ORC-182): the run's state, the ticket's last diff, the end of the transcript
+   * of the implementer's last session (the one at work, if it is), the linked tickets. A read that fails is said or left out:
+   * the answer starts all the same.
    */
   private async answerContext(project: ProjectRuntime, t: TicketState, blockers: readonly Blocker[] | undefined): Promise<NonNullable<PromptInput['run']>> {
     const quiet = <T>(what: string, io: Promise<T>): Promise<T | undefined> =>
@@ -2798,10 +2794,12 @@ export class Orchestrator {
       });
     const lastImplementer = async () =>
       (await this.d.store.ticketRuns(project.id, t.ticketId)).filter((r) => r.sessionRole === 'implementer').sort((a, b) => a.startedAt - b.startedAt).at(-1)?.id;
-    const at = t.activeRunId ?? (await quiet('the runs', lastImplementer()));
-    const lines = at && this.d.transcriptsDir ? transcriptLines(this.d.transcriptsDir, at) : undefined;
+    const [at, diff] = await Promise.all([
+      this.d.transcriptsDir ? quiet('the runs', lastImplementer()) : undefined,
+      t.worktreePath ? quiet('the diff', this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath)).then((d) => d ?? '(the diff could not be read)') : undefined,
+    ]);
+    const lines = at ? transcriptTail(this.d.transcriptsDir!, at) : undefined;
     const transcript = lines && formatTranscript(lines);
-    const diff = t.worktreePath ? await quiet('the diff', this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath)) : undefined;
     const linked = formatLinked(blockers);
     return { state: formatRunState(t), ...(diff ? { diff } : {}), ...(transcript ? { transcript } : {}), ...(linked ? { linked } : {}) };
   }

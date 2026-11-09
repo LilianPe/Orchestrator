@@ -116,6 +116,12 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, ...UNBLOCKED };
     case 'ticket.patched':
       return { ...t, ...e.patch };
+    case 'relay.added':
+      return { ...t, relayed: [...(t.relayed ?? []), e.question] };
+    case 'relay.done': {
+      const left = (t.relayed ?? []).filter((r) => r.handedTo !== e.runId);
+      return { ...t, relayed: left.length ? left : null };
+    }
     case 'feedback.appended':
       return { ...t, humanInbox: withinBound([...t.humanInbox, e.item]) };
     case 'work.cancelled':
@@ -163,6 +169,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       const read = new Set(e.items.map(itemKey));
       return { ...t, humanInbox: t.humanInbox.filter((i) => !read.has(itemKey(i))) };
     }
+    case 'relay.handed':
+      return { ...t, relayed: (t.relayed ?? []).map((r) => (e.runIds.includes(r.runId) ? { ...r, handedTo: e.to } : r)) };
     case 'run.cleared':
       return { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) };
     case 'untrusted.read':

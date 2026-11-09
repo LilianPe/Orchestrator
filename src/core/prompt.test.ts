@@ -61,7 +61,7 @@ describe('buildPrompt', () => {
     expect(out).toContain('## Linked tickets (data)\n- REL-2\n');
     expect(out.indexOf('## Run state')).toBeLessThan(out.indexOf('## Message\npourquoi ?'));
     const bare = buildPrompt({ skill: 'factory:ask', issue, run: { state: 'State: todo' } });
-    expect(bare).toContain("## Last diff\n(no commit on the ticket's branch yet)");
+    expect(bare).toContain('## Last diff\n(no worktree for this ticket: no work on its branch yet)');
     expect(bare).not.toContain('## Linked tickets');
     expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('## Run state');
   });
