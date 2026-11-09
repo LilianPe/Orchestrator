@@ -135,24 +135,28 @@ describe('runDetail (ORC-298)', () => {
     expect(runDetail(run({}), facts({ events: [done('e1', 'move', 20)], effects: [move('e1', 'human_review', 'dead')] })).gates).toEqual([]);
   });
 
-  it('the findings: the human reviews of the PR and the AI review rounds, with the closed outcome of each', () => {
+  it('the findings: the human reviews of the PR and the AI review rounds, with the closed outcome and the findings each lens handed back (ORC-183)', () => {
+    const blocking = { file: 'src/export.ts', line: 12, severity: 'blocking' as const, explanation: 'The CSV is not escaped.', suggestion: 'Quote the fields.' };
     const d = runDetail(run({}), facts({
       events: [
         ev('rc', 'pr.reviewed', 5, { ...pr, kind: 'comment', author: 'lilian-gh', body: 'why?' }),
         ev('f', 'run.finished', 9, { runId: 'rv1', job: 'review', outcome: 'failure', costUsd: 0, turns: 3, lastText: '', attempt: 'failed' }),
         ev('rv', 'pr.reviewed', 10, { ...pr, kind: 'review', author: 'lilian-gh', body: 'rename', state: 'CHANGES_REQUESTED' }),
+        ev('s', 'run.finished', 13, { runId: 'rv3', job: 'review-security', outcome: 'success', costUsd: 0, turns: 2, lastText: '', attempt: 'succeeded', output: { ...output, findings: [blocking] } }),
       ],
       runs: [
         run({ id: 'r1' }),
         run({ id: 'rv1', job: 'review', sessionRole: 'reviewer', status: 'failure', startedAt: 6, endedAt: 9 }),
         run({ id: 'rv2', job: 'review', sessionRole: 'reviewer', status: 'running', startedAt: 11, endedAt: undefined }),
+        run({ id: 'rv3', job: 'review-security', sessionRole: 'reviewer', status: 'success', startedAt: 12, endedAt: 13 }),
       ],
     }));
     expect(d.findings).toEqual([
       { source: 'human', id: 'rc', at: 5, author: 'lilian-gh', pr: 3, kind: 'comment', state: null },
-      { source: 'ai', runId: 'rv1', at: 9, job: 'review', status: 'failure', outcome: 'failed' },
+      { source: 'ai', runId: 'rv1', at: 9, job: 'review', status: 'failure', outcome: 'failed', findings: [] },
       { source: 'human', id: 'rv', at: 10, author: 'lilian-gh', pr: 3, kind: 'review', state: 'changes_requested' },
-      { source: 'ai', runId: 'rv2', at: 11, job: 'review', status: 'running', outcome: null },
+      { source: 'ai', runId: 'rv2', at: 11, job: 'review', status: 'running', outcome: null, findings: [] },
+      { source: 'ai', runId: 'rv3', at: 13, job: 'review-security', status: 'success', outcome: 'succeeded', findings: [blocking] },
     ]);
   });
 

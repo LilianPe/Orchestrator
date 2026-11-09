@@ -19,7 +19,7 @@ What it shows, live:
   - the run: step, status and closed outcome (ORC-188), duration, tokens, turns, labels (ORC-226);
   - **Timeline**: every event of the ticket's journal in order, said in the factory's words from its structured fields; the events of this run (its end, its checks, its publication) stand out;
   - **Gates and human decisions**: the merge gate, opened by the factory's move to Human Review and closed by the decision that ends it (merge, PR closed, changes requested, ticket sent back to dev, stop); each human decision with who (the author the source signed, else the signed actor), when, where (Linear, GitHub, dashboard, command line) and what. A move the factory made, echoed by Linear, and a merge the factory carried out are not human decisions. The spec gate comes with ORC-212;
-  - **Findings**: human reviews of the PR by their GitHub state, AI review rounds by how their attempt ended. What an AI reviewer wrote is in its transcript: the factory does not read it;
+  - **Findings**: human reviews of the PR by their GitHub state; AI review rounds by how their attempt ended, each with the findings its lens handed back through `submit_result` (ORC-183: file, line, severity, explanation, suggestion), shown as the lens's words;
   - **Checks**: `verify` (each failing factory check by name: `factory/anti-triche`, `factory/taille-du-diff`, the freeze…), `red` with its cause, the PR's CI;
   - **Cost per step**: per job of the ticket, attempts, tokens (those without a report counted apart), turns and work time;
   - **Structured output**: what the agent handed back through `submit_result`, as the factory validated it, shown as the agent's words;

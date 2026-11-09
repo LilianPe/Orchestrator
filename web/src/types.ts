@@ -136,7 +136,7 @@ export interface RunDetailView {
   gates: { gate: string; openedAt: number; closedAt: number | null; to: string | null; closedBy: string | null }[];
   findings: (
     | { source: 'human'; id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }
-    | { source: 'ai'; runId: string; at: number; job: string; status: string; outcome: string | null }
+    | { source: 'ai'; runId: string; at: number; job: string; status: string; outcome: string | null; findings: { file: string; line: number; severity: string; explanation: string; suggestion: string }[] }
   )[];
   checks: { id: string; at: number; check: 'verify' | 'red' | 'ci'; result: 'passed' | 'failed' | 'errored'; runId: string | null; job: string | null; names: string[]; red: string | null }[];
   steps: { job: string; attempts: number; tokens: TokensView | null; attemptsWithoutTokens: number; turns: number; workMs: number; costUsd: number }[];

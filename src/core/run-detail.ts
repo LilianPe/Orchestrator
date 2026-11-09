@@ -1,6 +1,6 @@
 import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, OutboxRow, RunRecord } from '../store/types.js';
-import type { AgentOutput, AttemptOutcome } from './agent-output.js';
+import type { AgentOutput, AttemptOutcome, Finding as LensFinding } from './agent-output.js';
 import { pendingLabels } from './attempt-labels.js';
 import { runMeasure, type RunMeasure } from './measures.js';
 import { addTokens, type EventType, type FactoryEvent, type LogicalState, type TokenUsage } from './types.js';
@@ -51,11 +51,12 @@ export interface Gate {
 
 /**
  * What the reviewers found, as the factory knows it: a human's review on the PR (its state, from GitHub), or an AI review round,
- * a reviewer attempt, with its closed outcome (ORC-188). What an AI reviewer wrote is its text: not read here.
+ * a reviewer attempt, with its closed outcome (ORC-188) and the findings its lens handed back through `submit_result`, as the
+ * factory validated them (ORC-183): each on its file and line, with its severity. Empty for a round that handed back none.
  */
 export type Finding =
   | { source: 'human'; id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }
-  | { source: 'ai'; runId: string; at: number; job: string; status: RunRecord['status']; outcome: AttemptOutcome | null };
+  | { source: 'ai'; runId: string; at: number; job: string; status: RunRecord['status']; outcome: AttemptOutcome | null; findings: readonly LensFinding[] };
 
 /**
  * A verdict of the factory's checks: `verify` (its commands, then `factory/anti-triche`, `factory/taille-du-diff`, the freeze…, each
@@ -318,10 +319,11 @@ export function runDetail(run: RunRecord, facts: MeasureFacts): RunDetail {
     if (check) checks.push(check);
     if (e.type === 'pr.reviewed') findings.push({ source: 'human', id: e.id, at: e.at, author: e.payload.author, pr: e.payload.number, kind: e.payload.kind, state: e.payload.state?.toLowerCase() ?? null });
   }
-  const outcomes = new Map(events.flatMap((e) => (e.type === 'run.finished' && e.payload.attempt ? [[e.payload.runId, e.payload.attempt] as const] : [])));
+  const ends = new Map(events.flatMap((e) => (e.type === 'run.finished' ? [[e.payload.runId, e.payload] as const] : [])));
   for (const r of facts.runs) {
     if (r.sessionRole !== 'reviewer') continue;
-    findings.push({ source: 'ai', runId: r.id, at: r.endedAt ?? r.startedAt, job: r.job, status: r.status, outcome: outcomes.get(r.id) ?? null });
+    const end = ends.get(r.id);
+    findings.push({ source: 'ai', runId: r.id, at: r.endedAt ?? r.startedAt, job: r.job, status: r.status, outcome: end?.attempt ?? null, findings: end?.output?.findings ?? [] });
   }
   findings.sort((a, b) => a.at - b.at);
   const attempts = facts.runs.map(runMeasure);

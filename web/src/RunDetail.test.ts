@@ -20,7 +20,7 @@ const detail = (patch: Partial<RunDetailView> = {}): RunDetailView => ({
   gates: [{ gate: 'merge', openedAt: 70_000, closedAt: 90_000, to: 'done', closedBy: 'mg' }],
   findings: [
     { source: 'human', id: 'rv', at: 80_000, author: 'lilian-gh', pr: 3, kind: 'review', state: 'changes_requested' },
-    { source: 'ai', runId: 'r2', at: 75_000, job: 'review', status: 'success', outcome: 'succeeded' },
+    { source: 'ai', runId: 'r2', at: 75_000, job: 'review', status: 'success', outcome: 'succeeded', findings: [{ file: 'src/export.ts', line: 12, severity: 'blocking', explanation: 'The CSV is not escaped.', suggestion: 'Quote the fields.' }] },
   ],
   checks: [{ id: 'v', at: 61_000, check: 'verify', result: 'failed', runId: 'r1', job: 'dev', names: ['factory/anti-triche', 'factory/taille-du-diff'], red: null }],
   steps: [
@@ -42,7 +42,7 @@ describe('the run detail page (ORC-298)', () => {
       'REL-1', 'succeeded',
       'Timeline', 'Delegated to the factory', 'dev ended: succeeded, 5 turns',
       'Gates and human decisions', 'merge', 'left for done', 'Lilian', 'linear',
-      'Findings', 'lilian-gh', 'changes_requested', 'AI review',
+      'Findings', 'lilian-gh', 'changes_requested', 'AI review', 'blocking', 'src/export.ts:12', 'The CSV is not escaped.',
       'Checks', 'factory/anti-triche, factory/taille-du-diff', 'failed',
       'Cost per step', '37.0 k', '9 turns', '1 without tokens',
       'Structured output', 'Export CSV added.', 'large lists',

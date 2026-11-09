@@ -80,12 +80,19 @@ function Findings({ findings }: Pick<RunDetailView, 'findings'>) {
             f.source === 'human' ? (
               <li key={f.id}>{time(f.at)} · <strong>{f.author}</strong> on PR #{f.pr}: {f.kind === 'review' ? (f.state ?? 'review') : 'comment on the diff'}</li>
             ) : (
-              <li key={f.runId}>{time(f.at)} · <a href={runHash(f.runId)}>AI review</a> ({f.job}): {f.outcome ?? f.status}</li>
+              <li key={f.runId}>
+                {time(f.at)} · <a href={runHash(f.runId)}>AI review</a> ({f.job}): {f.outcome ?? f.status}{f.findings.length === 0 && f.status !== 'running' ? ', no finding' : ''}
+                {f.findings.length > 0 && (
+                  <ul>
+                    {f.findings.map((x, i) => <li key={i}><strong>{x.severity}</strong> · {x.file}:{x.line}: {x.explanation}{x.suggestion ? ` Suggestion: ${x.suggestion}` : ''}</li>)}
+                  </ul>
+                )}
+              </li>
             ),
           )}
         </ul>
       ) : <p className="empty">No finding yet.</p>}
-      <p className="note">Human reviews as GitHub states them; AI review rounds by how their attempt ended. What a reviewer wrote is in its transcript.</p>
+      <p className="note">Human reviews as GitHub states them; AI review rounds by how their attempt ended, with the findings each lens handed back (ORC-183), in its own words.</p>
     </section>
   );
 }
