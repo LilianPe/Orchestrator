@@ -25,6 +25,8 @@ import {
   effectResult,
   timerEvent,
   timerRowId,
+  PAUSE_ACCEPTED,
+  pauseAcceptedValue,
   LEASE_MS,
   blockEntry,
   byMostRefused,
@@ -282,7 +284,11 @@ export class PgStore implements AsyncStore {
   async appendInbox(event: FactoryEvent | StoredEvent): Promise<boolean> {
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(event.ticketId));
-      return this.appendResult(tx, event);
+      const fresh = await this.appendResult(tx, event);
+      // Under the lock of the rows without a ticket: two controls write it in their inbox order.
+      const paused = pauseAcceptedValue(event);
+      if (fresh && paused !== undefined) await this.writeMeta(tx, PAUSE_ACCEPTED, paused);
+      return fresh;
     });
   }
 
@@ -1338,9 +1344,13 @@ export class PgStore implements AsyncStore {
   }
 
   async setMeta(key: string, value: string): Promise<void> {
+    await this.writeMeta(this.db, key, value);
+  }
+
+  private async writeMeta(db: Tx | NodePgDatabase<typeof schema>, key: string, value: string): Promise<void> {
     const id = metaId(key);
     const hash = createHash('sha256').update(`${id}\0${value}`).digest('hex');
-    await this.db.execute(sql`
+    await db.execute(sql`
       insert into workflow_versions (id, hash, definition, created_at)
       values (
         ${id}, ${hash}, ${JSON.stringify({ key, value })}::jsonb, to_timestamp(${this.now() / 1000})
