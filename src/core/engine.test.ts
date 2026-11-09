@@ -177,8 +177,8 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(decide(ticket(), ev('label.changed', { label: 'x', change: 'added' }), wf).effects).toEqual([{ kind: 'comment', body: 'label modifié' }]);
   });
 
-  it('a human push is a typed event that the standard pack does not react to', () => {
-    expect(decide(ticket({ logical: 'dev' }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
+  it('a human push is a typed event with no rule in the standard pack: on a ticket not delegated, nothing (the pause is ORC-159, engine-push.test.ts)', () => {
+    expect(decide(ticket({ logical: 'dev', delegated: false }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
   });
 
   it('merge moves to done, cleans up and learns', () => {

@@ -1,5 +1,5 @@
 /** Why a ticket waits for a human, in the order the Flow shows the causes (ORC-297). */
-export const BLOCK_CAUSES = ['question', 'contested', 'conflict', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'stopped', 'other'] as const;
+export const BLOCK_CAUSES = ['question', 'contested', 'conflict', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'pr_closed', 'human_push', 'stopped', 'other'] as const;
 export type BlockCause = (typeof BLOCK_CAUSES)[number];
 
 /**
@@ -9,6 +9,7 @@ export type BlockCause = (typeof BLOCK_CAUSES)[number];
  * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts;
  * `budget`, a step or a ticket past its budget in tokens or in turns (ORC-216); `paused`, a run paused from the dashboard
  * (ORC-301), a stop that says so.
+ * `human_push`: a human pushed to the ticket's branch, and the agent's work is paused while `verify` checks the push (ORC-159).
  */
 export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'budget' | 'paused';
 
