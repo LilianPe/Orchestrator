@@ -5,7 +5,7 @@ import { Measures } from './Measures.js';
 import { Security } from './Security.js';
 import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { FlowView, MeasuredTicketView, RunLine, RunSecurityView, WorkingRunView } from './types.js';
+import type { FlowView, RunLine, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
