@@ -26,6 +26,11 @@ export interface FrozenTests {
   criteria?: readonly string[];
   /** The answers to the `clarify` questions the tests were frozen with (ORC-210): what the tests hold the code to, as decided. */
   decisions?: readonly ClarifyAnswer[];
+  /**
+   * The designated maintainer whose `/refreeze` made this freeze (ORC-198): the approval a diff of the verification
+   * configuration waits for before publication. Absent on the factory's own freeze after `red`.
+   */
+  refrozenBy?: string;
 }
 
 /** A commit of the branch, read on the factory's repository, never in the agent's worktree (ORC-205). */

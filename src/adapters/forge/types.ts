@@ -142,4 +142,9 @@ export interface ForgeWriter {
    * that carries `externalId`. `ReviewLinesRefused` when a comment cannot go on its line.
    */
   postReview(repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }>;
+  /**
+   * Leaves `label` the only one of `group` on the PR (ORC-198), its other labels untouched: a final state, read first, so
+   * that a label already in place writes nothing. GitHub creates a label the repository does not have yet.
+   */
+  setExclusiveLabel(repoPath: string, number: number, label: string, group: readonly string[]): Promise<void>;
 }

@@ -162,6 +162,15 @@ describe('compilePreset', () => {
     expect(violations(without(factoryDefault, 'human_review'))).toContain('step merge: reachable from written code without a merge gate');
   });
 
+  it("declares the approvers of each diff class (ORC-198): a human's Done for every class, and a maintainer's /refreeze for the verification configuration", () => {
+    expect(factoryDefault.approvers).toEqual({ normal: ['done_merge'], sensitive: ['done_merge'], 'verification-config': ['refreeze', 'done_merge'] });
+  });
+
+  it("refuses a diff class approved without a human's Done: no auto-merge, in any form (ORC-198)", () => {
+    const p = { ...clone(), approvers: { ...factoryDefault.approvers, normal: [], 'verification-config': ['refreeze' as const] } };
+    expect(violations(p)).toEqual(['approvers of normal: a human done_merge is required, the factory never merges on its own', 'approvers of verification-config: a human done_merge is required, the factory never merges on its own']);
+  });
+
   it('refuses an unbounded cycle', () => {
     const p = clone();
     step(p, 'publish').next = 'build';

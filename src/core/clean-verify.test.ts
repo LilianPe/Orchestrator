@@ -400,6 +400,14 @@ describe('runCleanVerify', () => {
         expect((await runCleanVerify(touchInfra({}).req)).ok).toBe(true);
       });
 
+      it("the verdict carries the class of the diff against the default branch, under the base's sensitive_paths (ORC-198)", async () => {
+        expect((await runCleanVerify(touchInfra({}).req)).diffClass).toEqual({ class: 'sensitive', paths: ['infra/main.tf'] });
+        const { repo, req } = setup({ commands: [] });
+        write(repo, 'vitest.config.ts', 'export default {};\n');
+        commit(repo, 'harness');
+        expect((await runCleanVerify(req)).diffClass).toEqual({ class: 'verification-config', paths: ['vitest.config.ts'] });
+      });
+
       it('only what changed since the branch took untrusted content counts: a trusted commit before it stays the reviewer\'s', async () => {
         const { repo, req } = touchInfra({}, 'sensitive_paths: ["infra"]\n');
         const marked = { ...req, untrusted: { since: git(repo, 'rev-parse', 'HEAD'), humanPushes: [] } };
