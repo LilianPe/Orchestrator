@@ -2157,10 +2157,6 @@
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "effects": [
@@ -2245,10 +2241,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2279,10 +2271,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2344,10 +2332,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2378,10 +2362,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2443,10 +2423,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2477,10 +2453,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2542,10 +2514,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2576,10 +2544,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2654,10 +2618,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "activeRunId": "id-7",
           "activeJob": "fix-human",
@@ -2688,10 +2648,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "verifyingRunId": "id-7"
         },
@@ -2767,10 +2723,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "verifyingRunId": "id-7"
         },
@@ -2796,10 +2748,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "verifyingRunId": "id-7"
         },
@@ -2856,10 +2804,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "verifyingRunId": "id-7"
         },
@@ -2885,10 +2829,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "verifyingRunId": "id-7"
         },
@@ -2958,10 +2898,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1,
           "verifyingRunId": "id-7"
         },
@@ -2987,10 +2923,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "effects": [
@@ -3065,10 +2997,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "ticket": {
@@ -3093,10 +3021,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "effects": [],
@@ -3152,10 +3076,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "ticket": {
@@ -3180,10 +3100,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "effects": [],
@@ -3239,10 +3155,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "ticket": {
@@ -3267,10 +3179,6 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "diffClass": {
-            "class": "normal",
-            "paths": []
-          },
           "humanReviewRounds": 1
         },
         "effects": [],
