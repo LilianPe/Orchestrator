@@ -1,4 +1,5 @@
 import type { Parameters } from 'fast-check';
+import { expect, onTestFailed } from 'vitest';
 import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
 import { decide, historyTaint, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
@@ -22,14 +23,36 @@ function intFromEnv(name: string, min: number): number | undefined {
 
 /**
  * Number of sequences per property: a few hundred in `npm test`, 10 000 in the `properties` CI job
- * (`NUM_RUNS=10000 npm run test:properties`). `PROP_SEED` replays the seed fast-check prints on a failure.
+ * (`NUM_RUNS=10000 npm run test:properties`). `PROP_SEED` replays a failure's seed, `PROP_PATH` its counterexample's path.
+ * Without `PROP_SEED` the seed is drawn once per test file, as fast-check draws it, and set explicitly (ORC-368).
  */
 const NUM_RUNS = intFromEnv('NUM_RUNS', 1) ?? 200;
-const SEED = intFromEnv('PROP_SEED', Number.MIN_SAFE_INTEGER);
+const ENV_SEED = intFromEnv('PROP_SEED', Number.MIN_SAFE_INTEGER);
+const SEED = ENV_SEED ?? (Date.now() ^ (Math.random() * 0x1_0000_0000));
+const PATH = process.env['PROP_PATH'] || undefined;
+if (PATH !== undefined && ENV_SEED === undefined) throw new Error('PROP_PATH replays a counterexample of PROP_SEED: set both');
+/** The tests whose failure already logs the seed: one line each, however many properties they check. */
+const logged = new Set<string>();
 
-/** fast-check parameters; `examples` (counterexamples kept on purpose) are tried before the random sequences. */
+/** Each test's own seed, from the run's and its name: the properties do not all draw the same sequences. A 32-bit FNV-1a. */
+export function seedOf(test: string | undefined): number {
+  let h = 0x811c9dc5;
+  for (const c of test ?? '') h = Math.imul(h ^ c.charCodeAt(0), 0x01000193);
+  return SEED ^ h;
+}
+
+/**
+ * fast-check parameters; `examples` (counterexamples kept on purpose) are tried before the random sequences. Called in a
+ * test: its failure, a timeout included, which fast-check never gets to report, logs the seed that replays it (ORC-368).
+ */
 export function params<Ts extends unknown[]>(examples: Ts[] = []): Parameters<Ts> {
-  return { numRuns: NUM_RUNS, ...(SEED === undefined ? {} : { seed: SEED }), examples };
+  const test = expect.getState().currentTestName;
+  const seed = seedOf(test);
+  if (test !== undefined && !logged.has(test)) {
+    logged.add(test);
+    onTestFailed(() => console.error(`[properties] "${test}" failed: replay with PROP_SEED=${SEED} NUM_RUNS=${NUM_RUNS} (fast-check's seed ${seed} is this test's, derived from it), and PROP_PATH from fast-check's report if it gave one`));
+  }
+  return { numRuns: NUM_RUNS, seed, ...(PATH === undefined ? {} : { path: PATH }), examples };
 }
 
 /** Timeout of one property test, generous enough for 10 000 sequences on a CI runner. */
