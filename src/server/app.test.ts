@@ -236,8 +236,8 @@ describe('server', () => {
 
     it('serves the baseline computed last facing the measures, each of its measures by name (ORC-230)', async () => {
       const { app, store } = await setup();
-      const row = (measure: 'delivered' | 'first_try', value: number) => ({ projectId: 'p', measure, since: 0, until: 90 * DAY, value, over: 4, leftOut: 1, noSource: false, computedAt: 5 });
-      await store.putBaseline([row('delivered', 3), row('first_try', 0.5)], false);
+      const v = (value: number) => ({ value, over: 4, leftOut: 1, noSource: false });
+      await store.putBaseline({ projectId: 'p', since: 0, until: 90 * DAY, computedAt: 5, measures: { delivered: v(3), first_try: v(0.5) } }, false);
       expect((await (await app.request('/api/overview?since=0&until=100')).json()).baseline).toEqual({
         projectId: 'p', since: 0, until: 90 * DAY, computedAt: 5,
         measures: { delivered: { value: 3, over: 4, leftOut: 1, noSource: false }, first_try: { value: 0.5, over: 4, leftOut: 1, noSource: false } },

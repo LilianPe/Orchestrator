@@ -6,7 +6,7 @@ import { repoRoot } from '../app/root.js';
 import { FactoryYmlError, loadFactoryYml } from '../config/factory-yml.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { effectiveInstance, homePaths } from '../config/instance.js';
-import { BASELINE_DAYS, DAY_MS, baselinePeriod, baselineRows, type BaselineRow, type CompletedIssue, type MergedPr } from '../core/baseline.js';
+import { BASELINE_DAYS, BASELINE_MEASURES, DAY_MS, baselinePeriod, computeBaseline, type BaselineMeasure, type BaselineValue, type CompletedIssue, type MergedPr } from '../core/baseline.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
 import { cliLinearTracker } from './linear.js';
@@ -15,7 +15,6 @@ export const BASELINE_USAGE = `Usage: factory baseline <project> --since <YYYY-M
   Freezes the state of reference the overview compares with: the ${BASELINE_DAYS} days before the factory's start (the
   day given, UTC, left out), read from the project's Linear team and GitHub repository. One row per measure, in the store.
   --replace   compute the same period again, in place of the stored one`;
-
 
 export interface BaselineOptions {
   store: Store;
@@ -44,9 +43,9 @@ const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const orDash = (v: number | null, format: (n: number) => string) => (v === null ? '—' : format(v));
 
-/** A row as the command prints it. */
-function line(r: BaselineRow): string {
-  switch (r.measure) {
+/** A measure as the command prints it. */
+function line(measure: BaselineMeasure, r: BaselineValue): string {
+  switch (measure) {
     case 'delivered':
       return `  Delivered: ${r.value} (of ${plural(r.over, 'issue')} completed)`;
     case 'lead_time':
@@ -66,19 +65,19 @@ function line(r: BaselineRow): string {
  */
 export async function runBaseline(o: BaselineOptions): Promise<number> {
   const period = baselinePeriod(o.start);
-  const span = `${day(period.since)} → ${day(period.until)}`;
   if (period.until > o.now) {
     o.print(`The start ${day(o.start)} is still to come: the baseline is the ${BASELINE_DAYS} days before the factory started.`);
     return 1;
   }
   const [issues, prs] = await Promise.all([o.sources.completedIssues(o.project.teamKey, period.since, period.until), o.sources.mergedPrs(o.project.repoPath, period.since, period.until)]);
-  const rows = baselineRows(o.project.id, period, issues, prs, o.now);
-  if (!(await o.store.putBaseline(rows, o.replace))) {
+  const baseline = computeBaseline(o.project.id, period, issues, prs, o.now);
+  const span = `${day(period.since)} → ${day(period.until)}`;
+  if (!(await o.store.putBaseline(baseline, o.replace))) {
     o.print(`A baseline of ${o.project.id} over ${span} is already stored: --replace to compute it again.`);
     return 1;
   }
   o.print(`Baseline of ${o.project.id} over ${span} (${BASELINE_DAYS} days), from Linear ${o.project.teamKey} and GitHub:`);
-  for (const r of rows) o.print(line(r));
+  for (const measure of BASELINE_MEASURES) o.print(line(measure, baseline.measures[measure]!));
   o.print('Stored.');
   return 0;
 }

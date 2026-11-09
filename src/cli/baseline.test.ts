@@ -31,14 +31,14 @@ describe('factory baseline (ORC-230)', () => {
   it('reads Linear and GitHub over the 90 days before the start, for the project, and stores one frozen row per measure', async () => {
     const { store, lines, asked, baseline } = withStore(
       [{ identifier: 'ORC-1', startedAt: START - 10 * DAY, completedAt: START - 8 * DAY, links: [] }],
-      [{ number: 1, url: 'https://github.com/acme/app/pull/1', title: 'ORC-1', branch: 'orc-1', mergedAt: START - 8 * DAY, changesRequested: false }],
+      [{ url: 'https://github.com/acme/app/pull/1', title: 'ORC-1', branch: 'orc-1', mergedAt: START - 8 * DAY, changesRequested: false }],
     );
     expect(await baseline()).toBe(0);
     const period = { since: START - 90 * DAY, until: START };
     expect(asked).toEqual([{ teamKey: 'ORC', ...period }, { repoPath: '/repo', ...period }]);
-    const rows = await store.latestBaseline();
-    expect(rows.map((r) => [r.measure, r.value])).toEqual([['delivered', 1], ['lead_time', 2 * DAY], ['tokens_per_merged', null], ['first_try', 1]]);
-    expect(rows.every((r) => r.projectId === 'p' && r.since === period.since && r.until === period.until && r.computedAt === NOW)).toBe(true);
+    const stored = await store.latestBaseline();
+    expect(stored).toMatchObject({ projectId: 'p', ...period, computedAt: NOW });
+    expect(Object.fromEntries(Object.entries(stored!.measures).map(([m, v]) => [m, v.value]))).toEqual({ delivered: 1, lead_time: 2 * DAY, tokens_per_merged: null, first_try: 1 });
     expect(lines).toEqual([
       'Baseline of p over 2026-08-03 → 2026-11-01 (90 days), from Linear ORC and GitHub:',
       '  Delivered: 1 (of 1 issue completed)',
@@ -59,7 +59,7 @@ describe('factory baseline (ORC-230)', () => {
     expect(lines).toEqual(['A baseline of p over 2026-08-03 → 2026-11-01 is already stored: --replace to compute it again.']);
     expect(await store.latestBaseline()).toEqual(stored);
     expect(await baseline({ now: NOW + 2, replace: true })).toBe(0);
-    expect((await store.latestBaseline()).every((r) => r.computedAt === NOW + 2)).toBe(true);
+    expect((await store.latestBaseline())?.computedAt).toBe(NOW + 2);
   });
 
   it('refuses a start still to come, reading nothing: its 90 days have not all happened', async () => {
@@ -67,7 +67,7 @@ describe('factory baseline (ORC-230)', () => {
     expect(await baseline({ now: START - 1 })).toBe(1);
     expect(lines).toEqual(['The start 2026-11-01 is still to come: the baseline is the 90 days before the factory started.']);
     expect(asked).toEqual([]);
-    expect(await store.latestBaseline()).toEqual([]);
+    expect(await store.latestBaseline()).toBeNull();
   });
 
   it('says when nothing was delivered, a dash rather than a zero for what has no value', async () => {

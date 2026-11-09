@@ -13,7 +13,7 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';
 import type { TakeOverDesk } from '../core/orchestrator.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
-import { baselineOf } from '../core/baseline.js';
+import { BASELINE_DAYS, DAY_MS } from '../core/baseline.js';
 import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
@@ -77,11 +77,10 @@ const MEASURES_AT_ONCE = 2;
 
 /** Runs `GET /api/security` serves, the most refused: the others are counted. */
 const SECURITY_RUNS = 50;
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** The period the security log and the Pareto read when none is asked (ORC-300). */
 const DEFAULT_PERIOD_MS = 7 * DAY_MS;
 /** The period the overview reads when none is asked (ORC-299): as long as the baseline it is to be compared with (ORC-230). */
-const OVERVIEW_PERIOD_MS = 90 * DAY_MS;
+const OVERVIEW_PERIOD_MS = BASELINE_DAYS * DAY_MS;
 
 /** `[since, until)` from the query, in ms, `until` now and `since` `length` before by default; undefined when it is not a period. */
 function periodOf(c: Context, now: number, length = DEFAULT_PERIOD_MS): { since: number; until: number } | undefined {
@@ -294,7 +293,7 @@ export function createApp(d: ServerDeps): Hono {
   app.get('/api/overview', overPeriod(async (c, period) => {
     const [measures, baseline] = await Promise.all([measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since)), d.store.latestBaseline()]);
     const measured = measures.filter((m) => m !== null);
-    return c.json(overview(period, measured, measures.length - measured.length, baselineOf(baseline)));
+    return c.json(overview(period, measured, measures.length - measured.length, baseline));
   }, OVERVIEW_PERIOD_MS));
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,

@@ -2,7 +2,7 @@ import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
-import { BASELINE_MEASURES, type BaselineRow } from '../core/baseline.js';
+import type { Baseline } from '../core/baseline.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -358,17 +358,6 @@ export interface SecurityLog {
   skipped: { egress: number; refusals: number };
 }
 
-/** The project and the period of a baseline's rows (ORC-230): rows of no baseline, or of several, are a bug of the caller. */
-export function oneBaseline(rows: readonly BaselineRow[]): { projectId: string; since: number; until: number } {
-  const first = rows[0];
-  if (!first) throw new Error('a baseline without rows');
-  if (rows.some((r) => r.projectId !== first.projectId || r.since !== first.since || r.until !== first.until)) throw new Error('rows of several baselines');
-  return { projectId: first.projectId, since: first.since, until: first.until };
-}
-
-/** A baseline's rows in the order of `BASELINE_MEASURES` (ORC-230). */
-export const inMeasureOrder = (rows: BaselineRow[]): BaselineRow[] => rows.sort((a, b) => BASELINE_MEASURES.indexOf(a.measure) - BASELINE_MEASURES.indexOf(b.measure));
-
 /** What a store keeps of a security log (ORC-296): its fields alone, so a command or a path handed with it is never written. */
 export function keptSecurityLog(log: SecurityLog): SecurityLog {
   return {
@@ -705,12 +694,12 @@ export interface Store {
   /** Takes a test off the list (ORC-164): false when it was not on it. */
   deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean>;
   /**
-   * Freezes a baseline (ORC-230), the rows of one project and one period, all or none: false, nothing written, when that
-   * period of the project already has one and `replace` is not set; with it, they take the place of the stored ones.
+   * Freezes a baseline (ORC-230), one row per measure, all or none: false, nothing written, when that period of the project
+   * already has one and `replace` is not set; with it, the new one takes the place of the stored one.
    */
-  putBaseline(rows: readonly BaselineRow[], replace: boolean): Promise<boolean>;
-  /** The rows of the baseline computed last, whichever project and period, in the order of `BASELINE_MEASURES` (ORC-230); empty without one. */
-  latestBaseline(): Promise<BaselineRow[]>;
+  putBaseline(b: Baseline, replace: boolean): Promise<boolean>;
+  /** The baseline computed last, whichever project and period (ORC-230); null without one. */
+  latestBaseline(): Promise<Baseline | null>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */

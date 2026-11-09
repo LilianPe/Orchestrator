@@ -22,7 +22,6 @@ export interface CompletedIssue {
 
 /** A PR of the project's repository merged in the period, as GitHub reads it: `changesRequested`, a review asked changes of it. */
 export interface MergedPr {
-  number: number;
   url: string;
   title: string;
   branch: string;
@@ -42,16 +41,10 @@ export interface BaselineValue {
   noSource: boolean;
 }
 
-/** A frozen row of the store: one measure of a project's baseline over `[since, until)`, and when it was computed. */
-export interface BaselineRow extends BaselineValue {
-  projectId: string;
-  measure: BaselineMeasure;
-  since: number;
-  until: number;
-  computedAt: number;
-}
-
-/** A baseline as the overview serves it: its rows by measure; a measure without a row has no baseline. */
+/**
+ * A project's baseline over `[since, until)`, computed at `computedAt`: what the store freezes, one row per measure, and what
+ * the overview serves. A measure without a row has no baseline.
+ */
 export interface Baseline {
   projectId: string;
   since: number;
@@ -65,25 +58,25 @@ export function baselinePeriod(start: number): { since: number; until: number } 
   return { since: start - BASELINE_DAYS * DAY_MS, until: start };
 }
 
-/** `ORC-3` in a branch or a title, as a whole: not in `orc-30`. */
-const names = (identifier: string, text: string) =>
-  new RegExp(`(^|[^a-z0-9])${identifier.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^0-9])`).test(text.toLowerCase());
-
-/** A PR is the issue's when Linear links it to the issue, or when its branch or its title names the issue. */
-const isOf = (issue: CompletedIssue, pr: MergedPr) => issue.links.includes(pr.url) || names(issue.identifier, pr.branch) || names(issue.identifier, pr.title);
+/** Whether a PR is the issue's: Linear links it to the issue, or its branch or its title names the issue as a whole (`ORC-3`, not `orc-30`). */
+function prsOf(issue: CompletedIssue): (pr: MergedPr) => boolean {
+  const named = new RegExp(`(^|[^a-z0-9])${issue.identifier.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^0-9])`);
+  return (pr) => issue.links.includes(pr.url) || named.test(pr.branch.toLowerCase()) || named.test(pr.title.toLowerCase());
+}
 
 /**
- * The rows of a project's baseline over the period. Delivered: the issues completed in it that have a PR merged in it. Lead
- * time: the median, over the delivered issues, from the issue's start to its first merged PR; an issue never started, or
- * started after it, is left out. First try: the share of the delivered issues' merged PRs no review asked changes of.
- * Tokens per merged ticket: human work spends none the factory can read, so no value, said as no source. Pure.
+ * A project's baseline over the period. Delivered: the issues completed in it that have a PR merged in it. Lead time: the
+ * median, over the delivered issues, from the issue's start to its first merged PR; an issue never started, or started
+ * after it, is left out. First try: the share of the delivered issues' merged PRs no review asked changes of. Tokens per
+ * merged ticket: human work spends none the factory can read, so no value, said as no source. The period is applied here,
+ * whatever the sources read around it. Pure.
  */
-export function baselineRows(projectId: string, period: { since: number; until: number }, issues: readonly CompletedIssue[], prs: readonly MergedPr[], computedAt: number): BaselineRow[] {
+export function computeBaseline(projectId: string, period: { since: number; until: number }, issues: readonly CompletedIssue[], prs: readonly MergedPr[], computedAt: number): Baseline {
   const within = (at: number) => at >= period.since && at < period.until;
   const completed = issues.filter((i) => within(i.completedAt));
   const merged = prs.filter((p) => within(p.mergedAt));
   const delivered = completed.flatMap((issue) => {
-    const own = merged.filter((p) => isOf(issue, p));
+    const own = merged.filter(prsOf(issue));
     return own.length ? [{ issue, prs: own }] : [];
   });
   const leadTimes = delivered.flatMap(({ issue, prs: own }) => {
@@ -92,20 +85,15 @@ export function baselineRows(projectId: string, period: { since: number; until: 
   });
   const deliveredPrs = [...new Set(delivered.flatMap((d) => d.prs))];
   const firstTry = deliveredPrs.filter((p) => !p.changesRequested).length;
-  const values: Record<BaselineMeasure, BaselineValue> = {
-    delivered: { value: delivered.length, over: completed.length, leftOut: completed.length - delivered.length, noSource: false },
-    lead_time: { value: median(leadTimes), over: leadTimes.length, leftOut: delivered.length - leadTimes.length, noSource: false },
-    tokens_per_merged: { value: null, over: 0, leftOut: delivered.length, noSource: true },
-    first_try: { value: deliveredPrs.length ? firstTry / deliveredPrs.length : null, over: deliveredPrs.length, leftOut: 0, noSource: false },
+  return {
+    projectId,
+    ...period,
+    computedAt,
+    measures: {
+      delivered: { value: delivered.length, over: completed.length, leftOut: completed.length - delivered.length, noSource: false },
+      lead_time: { value: median(leadTimes), over: leadTimes.length, leftOut: delivered.length - leadTimes.length, noSource: false },
+      tokens_per_merged: { value: null, over: 0, leftOut: delivered.length, noSource: true },
+      first_try: { value: deliveredPrs.length ? firstTry / deliveredPrs.length : null, over: deliveredPrs.length, leftOut: 0, noSource: false },
+    },
   };
-  return BASELINE_MEASURES.map((measure) => ({ projectId, measure, ...period, ...values[measure], computedAt }));
-}
-
-/** The rows of one baseline, gathered by measure; null without rows. */
-export function baselineOf(rows: readonly BaselineRow[]): Baseline | null {
-  const first = rows[0];
-  if (!first) return null;
-  const measures: Baseline['measures'] = {};
-  for (const { measure, value, over, leftOut, noSource } of rows) measures[measure] = { value, over, leftOut, noSource };
-  return { projectId: first.projectId, since: first.since, until: first.until, computedAt: first.computedAt, measures };
 }
