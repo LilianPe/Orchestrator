@@ -182,7 +182,11 @@ function describe(e: FactoryEvent): string {
     case 'timer.fired':
       return `Timer ${e.payload.kind}`;
     case 'control.stop':
-      return 'Stopped the ticket';
+      return e.payload.takeOver ? 'Took the run over' : 'Stopped the ticket';
+    case 'control.bundle':
+      return 'Handed back a bundle';
+    case 'bundle.refused':
+      return 'Bundle refused';
     case 'control.pause':
       return 'Paused the factory';
     case 'control.resume':
@@ -223,6 +227,7 @@ function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, '
     case 'pr.closed':
       return { channel: 'github', who: actor };
     case 'control.stop':
+    case 'control.bundle':
     case 'control.pause':
     case 'control.resume':
       return { channel: 'dashboard', who: null };

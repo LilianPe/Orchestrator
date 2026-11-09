@@ -3,6 +3,7 @@ import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, post, subscrib
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
+import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { feedKey, initialState, reducer } from './state.js';
 import type { FlowView, MeasuredTicketView, RunDetailView, WorkingRunView } from './types.js';
@@ -127,7 +128,7 @@ export function App() {
 
   // A pause or a stop of a run, from its inspection or Working (ORC-301): a refusal is said in its inspection, a success reads the Flow again.
   const [notice, setNotice] = useState<{ runId: string; text: string }>();
-  const control = (run: WorkingRunView, action: 'pause' | 'stop') => () =>
+  const control = (run: WorkingRunView, action: 'pause' | 'stop' | 'take-over') => () =>
     void post(`/api/runs/${run.runId}/${action}`).then(
       async (res) => {
         if (res.ok) {
@@ -143,6 +144,32 @@ export function App() {
   const snap = s.snapshot;
   const lines = s.selectedRun ? (s.runLines[s.selectedRun] ?? []) : [];
   const inspected = s.flow?.working.find((w) => w.runId === s.selectedRun);
+  // The tickets a human took over (ORC-234): how to reach their container, and the bundles handed back.
+  const takenOver = s.flow?.needsYou.blocked.flatMap((g) => g.tickets).filter((t) => t.kind === 'taken_over') ?? [];
+  const [shells, setShells] = useState<Record<string, ShellCommand>>({});
+  const [takeOverNotice, setTakeOverNotice] = useState<Record<string, string>>({});
+  const unanswered = (key: string) => () => setTakeOverNotice((n) => ({ ...n, [key]: 'not sent: the server did not answer' }));
+  const answer = async (key: string, res: Response, ok: string) => {
+    const { error } = res.ok ? { error: undefined } : ((await res.json().catch(() => ({}))) as { error?: string });
+    setTakeOverNotice((n) => ({ ...n, [key]: res.ok ? ok : (error ?? `refused (${res.status})`) }));
+  };
+  const askShell = (t: { projectId: string; ticketId: string }) => () => {
+    const key = feedKey(t.projectId, t.ticketId);
+    void fetch(`/api/tickets/${t.projectId}/${t.ticketId}/take-over`).then(async (res) => {
+      if (res.ok) {
+        const shell = (await res.json()) as ShellCommand;
+        setShells((sh) => ({ ...sh, [key]: shell }));
+      }
+      return answer(key, res, '');
+    }, unanswered(key));
+  };
+  const handBack = (t: { projectId: string; ticketId: string }) => (file: File) => {
+    const key = feedKey(t.projectId, t.ticketId);
+    void fetch(`/api/tickets/${t.projectId}/${t.ticketId}/take-over/bundle`, { method: 'POST', body: file }).then(
+      (res) => answer(key, res, 'Bundle handed back: the factory checks it, then pushes it if it passes. Its verdict comes on the ticket.'),
+      unanswered(key),
+    );
+  };
 
   return (
     <div className="page">
@@ -177,8 +204,12 @@ export function App() {
           ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
         {inspected && (
-          <Inspection run={inspected} feed={s.feeds[feedKey(inspected.projectId, inspected.ticketId)] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} />
+          <Inspection run={inspected} feed={s.feeds[feedKey(inspected.projectId, inspected.ticketId)] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} onTakeOver={control(inspected, 'take-over')} />
         )}
+        {takenOver.map((t) => {
+          const key = feedKey(t.projectId, t.ticketId);
+          return <TakenOver key={key} ticket={t} shell={shells[key]} notice={takeOverNotice[key] || undefined} onShell={askShell(t)} onBundle={handBack(t)} />;
+        })}
         <section className="run">
           <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
           <div className="lines">

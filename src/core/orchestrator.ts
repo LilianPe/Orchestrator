@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
@@ -17,6 +17,7 @@ import {
   type Sandbox,
   type SandboxMount,
   type SandboxProvider,
+  type SpawnCommand,
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
@@ -75,6 +76,7 @@ import {
   type RunOutcome,
   type TicketState,
   type VerifyFailure,
+  SCHEMA_VERSION,
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
@@ -376,6 +378,18 @@ const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a hum
 
 /** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
 const blockedOn = (workflow: Workflow, kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, ...(workflow.blockComment ? { job } : {}) });
+
+/** The sandboxes of the take-overs (ORC-234): one per ticket, `take-over-<project>-<ticket>`, no attempt of an agent. */
+const TAKE_OVER = 'take-over-';
+export const takeOverKey = (projectId: string, ticketId: string): string => `${TAKE_OVER}${projectId}-${ticketId}`;
+
+/** What the dashboard reaches of a take-over (ORC-234): absent without sandboxes, where there is none. */
+export interface TakeOverDesk {
+  /** The host command of a shell in the ticket's take-over container; undefined when none is open. */
+  attach(projectId: string, ticketId: string): Promise<SpawnCommand | undefined>;
+  /** A bundle handed back, kept where the factory reads it (`<runsDir>/take-over-<project>-<ticket>/`): its path. */
+  keepBundle(projectId: string, ticketId: string, bytes: Uint8Array): Promise<string>;
+}
 
 export class Orchestrator {
   private background = new Map<Promise<void>, string | undefined>();
@@ -812,7 +826,8 @@ export class Orchestrator {
       return;
     }
     // ponytail: a red check's sandbox (`<run>-red`) has no run record: its log is left to the files' purge.
-    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId)).map(async ({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId, await this.d.store.getRun(runId))));
+    // A take-over's container (ORC-234) is no attempt: it stays until the ticket is relaunched, handed back or cleaned up.
+    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId) && !runId.startsWith(TAKE_OVER)).map(async ({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId, await this.d.store.getRun(runId))));
   }
 
   /**
@@ -1590,6 +1605,8 @@ export class Orchestrator {
         // behind the run it started, or queued (`startHandled`).
         const mark = `effect:${key.id}:started`;
         if (key.replay && (await this.startHandled(mark))) return { deduplicated: true };
+        // A relaunch ends a take-over (ORC-234): the human's container is closed before the agent's opens on the worktree.
+        await this.closeTakeOver(project.id, ticketId);
         await this.startRun(project, ticketId, { ...c, startMark: mark });
         await store.setMeta(mark, '1');
         return;
@@ -1674,7 +1691,12 @@ export class Orchestrator {
         // Seen during the run (the agent opened it), the PR waits for the end of the work: the move to Human Review closes the plan.
         if (!t.activeRunId && !t.verifyingRunId) await this.updatePlan(t, (plan) => advancePlan(plan, 'PR', 'completed'));
         return;
+      case 'take_over':
+        return this.openTakeOver(t, c.runId);
+      case 'publish_bundle':
+        return this.publishBundle(project, t, c, key);
       case 'cleanup':
+        await this.closeTakeOver(project.id, ticketId);
         await this.d.workspaces.cleanup(project.id, ticketId);
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
         return;
@@ -1863,6 +1885,86 @@ export class Orchestrator {
           if (err.code === 'empty') return published();
           reason = err.message;
         } else throw err;
+      }
+    }
+    await this.d.store.setMeta(mark, reason);
+    await refuse(reason);
+  }
+
+  /**
+   * The dashboard's take-over (ORC-234), only with sandboxes: the command of a shell in the ticket's container, and the
+   * bundles handed back, kept under the runs' dir and purged with it.
+   */
+  takeOverDesk(): TakeOverDesk | undefined {
+    const { sandboxes, runsDir } = this.d;
+    if (!sandboxes || !runsDir) return undefined;
+    return {
+      attach: async (projectId, ticketId) => {
+        const box = await sandboxes.findByAttempt(takeOverKey(projectId, ticketId));
+        if (!box) return undefined;
+        this.log('info', `take-over of ${ticketId}: the command of a shell in its container ${box.id} given to the dashboard`);
+        return sandboxes.spawnCommand(box.id, ['sh', '-i'], { cwd: WORKSPACE_TARGET });
+      },
+      keepBundle: async (projectId, ticketId, bytes) => {
+        const dir = join(runsDir, takeOverKey(projectId, ticketId));
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, `${randomUUID()}.bundle`);
+        writeFileSync(file, bytes);
+        return file;
+      },
+    };
+  }
+
+  /**
+   * A container of its own for the human who took `runId` over (ORC-234): on the ticket's worktree, no network, nothing else
+   * mounted (no Claude session, no pack, no secret), never a shell on the host. Opened once the agent's run has ended and its
+   * sandbox is gone: the human and the agent never write the worktree together. Without sandboxes, nothing opens.
+   */
+  private async openTakeOver(t: TicketState, runId: string): Promise<void> {
+    const { sandboxes } = this.d;
+    if (!sandboxes) return this.log('error', `take-over of ${t.ticketId} not opened: it needs sandboxes (FACTORY_CONTAINER_CLI), never a shell on the host`);
+    if (t.blockKind !== 'taken_over' || !t.worktreePath) return this.log('info', `take-over of ${t.ticketId} not opened: ${t.worktreePath ? 'the ticket left it' : 'no worktree'}`);
+    await Promise.all([...this.background].filter(([, id]) => id === runId).map(([p]) => p));
+    if (await sandboxes.findByAttempt(runId)) throw new Error(`take-over of ${t.ticketId}: the sandbox of run ${runId} is still alive`);
+    const box = await sandboxes.create({ runId: takeOverKey(t.projectId, t.ticketId), ticketId: t.ticketId, workspacePath: t.worktreePath, network: 'none', requirements: DEFAULT_REQUIREMENTS, mounts: [] });
+    this.log('info', `take-over of ${t.ticketId}: container ${box.id} open on its worktree, without network nor secret`);
+  }
+
+  /** The ticket's take-over container closed, if one is open (ORC-234). */
+  private async closeTakeOver(projectId: string, ticketId: string): Promise<void> {
+    const key = takeOverKey(projectId, ticketId);
+    const box = await this.d.sandboxes?.findByAttempt(key);
+    if (!box) return;
+    await this.destroySandbox(box.id, key);
+    this.log('info', `take-over of ${ticketId}: container ${box.id} closed`);
+  }
+
+  /**
+   * A bundle handed back after a take-over (ORC-234), checked and pushed by the publisher (`publishBundle`). Pushed, the
+   * take-over ends and the push is the human's (`push.human`, under the id GitHub's would have, which the factory's App never
+   * sends): `verify` checks it as any human's (ORC-159). Refused, nothing is on the forge, and the human is told.
+   */
+  private async publishBundle(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'publish_bundle' }>, key: EffectKey): Promise<void> {
+    if (t.blockKind !== 'taken_over') return this.log('info', `bundle of ${t.ticketId} dropped: the ticket is no longer taken over`);
+    const mark = `effect:${key.id}:refused`;
+    const refuse = async (reason: string) =>
+      void (await this.accept({ ...TRUSTED, projectId: project.id, ticketId: t.ticketId, id: `bundle-refused:${key.id}`, type: 'bundle.refused', at: this.d.clock.now(), payload: { file: c.file, reason } }));
+    const known = key.replay ? await this.d.store.getMeta(mark) : undefined;
+    if (known) return refuse(known);
+    let reason: string;
+    const { publisher } = this.d;
+    if (!publisher?.publishBundle) reason = 'the factory pushes through a GitHub App from its sandboxes, and this instance has none (docs/github.md).';
+    else if (!t.branch) reason = `no branch for ${t.ticketId}.`;
+    else {
+      try {
+        const pushed = await publisher.publishBundle({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: takeOverKey(project.id, t.ticketId), branch: t.branch, bundle: c.file });
+        await this.closeTakeOver(project.id, t.ticketId);
+        const payload = { branch: t.branch, sha: pushed.sha, author: c.by, ...(pushed.before ? { before: pushed.before } : {}) };
+        await this.accept({ schemaVersion: SCHEMA_VERSION, taint: 'untrusted', projectId: project.id, ticketId: t.ticketId, id: `push:${t.ticketId}:${pushed.sha}`, type: 'push.human', at: this.d.clock.now(), payload });
+        return;
+      } catch (err) {
+        if (!(err instanceof PublishRefused)) throw err;
+        reason = err.message;
       }
     }
     await this.d.store.setMeta(mark, reason);

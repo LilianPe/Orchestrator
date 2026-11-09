@@ -189,6 +189,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'control.pause': empty,
   'control.resume': empty,
   'control.stop': empty,
+  'control.bundle': fc.constant({ file: '/runs/take-over/b.bundle' }),
+  'bundle.refused': fc.constant({ file: '/runs/take-over/b.bundle', reason: 'factory/chemins-interdits' }),
   'effect.done': effectResult,
   'effect.failed': effectResult.map((r) => ({ ...r, error: 'Linear down' })),
   'dead_letter.added': fc.tuple(deadLettered, fc.constantFrom(undefined, 5)).map(([e, attempts]) => ({ eventId: e.id, eventType: e.type, error: 'boom', failures: 1, ...(attempts ? { attempts } : {}) })),
@@ -230,7 +232,7 @@ const signedBy: fc.Arbitrary<Signed | undefined> = fc.oneof(
  * their producers stamp them `TRUSTED`. Only events that carry content from outside can be untrusted.
  */
 const FACTORY_PRODUCED: ReadonlySet<EventType> = new Set<EventType>([
-  'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'timer.fired', 'control.pause', 'control.resume', 'control.stop',
+  'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'timer.fired', 'control.pause', 'control.resume', 'control.stop', 'control.bundle', 'bundle.refused',
   'effect.done', 'effect.failed', 'dead_letter.added', 'dead_letter.repaired',
 ]);
 

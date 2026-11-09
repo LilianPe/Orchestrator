@@ -6,15 +6,17 @@ const ofRun = (feed: FeedLine[], runId: string) => feed.filter((l) => l.kind ===
 
 /**
  * A run's live inspection (ORC-301): its feed in the factory's words (ORC-214), never the agent's text nor its tools'
- * parameters, which the live session alone shows; pause and stop, checked on the matrix; take over comes with ORC-234.
+ * parameters, which the live session alone shows; pause, stop and take over (ORC-234), checked on the matrix.
  */
-export function Inspection({ run, feed, notice, onPause, onStop }: {
+export function Inspection({ run, feed, notice, onPause, onStop, onTakeOver }: {
   run: WorkingRunView;
   feed: FeedLine[];
   /** The answer to the last action, when it was refused. */
   notice?: string;
   onPause: () => void;
   onStop: () => void;
+  /** The run stopped, then a container of its own for the human (ORC-234); refused without sandboxes. */
+  onTakeOver: () => void;
 }) {
   const lines = ofRun(feed, run.runId);
   return (
@@ -23,7 +25,7 @@ export function Inspection({ run, feed, notice, onPause, onStop }: {
       <div className="actions">
         <button disabled={!run.stoppable} onClick={onPause}>Pause</button>
         <button disabled={!run.stoppable} onClick={onStop}>Stop</button>
-        <button disabled title="Taking over a run comes with ORC-234">Take over</button>
+        <button disabled={!run.stoppable} onClick={onTakeOver} title="Stops the run, then opens a container of your own on its worktree">Take over</button>
       </div>
       {notice && <p className="flow-failed" role="alert">{notice}</p>}
       <ul className="feed">

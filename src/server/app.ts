@@ -10,6 +10,7 @@ import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { causeOf } from '../core/block-cause.js';
+import type { TakeOverDesk } from '../core/orchestrator.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { runDetail } from '../core/run-detail.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
@@ -42,7 +43,14 @@ export interface ServerDeps {
   webDir?: string;
   /** When set (non-loopback host), HTTP Basic auth with this password guards everything but the webhook, the OAuth callback and /agent. */
   uiPassword?: string;
+  /** A human's take-over of a run (ORC-234), only with sandboxes: absent, there is none. */
+  takeOver?: TakeOverDesk;
 }
+
+export type { TakeOverDesk };
+
+/** The largest bundle handed back after a take-over (ORC-234), held in memory once before it is written. */
+const MAX_BUNDLE_BYTES = 100 * 2 ** 20;
 
 /**
  * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
@@ -319,18 +327,49 @@ export function createApp(d: ServerDeps): Hono {
   });
   // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check,
   // not a question). The same check here answers the operator at once; `decide`'s is the one journaled.
-  const runControl = (action: 'pause' | 'stop') => async (c: Context) => {
+  const runControl = (action: 'pause' | 'stop' | 'take-over') => async (c: Context) => {
     const runId = c.req.param('id')!;
     const run = await d.store.getRun(runId);
     if (!run) return c.json({ error: `unknown run ${runId}` }, 404);
     if ((await d.store.getTicket(run.projectId, run.ticketId))?.activeRunId !== runId) return c.json({ error: `run ${runId} is not the ticket's run at work` }, 409);
+    // Only in a container of its own (ORC-234): without sandboxes, never a shell on the server.
+    if (action === 'take-over' && !d.takeOver) return c.json({ error: 'taking over a run needs the sandboxes (FACTORY_CONTAINER_CLI): never a shell on the server' }, 409);
     const at = d.clock.now();
-    const payload = action === 'pause' ? { runId, pause: true as const } : { runId };
+    const payload = action === 'pause' ? { runId, pause: true as const } : action === 'take-over' ? { runId, takeOver: true as const } : { runId };
     await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${action}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
     return c.json({ ok: true });
   };
   app.post('/api/runs/:id/pause', runControl('pause'));
   app.post('/api/runs/:id/stop', runControl('stop'));
+  app.post('/api/runs/:id/take-over', runControl('take-over'));
+
+  // A ticket taken over (ORC-234): how to reach its container, and the bundle handed back, which `decide` checks on the matrix.
+  const takenOver = async (c: Context): Promise<{ desk: TakeOverDesk; projectId: string; ticketId: string } | Response> => {
+    const projectId = c.req.param('projectId')!;
+    const ticketId = c.req.param('ticketId')!;
+    if (!d.takeOver) return c.json({ error: 'no take-over without the sandboxes (FACTORY_CONTAINER_CLI)' }, 409);
+    const t = await d.store.getTicket(projectId, ticketId);
+    if (!t?.blocked || t.blockKind !== 'taken_over') return c.json({ error: `${ticketId} is not taken over` }, 409);
+    return { desk: d.takeOver, projectId, ticketId };
+  };
+  app.get('/api/tickets/:projectId/:ticketId/take-over', async (c) => {
+    const at = await takenOver(c);
+    if (at instanceof Response) return at;
+    const shell = await at.desk.attach(at.projectId, at.ticketId);
+    return shell ? c.json(shell) : c.json({ error: `no container open for ${at.ticketId}: hand back a bundle, or reply to relaunch` }, 404);
+  });
+  app.post('/api/tickets/:projectId/:ticketId/take-over/bundle', async (c) => {
+    const at = await takenOver(c);
+    if (at instanceof Response) return at;
+    if (Number(c.req.header('content-length') ?? 0) > MAX_BUNDLE_BYTES) return c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413);
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (bytes.byteLength > MAX_BUNDLE_BYTES) return c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413);
+    if (!bytes.byteLength) return c.json({ error: 'empty bundle' }, 400);
+    const file = await at.desk.keepBundle(at.projectId, at.ticketId, bytes);
+    const now = d.clock.now();
+    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:bundle:${at.ticketId}:${now}`, type: 'control.bundle', at: now, projectId: at.projectId, ticketId: at.ticketId, payload: { file } });
+    return c.json({ ok: true });
+  });
 
   const agent = new Hono<AgentEnv>();
   agent.use('*', async (c, next) => {

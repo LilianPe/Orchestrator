@@ -4,11 +4,11 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { NoCommitsBetween, type ForgeWriter } from '../adapters/forge/types.js';
-import { PublishRefused, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
+import { PublishRefused, type BundlePush, type BundleRequest, type Publication, type Publisher, type PublishRequest } from '../adapters/publisher/types.js';
 import { WORKSPACE_TARGET, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { RepoConfigError, REPO_CONFIG_PATH } from '../config/repo-config.js';
-import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, untrustedCheck, withDeadline, within } from '../core/clean-verify.js';
-import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv } from './extract.js';
+import { BASE, baseConfig, boxOpener, checkClone, cloneGit, forkPoint, isYes, scanSecrets, untrustedCheck, withDeadline, within, type UntrustedMark } from '../core/clean-verify.js';
+import { BUNDLE_TARGET, cloneBundle, extractWork, HARDENING, hostGitEnv } from './extract.js';
 
 /** Git and a scan, no command of the repository: a stop waits behind the publication, so it is not given `verify`'s time. */
 const PUBLISH_DEADLINE_MS = 10 * 60_000;
@@ -45,6 +45,8 @@ export interface GitPublisherDeps {
  *    head the work does not hold, and only the one the factory published last (`rewrites`). The lease is on the head read
  *    in 3: a push in between is refused by git, and nothing is ever written over;
  * 6. the draft PR, found by its branch before it is opened (`ensurePr`).
+ *
+ * A bundle a human hands back after a take-over (ORC-234) goes through 1, 3, 4 and 5 (`publishBundle`): its file in place of 2.
  */
 export class GitPublisher implements Publisher {
   private readonly exec: Exec;
@@ -74,10 +76,33 @@ export class GitPublisher implements Publisher {
     }
   }
 
+  /**
+   * The bundle a human hands back after a take-over (ORC-234), from its file alone: `git bundle verify` in a fresh clone of
+   * ours (`cloneBundle`), then the same check of the diff as the agent's work, on all its commits as on an untrusted branch's,
+   * and a push only forward. No PR: it is the human's push, which `verify` checks then (ORC-159). A bundle that does not
+   * verify is a refusal, as a check that fails: nothing reaches the forge.
+   */
+  async publishBundle(req: BundleRequest): Promise<BundlePush> {
+    const access = await this.d.forge.gitAccess(req.repoPath);
+    const workDir = join(this.d.runsDir, req.runId, `bundle-${randomUUID()}`);
+    mkdirSync(workDir, { recursive: true });
+    try {
+      const env = { ...hostGitEnv(workDir, workDir), GIT_TERMINAL_PROMPT: '0', ...STALLED, ...access.env };
+      const onForge = await readForge(this.exec, access.url, req.branch, { cwd: workDir, env });
+      if (req.branch === onForge.base) throw new PublishRefused('trunk', `the ticket's branch is the default branch (${onForge.base}).`);
+      const cloneDir = join(workDir, 'clone');
+      const { sha } = await cloneBundle({ bundle: req.bundle, branch: req.branch, cloneDir, exec: this.exec }).catch((err: Error) => {
+        throw new PublishRefused('bundle', `the bundle does not verify as a bundle of ${req.branch}: ${err.message.slice(0, 500)}`);
+      });
+      if (onForge.head !== sha) await this.checkAndPush({ ...req, sha, untrusted: { since: '', humanPushes: [] } }, access.url, env, workDir, cloneDir, onForge.head);
+      return { sha, ...(onForge.head ? { before: onForge.head } : {}) };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.d.log(`bundle of ${req.ticketId}: ${workDir} not removed: ${err.message}`));
+    }
+  }
+
   private async pushChecked(req: PublishRequest, url: string, env: Record<string, string>, workDir: string, known: string | undefined): Promise<void> {
-    const deadlineMs = this.d.deadlineMs ?? PUBLISH_DEADLINE_MS;
-    const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
-    const sandboxes = withDeadline(this.d.sandboxes, deadlineMs);
+    const sandboxes = withDeadline(this.d.sandboxes, this.d.deadlineMs ?? PUBLISH_DEADLINE_MS);
     const inBox = boxOpener(sandboxes, { runId: req.runId, ticketId: req.ticketId, log: this.d.log });
     const bundleDir = join(workDir, 'bundle');
     const cloneDir = join(workDir, 'clone');
@@ -87,7 +112,18 @@ export class GitPublisher implements Publisher {
       const { sha } = await extractWork({ sandboxes, sandboxId, branch: req.branch, bundleDir, cloneDir, exec: this.exec });
       if (sha !== req.sha) throw new PublishRefused('head', `the head of the branch (${sha.slice(0, 12)}) is not the verified commit (${req.sha.slice(0, 12)}).`);
     });
+    await this.checkAndPush(req, url, env, workDir, cloneDir, known);
+  }
 
+  /** Steps 3 to 5 on the fresh clone at `cloneDir`, whose head is `req.sha`: the forge's heads fetched, the blocking check of the diff, the push. */
+  private async checkAndPush(
+    req: { runId: string; ticketId: string; branch: string; sha: string; untrusted?: UntrustedMark; rewrites?: string; repoPath: string },
+    url: string, env: Record<string, string>, workDir: string, cloneDir: string, known: string | undefined,
+  ): Promise<void> {
+    const deadlineMs = this.d.deadlineMs ?? PUBLISH_DEADLINE_MS;
+    const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
+    const sandboxes = withDeadline(this.d.sandboxes, deadlineMs);
+    const inBox = boxOpener(sandboxes, { runId: req.runId, ticketId: req.ticketId, log: this.d.log });
     const git = cloneGit({ workDir, exec: this.exec }, cloneDir);
     const inClone = (args: string[], over: Record<string, string> = {}) => this.exec('git', [...HARDENED, '-C', cloneDir, ...args], { env: { ...env, ...over } });
     const fetched = await within(inClone(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', url, `+HEAD:${BASE}`, ...(known ? [`+refs/heads/${req.branch}:${REMOTE_HEAD}`] : [])]), deadlineMs, silent);

@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, NO_ASSESSMENT, PAUSED, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -80,7 +80,7 @@ function silentReview(e: FactoryEvent): boolean {
 }
 
 const BUILT_IN = new Set<EventType>([
-  'control.pause', 'control.resume', 'control.stop', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'publish.done', 'publish.refused', 'timer.fired', 'pr.opened',
+  'control.pause', 'control.resume', 'control.stop', 'control.bundle', 'bundle.refused', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'publish.done', 'publish.refused', 'timer.fired', 'pr.opened',
   'effect.done', 'effect.failed', 'dead_letter.added', 'agent.asked', 'blockers.done',
 ]);
 
@@ -1163,8 +1163,10 @@ function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: Tick
   if (!job) return undefined;
   // The commit shown to the reviewer is no longer the branch's: no approval from before the push passes a gate (I2).
   if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
-  if (!ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
-  if (!ticket.blocked || ticket.blockKind === 'human_push') {
+  // A take-over (ORC-234) is held as a stop, and its bundle the factory pushed is the human's push, as any.
+  const takenOver = ticket?.blocked && ticket.blockKind === 'taken_over';
+  if (!ticket?.delegated || (settledTicket(ticket) && !takenOver) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
+  if (!ticket.blocked || ticket.blockKind === 'human_push' || takenOver) {
     cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
     // A push on a paused ticket keeps the job the first one interrupted.
     const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
@@ -1595,15 +1597,33 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.effects.push({ kind: 'set_paused', paused: false });
       return out;
     case 'control.stop': {
-      const { runId, pause } = event.payload;
-      if (!authorize(out, event, ticket, pause ? 'pause_run' : 'stop_run', 'dashboard', matrix)) return out;
+      const { runId, pause, takeOver } = event.payload;
+      if (!authorize(out, event, ticket, takeOver ? 'take_over' : pause ? 'pause_run' : 'stop_run', 'dashboard', matrix)) return out;
       // Aimed at a run (the dashboard's inspection, ORC-301): once it has ended, another may be at work, which this stops not.
-      if (runId && ticket?.activeRunId !== runId) {
-        out.trace.push(`control.stop: run ${runId} is no longer the ticket's, nothing stopped`);
+      if ((runId || takeOver) && ticket?.activeRunId !== runId) {
+        out.trace.push(`control.stop: run ${runId ?? 'none'} is no longer the ticket's, nothing stopped`);
+        return out;
+      }
+      if (takeOver && runId) {
+        // The stop first (ORC-234): the human's container opens on a worktree the agent no longer writes.
+        stop(out, workflow, TAKEN_OVER, `Taken over from the dashboard: a human works on the branch in a container of their own, or hands back a bundle the factory checks before any push. ${relaunch(workflow)}`, 'taken_over');
+        out.effects.splice(1, 0, { kind: 'take_over', runId });
         return out;
       }
       return pause ? stop(out, workflow, PAUSED, `Paused from the dashboard. ${relaunch(workflow)}`, 'paused') : stop(out, workflow);
     }
+    case 'control.bundle':
+      if (!authorize(out, event, ticket, 'take_over', 'dashboard', matrix)) return out;
+      // A bundle comes back for a take-over only: never a way around the agent's own run and its checks.
+      if (!ticket?.blocked || ticket.blockKind !== 'taken_over') {
+        out.trace.push(`control.bundle: ${event.ticketId} is not taken over, its bundle is not taken`);
+        return out;
+      }
+      out.effects.push({ kind: 'publish_bundle', file: event.payload.file, by: event.actor! });
+      return out;
+    case 'bundle.refused':
+      out.effects.push({ kind: 'activity', type: 'response', body: `The bundle handed back is refused, nothing was pushed: ${event.payload.reason}\nHand back another bundle, or ${relaunch(workflow).toLowerCase()}` });
+      return out;
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];
