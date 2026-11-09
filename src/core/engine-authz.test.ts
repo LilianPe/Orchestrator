@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { Workflow } from '../config/workflow-schema.js';
 import { DEFAULT_MATRIX, type Role } from './authz.js';
-import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
+import { PAUSED, STOPPED } from './block-cause.js';
+import { AUTHZ_REFUSED, decide, mayCheck, settledTicket } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
@@ -164,5 +165,51 @@ describe('decide — authorization matrix (ORC-186)', () => {
   it('takes the matrix as a parameter, for the preset that will declare it (ORC-187)', () => {
     const open = { ...DEFAULT_MATRIX, trigger: { ...DEFAULT_MATRIX.trigger, anyOf: [['team_member']] } } as const;
     expect(starts(decide(ticket(), ev('ticket.delegated', {}, 'u-member', ['team_member']), workflow, open).effects)).toHaveLength(1);
+  });
+});
+
+describe('decide — pausing and stopping a run from the dashboard (ORC-301)', () => {
+  const OPERATOR: Role[] = ['operator'];
+  const running = () => ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev' });
+  const stopOf = (payload: EventPayloads['control.stop'], actor: string | undefined, roles: readonly Role[] | undefined) => ev('control.stop', payload, actor, roles);
+
+  it('an operator pauses the running run: it is stopped, the ticket held as paused, which a reply relaunches', () => {
+    const out = decide(running(), stopOf({ runId: 'r1', pause: true }, 'dashboard:armand', OPERATOR), workflow);
+    expect(refused(out.trace)).toBe(false);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: PAUSED, kind: 'paused' }]);
+    // Then the label of a blocked ticket, as for any stop.
+    expect(out.effects.slice(0, 2)).toEqual([{ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: expect.stringMatching(/^Paused from the dashboard\. Reply/) }]);
+  });
+
+  it('an operator stops the running run, as the Stop button always did', () => {
+    const out = decide(running(), stopOf({ runId: 'r1' }, 'dashboard:armand', OPERATOR), workflow);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED, kind: 'stopped' }]);
+    expect(out.effects[0]).toEqual({ kind: 'stop_run' });
+  });
+
+  it('refuses someone who is not an operator: nothing stopped, the refusal traced, and nothing written in Linear', () => {
+    for (const payload of [{ runId: 'r1' }, { runId: 'r1', pause: true as const }]) {
+      const out = decide(running(), stopOf(payload, 'u-member', ['team_member', 'repo_writer']), workflow);
+      expect(refused(out.trace)).toBe(true);
+      expect(out.trace.find((t) => t.startsWith(AUTHZ_REFUSED))).toContain(payload.pause ? 'pause_run' : 'stop_run');
+      expect(out.events).toEqual([]);
+      expect(out.effects).toEqual([]);
+    }
+  });
+
+  it('a stop aimed at a run that has ended stops nothing: another run may be at work on the ticket', () => {
+    const out = decide(ticket({ logical: 'dev', activeRunId: 'r2', activeJob: 'dev' }), stopOf({ runId: 'r1' }, 'dashboard:armand', OPERATOR), workflow);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([]);
+    expect(out.trace.join('\n')).toContain('r1');
+  });
+
+  it('a stop journaled before ORC-301, without roles nor run, stops the ticket as it did', () => {
+    const out = decide(running(), stopOf({}, undefined, undefined), workflow);
+    expect(out.events).toEqual([{ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED, kind: 'stopped' }]);
+  });
+
+  it('a paused ticket is settled as a stopped one: a late failure blocks it no more', () => {
+    expect(settledTicket(ticket({ blocked: true, blockKind: 'paused', blockReason: PAUSED }))).toBe('stopped');
   });
 });
