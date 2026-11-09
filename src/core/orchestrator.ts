@@ -1346,10 +1346,15 @@ export class Orchestrator {
    * A launch before its reset would only hit it again; another account active is not held. The tick drains the queues once it passes.
    */
   async usageLimitedUntil(): Promise<number | undefined> {
-    const account = this.account();
-    // As the store has it: an operator who lowers it lifts the hold.
-    this.usageHolds.set(account, Number((await this.d.store.getMeta(usageHoldKey(account))) ?? 0));
+    await this.readUsageHold(this.account());
     return this.heldUntil();
+  }
+
+  /** The account's hold as the store has it, kept as this daemon's: an operator who lowers it lifts the hold. */
+  private async readUsageHold(account: string): Promise<number> {
+    const until = Number((await this.d.store.getMeta(usageHoldKey(account))) ?? 0);
+    this.usageHolds.set(account, until);
+    return until;
   }
 
   /** `usageLimitedUntil` on what this daemon knows already, without reading the store. */
@@ -1649,7 +1654,7 @@ export class Orchestrator {
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     // Read once per drain: its starts, and a limit heard of meanwhile, are held on what this daemon knows (`heldUntil`).
-    if (n > 0) await this.usageLimitedUntil();
+    if (n > 0) await this.readUsageHold(this.account());
     for (let i = 0; i < n; i++) {
       if ((await this.isPaused()) || this.heldUntil() !== undefined || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
@@ -3063,9 +3068,8 @@ export class Orchestrator {
       // hold back the result, and this daemon still holds its launches (`unrecordedHolds`). Only a restart before the reset loses it
       // then: the next launch meets the limit again, and waits as this one did.
       try {
-        const key = usageHoldKey(account);
-        const held = Math.max(Number((await this.d.store.getMeta(key)) ?? 0), usageLimit.resetAt);
-        await this.d.store.setMeta(key, String(held));
+        const held = Math.max(await this.readUsageHold(account), usageLimit.resetAt);
+        await this.d.store.setMeta(usageHoldKey(account), String(held));
         this.usageHolds.set(account, held);
       } catch (err) {
         this.unrecordedHolds.set(account, Math.max(this.unrecordedHolds.get(account) ?? 0, usageLimit.resetAt));

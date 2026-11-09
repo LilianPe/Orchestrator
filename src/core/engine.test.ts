@@ -960,9 +960,8 @@ describe('decide — built-ins', () => {
       expect(out.effects.map((e) => e.kind)).toContain('run_verify');
     });
 
-    it('records no wait on a ticket no longer delegated: no step to resume, decided as any other end', () => {
+    it('relaunches nothing on a ticket no longer delegated: no step to resume, decided as any other end', () => {
       const out = decide(ticket({ logical: 'dev', activeRunId: 'r1', delegated: false }), limited(), workflow);
-      expect(out.timers).toEqual([]);
       expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
     });
 

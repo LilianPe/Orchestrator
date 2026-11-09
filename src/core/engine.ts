@@ -2006,14 +2006,14 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.timers.push({ kind: 'reconcile', payload: {}, slot: 'reconcile', ms: RECONCILE_MS });
         return out;
       }
-      const cut = fired.kind === 'usage.reset' && fired.payload.job ? workflow.jobs[fired.payload.job] : undefined;
-      if (cut && fired.kind === 'usage.reset' && fired.payload.runId) {
+      const cut = fired.kind === 'usage.reset' && fired.payload.job && fired.payload.runId ? { job: workflow.jobs[fired.payload.job], runId: fired.payload.runId } : undefined;
+      if (cut?.job) {
         // A question cut by the limit: asked again, from what it read, in its thread (`relaunchOf`). A code step's reset, armed by a
         // version before ORC-357, relaunches it the same way while the wait it recorded then still names its run and nothing runs
         // on the ticket; its launch refuses it on a ticket undelegated, blocked or delivered since.
-        const current = cut.queue === 'questions' || (ticket?.usageWait?.runId === fired.payload.runId && !ticket.activeRunId && !ticket.verifyingRunId);
-        if (current) startRun(out, event, ticket, cut, { relaunchOf: fired.payload.runId });
-        else out.trace.push(`timer.fired usage.reset: ${cut.name} not resumed, the ticket moved on`);
+        const current = cut.job.queue === 'questions' || (ticket?.usageWait?.runId === cut.runId && !ticket.activeRunId && !ticket.verifyingRunId);
+        if (current) startRun(out, event, ticket, cut.job, { relaunchOf: cut.runId });
+        else out.trace.push(`timer.fired usage.reset: ${cut.job.name} not resumed, the ticket moved on`);
         return out;
       }
       if (fired.kind === 'clarify.remind' || fired.kind === 'clarify.expire') return clarifyTimer(out, fired, ticket, workflow);
