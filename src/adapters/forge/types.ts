@@ -13,6 +13,11 @@ export interface PrInfo {
   mergedAt?: number;
   checks: 'pending' | 'pass' | 'fail' | 'none';
   failedChecks: string[];
+  /**
+   * The checks in a state the forge does not know, which keep `checks` at `pending` (ORC-303): named, so that a refused
+   * merge says which one it waits on, never a CI still running (ORC-304). Absent when there is none.
+   */
+  unknownChecks?: string[];
 }
 
 /**

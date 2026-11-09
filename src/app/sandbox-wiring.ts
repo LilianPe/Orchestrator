@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import { ContainerSandboxProvider, defaultLimits, type SandboxLimits } from '../adapters/sandbox/docker-rootless.js';
+import { CONTAINER_SERVICES, ContainerSandboxProvider, defaultLimits, type SandboxLimits } from '../adapters/sandbox/docker-rootless.js';
 import { SandboxRouter } from '../adapters/sandbox/router.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 import type { Egress } from '../network/proxy-service.js';
@@ -38,8 +38,8 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
   return new SandboxRouter([
     {
       name: 'container',
-      provider: new ContainerSandboxProvider({ cli, image, uid, gid, instance, limits: sandboxLimits(env), egress }),
-      capabilities: { level: 'L3', browser: false, services: [] },
+      provider: new ContainerSandboxProvider({ cli, image, uid, gid, instance, limits: sandboxLimits(env), egress, ...(env['FACTORY_POSTGRES_IMAGE'] ? { postgresImage: env['FACTORY_POSTGRES_IMAGE'] } : {}) }),
+      capabilities: { level: 'L3', browser: false, services: CONTAINER_SERVICES },
     },
   ]);
 }

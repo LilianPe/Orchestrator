@@ -208,8 +208,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       ...(flaky.length ? { flaky } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
-    const setUp = async (suffix: string, workspacePath: string) => {
-      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
+    const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
+      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services, now: new Date() });
     };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
@@ -229,7 +229,9 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     }
     if (failures.length || !runs) return verdict();
 
-    await setUp('verify', cloneDir);
+    // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
+    const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
+    await setUp('verify', cloneDir, config.services);
     const ran: CommandRun[] = [];
     const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     await inBox('verify', cloneDir, [], async (id) => {
@@ -237,10 +239,11 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
         if (failed) ran.push(failed);
       }
-    });
+    }, withServices);
+    // The base's tests get services as the commit's do, new ones.
     if (onBase && needsBase(ran, standing)) {
-      await setUp('verify-base', beforeDir);
-      await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing));
+      await setUp('verify-base', beforeDir, config.services);
+      await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing), withServices);
     }
     const settled = settle(ran, standing);
     failures.push(...settled.failures);

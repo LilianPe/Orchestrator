@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { availableParallelism } from 'node:os';
 import { basename, dirname } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { EgressProxy } from '../../network/proxy.js';
 import { execCmd, mustExec, type Exec, type ExecResult } from '../exec.js';
 import {
@@ -31,7 +33,16 @@ export interface ContainerSandboxOptions {
   instance?: string;
   /** Per container (ORC-218): a fork bomb or a memory hog in one attempt must not starve the others. No swap: a hog is killed, not thrashing the host. */
   limits?: SandboxLimits;
+  /** The image of an attempt's Postgres (ORC-309); `POSTGRES_IMAGE` by default. */
+  postgresImage?: string;
+  /** How long a new service may take to accept connections; 60 s by default. */
+  serviceReadyMs?: number;
 }
+
+/** Fully qualified: rootless Podman resolves no short name without a registries config. */
+export const POSTGRES_IMAGE = 'docker.io/library/postgres:16-bookworm';
+/** The services the container backend starts next to an attempt (ORC-309). */
+export const CONTAINER_SERVICES: readonly string[] = ['postgres'];
 
 /** An undefined limit is left out of `run`: the engine's own (none), for a host whose cgroups lack that controller. */
 export interface SandboxLimits {
@@ -54,6 +65,30 @@ export function isPodman(cli: string): boolean {
 const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
 const INSTANCE = 'factory.instance';
+/** On a service's container (ORC-309): the key of the sandboxes it serves, `servicesOf` of their requests. */
+const SERVICES = 'factory.services';
+
+/** The role and database of `DATABASE_URL`. */
+const PG_USER = 'factory';
+
+/**
+ * In a tmpfs, gone with the container: a subdir, since initdb wants a data dir of its own. Mounted over the image's
+ * volume, so the engine makes no anonymous volume there (`rm -v` would remove one all the same).
+ */
+const PG_DATA = '/var/lib/postgresql/data';
+const PG_READY_POLL_MS = 250;
+/** In the service's environment: the password of `DATABASE_URL`'s role, read back when another sandbox joins it. */
+const PG_PASSWORD = 'FACTORY_DB_PASSWORD';
+/** `DATABASE_URL`'s role, by the superuser on the service's socket: owner of the database and its schema, no superuser. */
+const PG_ROLE = [
+  'psql -v ON_ERROR_STOP=1 --quiet --username=postgres',
+  `--dbname=${PG_USER}`,
+  `-c "CREATE ROLE ${PG_USER} LOGIN PASSWORD '$${PG_PASSWORD}'"`,
+  `-c "ALTER DATABASE ${PG_USER} OWNER TO ${PG_USER}"`,
+  `-c "ALTER SCHEMA public OWNER TO ${PG_USER}"`,
+].join(' ');
+/** What reaches an attempt's Postgres from its sandboxes, which share its loopback (ORC-309). */
+const databaseUrl = (password: string) => `postgres://${PG_USER}:${password}@127.0.0.1:5432/${PG_USER}`;
 
 /**
  * Where the run's own dir of the proxy is mounted, read-only: a dir, not its socket, so that a daemon started
@@ -117,6 +152,15 @@ interface Info {
   running: boolean;
   runId: string;
   network: NetworkLevel;
+  /** On the loopback of services (ORC-309): `--network container:<id>`. */
+  joined: boolean;
+}
+
+/** An attempt's Postgres (ORC-309): its container, the password of `DATABASE_URL`, and whether this call started it. */
+interface Service {
+  id: string;
+  password: string;
+  started: boolean;
 }
 
 /** L3 of the MVP doc: one container per attempt, driven by the engine's CLI. */
@@ -125,9 +169,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
   private readonly podman: boolean;
   /**
    * Ids seen through create, findByAttempt or list, with their run: `spawnCommand` is sync and checks
-   * against them (after a restart, list() first), `destroy` closes the run's egress from it.
+   * against them (after a restart, list() first), `destroy` closes the run's egress from it, and looks for
+   * the services it owns only if it joined some.
    */
-  private readonly known = new Map<string, string>();
+  private readonly known = new Map<string, { runId: string; joined: boolean }>();
 
   constructor(private readonly opts: ContainerSandboxOptions) {
     this.run = opts.exec ?? execCmd;
@@ -139,8 +184,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const { minLevel, browser, services } = req.requirements;
     if (minLevel !== 'L3') throw new Error(`container sandbox: isolation ${minLevel} not available (L3 only)`);
     if (browser) throw new Error('container sandbox: no browser');
-    if (services.length) throw new Error(`container sandbox: no services (${services.join(', ')})`);
+    const unknown = services.filter((s) => !CONTAINER_SERVICES.includes(s));
+    if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
     const mounts = [{ host: req.workspacePath, target: WORKSPACE_TARGET, readOnly: false }, ...req.mounts].map(mountArg);
+    const key = req.servicesOf ?? req.runId;
 
     for (const c of await this.byLabel(`${ATTEMPT}=${req.runId}`)) {
       // Stopped, or from before a restart: its egress socket is gone (the mount holds an unlinked inode).
@@ -149,21 +196,109 @@ export class ContainerSandboxProvider implements SandboxProvider {
         continue;
       }
       if (c.network !== req.network) throw new Error(`container sandbox: run ${req.runId} has network ${c.network}, asked ${req.network}`);
-      return this.seen(c);
+      return withServices(this.seen(c), services.length ? await this.service(req, key) : undefined);
     }
-    const egress = this.opts.egress && (await this.opts.egress.open(req.runId, { level: req.network, allow: req.allow ?? [] }));
-    // From the open on, any failure closes the run's egress: no socket left listening for nothing.
+    let service: Service | undefined;
+    let egress: string | undefined;
     try {
-      const id = (await this.must(this.runArgs(req, mounts, egress))).trim();
-      this.known.set(id, req.runId);
-      return { id, network: req.network, level: 'L3' };
+      if (services.length) service = await this.service(req, key);
+      egress = this.opts.egress && (await this.opts.egress.open(req.runId, { level: req.network, allow: req.allow ?? [] }));
+      const id = await this.start(this.runArgs(req, mounts, egress, service?.id), service ? { DATABASE_URL: databaseUrl(service.password) } : {});
+      this.known.set(id, { runId: req.runId, joined: !!service });
+      return withServices({ id, network: req.network, level: 'L3' }, service);
     } catch (err) {
-      await this.opts.egress?.close(req.runId);
+      // No socket left listening for nothing.
+      if (egress !== undefined) await this.opts.egress?.close(req.runId);
+      // Their owner never started, or a `setup` that would have filled them did not: nobody follows, nothing else would destroy them before a restart.
+      if (services.length && (key === req.runId || service?.started)) await this.destroyServices(key);
       throw err;
     }
   }
 
-  private runArgs(req: SandboxRequest, mounts: string[], egress: string | undefined): string[] {
+  /**
+   * The services of `req.servicesOf` (ORC-309): the running one, or a new one. Postgres, as its image's user, without
+   * capabilities, under the attempt's limits, in a network of its own without route (`none`), its data in a tmpfs: the
+   * sandboxes join its loopback, so only they reach it. Its passwords, new for it, and `DATABASE_URL` go through the
+   * engine CLI's environment (`start`), never its command line. Password auth on TCP (initdb would trust the loopback), trust on its own socket,
+   * which no sandbox mounts: the factory's `pg_dumpall` goes through it. `DATABASE_URL`'s role owns the database but is no
+   * superuser: a superuser runs programs in the service's container (`COPY … TO PROGRAM`), where a process started by
+   * the `setup` would outlive its container, its secrets with it, on the agent's loopback.
+   */
+  private async service(req: SandboxRequest, key: string): Promise<Service> {
+    const [found] = await this.ids(`${SERVICES}=${key}`);
+    if (found) {
+      const [running, ...env] = (await this.engine(['inspect', '--format', '{{.State.Running}}{{range .Config.Env}}\t{{.}}{{end}}', found])).stdout.trim().split('\t');
+      const password = env.find((e) => e.startsWith(`${PG_PASSWORD}=`))?.slice(PG_PASSWORD.length + 1);
+      // Never a new one in its place: its sandboxes would find an empty database where the setup filled one.
+      if (running !== 'true' || !password) throw new Error(`container sandbox: the services of ${key} are no longer running`);
+      return { id: found, password, started: false };
+    }
+    const password = randomBytes(24).toString('hex');
+    // The superuser's, which nobody is given: its own socket is how the factory gets in.
+    const secrets = { POSTGRES_PASSWORD: randomBytes(24).toString('hex'), [PG_PASSWORD]: password };
+    const id = await this.start(
+      [
+        'run', '-d',
+        '--label', `${SERVICES}=${key}`, '--label', `factory.ticket=${req.ticketId}`,
+        ...(this.opts.instance ? ['--label', `${INSTANCE}=${this.opts.instance}`] : []),
+        '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+        ...limitArgs(this.opts.limits ?? defaultLimits()),
+        '--user', 'postgres',
+        '--mount', `type=tmpfs,target=${PG_DATA},tmpfs-mode=1777`,
+        '-e', `POSTGRES_DB=${PG_USER}`, '-e', `PGDATA=${PG_DATA}/pgdata`, '-e', 'POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust',
+        ...Object.keys(secrets).flatMap((k) => ['-e', k]),
+        '--network', 'none',
+        this.opts.postgresImage ?? POSTGRES_IMAGE,
+      ],
+      secrets,
+    );
+    try {
+      await this.ready(id);
+      // The password from the container's own environment, by its own shell: never on a command line of the host.
+      const role = await this.engine(['exec', id, 'sh', '-c', PG_ROLE]);
+      if (role.code !== 0) throw new Error(`container sandbox: postgres role not made in ${id}: ${role.stderr.trim()}`);
+    } catch (err) {
+      await this.remove(id);
+      throw err;
+    }
+    return { id, password, started: true };
+  }
+
+  /** Until it accepts connections on the loopback its sandboxes reach it by: the entrypoint's first server listens on its socket only. */
+  private async ready(id: string): Promise<void> {
+    const until = Date.now() + (this.opts.serviceReadyMs ?? 60_000);
+    for (;;) {
+      const r = await this.engine(['exec', id, 'pg_isready', '--quiet', '--host=127.0.0.1', `--dbname=${PG_USER}`]);
+      if (r.code === 0) return;
+      if (Date.now() >= until) throw new Error(`container sandbox: postgres not ready in ${id}: ${r.stderr.trim() || `exit ${r.code}`}`);
+      await sleep(PG_READY_POLL_MS);
+    }
+  }
+
+  private async destroyServices(key: string): Promise<void> {
+    for (const id of await this.ids(`${SERVICES}=${key}`)) await this.remove(id);
+  }
+
+  /**
+   * `-v`: an anonymous volume of the image goes with its container. `--depend`: Podman refuses to remove a service a
+   * container still joins (a `setup` left by a crash, which `recover()` destroys at the same time); Docker removes it.
+   */
+  private async remove(id: string): Promise<void> {
+    const r = await this.engine(['rm', '-f', '-v', ...(this.podman ? ['--depend'] : []), id]);
+    if (r.code !== 0 && !/no such container|already in progress/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
+  }
+
+  /**
+   * `docker run` with `env` read by the engine CLI from its own environment (`-e NAME`, no value): never on the command
+   * line, which the host's process list shows. Its names are no variable of the engines' (`CARRIER`).
+   */
+  private async start(args: string[], env: Record<string, string>): Promise<string> {
+    const r = await this.engine(args, Object.keys(env).length ? { env } : undefined);
+    if (r.code !== 0) throw new Error(`container sandbox: run: ${r.stderr.trim()}`);
+    return r.stdout.trim();
+  }
+
+  private runArgs(req: SandboxRequest, mounts: string[], egress: string | undefined, service?: string): string[] {
     return [
       'run', '-d',
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
@@ -181,9 +316,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
             ...EGRESS_ENV.flatMap((v) => ['-e', v]),
           ]
         : []),
+      ...(service ? ['-e', 'DATABASE_URL'] : []),
       '--workdir', WORKSPACE_TARGET,
-      // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213).
-      '--network', 'none',
+      // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213). With services, their loopback (ORC-309), which has none either.
+      '--network', service ? `container:${service}` : 'none',
       this.opts.image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
     ];
   }
@@ -222,21 +358,34 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return this.seen(c);
   }
 
-  /** Stopped containers too: they are still attempts' leftovers for recover() to destroy. */
+  /** Stopped containers too: they are still attempts' leftovers for recover() to destroy. Services (ORC-309) under the key they serve. */
   async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
-    return (await this.byLabel(ATTEMPT)).map((c) => ({ runId: c.runId, sandbox: this.seen(c) }));
+    const sandboxes = (await this.byLabel(ATTEMPT)).map((c) => ({ runId: c.runId, sandbox: this.seen(c) }));
+    const ids = await this.ids(SERVICES);
+    if (!ids.length) return sandboxes;
+    // As `inspect` below: one removed since the `ps` prints nothing, the others still do.
+    const services = (await this.engine(['inspect', '--format', `{{.Id}}\t{{index .Config.Labels "${SERVICES}"}}`, ...ids])).stdout.split('\n').filter(Boolean).map((line) => {
+      const [id = '', runId = ''] = line.split('\t');
+      return { runId, sandbox: { id, network: 'none', level: 'L3' } satisfies Sandbox };
+    });
+    return [...sandboxes, ...services];
   }
 
+  /** The sandbox that owns services, whose `runId` is their key, takes them with it (ORC-309). */
   async destroy(id: string): Promise<void> {
-    const runId = this.known.get(id);
-    const r = await this.engine(['rm', '-f', id]);
-    if (r.code !== 0 && !/no such container/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
+    const known = this.known.get(id);
+    await this.remove(id);
     this.known.delete(id);
-    if (runId) await this.opts.egress?.close(runId);
+    if (!known) return;
+    try {
+      if (known.joined) await this.destroyServices(known.runId);
+    } finally {
+      await this.opts.egress?.close(known.runId);
+    }
   }
 
   private seen(c: Info): Sandbox {
-    this.known.set(c.id, c.runId);
+    this.known.set(c.id, { runId: c.runId, joined: c.joined });
     return sandbox(c);
   }
 
@@ -259,27 +408,37 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   private async byLabel(label: string): Promise<Info[]> {
-    const mine = this.opts.instance ? ['--filter', `label=${INSTANCE}=${this.opts.instance}`] : [];
-    const ids = (await this.must(['ps', '-a', '-q', '--no-trunc', '--filter', `label=${label}`, ...mine])).split('\n').filter(Boolean);
+    const ids = await this.ids(label);
     return ids.length ? this.inspect(ids) : [];
+  }
+
+  /** This daemon's containers that carry `label`, stopped ones included. */
+  private async ids(label: string): Promise<string[]> {
+    const mine = this.opts.instance ? ['--filter', `label=${INSTANCE}=${this.opts.instance}`] : [];
+    return (await this.must(['ps', '-a', '-q', '--no-trunc', '--filter', `label=${label}`, ...mine])).split('\n').filter(Boolean);
   }
 
   /** `inspect` rather than `ps --format`: its labels are a map under both engines. A missing id prints nothing and is skipped. */
   private async inspect(ids: string[]): Promise<Info[]> {
-    const format = `{{.Id}}\t{{.State.Running}}\t{{index .Config.Labels "${ATTEMPT}"}}\t{{index .Config.Labels "${NETWORK}"}}`;
+    const format = `{{.Id}}\t{{.State.Running}}\t{{index .Config.Labels "${ATTEMPT}"}}\t{{index .Config.Labels "${NETWORK}"}}\t{{.HostConfig.NetworkMode}}`;
     const r = await this.engine(['inspect', '--format', format, ...ids]);
     return r.stdout
       .split('\n')
       .filter(Boolean)
       .map((line) => {
-        const [id = '', running, runId = '', network] = line.split('\t');
-        return { id, running: running === 'true', runId, network: network as NetworkLevel };
+        const [id = '', running, runId = '', network, mode = ''] = line.split('\t');
+        return { id, running: running === 'true', runId, network: network as NetworkLevel, joined: mode.startsWith('container:') };
       });
   }
 }
 
 function sandbox(c: Info): Sandbox {
   return { id: c.id, network: c.network, level: 'L3' };
+}
+
+/** `sandbox`, with the container of its services when it has some. */
+function withServices(sandbox: Sandbox, service: Service | undefined): Sandbox {
+  return service ? { ...sandbox, services: service.id } : sandbox;
 }
 
 function limitArgs(l: SandboxLimits): string[] {

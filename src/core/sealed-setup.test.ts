@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
+import { POSTGRES_DUMP, RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
 
 const SECRET = 's3cr3t-value/with+chars';
 const NOW = new Date('2026-11-04T12:00:00.000Z');
@@ -186,5 +186,71 @@ describe('runSealedSetup', () => {
     const sandboxes = new FakeSandboxProvider();
     vi.spyOn(sandboxes, 'destroy').mockRejectedValue(new Error('engine down'));
     await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('engine down');
+  });
+
+  describe("with the repository's services (ORC-309)", () => {
+    const pg = { services: ['postgres'] };
+    const dumps = (s: FakeSandboxProvider) => s.execs.filter((e) => e.argv[0] === 'pg_dumpall');
+
+    it("opens the attempt's services, not the setup's own, and keeps them for the agent", async () => {
+      const sandboxes = new FakeSandboxProvider();
+      await runSealedSetup(sandboxes, request(tree({}), pg));
+      expect(sandboxes.created[0]).toMatchObject({ runId: 'r1-setup', servicesOf: 'r1', requirements: { services: ['postgres'] } });
+      expect(sandboxes.active()).toEqual([]);
+      expect(sandboxes.activeServices()).toEqual(['svc-1']);
+    });
+
+    it('dumps the database once the setup container is gone, through the services own container', async () => {
+      const sandboxes = new FakeSandboxProvider();
+      let aliveAtDump: string[] = [];
+      sandboxes.execResult = (argv) => {
+        if (argv[0] === 'pg_dumpall') aliveAtDump = sandboxes.active().map((s) => s.id);
+        return { stdout: 'COPY public.t (v) FROM stdin;\nclean\n', stderr: '', code: 0 };
+      };
+      await runSealedSetup(sandboxes, request(tree({}), pg));
+      expect(dumps(sandboxes)).toEqual([{ id: 'svc-1', argv: POSTGRES_DUMP, opts: { cwd: '/' } }]);
+      expect(aliveAtDump).toEqual([]);
+    });
+
+    it.each([
+      ['as written', SECRET],
+      ['in base64', Buffer.from(`user:${SECRET}`).toString('base64')],
+      ['in a URL', encodeURIComponent(SECRET)],
+    ])('a secret the setup wrote in the database (%s) fails it, without the value, and takes the services with it', async (_, spelling) => {
+      const sandboxes = new FakeSandboxProvider();
+      sandboxes.execResult = (argv) => ({ stdout: argv[0] === 'pg_dumpall' ? `COPY public.settings (v) FROM stdin;\n${spelling}\n` : '', stderr: '', code: 0 });
+      const err = await runSealedSetup(sandboxes, request(tree({}), pg)).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe('The worktree setup failed: a secret of the setup is in its database (NPM_TOKEN)');
+      expect((err as Error).message).not.toContain(SECRET);
+      expect(sandboxes.activeServices()).toEqual([]);
+    });
+
+    it('a database that cannot be dumped fails the setup: what cannot be checked does not stay', async () => {
+      const sandboxes = new FakeSandboxProvider();
+      sandboxes.execResult = (argv) => ({ stdout: '', stderr: argv[0] === 'pg_dumpall' ? 'connection refused' : '', code: argv[0] === 'pg_dumpall' ? 1 : 0 });
+      await expect(runSealedSetup(sandboxes, request(tree({}), pg))).rejects.toThrow('could not be checked for the secrets (connection refused)');
+      expect(sandboxes.activeServices()).toEqual([]);
+    });
+
+    it('without a secret there is nothing to find: no dump', async () => {
+      const sandboxes = new FakeSandboxProvider();
+      await runSealedSetup(sandboxes, request(tree({}), { ...pg, secrets: {} }));
+      expect(dumps(sandboxes)).toEqual([]);
+    });
+
+    it('a failed command takes the services with it: no agent follows', async () => {
+      const sandboxes = new FakeSandboxProvider();
+      sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 1 : 0 });
+      await expect(runSealedSetup(sandboxes, request(tree({}), pg))).rejects.toThrow('npm ci');
+      expect(sandboxes.activeServices()).toEqual([]);
+    });
+
+    it('a backend that gives no services container to check fails the setup', async () => {
+      const sandboxes = new FakeSandboxProvider();
+      const create = sandboxes.create.bind(sandboxes);
+      sandboxes.create = async (req) => ({ ...(await create(req)), services: undefined });
+      await expect(runSealedSetup(sandboxes, request(tree({}), pg))).rejects.toThrow('cannot be checked');
+    });
   });
 });
