@@ -6,7 +6,7 @@ The factory assumes the agent is compromised: an issue, a comment, a README or a
 
 How to read the Tests column:
 
-- `test/isolation/…` runs only with `FACTORY_ISOLATION=1` and a container engine: the `isolation` CI job, rootless Podman ([`tests.md`](tests.md#isolation-tests)). Test no. 11 (`claude-settings.test.ts`) also skips without a real `claude` and a credential; tests no. 12 and 13 skip without a test GitHub App (in CI they run in the `isolation-github` job, on `main` only).
+- `test/isolation/…` runs only with `FACTORY_ISOLATION=1` and a container engine: the `isolation` CI job, rootless Podman ([`tests.md`](tests.md#isolation-tests)). Test no. 11 (`test/isolation/claude-settings.test.ts`) also skips without a real `claude` and a credential; tests no. 12 and 13 skip without a test GitHub App (in CI they run in the `isolation-github` job, on `main` only).
 - `src/…` runs in the `unit` project, on every CI run.
 - A quoted title names the case within the file; without one, the whole file is the test.
 
@@ -19,7 +19,7 @@ Whatever it was told, the agent runs code in its sandbox. Everything below holds
 | Attack | Defense | Tests |
 |---|---|---|
 | Escape the container: capabilities, kernel calls, mounts, host processes | Rootless engine, no capabilities, `NoNewPrivs`, seccomp, `/proc/sys` read-only, own pid namespace (ORC-204) | `test/isolation/isolation-01-runtime.test.ts`; `test/isolation/isolation-02-kernel.test.ts`; `test/isolation/rootless.test.ts` |
-| Exhaust the machine: fork bomb, memory hog | Per-container limits, by default 512 processes, 4 GiB without swap, 2 CPUs (fewer on a smaller host); `FACTORY_SANDBOX_*` can loosen or remove them, and the test checks the defaults | `test/isolation/isolation-09-resources.test.ts` |
+| Exhaust the machine: fork bomb, memory hog | Per-container limits on processes, memory and CPUs ([`configuration.md`](configuration.md)); `FACTORY_SANDBOX_*` can loosen or remove them, and the test checks the defaults | `test/isolation/isolation-09-resources.test.ts` |
 | Read another ticket's work, `/tmp`, home or Claude session | One container per run, mounts of its own ticket only | `test/isolation/isolation-10-leaks.test.ts` |
 | Steal a credential: the Claude account's token, repository secrets, the factory's Linear or GitHub tokens | The run gets only its run variables, the variables the repository declares and a placeholder; the egress proxy sets the Claude token on the way out (ORC-211, ORC-337) | `test/isolation/isolation-07-secrets.test.ts`; `test/isolation/claude-token.test.ts`; `src/adapters/runner/claude-code.test.ts` « never with the env of the container (ORC-211) »; `test/isolation/isolation-07-layers.test.ts` |
 | Use the Claude account for something else: the Files API, a server tool or a document fetched by URL on the factory's account | Only the calls Claude Code makes get through, model call bodies checked before they go on (ORC-337) | `src/network/proxy.test.ts` « refuses a model call that would make Anthropic »; `src/network/proxy.test.ts` « refuses a path Claude Code does not call, /v1/files first »; `test/isolation/claude-token.test.ts` |
@@ -98,4 +98,4 @@ What [`interface-and-security.md`](interface-and-security.md#known-limitations) 
 - **Sandbox: the Claude token is visible to the agent.** It was the runner's only credential, in its environment. Lifted by ORC-337: the sandbox holds a placeholder, the egress proxy sets the token on the way to `api.anthropic.com` (`test/isolation/claude-token.test.ts`).
 - **Claude Code's refusals as the first barrier.** [`github.md`](github.md#branch-protection-strongly-recommended) once presented the pack's refusals as the first barrier against a push. They are a guard against mistakes; the barrier is the sandbox without a token and the factory's publication (ORC-125, ORC-349).
 
-Still open, and still listed there: the smee channel is public (threat 3), only branch protection keeps a merge human (threat 4), the transcripts hold everything the agents read and wrote (threat 5, `FACTORY_HOME` to protect), and runs on the host share the daemon's user and secrets. That last one is narrowed, not lifted: with sandboxes a run gets only its variables (ORC-211), and the daemon no longer starts without a container engine unless `FACTORY_ALLOW_HOST_RUNS=1` asks for host runs (ORC-349).
+The limitations still listed there are the **Open** rows above, and the runs on the host, which keep the daemon's user and secrets: narrowed, not lifted, since the daemon no longer starts without a container engine unless `FACTORY_ALLOW_HOST_RUNS=1` asks for them (ORC-349).
