@@ -23,7 +23,6 @@ export interface Snapshot {
   queue: QueueView[];
   activeRuns: RunView[];
   costTodayUsd: number;
-  budgetUsd: number | null;
   capacity: { dev: { used: number; total: number }; questions: { used: number; total: number } };
 }
 

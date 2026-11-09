@@ -41,7 +41,8 @@ describe('the build step (ORC-136)', () => {
     await h.advance(600_000);
     expect(h.runner.requests).toHaveLength(1);
     const t = await h.ticket();
-    expect(t).toMatchObject({ blocked: true, blockReason: expect.stringContaining('reached a limit') });
+    // The turn cap is a budget (ORC-216): its own kind, under the cause `limit` in the Flow.
+    expect(t).toMatchObject({ blocked: true, blockKind: 'budget', blockReason: 'The run dev spent its turn budget (max_turns of its step).' });
     expect(causeOf(t.blockKind)).toBe('limit');
   });
 

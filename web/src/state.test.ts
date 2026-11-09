@@ -4,7 +4,7 @@ import type { FlowView, Snapshot } from './types.js';
 
 const snapshot: Snapshot = {
   paused: false, linearConnected: true, queue: [], activeRuns: [{ id: 'r1', ticketId: 'REL-1', job: 'dev', startedAt: 1, turns: 0, costUsd: 0 }],
-  costTodayUsd: 1.5, budgetUsd: 20, capacity: { dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } },
+  costTodayUsd: 1.5, capacity: { dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } },
 };
 
 describe('reducer', () => {

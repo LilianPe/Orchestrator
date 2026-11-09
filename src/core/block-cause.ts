@@ -7,11 +7,12 @@ export type BlockCause = (typeof BLOCK_CAUSES)[number];
  * classes by it, and the reason is only shown. A cause, or one of the kinds the engine tells apart within a cause:
  * `asked`, a question the agent asks during its run, whose reason says no more than its cause; `stuck`, a pending job
  * no settle could start (ORC-339), which a reply starts; `ci_bound`, the red-CI bound (ORC-270), which a green CI lifts;
- * `paused`, a run paused from the dashboard (ORC-301), a stop that says so.
+ * `budget`, a step or a ticket past its budget in tokens or in turns (ORC-216); `paused`, a run paused from the dashboard
+ * (ORC-301), a stop that says so.
  */
-export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'paused';
+export type BlockKind = BlockCause | 'asked' | 'stuck' | 'ci_bound' | 'budget' | 'paused';
 
-const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit', paused: 'stopped' };
+const WITHIN: Partial<Record<BlockKind, BlockCause>> = { asked: 'question', stuck: 'infra', ci_bound: 'limit', budget: 'limit', paused: 'stopped' };
 
 /** The cause the Flow shows a block under; `other` for a ticket blocked without a kind, never a guess. */
 export const causeOf = (kind: BlockKind | undefined): BlockCause => {
