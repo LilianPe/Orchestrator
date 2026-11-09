@@ -2,7 +2,7 @@
 
 A repository can declare its commands, its sensitive paths and its limits to the factory in `.factory/config.yml`, at the root. The file is optional: without it, the `factory/default` baseline applies as is.
 
-**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). `budgets.per_ticket_tokens` at each launch (ORC-340) and by `factory validate`'s worst case (ORC-216). `visual_paths` on each `verify` of a job that writes the commit (ORC-176). `max_diff` on each `verify` (ORC-333), not yet on the publication (ORC-125). Read and validated, but not yet applied: `services` (ORC-282, ORC-309) and `feature_flags`.
+**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). `budgets.per_ticket_tokens` at each launch (ORC-340) and by `factory validate`'s worst case (ORC-216). `visual_paths` on each `verify` of a job that writes the commit (ORC-176). `services` at launch and on each `verify` (ORC-309, see [Services](#services)). `max_diff` on each `verify` (ORC-333), not yet on the publication (ORC-125). Read and validated, but not yet applied: `feature_flags`.
 
 ## When and where it is read
 
@@ -38,7 +38,7 @@ network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (def
 | `commands` | `name: command` | `{}` | The repository's checks (`lint`, `typecheck`, `test`…), run by `verify` in file order, at network level `none`. Empty: the workflow's `jobs.<job>.verify`, until ORC-177. |
 | `env` | list of names | `[]` | Variables the runner receives: `setup`, agent, red check, and `verify`. See [Variables and secrets](#variables-and-secrets). |
 | `setup_secrets` | list of names | `[]` | Secrets that only `setup` receives, sealed before the agent starts. |
-| `services` | list | `[]` | Services to start next to the runner (`postgres`…). |
+| `services` | list | `[]` | Services the factory starts next to each attempt: `postgres` only (see [Services](#services)). Another name refuses the launch. |
 | `sensitive_paths` | list of globs | `[]` | Globs from the root (`infra`, `src/auth*`, `**/migrations/**`, `src/**/*.sql`), dotfiles included and case ignored; a pattern that names a directory protects everything under it. What a branch changes in them once an untrusted run worked on it is refused by `verify` and the publication. A trusted branch may change them ([workflow](workflow.md#lifecycle-events-not-configurable)). |
 | `budgets.per_ticket_tokens` | integer > 0 | none | Token cap for the ticket's code runs (questions do not count): past it, the ticket is blocked before its next code run (ORC-340), kind `budget` (ORC-216). It can only lower the cap of `factory.yml`; `factory validate` refuses the preset when its worst case exceeds the lower of the two. |
 | `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Maximum diff size excluding tests; can only be tightened. |
@@ -71,6 +71,18 @@ Consequence of the separate container: whatever a tool stores in `$HOME` disappe
 After the `setup`, before the agent, `sealSecrets` deletes any worktree file that contains a value from `setup_secrets`: as is, in base64, alone or within a longer value (`user:token`), in a URL or in JSON. A hashed or encrypted secret, or base64 split across lines, is not recognized: do not leave it in the worktree in another form.
 
 The `setup` receives **no secrets** when its branch has commits beyond the default branch (a ticket resumed after its worktree was deleted): it would execute code no human has reviewed. A `setup` that needs a secret then fails, and the ticket is blocked.
+
+## Services
+
+`services: [postgres]` (ORC-309): each attempt gets a Postgres of its own, made for it and destroyed with it. The factory generates `DATABASE_URL` (`postgres://factory:<password>@127.0.0.1:5432/factory`, a random password for each database) and gives it to the `setup` and to the agent, in their containers' environment; it comes neither from the daemon nor from the repository, which cannot declare it under `env`. The database is empty: the `setup` fills it (`pnpm db:migrate`).
+
+- **One database per attempt.** The `setup` and the agent of an attempt share it. A new attempt on a worktree already set up gets a new one, so its `setup` runs again, without `setup_secrets` (the worktree holds an earlier attempt's work, which nobody reviewed); if that fails, the ticket is blocked and the worktree stays.
+- **`verify` has its own**, new, filled by its own `setup`, never the agent's: the agent cannot prepare the state its checks find.
+- **Its role** owns the database and its `public` schema (migrations, trusted extensions such as `pgcrypto`), and is no superuser: a migration that needs one (an untrusted extension, `ALTER SYSTEM`) fails.
+- **No route.** Postgres runs in a network of its own, without route (`--network none`), as its image's user, without capabilities, under the same limits as the attempt's container, its data in memory. The attempt's containers join its loopback, which has no route either: nothing out, and no other attempt reaches it.
+- **Its secrets.** With `setup_secrets`, the database is dumped (`pg_dumpall`) once the `setup`'s container is gone, and searched for their values, in the spellings `sealSecrets` knows. A value found there blocks the ticket, naming the secret, never its value, and no agent starts. A secret transformed (hashed, encrypted, in a `bytea`) is not recognized, as on the disk.
+- **Gone with the attempt**: with its container, when the attempt ends, when its `setup` fails, and at the daemon's next start for an attempt that did not survive it.
+- The red check of a `tests` step and the visual proof get no database (see the known gaps in [`ports/sandbox-provider.md`](ports/sandbox-provider.md#known-gaps)).
 
 ## What a configuration cannot do
 

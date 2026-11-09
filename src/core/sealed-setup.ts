@@ -64,6 +64,11 @@ function spellings(secret: string): Buffer[] {
   return [...new Set(forms)].map((f) => Buffer.from(f));
 }
 
+/** Whether `data` holds `secret`, in one of the spellings `sealSecrets` finds. */
+export function holdsSecret(data: Buffer, secret: string): boolean {
+  return !!secret && spellings(secret).some((n) => data.includes(n));
+}
+
 /** `buffer`, of `CHUNK + overlap` bytes, is the caller's: one for the whole scan, not a megabyte per file of a `node_modules`. */
 async function holdsOne(path: string, needles: readonly Buffer[], buffer: Buffer, overlap: number): Promise<boolean> {
   const file = await open(path, 'r');
@@ -130,6 +135,8 @@ export interface SealedSetupRequest {
   argv?: (command: string) => string[];
   env: Record<string, string>;
   secrets: Record<string, string>;
+  /** The repository's (ORC-309): started for the attempt, `DATABASE_URL` in the setup's environment, kept for its agent. */
+  services?: readonly string[];
   now: Date;
 }
 
@@ -138,32 +145,65 @@ export interface SealedSetupRequest {
  * the environment of each `exec`, never a mount nor the engine's command line. The container is destroyed
  * first, with its layer, its `/tmp`, its `$HOME` and every process the setup left behind; then the disk it
  * shared, the worktree, is sealed. Only then may the agent get a sandbox. A failed setup is sealed as well.
+ * Its services (ORC-309) are the attempt's (`servicesOf`), kept for the agent: with secrets, their database is dumped
+ * once the setup's container is gone, and a secret found there fails the setup, which takes them with it.
  * ponytail: at `limited` (registries, GitHub read), so a secret has nowhere to be sent; the doc's `full`
  * when a repository needs more (docs/decisions/ORC-213.md, open point 2).
  */
 export async function runSealedSetup(sandboxes: Pick<SandboxProvider, 'create' | 'exec' | 'destroy'>, req: SealedSetupRequest): Promise<{ purged: string[] }> {
+  const services = req.services ?? [];
   const box = await sandboxes.create({
     runId: `${req.runId}-setup`,
     ticketId: req.ticketId,
     workspacePath: req.workspacePath,
     network: 'limited',
-    requirements: DEFAULT_REQUIREMENTS,
+    requirements: { ...DEFAULT_REQUIREMENTS, services },
+    ...(services.length ? { servicesOf: req.runId } : {}),
     mounts: req.mounts,
   });
+  try {
+    const purged = await setUpIn(sandboxes, box.id, req);
+    if (services.length && Object.keys(req.secrets).length) await checkDatabase(sandboxes, box.services, req.secrets);
+    return { purged };
+  } catch (err) {
+    // No agent follows a failed setup: its services go now, or at recover() if the engine fails here too.
+    if (box.services) await sandboxes.destroy(box.services).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** What dumps an attempt's Postgres, in its own container: its superuser, through its socket, sees every database and role. */
+export const POSTGRES_DUMP = ['pg_dumpall', '--username=postgres'];
+
+/**
+ * The setup's database (ORC-309), which `sealSecrets` does not see: dumped and searched for the same spellings. A
+ * secret transformed (hashed, encrypted, `bytea`) is not found, as on the disk. What cannot be dumped does not stay.
+ */
+async function checkDatabase(sandboxes: Pick<SandboxProvider, 'exec'>, services: string | undefined, secrets: Record<string, string>): Promise<void> {
+  if (!services) throw new Error('The worktree setup failed: its database cannot be checked for the secrets');
+  const dump = await sandboxes.exec(services, POSTGRES_DUMP, { cwd: '/' });
+  if (dump.code !== 0) throw new Error(`The worktree setup failed: its database could not be checked for the secrets (${dump.stderr.trim()})`);
+  const data = Buffer.from(dump.stdout);
+  const found = Object.entries(secrets).filter(([, value]) => holdsSecret(data, value)).map(([name]) => name);
+  // Its name, never its value.
+  if (found.length) throw new Error(`The worktree setup failed: a secret of the setup is in its database (${found.join(', ')})`);
+}
+
+async function setUpIn(sandboxes: Pick<SandboxProvider, 'exec' | 'destroy'>, id: string, req: SealedSetupRequest): Promise<string[]> {
   const env = { ...req.env, ...req.secrets, ...setupEnv(req.now) };
   let purged: string[];
   try {
-    const rc = await sandboxes.exec(box.id, YARN1_NO_SCRIPTS, { env: { HOME: SETUP_HOME } });
+    const rc = await sandboxes.exec(id, YARN1_NO_SCRIPTS, { env: { HOME: SETUP_HOME } });
     if (rc.code !== 0) throw new Error(`The worktree setup failed: Yarn 1 scripts not disabled (${rc.stderr.trim()})`);
     for (const command of req.commands) {
-      const { code } = await sandboxes.exec(box.id, (req.argv ?? cappedCommand)(command), { env });
+      const { code } = await sandboxes.exec(id, (req.argv ?? cappedCommand)(command), { env });
       if (code === 124) throw new Error(`The worktree setup failed: ${command} (timed out after ${VERIFY_TIMEOUT_MS / 60_000} min)`);
       if (code !== 0) throw new Error(`The worktree setup failed: ${command}`);
     }
   } finally {
     // Its failure wins over the setup's: a container still alive holds the secret and can still write it, no agent may start.
-    await sandboxes.destroy(box.id);
+    await sandboxes.destroy(id);
     purged = await sealSecrets([req.workspacePath], Object.values(req.secrets));
   }
-  return { purged };
+  return purged;
 }
