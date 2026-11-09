@@ -1,7 +1,9 @@
+import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { isRecord } from '../graphql-pages.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
+import { mergedPullRequests } from './merged-prs.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, type Forge, type ForgeBranch, type OpenPr, type PrInfo } from './types.js';
@@ -165,6 +167,12 @@ export class GhCliForge implements Forge, RepoPermissions {
   async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     return recentRepoBranches(gql, owner, name);
+  }
+
+  /** The repository's PRs merged in `[since, until)` (ORC-230), for `factory baseline`: not part of the `Forge` port the factory runs on. */
+  async mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return mergedPullRequests(gql, owner, name, since, until);
   }
 
   /**

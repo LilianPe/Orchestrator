@@ -13,6 +13,7 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';
 import type { TakeOverDesk } from '../core/orchestrator.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
+import { baselineOf } from '../core/baseline.js';
 import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
@@ -288,11 +289,12 @@ export function createApp(d: ServerDeps): Hono {
 
   // The reduced overview (ORC-299), read-only, over a period, the last 90 days by default. Only the tickets the factory
   // updated since the period began are read: each event it decides updates its ticket, so the others hold no merge nor
-  // message of the period. A ticket whose measures cannot be read is counted, the error logged.
+  // message of the period. A ticket whose measures cannot be read is counted, the error logged. The baseline computed
+  // last faces the measures (ORC-230).
   app.get('/api/overview', overPeriod(async (c, period) => {
-    const measures = await measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since));
+    const [measures, baseline] = await Promise.all([measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since)), d.store.latestBaseline()]);
     const measured = measures.filter((m) => m !== null);
-    return c.json(overview(period, measured, measures.length - measured.length));
+    return c.json(overview(period, measured, measures.length - measured.length, baselineOf(baseline)));
   }, OVERVIEW_PERIOD_MS));
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,

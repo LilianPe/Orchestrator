@@ -11,6 +11,7 @@ import {
 } from '../core/dead-letter.js';
 import type { ReviewLens } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
+import type { BaselineRow } from '../core/baseline.js';
 import type { OutboxEffect } from '../core/decision.js';
 import type { ReviewFinding } from '../core/review.js';
 import { claims, holds } from '../core/routing.js';
@@ -23,7 +24,9 @@ import {
   decidedOn,
   decisionRecord,
   effectResult,
+  inMeasureOrder,
   keptSecurityLog,
+  oneBaseline,
   timerEvent,
   timerRowId,
   PAUSE_ACCEPTED,
@@ -73,6 +76,7 @@ CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TE
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS baselines (project_id TEXT NOT NULL, since INTEGER NOT NULL, until INTEGER NOT NULL, measure TEXT NOT NULL, computed_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, since, until, measure));
 CREATE TABLE IF NOT EXISTS known_flaky_tests (project_id TEXT NOT NULL, test TEXT NOT NULL, added_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, test));
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 `;
@@ -808,6 +812,27 @@ export class SqliteStore implements Store {
 
   async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
     return Number(this.db.prepare('DELETE FROM known_flaky_tests WHERE project_id = ? AND test = ?').run(projectId, test).changes) === 1;
+  }
+
+  async putBaseline(rows: readonly BaselineRow[], replace: boolean): Promise<boolean> {
+    const { projectId, since, until } = oneBaseline(rows);
+    return this.atomically(() => {
+      const period = [projectId, since, until] as const;
+      if (this.db.prepare('SELECT 1 FROM baselines WHERE project_id = ? AND since = ? AND until = ? LIMIT 1').get(...period)) {
+        if (!replace) return false;
+        this.db.prepare('DELETE FROM baselines WHERE project_id = ? AND since = ? AND until = ?').run(...period);
+      }
+      const insert = this.db.prepare('INSERT INTO baselines (project_id, since, until, measure, computed_at, data) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const r of rows) insert.run(projectId, since, until, r.measure, r.computedAt, JSON.stringify(r));
+      return true;
+    });
+  }
+
+  async latestBaseline(): Promise<BaselineRow[]> {
+    const rows = this.db
+      .prepare('SELECT b.data FROM baselines b JOIN (SELECT project_id, since, until FROM baselines ORDER BY computed_at DESC LIMIT 1) l USING (project_id, since, until)')
+      .all() as { data: string }[];
+    return inMeasureOrder(rows.map((r) => JSON.parse(r.data) as BaselineRow));
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {

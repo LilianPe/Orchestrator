@@ -134,6 +134,23 @@ export interface MeasuredTicketView extends FlowTicketView {
 /** Why a merged ticket was not ready at the first try: `Rework['cause']` of src/core/measures.ts. */
 export type ReworkCause = 'pr.checks_failed' | 'verify.failed' | 'push.human' | 'feedback' | 'sent_back' | 'changes_requested';
 
+/** One measure of the baseline: `BaselineValue` of src/core/baseline.ts. */
+export interface BaselineValueView {
+  value: number | null;
+  over: number;
+  leftOut: number;
+  noSource: boolean;
+}
+
+/** The 90-day baseline (ORC-230), a measure without a row left out of `measures`. */
+export interface BaselineView {
+  projectId: string;
+  since: number;
+  until: number;
+  computedAt: number;
+  measures: Partial<Record<'delivered' | 'lead_time' | 'tokens_per_merged' | 'first_try', BaselineValueView>>;
+}
+
 /** `GET /api/overview` (ORC-299): `Overview` of src/core/overview.ts over `[since, until)`. */
 export interface OverviewView {
   since: number;
@@ -148,8 +165,8 @@ export interface OverviewView {
   ciPerMerged: { mean: number | null; leftOut: number };
   red: { verified: number; wouldHaveBlocked: number };
   messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
-  /** The 90-day baseline: null until ORC-230 computes it. */
-  baseline: null;
+  /** The 90-day baseline the measures face (ORC-230): `Baseline` of src/core/baseline.ts, null until `factory baseline` computes one. */
+  baseline: BaselineView | null;
 }
 
 /** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */

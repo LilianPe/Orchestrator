@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
+import type { BaselineRow } from '../../src/core/baseline.js';
 import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
@@ -325,6 +326,25 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(false);
     expect((await s.knownFlakyTests('p')).map((k) => k.test)).toEqual(['tests/t.py::test_it']);
     expect(await s.knownFlakyTests('other')).toEqual([{ ...t, projectId: 'other' }]);
+  });
+
+  it('keeps a baseline frozen, its rows all or none: the same period again only on replace, the last computed read back (ORC-230)', async () => {
+    const s = await store();
+    const row = (measure: BaselineRow['measure'], value: number | null, patch: Partial<BaselineRow> = {}): BaselineRow => ({
+      projectId: 'p', measure, since: 1_700_000_000_000, until: 1_707_776_000_000, value, over: 4, leftOut: 1, noSource: false, computedAt: 1_710_000_000_000, ...patch,
+    });
+    const first = [row('delivered', 3), row('lead_time', 129_600_000.5), row('tokens_per_merged', null, { over: 0, leftOut: 3, noSource: true }), row('first_try', 2 / 3)];
+    expect(await s.latestBaseline()).toEqual([]);
+    expect(await s.putBaseline(first, false)).toBe(true);
+    expect(await s.latestBaseline()).toEqual(first);
+    const again = first.map((r) => ({ ...r, value: 1, computedAt: 1_710_000_000_001 }));
+    expect(await s.putBaseline(again, false)).toBe(false);
+    expect(await s.latestBaseline()).toEqual(first);
+    expect(await s.putBaseline(again.slice(0, 2), true)).toBe(true);
+    expect(await s.latestBaseline()).toEqual(again.slice(0, 2));
+    const later = [row('delivered', 5, { since: 1_600_000_000_000, until: 1_607_776_000_000, computedAt: 1_710_000_000_002 })];
+    expect(await s.putBaseline(later, false)).toBe(true);
+    expect(await s.latestBaseline()).toEqual(later);
   });
 
   it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {

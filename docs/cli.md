@@ -19,6 +19,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `relais pause` / `relais resume` | Suspend / resume the queue. | yes |
 | `factory stop <ID>` | Stop a ticket's run. | yes |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
+| `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 
 The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. If `RELAIS_UI_PASSWORD` is set in your shell, they send it as HTTP Basic (necessary when the daemon listens beyond loopback). In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
@@ -151,6 +152,27 @@ $ factory flaky p remove 'src/cart.test.ts > cart total'
 ```
 
 `--frozen` also covers the test while it is frozen for a ticket (ORC-131): without it, a frozen test always counts. Each entry keeps who added it (the user's name), why and when. Like `run repair`, the command writes to the instance's database, without the daemon.
+
+### `factory baseline <project>` (ORC-230)
+
+The state of reference the Overview compares the factory with ([`interface-and-security.md`](interface-and-security.md)): what the team delivered without it over the 90 days before `--since`, the factory's start (the day given, UTC midnight, left out). Read from the project's Linear team and its GitHub repository, with the daemon's credentials (Linear's saved tokens; the GitHub App when configured, otherwise `gh`), then frozen in the store, one row per measure with its period:
+
+- **Delivered**: the team's issues completed in the period that have a PR merged in it, linked by Linear (the PR attached to the issue) or naming the issue in its branch or title.
+- **Median lead time**: from the issue's start (its first started state, In Progress) to its first merged PR; an issue never started is left out, and counted.
+- **Ready at the first try**: the share of the delivered issues' merged PRs that no review asked changes of.
+- **Tokens per merged ticket**: no source: human work spends none the factory can read. Stored without a value, shown as `no source`, never invented.
+
+```text
+$ factory baseline p --since 2026-11-01
+Baseline of p over 2026-08-03 → 2026-11-01 (90 days), from Linear ORC and GitHub:
+  Delivered: 12 (of 20 issues completed)
+  Median lead time: 3.1 days (over 10 delivered issues, 2 without a start)
+  Tokens per merged ticket: no source (human work)
+  Ready at the first try: 75% (of 15 merged PRs)
+Stored.
+```
+
+The same period again is refused, the stored rows kept, unless `--replace`: a baseline is what the factory is measured against, never recomputed by accident. The Overview shows the baseline computed last. A list Linear or GitHub cannot give to its end (GitHub's search stops at 1000 PRs) stops the command, never a baseline read in part. Like `flaky`, the command writes to the instance's database, without the daemon.
 
 ## `relais-agent` (agent side)
 

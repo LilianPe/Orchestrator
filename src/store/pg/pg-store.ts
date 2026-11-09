@@ -13,6 +13,7 @@ import {
 } from '../../core/dead-letter.js';
 import type { ReviewLens } from '../../config/workflow-schema.js';
 import type { Finding } from '../../core/agent-output.js';
+import type { BaselineMeasure, BaselineRow } from '../../core/baseline.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import type { ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
@@ -30,6 +31,8 @@ import {
   LEASE_MS,
   blockEntry,
   byMostRefused,
+  inMeasureOrder,
+  oneBaseline,
   type BlockEntry,
   type DecisionOutcome,
   type DecisionRecord,
@@ -978,6 +981,36 @@ export class PgStore implements AsyncStore {
   async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
     const rows = await this.db.execute(sql`delete from known_flaky_tests where project_id = ${projectId} and test = ${test} returning test`);
     return rows.rows.length === 1;
+  }
+
+  async putBaseline(rows: readonly BaselineRow[], replace: boolean): Promise<boolean> {
+    const { projectId, since, until } = oneBaseline(rows);
+    const period = sql`project_id = ${projectId} and since = ${new Date(since)} and until = ${new Date(until)}`;
+    return this.db.transaction(async (tx) => {
+      // Two computations of the same period at once: the second waits here, then finds the first's rows.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`baseline:${projectId}:${since}:${until}`}))`);
+      if ((await tx.execute(sql`select 1 from baselines where ${period} limit 1`)).rows.length) {
+        if (!replace) return false;
+        await tx.execute(sql`delete from baselines where ${period}`);
+      }
+      await tx.insert(schema.baselines).values(rows.map((r) => ({
+        projectId, since: new Date(since), until: new Date(until), measure: r.measure, value: r.value, overCount: r.over, leftOut: r.leftOut, noSource: r.noSource, computedAt: new Date(r.computedAt),
+      })));
+      return true;
+    });
+  }
+
+  async latestBaseline(): Promise<BaselineRow[]> {
+    type Row = { project_id: string; since: string | number; until: string | number; measure: string; value: number | null; over_count: number; left_out: number; no_source: boolean; at: string | number };
+    const rows = await this.db.execute<Row>(sql`
+      select b.project_id, round(extract(epoch from b.since) * 1000) as since, round(extract(epoch from b.until) * 1000) as until, b.measure, b.value,
+        b.over_count, b.left_out, b.no_source, round(extract(epoch from b.computed_at) * 1000) as at
+      from baselines b join (select project_id, since, until from baselines order by computed_at desc limit 1) l using (project_id, since, until)
+    `);
+    return inMeasureOrder(rows.rows.map((r) => ({
+      projectId: r.project_id, measure: r.measure as BaselineMeasure, since: Number(r.since), until: Number(r.until),
+      value: r.value === null ? null : Number(r.value), over: r.over_count, leftOut: r.left_out, noSource: r.no_source, computedAt: Number(r.at),
+    })));
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {

@@ -17,6 +17,13 @@ export const Q = {
   delegated: `query Delegated($teamKey: String!, $appUserId: ID!, $after: String) {
     issues(first: 100, after: $after, filter: { team: { key: { eq: $teamKey } }, delegate: { id: { eq: $appUserId } },
       state: { type: { nin: ["completed", "canceled"] } } }) { nodes { ${ISSUE_FIELDS} } ${PAGE} } }`,
+  /**
+   * The team's issues completed in `[since, until)` (ORC-230), with their start and the URLs attached to them (Linear's
+   * GitHub integration attaches the PRs): what `factory baseline` reads of the 90 days before the factory.
+   */
+  completed: `query Completed($teamKey: String!, $since: DateTimeOrDuration!, $until: DateTimeOrDuration!, $after: String) {
+    issues(first: 100, after: $after, filter: { team: { key: { eq: $teamKey } }, completedAt: { gte: $since, lt: $until } }) { nodes {
+      identifier startedAt completedAt trashed attachments(first: 20) { nodes { url } ${PAGE} } } ${PAGE} } }`,
   teamStates: `query TeamStates($teamKey: String!, $after: String) {
     workflowStates(first: 250, after: $after, filter: { team: { key: { eq: $teamKey } } }) { nodes { id name type position } ${PAGE} } }`,
   teamLabels: `query TeamLabels($teamKey: String!, $after: String) {
