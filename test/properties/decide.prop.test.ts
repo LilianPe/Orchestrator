@@ -338,6 +338,38 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     );
   });
 
+  describe('a settle stuck on a ticket blocked already (ORC-362)', () => {
+    it('shows the block that was there alone, and the lift of that block starts the pending job, once', () => {
+      // A relaunch of fix-ci kept pending behind the tests run, the red-CI bound blocks fix-ci, then the settle dies.
+      const stuck = [
+        ...delegated(),
+        runStarted('fix-ci'),
+        runFinished('success', 'fix-ci'),
+        runStarted('tests'),
+        verifyFailed('fix-ci'),
+        runFinished('success', 'tests'),
+        verifyFailed('tests'),
+        ext('status.changed', { from: 'dev', to: 'human_review' }),
+        ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
+        ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
+      ];
+      const r = run(seq(...stuck, ext('pr.checks_passed', pr), runStarted('fix-ci', 'r9'), runFinished('success', 'fix-ci', 'r9')));
+      const died = decided(r).find((s) => s.event.type === 'effect.failed')!;
+      expect(died.before?.blocked).toBe(true);
+      expect(died.decision.events.map((e) => e.type)).not.toContain('ticket.blocked');
+      expect(died.decision.effects).toEqual([]);
+      expect(died.after).toMatchObject({ blocked: true, blockReason: died.before?.blockReason });
+      const pendingJob = died.after!.pendingJob!;
+      expect(pendingJob).toBeDefined();
+      // The green CI lifts the red-CI block: nothing else will start the pending job, its own decision does, through settle.
+      const lift = r.steps.findIndex((s) => s.event.type === 'pr.checks_passed');
+      expect(r.steps[lift]!.after).toMatchObject({ blocked: false });
+      const started = r.steps.slice(lift).flatMap(launches).filter((e) => e.job === pendingJob.job && e.input === pendingJob.input);
+      expect(started).toHaveLength(1);
+      expect(r.steps[lift + 1]).toMatchObject({ kind: 'settled', start: { job: pendingJob.job, input: pendingJob.input } });
+    });
+  });
+
   describe('I5 — every loop has a bounded counter, red CI included', () => {
     it(
       'a verify loop of verify_attempts = N + 1 relaunches at most N times, and its (N+1)-th failure blocks',
@@ -369,6 +401,15 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
           ext('timer.fired', DEBOUNCE),
         );
+        // ORC-362: the settle dies on the ticket the red-CI bound blocked, and a green CI lifts that block: the relaunch starts, once.
+        const stuckOnBlocked = seq(
+          ...pendingRelaunch,
+          ext('status.changed', { from: 'dev', to: 'human_review' }),
+          ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
+          ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
+          ext('pr.checks_passed', pr),
+          ...failedAttempt('fix-ci', 'r9'),
+        );
         // Found by the count of launches (ORC-360): a relaunch kept pending outlived the green check that started the loop over;
         // settle then started it, on failures gone, and the new loop still had all its relaunches (attempts 3).
         const pendingPastGreen = seq(
@@ -397,7 +438,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
               (e) => e.type === 'verify.failed' && !w.jobs[e.payload.job]?.red,
             );
           }),
-          params<[Sequences, number]>([[redCiOnPending, 2], [stuckSettle, 2], [pendingPastGreen, 3]]),
+          params<[Sequences, number]>([[redCiOnPending, 2], [stuckSettle, 2], [stuckOnBlocked, 2], [pendingPastGreen, 3]]),
         );
       },
       TIMEOUT,
