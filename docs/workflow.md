@@ -266,7 +266,7 @@ A rule with no condition always matches.
 | `move` | Moves the ticket to this logical state. |
 | `labels` | `{ add: [...], remove: [...] }`: adds / removes Linear labels. |
 | `comment` | Posts this text as a comment on the ticket. |
-| `do` | `stop`: stops the running run, empties waiting runs and blocks the ticket (« Stopped. Reply on this ticket to relaunch. »). `cleanup`: deletes the ticket's worktree. `propose_delegate`: replies that the ticket must be delegated to Relais for it to develop it. |
+| `do` | `stop`: stops the running run, empties waiting runs and blocks the ticket (« Stopped. Reply on this ticket to relaunch. »). `cleanup`: deletes the ticket's worktree. `propose_delegate`: replies that the ticket must be delegated to Relais for it to develop it. `after_merge` (ORC-197, on `pr.merged` only, refused elsewhere when the workflow loads): the step of a merged PR, see [After the merge](#after-the-merge-orc-197), then `cleanup`. |
 | `run` | Launches the job with this name (must exist in `jobs`). If the ticket was blocked, it is unblocked first. |
 | `debounce` | With `run`: instead of launching right away, schedules the job after this delay. A new matching event before expiry pushes the delay back: messages close together produce a single run. `0s` = immediate. The delay is a timer in the database, written with the decision, specific to each project: a Relais restart does not lose it. |
 
@@ -291,7 +291,7 @@ There is no `post` field in a rule: publishing the result is configured in `jobs
 | `session.stopped` | → `stop` |
 | `pr.checks_failed` | if `state in [human_review, ai_review] && !blocked` → `fix-ci`, a round of the review and CI loop (`limits.ci_fix_attempts`, shared with `rebase` and `fix-review`), then block |
 | `pr.conflicted` | if `state in [dev, human_review, ai_review] && !blocked` → `rebase` ([preset](preset.md#rebase-step-orc-146)), on the same count as `fix-ci`, then block |
-| `pr.merged` | → moves to `done`, deletes the worktree, launches `learn` |
+| `pr.merged` | → moves to `done`, the `after_merge` step (the requester told, the changelog entry), deletes the worktree, launches `learn` (until ORC-193) |
 
 ## 4. `when` grammar
 
@@ -454,8 +454,17 @@ version: 1
 on:
   pr.checks_failed: []
   pr.merged:
-    - { move: done, do: cleanup }
+    - { move: done, do: after_merge }
 ```
+
+### After the merge (ORC-197)
+
+`do: after_merge`, on `pr.merged`, is the `after_merge` step of the preset, carried out by the factory itself, without an agent. Its effect (`after_merge`, one outbox row):
+
+1. appends an entry to the **changelog**, once by the effect's key (a replay writes nothing, an entry is never changed): the ticket and its title, what changed (the `summary` of the work the factory published last, the ticket's title when none was), where (the page the visual proof shot, and the paths of the diff in `visual_paths` that asked for it), the captures before and after `verify` took (ORC-176), each by the id of the artifact kept of it, or « no visual proof applicable » (`not_applicable`), or why the factory could not take it (`unavailable`), the PR's link and merge commit, and when GitHub merged it. The changelog needs nothing of Linear: it is written first.
+2. mentions the requester, the issue's creator in Linear, in the ticket's session with the merged PR's link: « Delivered, <their profile>: [PR #n](url) is merged. » (Linear turns a profile's link into a mention). An issue with no creator (made by an integration) gets the same text without the mention.
+
+Then the worktree is deleted (`cleanup`). The changelog is read through `GET /api/changelog` ([interface-and-security.md](interface-and-security.md#what-the-server-exposes)). A version frozen before ORC-197 keeps its `do: cleanup`: no entry nor mention for its tickets.
 
 ### Adapting Linear column names
 
