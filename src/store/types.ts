@@ -3,6 +3,7 @@ import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { Baseline } from '../core/baseline.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -724,6 +725,13 @@ export interface Store {
   putKnownFlakyTest(t: KnownFlakyTest): Promise<void>;
   /** Takes a test off the list (ORC-164): false when it was not on it. */
   deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean>;
+  /**
+   * Freezes a baseline (ORC-230), one row per measure, all or none: false, nothing written, when that period of the project
+   * already has one and `replace` is not set; with it, the new one takes the place of the stored one.
+   */
+  putBaseline(b: Baseline, replace: boolean): Promise<boolean>;
+  /** The baseline computed last, whichever project and period (ORC-230); null without one. */
+  latestBaseline(): Promise<Baseline | null>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */

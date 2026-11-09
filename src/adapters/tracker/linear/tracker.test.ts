@@ -371,6 +371,36 @@ describe('LinearTracker', () => {
     expect(await new LinearTracker(api, 'app-1').ensureSession('REL-1')).toBe('as-9');
   });
 
+  it('reads the issues of the team completed in a period, every page, with their start and the PRs Linear links to them (ORC-230)', async () => {
+    const done = (identifier: string, startedAt: string | null, links: string[] = [], patch: Record<string, unknown> = {}) => ({
+      identifier, startedAt, completedAt: '2026-10-10T08:00:00.000Z', trashed: false, attachments: conn(links.map((url) => ({ url }))), ...patch,
+    });
+    const { api, calls } = fakeLinear({
+      Completed: (v) => ({ issues: v.after === null
+        ? conn([done('REL-1', '2026-10-01T08:00:00.000Z', ['https://github.com/acme/app/pull/3'])], 'c1')
+        : conn([done('REL-2', null), done('REL-3', null, [], { trashed: true })]) }),
+    });
+    const since = Date.parse('2026-08-01T00:00:00.000Z');
+    const until = Date.parse('2026-10-30T00:00:00.000Z');
+    expect(await new LinearTracker(api, 'app-1').completedIssues('REL', since, until)).toEqual([
+      { identifier: 'REL-1', startedAt: Date.parse('2026-10-01T08:00:00.000Z'), completedAt: Date.parse('2026-10-10T08:00:00.000Z'), links: ['https://github.com/acme/app/pull/3'] },
+      { identifier: 'REL-2', startedAt: null, completedAt: Date.parse('2026-10-10T08:00:00.000Z'), links: [] },
+    ]);
+    expect(calls.map((c) => c.vars)).toEqual([
+      { teamKey: 'REL', since: '2026-08-01T00:00:00.000Z', until: '2026-10-30T00:00:00.000Z', after: null },
+      { teamKey: 'REL', since: '2026-08-01T00:00:00.000Z', until: '2026-10-30T00:00:00.000Z', after: 'c1' },
+    ]);
+    // Linear archives a closed issue after the team's delay: the period may be past it.
+    expect(Q.completed).toContain('includeArchived: true');
+  });
+
+  it('never reads an issue whose links it cannot read to their end as complete (ORC-230)', async () => {
+    const { api } = fakeLinear({
+      Completed: () => ({ issues: conn([{ identifier: 'REL-1', startedAt: null, completedAt: '2026-10-10T08:00:00.000Z', attachments: conn([], 'more') }]) }),
+    });
+    await expect(new LinearTracker(api, 'app-1').completedIssues('REL', 0, 1)).rejects.toThrow(/links of REL-1/);
+  });
+
   it('surfaces GraphQL errors', async () => {
     const { api } = fakeLinear({});
     await expect(api.gql('query Missing { x }')).rejects.toThrow('no handler for Missing');

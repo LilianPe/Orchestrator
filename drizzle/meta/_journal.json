@@ -71,6 +71,13 @@
       "when": 1794218628510,
       "tag": "0009_changelog",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794227992126,
+      "tag": "0010_baselines",
+      "breakpoints": true
     }
   ]
 }
