@@ -48,6 +48,15 @@ describe('standard pack', () => {
     for (const c of cited) expect(names.has(c), `factory:${c}`).toBe(true);
   });
 
+  it('keeps the AI review read-only: its skill runs no command, writes nothing, and hands back findings (ORC-183)', () => {
+    const text = readFileSync(join(pack, 'skills/review/SKILL.md'), 'utf8');
+    expect(text).not.toMatch(/```(bash|sh)/);
+    expect(text).not.toMatch(/`(git|gh|npm|npx) /);
+    expect(text).not.toMatch(/factory:receiving-review|factory-agent ask|git push|git commit/);
+    expect(text).toMatch(/factory:code-review/);
+    for (const field of ['file', 'line', 'severity', 'explanation', 'suggestion', 'fact']) expect(text).toContain(`\`${field}\``);
+  });
+
   it('allows the read-only git and CI commands the skills rely on', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.allow).toEqual(
@@ -97,7 +106,8 @@ describe('standard pack', () => {
       expect(text, name).not.toMatch(integrates);
       expect(text, name).not.toMatch(/`git rebase --continue`/);
     }
-    for (const name of ['dev', 'feedback', 'review', 'fix-ci']) {
+    // Not the AI review: it reads a clone of the published commit and writes nothing, no conflict to meet (ORC-183).
+    for (const name of ['dev', 'feedback', 'fix-ci']) {
       expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toMatch(/factory:rebase/);
     }
   });

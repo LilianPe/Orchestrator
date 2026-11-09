@@ -480,29 +480,31 @@ describe('the ticket session across attempts', () => {
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
     await h.advance(180_000);
-    const [dev, review, feedback] = h.runner.requests;
-    expect(review!.prompt.startsWith('/factory:review\n')).toBe(true);
-    expect(review).toMatchObject({ resume: false });
-    expect(review!.claudeSessionId).not.toBe(dev!.claudeSessionId);
-    expect(claudeHost(h, 1)).toBe(runClaude(h, 1));
-    expect(existsSync(runClaude(h, 1))).toBe(false);
-    expect(review!.env).toMatchObject({ CLAUDE_CONFIG_DIR: claudeDir });
+    // The review's two lenses (ORC-183), each in a session and a ~/.claude of its own.
+    const [dev, review, second, feedback] = h.runner.requests;
+    for (const [i, r] of [[1, review], [2, second]] as const) {
+      expect(r!.prompt.startsWith('/factory:review\n')).toBe(true);
+      expect(r).toMatchObject({ resume: false });
+      expect(r!.claudeSessionId).not.toBe(dev!.claudeSessionId);
+      expect(claudeHost(h, i)).toBe(runClaude(h, i));
+      expect(existsSync(runClaude(h, i))).toBe(false);
+      expect(r!.env).toMatchObject({ CLAUDE_CONFIG_DIR: claudeDir });
+    }
     expect(feedback).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
-    expect(claudeHost(h, 2)).toBe(ticketDir(h));
-    expect(await roles(h)).toEqual(['implementer', 'reviewer', 'implementer']);
+    expect(claudeHost(h, 3)).toBe(ticketDir(h));
+    expect(await roles(h)).toEqual(['implementer', 'reviewer', 'reviewer', 'implementer']);
   });
 
-  it('a review as the first run of a ticket neither mounts nor becomes the ticket session', async () => {
+  it('a review before anything is published starts no run, and makes no ticket session: it reads only the published commit (ORC-183)', async () => {
     const h = createHarness({ sandboxed: true });
     // A description too short for the pickup checks: delegated, blocked, no dev run, no session.
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'court' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.send('status.changed', { from: 'todo', to: 'ai_review' });
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:review']);
-    expect(claudeHost(h, 0)).toBe(runClaude(h, 0));
+    expect(h.runner.requests).toEqual([]);
+    expect(h.sandboxes.created).toEqual([]);
     expect(existsSync(ticketDir(h))).toBe(false);
     expect((await h.ticket()).claudeSessionId).toBeUndefined();
-    expect(await roles(h)).toEqual(['reviewer']);
   });
 
   it('a re-delegated dev resumes the ticket session', async () => {

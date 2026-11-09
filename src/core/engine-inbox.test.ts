@@ -5,6 +5,7 @@ import type { Effect } from './decision.js';
 import { decide, historyTaint, ingestedConversation, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type TicketState } from './types.js';
+import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 
@@ -153,7 +154,7 @@ describe('decide — a classified message (ORC-180)', () => {
     it('by the regrouping, and at the end of a step: a command beside a trusted message', () => {
       const humanInbox = [item(), item({ kind: 'command', ...untrusted })];
       expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), timer, workflow))).toEqual(sandboxed);
-      expect(starts(decide(ticket({ logical: 'ai_review', verifyingRunId: 'r1', humanInbox }), end, workflow))).toEqual(sandboxed);
+      expect(starts(decide(ticket({ logical: 'ai_review', verifyingRunId: 'r1', humanInbox }), end, beforeOrc183(workflow)))).toEqual(sandboxed);
     });
 
     it('all of it trusted, no sensitive path', () => {
@@ -259,12 +260,13 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
   const run = 'r1';
   const inReview = (patch: Partial<TicketState>) => ticket({ logical: 'ai_review', activeRunId: run, activeJob: 'review', ...patch });
 
-  // `review` verifies once something is frozen or it has repo checks: its success goes through its check, then publishes.
+  // A `review` frozen before ORC-183 verifies, as it has repo checks: its success goes through its check, then publishes.
+  const frozen = beforeOrc183(workflow);
   const passed = ev('verify.passed', { runId: run, job: 'review' });
   const verifying = (patch: Partial<TicketState>) => ticket({ logical: 'ai_review', verifyingRunId: run, ...patch });
 
   it('the end of the work moves the ticket, then the agent is resumed on them', () => {
-    const out = decide(verifying({ humanInbox: [item()] }), passed, workflow);
+    const out = decide(verifying({ humanInbox: [item()] }), passed, frozen);
     expect(out.effects.map((e) => e.kind)).toEqual(['move', 'post_output', 'start_run']);
     expect(out.effects.at(-1)).toMatchObject({ job: 'dev-feedback', input: 'feedback' });
   });
@@ -277,14 +279,15 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
     ['a pending job comes next and reads them', { humanInbox: [item()], pendingJob: { job: 'dev-feedback' } }],
     ['it is no longer delegated', { humanInbox: [item()], delegated: false }],
   ])('no run when %s', (_what, patch) => {
-    expect(decide(verifying(patch), passed, workflow).effects.map((e) => e.kind)).not.toContain('start_run');
+    expect(decide(verifying(patch), passed, frozen).effects.map((e) => e.kind)).not.toContain('start_run');
   });
 
   it('the state it is read on is the one this end leaves, a move owed by a refused publication included', () => {
     const done = ev('publish.done', { runId: run, job: 'dev-feedback', sha: 'abc' });
     const t = ticket({ logical: 'dev', verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
-    // Owed to AI Review, where no reply rule applies: the messages wait.
-    expect(decide(t, done, workflow).effects.map((e) => e.kind)).not.toContain('start_run');
+    // Owed to AI Review, where no reply rule applies: the messages wait; only the review the move came with starts (ORC-183).
+    const starts = decide(t, done, workflow).effects.filter((e) => e.kind === 'start_run');
+    expect(starts).toEqual([expect.objectContaining({ job: 'review' })]);
     expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'dev-feedback' });
   });
 

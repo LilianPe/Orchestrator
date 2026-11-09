@@ -93,6 +93,7 @@ export function promptTemplate(p: PromptInput): string {
     promptContext: p.promptContext && '<CONTEXTE>',
     decisions: p.decisions && [{ question: '<QUESTION>', answer: '<REPONSE>', author: '<AUTEUR>' }],
     conventions: p.conventions && '<CONVENTIONS>',
+    commit: p.commit && '<COMMIT>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
     conversation: p.conversation && (p.conversation.length ? [{ author: '<AUTEUR>', body: '<MESSAGE>', at: 0, source: 'session' }] : []),
   });

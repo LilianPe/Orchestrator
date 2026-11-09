@@ -1,6 +1,7 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { logExcerpt } from '../checks/log-excerpt.js';
+import type { ReviewLens } from '../config/workflow-schema.js';
 import type { ClarifyAnswer, FeedbackItem, InputKind, VerifyFailure } from './types.js';
 
 export interface PromptIssue {
@@ -23,7 +24,9 @@ export interface PromptInput {
   input?: { kind: InputKind; text: string };
   /** `learn` after a merge: what the factory ingested of the ticket's conversation (`ingestedConversation`, ORC-361). */
   conversation?: readonly FeedbackItem[];
-  reviewRounds: number;
+  /** An AI review's lens, and the published commit it reads (ORC-183). */
+  lens?: ReviewLens;
+  commit?: string;
   /** The step starts again on its session, after an attempt cut by a restart or a lost lease (ORC-220). */
   resumedAfterCut?: boolean;
 }
@@ -33,6 +36,7 @@ const HEADINGS: Record<InputKind, string> = {
   ci_failures: 'CI failures',
   verify_failures: 'Failed checks',
   thread: 'Message',
+  diff: 'Diff to review',
 };
 
 const CONVERSATION_HEADING = 'What the factory received on this ticket';
@@ -42,7 +46,8 @@ export function buildPrompt(p: PromptInput): string {
   const lines = [`/${p.skill}`, '', `## Ticket ${p.issue.identifier} — ${p.issue.title}`, `URL: ${p.issue.url}`];
   if (p.branch) lines.push(`Branch: ${p.branch}`);
   if (p.prUrl) lines.push(`PR: ${p.prUrl}`);
-  if (p.skill.endsWith(':review')) lines.push(`Max review rounds: ${p.reviewRounds}`);
+  if (p.lens) lines.push(`Lens: ${p.lens}`);
+  if (p.commit) lines.push(`Commit: ${p.commit}`);
   lines.push('', p.issue.description.trim() || '(no description)', '');
   if (p.promptContext) lines.push('## Linear context', p.promptContext, '');
   if (p.decisions?.length) {
