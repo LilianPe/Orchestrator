@@ -156,6 +156,12 @@ describe('mapLinearWebhook', () => {
       type: 'command', payload: { name: 'retiens', body: 'les agrégats côté serveur', linearSessionId: 'as-3' },
     });
   });
+  it('maps "retiens" under the standard pack as a mention, classified as any message: no command declares it (ORC-193)', async () => {
+    const { commands } = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    expect((await mapLinearWebhook(fx('session-created-command'), 'd3', { ...ctx(), commands: () => commands }))[0]).toMatchObject({
+      type: 'session.mentioned', payload: { body: 'Retiens les agrégats côté serveur', linearSessionId: 'as-3', kind: 'instruction' },
+    });
+  });
   it('maps /refreeze as a command whatever the workflow declares (ORC-131)', async () => {
     const body = fx('session-created-command');
     body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
