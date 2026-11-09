@@ -29,8 +29,16 @@ function intFromEnv(name: string, min: number): number | undefined {
 const NUM_RUNS = intFromEnv('NUM_RUNS', 1) ?? 200;
 export const SEED = intFromEnv('PROP_SEED', Number.MIN_SAFE_INTEGER) ?? (Date.now() ^ (Math.random() * 0x1_0000_0000));
 const PATH = process.env['PROP_PATH'] || undefined;
+if (PATH !== undefined && process.env['PROP_SEED'] === undefined) throw new Error('PROP_PATH replays a counterexample of PROP_SEED: set both');
 /** The tests whose failure already logs the seed: one line each, however many properties they check. */
 const logged = new Set<string>();
+
+/** Each test's own seed, from the run's and its name: the properties do not all draw the same sequences. A 32-bit FNV-1a. */
+export function seedOf(test: string | undefined): number {
+  let h = 0x811c9dc5;
+  for (const c of test ?? '') h = Math.imul(h ^ c.charCodeAt(0), 0x01000193);
+  return SEED ^ h;
+}
 
 /**
  * fast-check parameters; `examples` (counterexamples kept on purpose) are tried before the random sequences. Called in a
@@ -40,9 +48,9 @@ export function params<Ts extends unknown[]>(examples: Ts[] = []): Parameters<Ts
   const test = expect.getState().currentTestName;
   if (test !== undefined && !logged.has(test)) {
     logged.add(test);
-    onTestFailed(() => console.error(`[properties] "${test}" failed: replay with PROP_SEED=${SEED} NUM_RUNS=${NUM_RUNS}, and PROP_PATH from fast-check's report if it gave one`));
+    onTestFailed(() => console.error(`[properties] "${test}" failed: replay with PROP_SEED=${SEED} NUM_RUNS=${NUM_RUNS} (fast-check's seed ${seedOf(test)} is this test's, derived from it), and PROP_PATH from fast-check's report if it gave one`));
   }
-  return { numRuns: NUM_RUNS, seed: SEED, ...(PATH === undefined ? {} : { path: PATH }), examples };
+  return { numRuns: NUM_RUNS, seed: seedOf(test), ...(PATH === undefined ? {} : { path: PATH }), examples };
 }
 
 /** Timeout of one property test, generous enough for 10 000 sequences on a CI runner. */
