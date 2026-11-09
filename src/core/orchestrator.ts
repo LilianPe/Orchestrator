@@ -612,7 +612,8 @@ export class Orchestrator {
    *   start taken up again launches it (`startHandled`, ORC-277); the ticket just lets go of it.
    *
    * A run or check whose result is in the inbox, written before the crash and not yet processed, is
-   * left alone: the inbox replay settles it with its real result. Everything goes through the inbox,
+   * left alone: the inbox replay settles it with its real result. So is one whose result is set aside
+   * in `dead_letter`, open (ORC-321): its repair (`factory run repair`) is the decision. Everything goes through the inbox,
    * written before the status it replaces, so a kill at any point leaves it to the next recover(), and
    * the event is written once (by its id; a check, which can be cut again under one run, by the scan of the
    * inbox). Nothing is woken here: the worker starts after, on the sandboxes
@@ -629,7 +630,9 @@ export class Orchestrator {
     await this.destroyDeadSandboxes(new Set(tickets.filter(isTakenOver).map((t) => takeOverKey(t.projectId, t.ticketId))));
     const settled = new Set<string>();
     const checked = new Set<string>();
-    for (const row of await store.pendingInbox(Number.MAX_SAFE_INTEGER)) {
+    // A result set aside (ORC-321) is out of the inbox and still the result: its repair decides it, never a check or an end made up here.
+    const setAside = (await store.deadLetters()).filter((d) => d.status === 'open').map((d) => d.event);
+    for (const row of [...(await store.pendingInbox(Number.MAX_SAFE_INTEGER)), ...setAside]) {
       if (row.type === 'run.finished' || row.type === 'run.lost') settled.add((row.payload as EventPayloads['run.lost']).runId);
       if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost' || row.type === 'publish.done' || row.type === 'publish.refused') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
