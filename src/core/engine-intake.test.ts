@@ -1,11 +1,13 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { Workflow } from '../config/workflow-schema.js';
 import type { AgentOutput } from './agent-output.js';
 import { causeOf } from './block-cause.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
+import { normalizeTicket } from './upcast.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 
@@ -19,7 +21,7 @@ function ticket(patch: Partial<TicketState> = {}): TicketState {
 const output = (intake: AgentOutput['intake']): AgentOutput => ({ status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...(intake ? { intake } : {}) });
 const assessed = (patch: Partial<NonNullable<AgentOutput['intake']>> = {}) => output({ size: 'm', risk: 'medium', complete: true, missing: [], screen: false, ...patch });
 /** The ticket once the decision is applied. */
-const after = (t: TicketState, e: FactoryEvent) => decide(t, e, workflow).events.reduce<TicketState | undefined>((s, x) => reduce(s, x), reduce(t, e))!;
+const after = (t: TicketState | undefined, e: FactoryEvent, wf = workflow) => decide(t, e, wf).events.reduce<TicketState | undefined>((s, x) => reduce(s, x), reduce(t, e))!;
 
 describe('intake (ORC-206)', () => {
   it('is an agent step of factory/default at effort low, that writes nothing and does not move the ticket', () => {
@@ -79,5 +81,62 @@ describe('intake (ORC-206)', () => {
     expect(t).toMatchObject({ blocked: true, blockedJob: 'intake' });
     expect(t.size).toBeUndefined();
     expect(causeOf(t.blockKind)).toBe('failed');
+  });
+});
+
+describe('the run boundary of the risk (ORC-365)', () => {
+  // Delegation starts with intake, as a repository turns it on.
+  const withIntake: Workflow = { ...workflow, on: { ...workflow.on, 'ticket.delegated': workflow.on['ticket.delegated']!.map((r) => ({ ...r, run: 'intake' })) } };
+  const delegation = (extra: Partial<FactoryEvent> = {}) =>
+    ({ id: 'e-delegated', type: 'ticket.delegated', at: 5000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload: { linearSessionId: 's2', ack: true }, ...extra }) as FactoryEvent;
+  /** A ticket whose last run was assessed `high` with a screen, then taken back: undelegated, no run. */
+  const takenBack = (patch: Partial<TicketState> = {}) => ticket({ delegated: false, activeRunId: undefined, activeJob: undefined, risk: 'high', size: 'l', visualProof: 'required', ...patch });
+  /** The run's intake, started by the delegation. */
+  const intakeOf = (t: TicketState) => ({ ...t, activeRunId: 'r1', activeJob: 'intake' });
+  /** Whether the decision of `e` touches the risk: a delegation does only to mark a new run. */
+  const marks = (t: TicketState | undefined, e: FactoryEvent) => decide(t, e, withIntake).events.some((x) => x.type === 'ticket.patched' && 'risk' in x.patch);
+
+  it('within a run, a later intake proposing low leaves a high risk high (criterion 1)', () => {
+    const first = after(ticket(), finished(assessed({ risk: 'high', screen: true, complete: false, missing: ['CSV or XLSX?'] })));
+    // The answer relaunches intake in the same run: no delegation in between.
+    const again = after(intakeOf({ ...first, clarify: null }), finished(assessed({ risk: 'low', screen: false })));
+    expect(again).toMatchObject({ risk: 'high', visualProof: 'required' });
+  });
+
+  it('a ticket delegated again takes the risk its new intake proposes, low after high, and the visual proof it plans (criterion 2)', () => {
+    expect(decide(takenBack(), delegation(), withIntake).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'intake' }));
+    // The boundary: the last run's assessment does not carry over, the new run has none yet.
+    const delegated = after(takenBack(), delegation(), withIntake);
+    expect(delegated).toMatchObject({ risk: null, visualProof: null });
+    const t = after(intakeOf(delegated), finished(assessed({ risk: 'low', size: 's', screen: false })));
+    expect(t).toMatchObject({ risk: 'low', size: 's', visualProof: null });
+    // Within the new run, the risk goes up again and never down.
+    const raised = after(intakeOf(t), finished(assessed({ risk: 'high' })));
+    expect(raised.risk).toBe('high');
+    expect(after(intakeOf(raised), finished(assessed({ risk: 'low' }))).risk).toBe('high');
+  });
+
+  it('a new run whose intake sees a screen requires the visual proof again', () => {
+    expect(after(intakeOf(after(takenBack(), delegation(), withIntake)), finished(assessed({ risk: 'low', screen: true }))).visualProof).toBe('required');
+  });
+
+  it('a delegation straight to dev starts a new run too, with no risk until an intake assesses it', () => {
+    expect(after(takenBack(), delegation())).toMatchObject({ risk: null, visualProof: null });
+  });
+
+  it('a delegation that starts no run leaves the run as it is: refused, a run active, a blocked ticket, a wait on blockers', () => {
+    expect(marks(takenBack({ delegated: true, activeRunId: 'r0', activeJob: 'dev' }), delegation())).toBe(false);
+    expect(marks(takenBack(), delegation({ actor: 'u-guest', roles: [] }))).toBe(false);
+    expect(marks(takenBack({ blocked: true, blockReason: 'Question', blockKind: 'question', blockedJob: 'intake' }), delegation())).toBe(false);
+    expect(marks(takenBack({ delegated: true, waitingOn: { blockers: ['REL-2'], start: { job: 'dev' } } }), delegation())).toBe(false);
+  });
+
+  it('a first delegation, with nothing assessed yet, patches nothing: the journals of a single run stay as they were', () => {
+    expect(marks(undefined, delegation())).toBe(false);
+  });
+
+  it('a stored ticket from before ORC-365, read back, stays in its run: its intake decides as before (upcast)', () => {
+    const old = normalizeTicket(ticket({ risk: 'high', visualProof: 'required' }));
+    expect(decide(old, finished(assessed({ risk: 'low' })), workflow).events).toContainEqual({ type: 'ticket.patched', patch: { size: 'm', risk: 'high' } });
   });
 });
