@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../config/repo-config.js';
-import { agentPolicy, allowConnect, allowRequest, CLAUDE_BODY_DEPTH, claudeBody, stepPolicy, type EgressPolicy } from './levels.js';
+import { agentPolicy, allowConnect, allowRequest, CLAUDE_BODY_DEPTH, CLAUDE_BODY_VALUES, claudeBody, stepPolicy, type EgressPolicy } from './levels.js';
 
 const repo = (yaml?: string) => parseRepoConfig(yaml);
 const limited: EgressPolicy = { level: 'limited', allow: [] };
@@ -203,6 +203,23 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(v(at(CLAUDE_BODY_DEPTH + 1)).ok).toBe(false);
     // In a string, a bracket is text; an escaped quote does not end the string, an escaped backslash does not escape it.
     expect(v(`{"x":"${'['.repeat(1000)}\\"${'{'.repeat(100)}","y":"a\\\\"}`).ok).toBe(true);
+  });
+
+  it('refuses a call of more than CLAUDE_BODY_VALUES values on its raw bytes, before any parse: millions of empty objects cost 40 times their size (ORC-373)', () => {
+    const v = (raw: string) => claudeBody(Buffer.from(raw));
+    const reason = `Claude API body refused: more than ${CLAUDE_BODY_VALUES} values`;
+    // Counted as the brackets and the commas: `{"messages":[` is 2, each `{}` 2 more, less the first one's comma.
+    const objects = (n: number) => `{"messages":[${Array(n).fill('{}').join(',')}]}`;
+    const at = CLAUDE_BODY_VALUES / 2 - 1;
+    expect(v(objects(at)).ok).toBe(true);
+    expect(v(objects(at + 1))).toEqual({ ok: false, reason });
+    for (const raw of [
+      `{"messages":[{"role":"user","content":[{"type":"tool_use","id":"t","name":"B","input":[${Array(CLAUDE_BODY_VALUES).fill('[]').join(',')}]}]}]}`,
+      `{"messages":[],"x":[${Array(CLAUDE_BODY_VALUES + 1).fill('0').join(',')}]}`,
+      `{"messages":[],"x":{${Array.from({ length: CLAUDE_BODY_VALUES }, (_, i) => `"k${i}":0`).join(',')}}}`,
+    ]) expect(v(raw)).toEqual({ ok: false, reason });
+    // In a string, a comma or a bracket is text.
+    expect(v(`{"messages":[{"role":"user","content":"${',{['.repeat(CLAUDE_BODY_VALUES)}"}]}`).ok).toBe(true);
   });
 
   it('refuses what a parse and a serialisation would change: not UTF-8, a number past a double (ORC-337)', () => {
