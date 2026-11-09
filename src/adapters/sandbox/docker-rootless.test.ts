@@ -467,7 +467,7 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
   interface Container { labels: Record<string, string>; env: Record<string, string>; running: boolean; args: string[] }
 
   /** An engine that keeps its containers: their labels and the env file read at `run`, looked up by `ps --filter`. */
-  function stateful(over: { ready?: () => number; failRun?: (args: string[]) => boolean } = {}) {
+  function stateful(over: { ready?: () => number; role?: () => ExecResult; failRun?: (args: string[]) => boolean } = {}) {
     const containers = new Map<string, Container>();
     let made = 0;
     const pair = (x: string): [string, string] => [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1)];
@@ -492,7 +492,8 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
         if (format.includes('"factory.services"')) return ok(found.map(([id, c]) => `${id}\t${c.labels['factory.services']}\n`).join(''));
         return ok(found.map(([id, c]) => inspectLine(id, c.running, c.labels['factory.attempt']!, c.labels['factory.network']!)).join(''));
       }
-      if (a[0] === 'exec') return a.includes('pg_isready') ? { stdout: '', stderr: 'no response', code: over.ready?.() ?? 0 } : ok();
+      if (a[0] === 'exec' && a.includes('pg_isready')) return { stdout: '', stderr: 'no response', code: over.ready?.() ?? 0 };
+      if (a[0] === 'exec' && a[2] === 'sh') return over.role?.() ?? ok();
       if (a[0] === 'rm') containers.delete(a.at(-1)!);
       return ok();
     });
@@ -517,9 +518,18 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
       '--network', 'none',
       POSTGRES_IMAGE,
     ]);
-    const password = svc.env['POSTGRES_PASSWORD']!;
+    const password = svc.env['FACTORY_DB_PASSWORD']!;
     expect(password).toMatch(/^[0-9a-f]{48}$/);
-    expect(svc.env).toMatchObject({ POSTGRES_USER: 'factory', POSTGRES_DB: 'factory', POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=trust' });
+    // The superuser's is another, given to nobody; DATABASE_URL's role is made by it, no superuser.
+    expect(svc.env['POSTGRES_PASSWORD']).toMatch(/^[0-9a-f]{48}$/);
+    expect(svc.env['POSTGRES_PASSWORD']).not.toBe(password);
+    expect(svc.env).toMatchObject({ POSTGRES_DB: 'factory', POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=trust' });
+    expect(svc.env).not.toHaveProperty('POSTGRES_USER');
+    const role = e.calls.map((c) => sub(c.args)).find((a) => a[0] === 'exec' && a[2] === 'sh')!;
+    expect(role.slice(0, 4)).toEqual(['exec', 'svc1', 'sh', '-c']);
+    expect(role[4]).toContain(`CREATE ROLE factory LOGIN PASSWORD '$FACTORY_DB_PASSWORD'`);
+    expect(role[4]).toContain('ALTER DATABASE factory OWNER TO factory');
+    expect(role[4]).not.toMatch(/SUPERUSER/i);
     const box = e.containers.get('c2')!;
     expect(box.args.slice(box.args.indexOf('--network'), box.args.indexOf('--network') + 2)).toEqual(['--network', 'container:svc1']);
     expect(box.env).toEqual({ DATABASE_URL: `postgres://factory:${password}@127.0.0.1:5432/factory` });
@@ -533,7 +543,13 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     const e = stateful({ ready: () => answers.shift() ?? 0 });
     await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req({ requirements: pg }));
     const steps = e.calls.map((c) => sub(c.args)).filter((a) => a[0] === 'run' || a[0] === 'exec').map((a) => (a[0] === 'run' ? `run ${a.at(-1)}` : `${a[1]} ${a[2]}`));
-    expect(steps).toEqual([`run ${POSTGRES_IMAGE}`, 'svc1 pg_isready', 'svc1 pg_isready', 'svc1 pg_isready', 'run infinity']);
+    expect(steps).toEqual([`run ${POSTGRES_IMAGE}`, 'svc1 pg_isready', 'svc1 pg_isready', 'svc1 pg_isready', 'svc1 sh', 'run infinity']);
+  });
+
+  it('a Postgres whose role cannot be made is removed, and no sandbox starts', async () => {
+    const e = stateful({ role: () => ({ stdout: '', stderr: 'role exists', code: 1 }) });
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req({ requirements: pg }))).rejects.toThrow('postgres role not made in svc1: role exists');
+    expect([...e.containers.keys()]).toEqual([]);
   });
 
   it('a Postgres never ready is removed, and no sandbox starts', async () => {
@@ -551,7 +567,7 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     expect([...e.containers.keys()]).toEqual(['svc1']);
     const agent = await p.create(req({ requirements: pg }));
     expect(agent.services).toBe('svc1');
-    expect(e.containers.get(agent.id)!.env).toEqual({ DATABASE_URL: `postgres://factory:${e.containers.get('svc1')!.env['POSTGRES_PASSWORD']}@127.0.0.1:5432/factory` });
+    expect(e.containers.get(agent.id)!.env).toEqual({ DATABASE_URL: `postgres://factory:${e.containers.get('svc1')!.env['FACTORY_DB_PASSWORD']}@127.0.0.1:5432/factory` });
     const verify = await p.create(req({ runId: 'r1-verify', requirements: pg }));
     expect(verify.services).not.toBe('svc1');
     expect(e.containers.get(verify.id)!.env['DATABASE_URL']).not.toBe(e.containers.get(agent.id)!.env['DATABASE_URL']);
@@ -577,13 +593,29 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     expect(rms(e.calls)).toEqual([['rm', '-f', '-v', setup.id], ['rm', '-f', '-v', agent.id], ['rm', '-f', '-v', 'svc1']]);
   });
 
-  it('an owner that fails to start takes its services with it; one that only joins leaves them', async () => {
+  it('a sandbox that fails to start takes the services it owns or started with it; one that only joins them leaves them', async () => {
     const owner = stateful({ failRun: (a) => a.includes('container:svc1') });
     await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: owner.exec }).create(req({ requirements: pg }))).rejects.toThrow('run failed');
     expect([...owner.containers.keys()]).toEqual([]);
-    const joiner = stateful({ failRun: (a) => a.includes('container:svc1') });
-    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: joiner.exec }).create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }))).rejects.toThrow('run failed');
-    expect([...joiner.containers.keys()]).toEqual(['svc1']);
+    // A setup whose container never ran: no agent follows it.
+    const starter = stateful({ failRun: (a) => a.includes('container:svc1') });
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: starter.exec }).create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }))).rejects.toThrow('run failed');
+    expect([...starter.containers.keys()]).toEqual([]);
+    let fail = false;
+    const joiner = stateful({ failRun: (a) => fail && a.includes('container:svc1') });
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: joiner.exec });
+    await p.create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }));
+    fail = true;
+    await expect(p.create(req({ runId: 'r1-again', servicesOf: 'r1', requirements: pg }))).rejects.toThrow('run failed');
+    expect(joiner.containers.has('svc1')).toBe(true);
+  });
+
+  it('removes with --depend under Podman, which refuses a service a leftover container still joins', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    const agent = await p.create(req({ requirements: pg }));
+    await p.destroy(agent.id);
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', agent.id], ['rm', '-f', '-v', '--depend', 'svc1']]);
   });
 
   it('list gives the services under the key they serve, so recover destroys those of dead attempts', async () => {

@@ -853,7 +853,15 @@ export class Orchestrator {
       return;
     }
     // ponytail: a red check's sandbox (`<run>-red`) has no run record: its log is left to the files' purge.
-    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId) && !takenOver.has(runId)).map(async ({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId, await this.d.store.getRun(runId))));
+    const dead = new Map<string, typeof live>();
+    for (const l of live) if (!this.handles.has(l.runId) && !takenOver.has(l.runId)) dead.set(l.runId, [...(dead.get(l.runId) ?? []), l]);
+    // An attempt's containers one after the other, its services (ORC-309) last as `list()` gives them: its security log read once, after them all.
+    await Promise.all(
+      [...dead].map(async ([runId, boxes]) => {
+        const owner = await this.d.store.getRun(runId);
+        for (const [i, { sandbox }] of boxes.entries()) await this.destroySandbox(sandbox.id, runId, i === boxes.length - 1 ? owner : undefined);
+      }),
+    );
   }
 
   /**
@@ -939,9 +947,13 @@ export class Orchestrator {
       if (!res.ok) throw new Error(`The worktree setup failed: ${res.failures[0]!.command}`);
       return;
     }
-    // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
-    const secrets = ws.ahead ? {} : vars.setupSecrets;
-    if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
+    // On commits a previous agent wrote, or in a worktree an earlier attempt worked in (its services new, ORC-309), `setup`
+    // runs code nobody reviewed: no secret for it. A setup that needs one fails.
+    const unreviewed = ws.ahead || !ws.fresh;
+    const secrets = unreviewed ? {} : vars.setupSecrets;
+    if (unreviewed && Object.keys(vars.setupSecrets).length) {
+      this.log('warn', `setup of ${ticketId}: ${ws.ahead ? 'its branch has commits beyond the default branch' : "its worktree holds an earlier attempt's work"}, the repository's secrets are withheld`);
+    }
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
       ticketId,
@@ -2574,7 +2586,8 @@ export class Orchestrator {
         await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
         await state(store.setMeta(setupPendingKey(ws.path), ''));
       } else if (this.d.sandboxes && config.services.length && setup.length) {
-        // Each attempt's services are new (ORC-309): the setup fills them again. Its worktree, set up already, stays if it fails.
+        // Each attempt's services are new (ORC-309): the setup fills them again, without the secrets (the worktree is an
+        // agent's). Its worktree, set up already, stays if it fails.
         await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
       }
       setUp = true;

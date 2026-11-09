@@ -470,14 +470,17 @@ describe('a disposable sandbox per attempt', () => {
       expect(h.sandboxes.destroyed).toEqual(['sbx-1', 'sbx-2', 'svc-1']);
     });
 
-    it('a new attempt on the same worktree runs the setup again, for its new database; a failure there keeps the worktree', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig });
+    it('a new attempt on the same worktree runs the setup again, for its new database, without the secrets; a failure there keeps the worktree', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
+      expect(setups(h)[0]!.opts!.env).toHaveProperty('REGISTRY_TOKEN');
       h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
       await h.advance(600_000);
       expect(setups(h)).toHaveLength(2);
+      // The worktree holds the first attempt's work, which nobody reviewed.
+      expect(setups(h)[1]!.opts!.env).not.toHaveProperty('REGISTRY_TOKEN');
       expect(h.runner.requests).toHaveLength(1);
       expect(h.workspaces.cleaned).toEqual([]);
       expect(await h.ticket()).toMatchObject({ blocked: true });
@@ -496,12 +499,18 @@ describe('a disposable sandbox per attempt', () => {
       expect(comment).not.toContain('registry-secret');
     });
 
-    it('recover destroys the services of an attempt that is no longer running', async () => {
+    it('recover destroys the services of an attempt that is no longer running, after its sandboxes', async () => {
       const h = createHarness({ sandboxed: true });
-      const setup = await h.sandboxes.create({ runId: 'gone-setup', servicesOf: 'gone', ticketId: 'REL-9', workspacePath: '/w', network: 'limited', requirements: PG, mounts: [] });
+      const box = (runId: string, servicesOf?: string) =>
+        h.sandboxes.create({ runId, ...(servicesOf ? { servicesOf } : {}), ticketId: 'REL-9', workspacePath: '/w', network: 'limited', requirements: PG, mounts: [] });
+      const setup = await box('gone-setup', 'gone');
       await h.sandboxes.destroy(setup.id);
+      const left = await box('left-setup', 'left');
       await h.restart({ mode: 'brutal' });
       expect(h.sandboxes.activeServices()).toEqual([]);
+      const d = h.sandboxes.destroyed;
+      expect([...d].sort()).toEqual([setup.id, left.id, 'svc-1', 'svc-2'].sort());
+      expect(d.indexOf(left.id)).toBeLessThan(d.indexOf('svc-2'));
     });
   });
 });

@@ -27,6 +27,9 @@ describe.skipIf(!enabled)(`an attempt's Postgres (${cli}, ORC-309)`, () => {
     expect((await sh(setup.id, 'exec 3<>/dev/tcp/127.0.0.1/5432 && echo open')).stdout).toBe('open');
     expect((await psql(setup, url, 'create table t (v text); insert into t values (1)')).code).toBe(0);
     expect((await psql(setup, url.replace(/:[0-9a-f]{48}@/, ':wrong@'), 'select 1')).code).not.toBe(0);
+    // No superuser: nothing the setup starts in the service's container would outlive its own.
+    expect((await psql(setup, url, 'select rolsuper from pg_roles where rolname = current_user')).stdout.trim()).toBe('f');
+    expect((await psql(setup, url, "copy (select 1) to program 'true'")).code).not.toBe(0);
     await provider.destroy(setup.id);
 
     const agent = await provider.create({ ...attempt, requirements: PG });

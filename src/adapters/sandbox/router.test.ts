@@ -46,6 +46,15 @@ describe('SandboxRouter', () => {
     expect(pg.provider.activeServices()).toEqual([]);
   });
 
+  it("a replayed create gives the sandbox's services back, as its backend has them (ORC-309)", async () => {
+    const pg = backend('pg', { level: 'L3', browser: false, services: ['postgres'] });
+    const req = { ...request, runId: 'r1-setup', servicesOf: 'r1', requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres'] } };
+    await pg.provider.create(req);
+    const router = new SandboxRouter([pg]);
+    expect((await router.create(req)).services).toBe('svc-1');
+    expect(await router.exec('svc-1', ['pg_dumpall'])).toEqual(EXEC_PROBE.result);
+  });
+
   it('refuses instead of falling back to a weaker backend, naming what is missing', async () => {
     const weak = backend('weak');
     const router = new SandboxRouter([weak]);

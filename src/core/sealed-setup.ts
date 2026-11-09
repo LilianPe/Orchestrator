@@ -1,6 +1,6 @@
 import { open, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { DEFAULT_REQUIREMENTS, POSTGRES_USER, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { cappedCommand, VERIFY_TIMEOUT_MS } from './verify.js';
 
 /**
@@ -172,8 +172,8 @@ export async function runSealedSetup(sandboxes: Pick<SandboxProvider, 'create' |
   }
 }
 
-/** What dumps an attempt's Postgres, in its own container, through its socket. */
-export const POSTGRES_DUMP = ['pg_dumpall', `--username=${POSTGRES_USER}`];
+/** What dumps an attempt's Postgres, in its own container: its superuser, through its socket, sees every database and role. */
+export const POSTGRES_DUMP = ['pg_dumpall', '--username=postgres'];
 
 /**
  * The setup's database (ORC-309), which `sealSecrets` does not see: dumped and searched for the same spellings. A

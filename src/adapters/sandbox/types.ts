@@ -102,8 +102,5 @@ export const SANDBOX_HOME = '/home/factory';
 export const PACK_TARGET = '/factory/pack';
 /** Where the run settings file is mounted read-only. */
 export const SETTINGS_TARGET = '/factory/settings.json';
-/** The role and database of an attempt's Postgres (ORC-309). */
-export const POSTGRES_USER = 'factory';
-
 /** Where the run's refusals dir is mounted read-write; the hook writes `refusals.jsonl` there (ORC-217). */
 export const REFUSALS_TARGET = '/factory/refusals';
