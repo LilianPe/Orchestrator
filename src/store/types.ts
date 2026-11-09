@@ -448,6 +448,17 @@ export function blockMoves(decisions: DecisionRecord[], tickets: TicketState[]):
 /** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
 export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string => `${t.projectId}:${t.key}`;
 
+/**
+ * The meta key of the last pause or resume accepted (ORC-335), `1` for a pause: written with its inbox row by `appendInbox`, it
+ * holds the starts before the pause's `set_paused` has run, as a ticket's lane may launch one before the instance's decides it.
+ */
+export const PAUSE_ACCEPTED = 'pause-accepted';
+
+/** The value `appendInbox` writes under `PAUSE_ACCEPTED` for an event: undefined for one that neither pauses nor resumes. */
+export function pauseAcceptedValue(e: FactoryEvent | StoredEvent): '1' | '0' | undefined {
+  return e.type === 'control.pause' ? '1' : e.type === 'control.resume' ? '0' : undefined;
+}
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {
@@ -485,6 +496,7 @@ export interface Store {
   /**
    * The inbox (ORC-147): every event is written here, durably, before anything acts on it. False
    * when an event with this id is already in the inbox, processed or not: the id is the dedup key.
+   * A `control.pause` or `control.resume` written sets the meta `PAUSE_ACCEPTED` in the same transaction (ORC-335).
    */
   appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean>;
   /** Whether the inbox already holds an event with this id, processed or not (ORC-336: a redelivered webhook). */

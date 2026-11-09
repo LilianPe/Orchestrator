@@ -30,7 +30,7 @@ To unblock it: **reply in the ticket** (comment, or the agent's session): the bl
 
 ## Pause
 
-`relais pause` (or the UI button): no run starts any more, requests stay queued; runs in progress finish. `relais resume` resumes. The pause state survives a restart. Useful before maintenance, an upgrade, or to stop spending without stopping the daemon (webhooks and reconciliation keep going).
+`relais pause` (or the UI button): no run starts any more, requests stay queued; runs in progress finish. `relais resume` resumes. The pause state survives a restart. A pause holds every request accepted after it, from the moment it is recorded: a delegation that follows it at once starts no run, even if it is decided first (ORC-335). Useful before maintenance, an upgrade, or to stop spending without stopping the daemon (webhooks and reconciliation keep going).
 
 To stop a single ticket: `relais stop <ID>`, the Stop button, the `agent:stop` label, or stop in the Linear session.
 

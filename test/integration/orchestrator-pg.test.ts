@@ -146,9 +146,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     const h = harness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.orch.accept({ id: 'pause', type: 'control.pause', at: h.clock.now(), projectId: '*', payload: {} });
-    // Decided first: the instance's rows and a ticket's go on side by side, and a delegation decided before the pause
-    // starts its run. An engine bug (ORC-335): once fixed, this wait goes and the delegation follows the pause at once.
-    await h.orch.drained();
+    // Right behind the pause, decided side by side with it: the pause still wins (ORC-335).
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(h.runner.requests).toHaveLength(0);
     expect(await h.orch.isPaused()).toBe(true);

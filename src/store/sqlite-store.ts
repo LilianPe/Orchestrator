@@ -26,6 +26,8 @@ import {
   keptSecurityLog,
   timerEvent,
   timerRowId,
+  PAUSE_ACCEPTED,
+  pauseAcceptedValue,
   type BlockEntry,
   type DecisionOutcome,
   type DecisionRecord,
@@ -221,7 +223,13 @@ export class SqliteStore implements Store {
 
   /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
-    return this.appendResult(e);
+    const paused = pauseAcceptedValue(e);
+    if (paused === undefined) return this.appendResult(e);
+    return this.atomically(() => {
+      const fresh = this.appendResult(e);
+      if (fresh) this.writeMeta(PAUSE_ACCEPTED, paused);
+      return fresh;
+    });
   }
 
   async inboxHas(id: string): Promise<boolean> {
@@ -839,6 +847,10 @@ export class SqliteStore implements Store {
   }
 
   async setMeta(key: string, value: string): Promise<void> {
+    this.writeMeta(key, value);
+  }
+
+  private writeMeta(key: string, value: string): void {
     this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO UPDATE SET value = excluded.value').run(key, value);
   }
 

@@ -1322,4 +1322,29 @@ describe('a start that must not run (ORC-150 review)', () => {
     expect(t.blocked).toBe(true);
     expect(t.activeRunId).toBeUndefined();
   });
+
+  it('does not launch the start of a delegation accepted after a pause whose effect has not run yet (ORC-335)', async () => {
+    // The pause's lane writes `paused` only once the delegation's start has gone through its own.
+    const started = gate();
+    const h = createHarness({
+      wrapStore: (inner) =>
+        Object.assign(Object.create(inner) as Store, {
+          setMeta: async (key: string, value: string) => {
+            if (key === 'paused' && value === '1') await started.opened;
+            await inner.setMeta(key, value);
+            if (key.startsWith('effect:') && key.endsWith(':started')) started.open();
+          },
+        }),
+    });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    const control = (id: string, type: 'control.pause' | 'control.resume') => h.orch.accept({ ...TRUSTED, id, type, at: h.clock.now(), projectId: '*', payload: {} } as FactoryEvent);
+    await control('g1', 'control.pause');
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.runner.requests).toHaveLength(0);
+    expect((await h.store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-1']);
+    expect(await h.orch.isPaused()).toBe(true);
+    await control('g2', 'control.resume');
+    await h.orch.drained();
+    expect(h.runner.requests).toHaveLength(1);
+  });
 });
