@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -1165,7 +1165,7 @@ function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: Tick
   if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
   // A take-over (ORC-234) is held as a stop, and its bundle the factory pushed is the human's push, as any.
   const settled = ticket && settledTicket(ticket);
-  const takenOver = settled === 'stopped' && ticket?.blockKind === 'taken_over';
+  const takenOver = settled === 'stopped' && isTakenOver(ticket);
   if (!ticket?.delegated || (settled && !takenOver) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
   if (!ticket.blocked || ticket.blockKind === 'human_push' || takenOver) {
     cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
@@ -1438,10 +1438,21 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     out.effects.push(blockedLabelChange(true, false)!);
   }
   if (event.type === 'ticket.delegated') newRun(out, state, workflow);
+  endTakeOver(out, state, event);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
   if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
   return out;
+}
+
+/**
+ * A ticket that leaves its take-over (ORC-234) in this decision, relaunched, pushed to, stopped for another reason, or
+ * cleaned up: its container is closed first, before an agent's opens on the worktree.
+ */
+function endTakeOver(out: Decision, state: TicketState | undefined, event: FactoryEvent): void {
+  if (!isTakenOver(state)) return;
+  const after = out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event));
+  if (!isTakenOver(after) || out.effects.some((e) => e.kind === 'cleanup')) out.effects.unshift({ kind: 'close_take_over' });
 }
 
 /**
@@ -1617,7 +1628,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.bundle':
       if (!authorize(out, event, ticket, 'take_over', 'dashboard', matrix)) return out;
       // A bundle comes back for a take-over only: never a way around the agent's own run and its checks.
-      if (!ticket?.blocked || ticket.blockKind !== 'taken_over') {
+      if (!isTakenOver(ticket)) {
         out.trace.push(`control.bundle: ${event.ticketId} is not taken over, its bundle is not taken`);
         return out;
       }

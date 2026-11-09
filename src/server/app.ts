@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
 import { TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
@@ -9,7 +10,7 @@ import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { causeOf } from '../core/block-cause.js';
+import { causeOf, isTakenOver } from '../core/block-cause.js';
 import type { TakeOverDesk } from '../core/orchestrator.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { runDetail } from '../core/run-detail.js';
@@ -52,30 +53,8 @@ export type { TakeOverDesk };
 /** The largest bundle handed back after a take-over (ORC-234), held in memory once before it is written. */
 const MAX_BUNDLE_BYTES = 100 * 2 ** 20;
 
-/** A request body read up to `max` bytes, whatever its `Content-Length` says; undefined past it, the rest not read. */
-async function readCapped(body: ReadableStream<Uint8Array> | null, max: number): Promise<Uint8Array | undefined> {
-  if (!body) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const reader = body.getReader();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > max) {
-      await reader.cancel();
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const c of chunks) {
-    out.set(c, at);
-    at += c.byteLength;
-  }
-  return out;
-}
+/** What each control of a run adds to its stop (ORC-301, ORC-234). */
+const RUN_CONTROL = { pause: { pause: true }, stop: {}, 'take-over': { takeOver: true } } as const;
 
 /**
  * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
@@ -352,7 +331,7 @@ export function createApp(d: ServerDeps): Hono {
   });
   // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check,
   // not a question). The same check here answers the operator at once; `decide`'s is the one journaled.
-  const runControl = (action: 'pause' | 'stop' | 'take-over') => async (c: Context) => {
+  const runControl = (action: keyof typeof RUN_CONTROL) => async (c: Context) => {
     const runId = c.req.param('id')!;
     const run = await d.store.getRun(runId);
     if (!run) return c.json({ error: `unknown run ${runId}` }, 404);
@@ -360,7 +339,7 @@ export function createApp(d: ServerDeps): Hono {
     // Only in a container of its own (ORC-234): without sandboxes, never a shell on the server.
     if (action === 'take-over' && !d.takeOver) return c.json({ error: 'taking over a run needs the sandboxes (FACTORY_CONTAINER_CLI): never a shell on the server' }, 409);
     const at = d.clock.now();
-    const payload = action === 'pause' ? { runId, pause: true as const } : action === 'take-over' ? { runId, takeOver: true as const } : { runId };
+    const payload = { runId, ...RUN_CONTROL[action] };
     await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${action}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
     return c.json({ ok: true });
   };
@@ -374,7 +353,7 @@ export function createApp(d: ServerDeps): Hono {
     const ticketId = c.req.param('ticketId')!;
     if (!d.takeOver) return c.json({ error: 'no take-over without the sandboxes (FACTORY_CONTAINER_CLI)' }, 409);
     const t = await d.store.getTicket(projectId, ticketId);
-    if (!t?.blocked || t.blockKind !== 'taken_over') return c.json({ error: `${ticketId} is not taken over` }, 409);
+    if (!isTakenOver(t)) return c.json({ error: `${ticketId} is not taken over` }, 409);
     return { desk: d.takeOver, projectId, ticketId };
   };
   app.get('/api/tickets/:projectId/:ticketId/take-over', async (c) => {
@@ -383,11 +362,11 @@ export function createApp(d: ServerDeps): Hono {
     const shell = await at.desk.attach(at.projectId, at.ticketId);
     return shell ? c.json(shell) : c.json({ error: `no container open for ${at.ticketId}: hand back a bundle, or reply to relaunch` }, 404);
   });
-  app.post('/api/tickets/:projectId/:ticketId/take-over/bundle', async (c) => {
+  const bundleLimit = bodyLimit({ maxSize: MAX_BUNDLE_BYTES, onError: (c) => c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413) });
+  app.post('/api/tickets/:projectId/:ticketId/take-over/bundle', bundleLimit, async (c) => {
     const at = await takenOver(c);
     if (at instanceof Response) return at;
-    const bytes = await readCapped(c.req.raw.body, MAX_BUNDLE_BYTES);
-    if (!bytes) return c.json({ error: `bundle over ${MAX_BUNDLE_BYTES / 2 ** 20} MB` }, 413);
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.byteLength) return c.json({ error: 'empty bundle' }, 400);
     const file = await at.desk.keepBundle(at.projectId, at.ticketId, bytes);
     const now = d.clock.now();

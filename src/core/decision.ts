@@ -49,6 +49,8 @@ export type Effect =
   | { kind: 'merge'; sha: string }
   /** A container of its own for a human who takes `runId` over (ORC-234), on the ticket's worktree, once that run has ended. */
   | { kind: 'take_over'; runId: string }
+  /** The ticket's take-over container closed (ORC-234): the ticket leaves its take-over, first of the decision's effects. */
+  | { kind: 'close_take_over' }
   /** The bundle `by` handed back (ORC-234), checked by the factory and pushed if it passes: then the human's push (`push.human`). */
   | { kind: 'publish_bundle'; file: string; by: string }
   | { kind: 'cleanup' }

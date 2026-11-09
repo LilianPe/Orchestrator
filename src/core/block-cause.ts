@@ -26,6 +26,9 @@ export const causeOf = (kind: BlockKind | undefined): BlockCause => {
 /** The kinds whose reason says no more than their cause: the Flow does not repeat it under it (ORC-332). */
 export const restatesCause = (kind: BlockKind | undefined): boolean => kind === 'stopped' || kind === 'asked';
 
+/** A ticket a human took over (ORC-234), and holds still. */
+export const isTakenOver = (t: { blocked?: boolean; blockKind?: BlockKind } | undefined): boolean => !!t?.blocked && t.blockKind === 'taken_over';
+
 /** The reason of a stop: the label of its cause in the Flow too. */
 export const STOPPED = 'Stopped on request';
 /** The reason of a run paused from the dashboard (ORC-301), shown under the cause of a stop. */

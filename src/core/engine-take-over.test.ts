@@ -81,6 +81,16 @@ describe('decide — a human takes over a run (ORC-234)', () => {
       expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'run_verify', head: 'a'.repeat(40) }));
     });
 
+    it("a ticket leaving its take-over has its container closed first, before anything else the decision does", () => {
+      const pushed = decide(takenOver(), ev('push.human', { branch: 'factory/rel-1', sha: 'a'.repeat(40), author: 'lilian' }, undefined, undefined, 'untrusted'), workflow);
+      expect(pushed.effects[0]).toEqual({ kind: 'close_take_over' });
+      const stopped = decide(takenOver(), ev('control.stop', {}, undefined, undefined), workflow);
+      expect(stopped.effects[0]).toEqual({ kind: 'close_take_over' });
+      // Still taken over: nothing closed.
+      expect(decide(takenOver(), ev('bundle.refused', { file: '/x', reason: 'r' }, undefined, undefined), workflow).effects.map((e) => e.kind)).not.toContain('close_take_over');
+      expect(decide(running(), ev('control.stop', {}, undefined, undefined), workflow).effects.map((e) => e.kind)).not.toContain('close_take_over');
+    });
+
     it('a delivered ticket stays delivered: a push on it after its merge checks nothing', () => {
       const out = decide(ticket({ blocked: true, blockKind: 'taken_over', prState: 'MERGED' }), ev('push.human', { branch: 'factory/rel-1', sha: 'a'.repeat(40), author: 'x' }, undefined, undefined, 'untrusted'), workflow);
       expect(out.effects.filter((e) => e.kind === 'run_verify')).toEqual([]);

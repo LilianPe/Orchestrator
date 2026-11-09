@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, post, subscribe } from './api.js';
+import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
@@ -135,8 +135,7 @@ export function App() {
           setNotice(undefined);
           return loadFlow();
         }
-        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
-        setNotice({ runId: run.runId, text: error ?? `${action} refused (${res.status})` });
+        setNotice({ runId: run.runId, text: await refusal(res, action) });
       },
       () => setNotice({ runId: run.runId, text: `${action} not sent: the server did not answer` }),
     );
@@ -147,26 +146,22 @@ export function App() {
   // The tickets a human took over (ORC-234): how to reach their container, and the bundles handed back.
   const takenOver = s.flow?.needsYou.blocked.flatMap((g) => g.tickets).filter((t) => t.kind === 'taken_over') ?? [];
   const [shells, setShells] = useState<Record<string, ShellCommand>>({});
-  const [takeOverNotice, setTakeOverNotice] = useState<Record<string, string>>({});
-  const unanswered = (key: string) => () => setTakeOverNotice((n) => ({ ...n, [key]: 'not sent: the server did not answer' }));
-  const answer = async (key: string, res: Response, ok: string) => {
-    const { error } = res.ok ? { error: undefined } : ((await res.json().catch(() => ({}))) as { error?: string });
-    setTakeOverNotice((n) => ({ ...n, [key]: res.ok ? ok : (error ?? `refused (${res.status})`) }));
-  };
+  const [takeOverNotice, setTakeOverNotice] = useState<Record<string, string | undefined>>({});
+  const tell = (key: string, text?: string) => setTakeOverNotice((n) => ({ ...n, [key]: text }));
+  const unanswered = (key: string) => () => tell(key, 'not sent: the server did not answer');
   const askShell = (t: { projectId: string; ticketId: string }) => () => {
     const key = feedKey(t.projectId, t.ticketId);
-    void fetch(`/api/tickets/${t.projectId}/${t.ticketId}/take-over`).then(async (res) => {
-      if (res.ok) {
-        const shell = (await res.json()) as ShellCommand;
-        setShells((sh) => ({ ...sh, [key]: shell }));
-      }
-      return answer(key, res, '');
+    void fetchTakeOverShell(t.projectId, t.ticketId).then(async (res) => {
+      if (!res.ok) return tell(key, await refusal(res, 'shell'));
+      const shell = (await res.json()) as ShellCommand;
+      setShells((sh) => ({ ...sh, [key]: shell }));
+      tell(key);
     }, unanswered(key));
   };
   const handBack = (t: { projectId: string; ticketId: string }) => (file: File) => {
     const key = feedKey(t.projectId, t.ticketId);
-    void fetch(`/api/tickets/${t.projectId}/${t.ticketId}/take-over/bundle`, { method: 'POST', body: file }).then(
-      (res) => answer(key, res, 'Bundle handed back: the factory checks it, then pushes it if it passes. Its verdict comes on the ticket.'),
+    void postBundle(t.projectId, t.ticketId, file).then(
+      async (res) => tell(key, res.ok ? 'Bundle handed back: the factory checks it, then pushes it if it passes. Its verdict comes on the ticket.' : await refusal(res, 'bundle')),
       unanswered(key),
     );
   };
@@ -208,7 +203,7 @@ export function App() {
         )}
         {takenOver.map((t) => {
           const key = feedKey(t.projectId, t.ticketId);
-          return <TakenOver key={key} ticket={t} shell={shells[key]} notice={takeOverNotice[key] || undefined} onShell={askShell(t)} onBundle={handBack(t)} />;
+          return <TakenOver key={key} ticket={t} shell={shells[key]} notice={takeOverNotice[key]} onShell={askShell(t)} onBundle={handBack(t)} />;
         })}
         <section className="run">
           <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
