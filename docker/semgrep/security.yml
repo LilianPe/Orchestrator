@@ -1,0 +1,108 @@
+# The factory's base of security rules (ORC-333): `verify` runs them with the repository's own on the lines a branch adds,
+# without network, so they live here and not in Semgrep's registry. Each one blocks: only what is wrong wherever it is written.
+rules:
+  - id: js-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Code built at run time (`eval`, `new Function`) runs whatever reaches it. Parse the data instead.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(..., $X)
+          - pattern: Function(..., $X)
+      - pattern-not: $F(..., "...")
+      - pattern-not: new $F(..., "...")
+  - id: js-shell-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: A shell command built from a value runs what the value says. Pass the arguments as a list (`execFile`, `spawn` without `shell`).
+    patterns:
+      - pattern-either:
+          # The module, by any name.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      import $CP from '$MOD';
+                      ...
+                  - pattern-inside: |
+                      import * as $CP from '$MOD';
+                      ...
+                  - pattern-inside: |
+                      $CP = require('$MOD');
+                      ...
+              - pattern-either:
+                  - pattern: $CP.exec($CMD, ...)
+                  - pattern: $CP.execSync($CMD, ...)
+          # Its functions, imported by name.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      import { ..., $F, ... } from '$MOD';
+                      ...
+                  - pattern-inside: |
+                      const { ..., $F, ... } = require('$MOD');
+                      ...
+              - metavariable-regex:
+                  metavariable: $F
+                  regex: ^(exec|execSync)$
+              - pattern: $F($CMD, ...)
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(node:)?child_process$
+      - pattern-not: $FN("...", ...)
+  - id: js-tls-verification-off
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: TLS certificate verification turned off accepts any server. Trust the right certificate authority instead.
+    pattern-either:
+      - pattern: |
+          { ..., rejectUnauthorized: false, ... }
+      - patterns:
+          - pattern-either:
+              - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = $V
+              - pattern: process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = $V
+          - pattern-not: process.env.$K = "1"
+          - pattern-not: process.env[$K] = "1"
+  - id: py-eval
+    languages: [python]
+    severity: ERROR
+    message: Code built at run time (`eval`, `exec`) runs whatever reaches it. Parse the data instead.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: exec($X, ...)
+      - pattern-not: $F("...", ...)
+  - id: py-shell-injection
+    languages: [python]
+    severity: ERROR
+    message: A shell command built from a value runs what the value says. Pass the arguments as a list, without `shell=True`.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$F($CMD, ..., shell=True, ...)
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+      - pattern-not: $FN("...", ...)
+  - id: py-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: Deserializing with `pickle`, or `yaml` without a safe loader, runs code the data carries. Use JSON, or `yaml.safe_load`.
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+      - pattern: yaml.unsafe_load(...)
+      - pattern: yaml.load($S)
+      - patterns:
+          - pattern-either:
+              - pattern: yaml.load($S, Loader=$L)
+              - pattern: yaml.load($S, $L)
+          - metavariable-regex:
+              metavariable: $L
+              regex: ^(?!(yaml\.)?(C?SafeLoader|BaseLoader)$)
+  - id: py-tls-verification-off
+    languages: [python]
+    severity: ERROR
+    message: TLS certificate verification turned off accepts any server. Trust the right certificate authority instead.
+    pattern-either:
+      - pattern: requests.$F(..., verify=False, ...)
+      - pattern: httpx.$F(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
