@@ -10,7 +10,7 @@ import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
 import { messageClassifier } from '../adapters/runner/message-classifier.js';
-import { maskTranscriptLine, purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets } from '../adapters/runner/transcript.js';
+import { purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { registriesViaEgress } from '../network/egress-fetch.js';
@@ -205,7 +205,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       sandboxes: !!sandboxes,
       hostVerify: hostChecks,
       publisher: !!publisher,
-      claudeToken: !!claudeTokenOf(),
       budgets: yml?.budgets,
     });
     for (const p of problems) log(`Invalid configuration, no ticket is taken until it is fixed and the factory restarted: ${p}`);
@@ -390,7 +389,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       uiPassword,
       configProblems: problems,
       heldRows: (ticketId) => orchestrator.heldRows(ticketId),
-      mask: (text) => maskTranscriptLine(text, transcriptSecrets(env, daemonSecrets())),
+      secrets: () => transcriptSecrets(env, daemonSecrets()),
       oauth: linearSettings(o.home, yml)
         ? {
             authorizeUrl: () => {

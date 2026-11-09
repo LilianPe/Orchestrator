@@ -40,10 +40,9 @@ To stop a single ticket: `relais stop <ID>`, the Stop button, the `agent:stop` l
 
 - `verify cannot run`: no sandbox (`FACTORY_CONTAINER_CLI`) and no `FACTORY_ALLOW_HOST_VERIFY=1`;
 - `publication impossible`: no sandbox, or no GitHub App;
-- `no Claude token`: sandboxes without `claude.active` nor `CLAUDE_CODE_OAUTH_TOKEN`;
-- `factory.yml: …`: a budget `factory validate` refuses (a `per_step_tokens` or `per_ticket_tokens` not set, a worst case over the ticket's cap).
+- `factory.yml: …`: a budget `factory validate` refuses (a `per_step_tokens` not set, a worst case over `per_ticket_tokens`). A `per_ticket_tokens` left to the repositories' `.factory/config.yml` is not refused here.
 
-None applies under `--fake-runner`. Fix the cause, then restart.
+The budgets are not checked under `--fake-runner`. Fix the cause, then restart. A missing Claude token stays a warning: the account is read again at each launch, its fix needs no restart.
 
 **`GET /health`** answers 200 `{ ok: true, store: "ok", takingTickets: true, configProblems: [], linearConnected }` while the store answers and the factory takes tickets; 503 otherwise, with `store: "unreachable"` or the reasons in `configProblems`.
 
@@ -53,7 +52,7 @@ Both are behind the interface's password, as every route but the webhooks, the O
 
 ## Linear's rate limit (ORC-350)
 
-Every call to Linear's API is bounded (30 s). A rate limit (a 429, or a `RATELIMITED` error) is waited out until Linear's reset when its answer gives one (`Retry-After`, `X-RateLimit-Requests-Reset`), 1 s, 2 s then 4 s otherwise, at most 60 s, then the call is tried again, 3 times; past them, the effect is retried as a [transient failure](#transient-and-permanent-errors-orc-343). The live feed of a run (the ephemeral activities of its Linear session) yields the quota: while a rate limit is waited out, or once less than a tenth of the hour's requests is left, its activities are skipped and never retried, so that the comments, statuses and labels keep it.
+Every call to Linear's API is bounded (30 s). A rate limit (a 429, or a `RATELIMITED` error) is waited out until Linear's reset when its answer gives one (`Retry-After`, `X-RateLimit-Requests-Reset`), 1 s, 2 s then 4 s otherwise, at most 60 s, then the call is tried again, 3 times; another call made meanwhile waits for the same end before it goes; past them, the effect is retried as a [transient failure](#transient-and-permanent-errors-orc-343). The live feed of a run (the ephemeral activities of its Linear session) yields the quota: while a rate limit is waited out, or once less than a tenth of the hour's requests is left until their reset, its activities are skipped and never retried, so that the comments, statuses and labels keep it.
 
 ## Logs, transcripts and data
 

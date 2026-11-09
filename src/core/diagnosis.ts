@@ -59,7 +59,8 @@ export async function ticketDiagnoses(d: DiagnosisDeps, ticketId: string, projec
     projects.map(async (pid): Promise<TicketDiagnosis> => {
       const t = tracked.find((x) => x.projectId === pid);
       const [effects, runs] = await Promise.all([store.listEffects(pid, ticketId), store.ticketRuns(pid, ticketId)]);
-      const failed = effects.filter((e) => e.error !== undefined).at(-1);
+      // A row done keeps the error of a failed try: only one still failing, or given up, holds the ticket.
+      const failed = effects.filter((e) => e.status !== 'done' && e.error !== undefined).at(-1);
       const run = runs.filter((r) => r.status === 'running').at(-1);
       const heldRow = held.find((h) => h.projectId === pid);
       const reasons: string[] = [];

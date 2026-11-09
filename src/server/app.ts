@@ -54,8 +54,8 @@ export interface ServerDeps {
   configProblems?: readonly string[];
   /** The failed inbox rows the worker holds for a ticket (ORC-350), for its diagnosis. */
   heldRows?: (ticketId: string) => HeldRow[];
-  /** Masks the daemon's secrets in what the diagnosis tells; the secret shapes alone by default. */
-  mask?: (text: string) => string;
+  /** The daemon's secret values (`transcriptSecrets`), masked in what the diagnosis tells with the secret shapes; read once per request. */
+  secrets?: () => string[];
 }
 
 export type { TakeOverDesk };
@@ -238,7 +238,8 @@ export function createApp(d: ServerDeps): Hono {
   // Why a ticket is stuck (ORC-350), with what holds every ticket: the configuration, the pause, the usage limit.
   app.get('/tickets/:id/diagnosis', async (c) => {
     const ticketId = c.req.param('id');
-    const mask = d.mask ?? ((text: string) => maskTranscriptLine(text, []));
+    const secrets = d.secrets?.() ?? [];
+    const mask = (text: string) => maskTranscriptLine(text, secrets);
     const found = await ticketDiagnoses({ store: d.store, ...(d.heldRows ? { held: d.heldRows } : {}), mask }, ticketId, c.req.query('project') || undefined);
     if (found.length === 0) return c.json({ error: `${ticketId}: no such ticket` }, 404);
     if (found.length > 1) return c.json({ error: `${ticketId} is tracked in several projects: ask with ?project=`, projects: found.map((f) => f.projectId).sort() }, 409);

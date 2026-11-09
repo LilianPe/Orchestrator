@@ -13,7 +13,7 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'mask'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -831,7 +831,7 @@ describe('the health check and the diagnosis of a ticket (ORC-350)', () => {
     const { app, store } = await setup({
       configProblems: ['no Claude token'],
       heldRows: (id) => (id === 'REL-1' ? [{ projectId: 'p', eventId: 'e1', type: 'ticket.delegated', error: 'token tok-123 refused', attempts: 3, behind: 0 }] : []),
-      mask: (s) => s.replace('tok-123', '***'),
+      secrets: () => ['tok-123'],
     });
     const res = await app.request('/tickets/REL-1/diagnosis');
     expect(res.status).toBe(200);
@@ -839,7 +839,7 @@ describe('the health check and the diagnosis of a ticket (ORC-350)', () => {
     expect(body).toMatchObject({
       projectId: 'p',
       ticketId: 'REL-1',
-      heldRow: { error: 'token *** refused' },
+      heldRow: { error: 'token [masked] refused' },
       factory: { takingTickets: false, configProblems: ['no Claude token'], paused: false, usageLimitedUntil: null },
     });
     expect(body.reasons).toContain('the factory takes no ticket, its configuration is invalid: no Claude token');

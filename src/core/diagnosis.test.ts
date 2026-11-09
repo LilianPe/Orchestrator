@@ -55,6 +55,25 @@ describe('ticketDiagnoses (ORC-350)', () => {
     await store.close();
   });
 
+  it('tells no effect that failed once and then went through', async () => {
+    const store = new SqliteStore(':memory:');
+    await store.putTicket(newTicketState('p', 'REL-1', 'Export', 'dev', 1));
+    await store.appendInbox(event('e1'));
+    await store.decide({
+      event: event('e1'),
+      workflow: { hash: 'h', definition: {} },
+      decide: (t) => ({ ticket: t!, effects: [{ kind: 'comment', body: 'hello' }], timers: [], clearTimers: false }),
+    });
+    const first = (await store.claimEffect('p', 'REL-1', 60_000)) as OutboxRow;
+    await store.retryEffect(first.id, first.lease!, 'HTTP 502', 0);
+    const second = (await store.claimEffect('p', 'REL-1', 60_000)) as OutboxRow;
+    await store.completeEffect(second.id, second.lease, 7);
+    const [d] = await ticketDiagnoses({ store, mask }, 'REL-1');
+    expect(d!.lastFailedEffect).toBeUndefined();
+    expect(d!.reasons).toEqual([]);
+    await store.close();
+  });
+
   it('finds a ticket the store does not track yet by the row the worker holds, and none it knows nothing of', async () => {
     const store = new SqliteStore(':memory:');
     const held: HeldRow = { projectId: 'p', eventId: 'e1', type: 'ticket.delegated', error: 'Linear unreachable', attempts: 1, behind: 0 };

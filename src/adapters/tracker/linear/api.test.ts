@@ -47,6 +47,27 @@ describe('LinearApi under its rate limit (ORC-350)', () => {
     expect(far.waits).toEqual([60_000]);
   });
 
+  it('backs off all the same on a reset already past by its clock, or a Retry-After of 0', async () => {
+    const now = () => 1_000_000;
+    const past = linear([http429({ 'x-ratelimit-requests-reset': String(1_000_000 - 2_000) }), http429({ 'retry-after': '0' }), ok()], { now });
+    await past.api.gql('query { viewer { id } }');
+    expect(past.waits).toEqual([1_000, 2_000]);
+  });
+
+  it('keeps a critical call made while a rate limit is waited out until its end, rather than sending it to be refused', async () => {
+    const now = () => 1_000_000;
+    const answers: Answer[] = [http429({ 'retry-after': '20' })];
+    const { api, calls, waits } = linear(answers, { now });
+    // Refused past its retries: Linear's limit holds for 20 s more.
+    await api.gql('query A { x }').catch(() => undefined);
+    answers.splice(0, answers.length, ok());
+    waits.length = 0;
+    const sent = calls.length;
+    await api.gql('query B { y }');
+    expect(waits).toEqual([20_000]);
+    expect(calls).toHaveLength(sent + 1);
+  });
+
   it('gives up after its retries, with an error the outbox still retries as transient (ORC-343)', async () => {
     const { api, calls, waits } = linear([http429()]);
     const err = await api.gql('query { viewer { id } }').catch((e: unknown) => e);
@@ -87,6 +108,12 @@ describe('LinearApi under its rate limit (ORC-350)', () => {
     await api.gql('query C { z }');
     await api.gql('mutation B { y }', {}, { background: true });
     expect(calls).toHaveLength(sent + 4);
+    // A quota read low, its reset past: no longer known, the background call goes.
+    answers.splice(0, answers.length, ok({}, { 'x-ratelimit-requests-limit': '1000', 'x-ratelimit-requests-remaining': '10', 'x-ratelimit-requests-reset': String(t + 60_000) }));
+    await api.gql('query C { z }');
+    await expect(api.gql('mutation B { y }', {}, { background: true })).rejects.toThrow('Linear quota kept for the critical calls');
+    t += 60_000;
+    await api.gql('mutation B { y }', {}, { background: true });
   });
 
   it('never retries a background call: the live feed sends the next one anyway', async () => {
