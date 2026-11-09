@@ -342,6 +342,8 @@ interface KeptPlan {
 
 interface EffectKey {
   id: string;
+  /** The outbox row's id, without the installation's salt: what the factory shows of the effect (ORC-197). */
+  effectId: string;
   replay: boolean;
   /** The inbox event the effect's decision came from. */
   eventId: string;
@@ -1523,7 +1525,7 @@ export class Orchestrator {
       return;
     }
     this.d.bus.publish({ kind: 'command', projectId: project.id, ticketId: row.ticketId, command: effect });
-    const key: EffectKey = { id: `${row.id}@${await this.instanceId()}`, replay: row.attempts > 1, eventId: row.eventId };
+    const key: EffectKey = { id: `${row.id}@${await this.instanceId()}`, effectId: row.id, replay: row.attempts > 1, eventId: row.eventId };
     const outcome = await this.exec(project, row.ticketId, effect, key);
     if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
     return outcome;
@@ -1808,15 +1810,20 @@ export class Orchestrator {
   }
 
   /**
-   * The `after_merge` step (ORC-197). The changelog entry first, which needs nothing of Linear: appended once by the effect's key, never
+   * The `after_merge` step (ORC-197). The changelog entry first, which needs nothing of Linear: appended once by the effect's id, never
    * changed. Then the requester, the issue's creator, mentioned in the ticket's session with the merged PR's link. A replay finds both.
+   * The mention is best effort, as an ack: a dead effect would hold back the cleanup and the run its decision starts after it.
    */
   private async afterMerge(project: ProjectRuntime, t: TicketState, c: MergedPr, key: EffectKey): Promise<EffectOutcome | void> {
     const events = (await this.d.store.ticketJournal(project.id, t.ticketId)).map((j) => upcast(j.event));
-    const appended = await this.d.store.appendChangelog(changelogEntry(key.id, t, c, mergedWork(events)));
-    const { creator } = await this.d.tracker.getIssue(t.ticketId);
-    const told = await this.activityOnce(await this.sessionFor(t), { type: 'response', body: deliveredBody(creator, c) }, key);
-    return !appended && told?.deduplicated ? told : undefined;
+    const appended = await this.d.store.appendChangelog(changelogEntry(key.effectId, t, c, mergedWork(events, c.headSha)));
+    try {
+      const { creator } = await this.d.tracker.getIssue(t.ticketId);
+      const told = await this.activityOnce(await this.sessionFor(t), { type: 'response', body: deliveredBody(creator, c) }, key);
+      return !appended && told?.deduplicated ? told : undefined;
+    } catch (err) {
+      this.log('warn', `the requester of ${t.ticketId} not told of PR #${c.number}: ${(err as Error).message}`);
+    }
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */

@@ -265,6 +265,8 @@ describe('server', () => {
       const all = await (await app.request(`/api/changelog?since=0&until=${30 * DAY}`)).json();
       expect(all.entries.map((e: ChangelogEntry) => e.ticketId)).toEqual(['REL-3', 'REL-2', 'REL-1']);
       expect((await app.request('/api/changelog?since=x')).status).toBe(400);
+      await store.appendChangelog({ ...entry('OPS-1:1:1', 29 * DAY), projectId: 'ops' });
+      expect((await (await app.request('/api/changelog?project=ops')).json()).entries.map((e: ChangelogEntry) => e.ticketId)).toEqual(['OPS-1']);
       // Nothing writes it from outside: the after_merge step alone appends to it.
       for (const method of ['POST', 'PUT', 'DELETE']) expect((await app.request('/api/changelog', { method })).status).not.toBe(200);
       expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/changelog')).status).toBe(401);

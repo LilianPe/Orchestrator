@@ -8,13 +8,13 @@ import type { EventPayloads, FactoryEvent, TicketState } from './types.js';
 export type MergedPr = Extract<Effect, { kind: 'after_merge' }>;
 
 /**
- * The work the merged PR carries, as the ticket's journal has it: the green verdict of the commit the factory published last
- * (ORC-125), or the last green verdict when none was published by the factory.
+ * The work the merged PR carries, as the ticket's journal has it: the green verdict of the merged head when GitHub names it
+ * (a human's push verified since, ORC-159), else of the commit the factory published last (ORC-125), else the last green verdict.
  */
-export function mergedWork(events: readonly FactoryEvent[]): EventPayloads['verify.passed'] | undefined {
+export function mergedWork(events: readonly FactoryEvent[], headSha?: string): EventPayloads['verify.passed'] | undefined {
   const published = events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done')?.payload.runId;
   const passed = events.filter((e): e is FactoryEvent<'verify.passed'> => e.type === 'verify.passed').map((e) => e.payload);
-  return passed.findLast((p) => p.runId === published) ?? passed.at(-1);
+  return (headSha ? passed.findLast((p) => p.sha === headSha) : undefined) ?? passed.findLast((p) => p.runId === published) ?? passed.at(-1);
 }
 
 /**

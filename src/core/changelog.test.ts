@@ -12,6 +12,10 @@ describe('the changelog entry of a merged PR (ORC-197)', () => {
   it('takes the work the factory published last, not a later verdict it never published', () => {
     const events = [passed('r1', 'first'), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'a' }), passed('r2', 'never published')];
     expect(mergedWork(events)?.output?.summary).toBe('first');
+    // The commit GitHub merged, when it says it: a human's push verified after the factory's publication.
+    const pushed = [...events, passed('check-1', 'pushed', { sha: 'b', output: undefined })];
+    expect(mergedWork(pushed, 'b')?.runId).toBe('check-1');
+    expect(mergedWork(pushed, 'unknown')?.output?.summary).toBe('first');
     // Nothing published by the factory: its last green verdict.
     expect(mergedWork([passed('r1', 'first'), passed('r2', 'second')])?.output?.summary).toBe('second');
     expect(mergedWork([])).toBeUndefined();

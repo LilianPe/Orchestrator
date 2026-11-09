@@ -714,8 +714,8 @@ export interface Store {
   artifacts(ticketId: string): Promise<Artifact[]>;
   /** Appends an entry to the changelog (ORC-197), once by its id: false, and nothing written nor changed, when it is there already. */
   appendChangelog(e: ChangelogEntry): Promise<boolean>;
-  /** The changelog entries dated in `[since, until)` (ORC-197), the most recent first. */
-  changelog(since: number, until: number): Promise<ChangelogEntry[]>;
+  /** The changelog entries dated in `[since, until)` (ORC-197), of one project when `projectId` is given, the most recent first. */
+  changelog(since: number, until: number, projectId?: string): Promise<ChangelogEntry[]>;
   /** A project's known flaky tests (ORC-164), oldest first. */
   knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]>;
   /** Lists a test as known flaky (ORC-164), in place of its entry if it has one. */

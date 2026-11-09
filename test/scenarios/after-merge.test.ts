@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FakeShooter, fakePng } from '../../src/adapters/browser/fake.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { CleanVerifyResult } from '../../src/core/clean-verify.js';
@@ -105,6 +105,26 @@ describe('the after_merge step (ORC-197)', () => {
     const all = await entries(h);
     expect(all.map((e) => e.prNumber)).toEqual([9, first!.prNumber]);
     expect(all[1]).toEqual(first);
+  });
+
+  it('the entry is named by its effect, never by the installation salt of the keys written to Linear', async () => {
+    const h = delivered(taken());
+    await merge(h);
+    const [entry] = await entries(h);
+    expect(entry!.id).toMatch(/^REL-1:\d+:\d+$/);
+  });
+
+  it('a mention Linear refuses holds back neither the entry, nor the cleanup and learn behind it: logged, the step done', async () => {
+    const h = delivered(taken());
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const { prNumber, prUrl } = await h.ticket();
+    const activity = h.tracker.activity.bind(h.tracker);
+    vi.spyOn(h.tracker, 'activity').mockImplementation((s, a, key) => ('body' in a && a.body.startsWith('Delivered') ? Promise.reject(new Error('Linear refused it')) : activity(s, a, key)));
+    await h.send('pr.merged', { number: prNumber!, url: prUrl!, branch: 'factory/rel-1-restyle-the-button' });
+    expect(await entries(h)).toHaveLength(1);
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    expect(h.runner.requests.at(-1)!.prompt.startsWith('/factory:learn\n')).toBe(true);
+    expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'done' });
   });
 
   it('a ticket whose creator Linear does not give is told without a mention', async () => {

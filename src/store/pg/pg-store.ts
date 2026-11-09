@@ -970,9 +970,10 @@ export class PgStore implements AsyncStore {
     return rows.length === 1;
   }
 
-  async changelog(since: number, until: number): Promise<ChangelogEntry[]> {
+  async changelog(since: number, until: number, projectId?: string): Promise<ChangelogEntry[]> {
+    const project = projectId === undefined ? sql`` : sql`and project_id = ${projectId}`;
     const rows = await this.db.execute<{ entry: ChangelogEntry }>(sql`
-      select entry from changelog where at >= to_timestamp(${since / 1000}) and at < to_timestamp(${until / 1000}) order by at desc, id desc
+      select entry from changelog where at >= to_timestamp(${since / 1000}) and at < to_timestamp(${until / 1000}) ${project} order by at desc, id desc
     `);
     return rows.rows.map((r) => r.entry);
   }

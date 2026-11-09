@@ -330,6 +330,8 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.appendChangelog(old)).toBe(true);
     expect(await s.changelog(1_700_000_000_000, 1_800_000_000_000)).toEqual([later, e]);
     expect(await s.changelog(0, 1_700_000_000_000)).toEqual([old]);
+    expect(await s.changelog(0, 1_800_000_000_000, 'q')).toEqual([old]);
+    expect(await s.changelog(0, 1_800_000_000_000, 'p')).toEqual([later, e]);
   });
 
   it("keeps a project's known flaky tests, a human's list: replaced by test, listed oldest first, taken off (ORC-164)", async () => {
