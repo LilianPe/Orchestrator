@@ -27,11 +27,12 @@ export class SandboxRouter implements SandboxProvider {
   /** In memory only: after a daemon restart, `list` and `findByAttempt` fill it again from the backends. */
   private owner = new Map<string, SandboxBackend>();
 
-  /** Those of any backend (ORC-282): a request naming another is refused, whatever else it asks. */
-  readonly services: readonly string[];
+  constructor(private readonly backends: readonly SandboxBackend[]) {}
 
-  constructor(private readonly backends: readonly SandboxBackend[]) {
-    this.services = [...new Set(backends.flatMap((b) => b.capabilities.services))];
+  /** As `create` picks (ORC-282): one backend gives them all, or those the closest one lacks; all of them without a backend. */
+  unprovided(services: readonly string[]): string[] {
+    const lacks = this.backends.map((b) => services.filter((s) => !b.capabilities.services.includes(s)));
+    return lacks.reduce((best, l) => (l.length < best.length ? l : best), [...services]);
   }
 
   async create(req: SandboxRequest): Promise<Sandbox> {

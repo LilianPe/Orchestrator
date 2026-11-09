@@ -842,14 +842,14 @@ describeSandboxContract(
   { violates: [RECREATE] },
 );
 
-const UNPROVIDED = 'create refuses a service outside `services`, naming it, and makes no sandbox (ORC-282)';
+const UNPROVIDED = 'create refuses a service `unprovided` names, naming it, and makes no sandbox (ORC-282)';
 
 describeSandboxContract(
   'a sandbox provider that opens a sandbox without a service it does not provide',
   sandboxesThat(
     class extends FakeSandboxProvider {
       override async create(req: SandboxRequest): Promise<Sandbox> {
-        return super.create({ ...req, requirements: { ...req.requirements, services: req.requirements.services.filter((s) => this.services.includes(s)) } });
+        return super.create({ ...req, requirements: { ...req.requirements, services: req.requirements.services.filter((s) => !this.unprovided([s]).length) } });
       }
     },
   ),

@@ -55,9 +55,13 @@ describe('SandboxRouter', () => {
     expect(await router.exec('svc-1', ['pg_dumpall'])).toEqual(EXEC_PROBE.result);
   });
 
-  it('provides the services of its backends, each once (ORC-282)', () => {
-    const router = new SandboxRouter([backend('weak'), backend('pg', { ...L3, services: ['postgres'] }), backend('both', { ...L3, services: ['redis', 'postgres'] })]);
-    expect(router.services).toEqual(['postgres', 'redis']);
+  it('provides services together, as create picks one backend for them all: else what the closest one lacks (ORC-282)', () => {
+    const pg = backend('pg', { ...L3, services: ['postgres'] });
+    const redis = backend('redis', { ...L3, services: ['redis'] });
+    expect(new SandboxRouter([pg, redis]).unprovided(['postgres'])).toEqual([]);
+    expect(new SandboxRouter([redis, pg]).unprovided(['postgres', 'redis', 'kafka'])).toEqual(['postgres', 'kafka']);
+    expect(new SandboxRouter([backend('both', { ...L3, services: ['redis', 'postgres'] })]).unprovided(['postgres', 'redis'])).toEqual([]);
+    expect(new SandboxRouter([]).unprovided(['postgres'])).toEqual(['postgres']);
   });
 
   it('refuses instead of falling back to a weaker backend, naming what is missing', async () => {

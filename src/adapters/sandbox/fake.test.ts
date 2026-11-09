@@ -30,7 +30,7 @@ describe('FakeSandboxProvider', () => {
 
   it("provides the container backend's services, as many as a test sets, and refuses another (ORC-282)", async () => {
     const p = new FakeSandboxProvider();
-    expect(p.services).toEqual(['postgres']);
+    expect(p.unprovided(['postgres', 'redis'])).toEqual(['redis']);
     const req = { runId: 'r1', ticketId: 'REL-1', workspacePath: '/w', network: 'none' as const, mounts: [] };
     await expect(p.create({ ...req, requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres', 'redis'] } })).rejects.toThrow('no services (redis)');
     p.services = [];

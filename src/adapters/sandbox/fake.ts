@@ -16,8 +16,12 @@ export class FakeSandboxProvider implements SandboxProvider {
   private made = 0;
   private madeServices = 0;
 
+  unprovided(services: readonly string[]): string[] {
+    return services.filter((s) => !this.services.includes(s));
+  }
+
   async create(req: SandboxRequest): Promise<Sandbox> {
-    const unknown = req.requirements.services.filter((s) => !this.services.includes(s));
+    const unknown = this.unprovided(req.requirements.services);
     if (unknown.length) throw new Error(`fake sandbox: no services (${unknown.join(', ')})`);
     this.created.push(req);
     const existing = this.live.get(req.runId);

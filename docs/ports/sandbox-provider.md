@@ -33,7 +33,7 @@ After `destroy`, a `create` for the same `runId` gives a new sandbox.
 
 `req.requirements`: a minimum isolation level (`minLevel`, ordered `L3` < `L4` < `L5`), `browser` and a list of `services`. A backend satisfies them all or is not picked: never a silent fallback to a less isolated backend, nor to the host. The refusal is a rejection of `create` whose message names what is missing (`level >= L5`, `browser`, `service postgres`). In the MVP, `L4`, `L5`, a browser and any service but `postgres` are therefore refused.
 
-`services` (a property, ORC-282) names the services the provider starts next to a sandbox: those of its backends for the router, `postgres` for the container backend. `create` refuses a request naming another, and makes nothing. The orchestrator reads it at the launch, before the `setup`: a repository that declares a service no backend provides, or any service on a daemon without sandboxes, starts no run, and its ticket is blocked with a message naming the service.
+`unprovided(services)` (ORC-282) gives those of `services` the provider cannot start next to a sandbox, empty when it provides them all: `create` refuses a request naming one, and makes nothing. The container backend provides `postgres`. The router reads its backends' capabilities as `create` picks: one backend must provide them all, else it gives what the closest backend lacks. The orchestrator asks at the launch, before the `setup`: a repository that declares a service no backend provides, or any service on a daemon without sandboxes, starts no run, and its ticket is blocked with a message naming the service.
 
 ## Services (ORC-309)
 
@@ -68,14 +68,14 @@ The sandbox belongs to an attempt: the engine is what decides which attempt is a
 - `active()`: the ids of the live sandboxes (the fake reads them through `active()`; a real one, through its labels);
 - `unsatisfiable` (optional): requirements the subject cannot satisfy and a pattern of the refusal message that must name them; without it, the refusal case is skipped (the fake, which looks only at services, declares none).
 
-Whatever the subject, a case names a service outside the provider's `services` (`contract-no-such-service`) and expects a refusal naming it, with no sandbox made (ORC-282).
+Whatever the subject, a case names a service the provider does not have (`contract-no-such-service`): `unprovided` must name it, and `create` refuse it naming it, with no sandbox made (ORC-282).
 
 The `exec` case runs `EXEC_PROBE` (`sh -c`, which writes to both outputs and exits with 3): a real sandbox executes it, a fake scripts its answer.
 
 ## Known gaps
 
 - **Network enforced by the egress proxy (ORC-213).** The container backend always runs with `--network none`. With the factory's proxy, it mounts the run's socket and the egress authority's certificate, and the proxy is what enforces the level; without a proxy, nothing gets out, whatever the level. The returned `Sandbox` carries the requested level (a replayed `create` compares it). A live container whose socket is not held by this process (restarted daemon) is only returned by `reattach`, which reopens the socket at the same path: `create` and `findByAttempt` do not return it, and `create` destroys and remakes it. See [interface-and-security.md](../interface-and-security.md#sandbox-network).
-- `FakeSandboxProvider` looks only at `services`, refusing one outside its own (`postgres`, which a test can change): it creates an `L3` sandbox whatever the level or browser asked. That refusal is checked on the router. It keeps services by their key (`activeServices()`), as the container backend does.
+- `FakeSandboxProvider` looks only at services, refusing one outside its `services` field (`postgres`, which a test can change): it creates an `L3` sandbox whatever the level or browser asked. That refusal is checked on the router. It keeps services by their key (`activeServices()`), as the container backend does.
 - **Services under rootless Podman (ORC-309)**: `--network container:` between a service without `--userns=keep-id` and a sandbox with it is checked by `test/isolation/services.test.ts`, in CI only.
 - **No database for the red check (ORC-309)**: the `<run>-red` sandbox gets no services; a red check whose tests need the database sees them fail for that reason. The captures of the visual proof get none either, so a repository with `services` gets no capture: its required proof is unavailable, naming them (ORC-282).
 - **A replayed `create` through the router** returns the sandbox without `services`: a `setup` replayed so fails rather than leave its database unchecked.

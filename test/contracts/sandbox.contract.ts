@@ -105,10 +105,10 @@ export function describeSandboxContract(name: string, make: () => SandboxSubject
       expect(listed.map((l) => l.sandbox.id)).not.toContain(a.id);
     });
 
-    it('create refuses a service outside `services`, naming it, and makes no sandbox (ORC-282)', async () => {
+    it('create refuses a service `unprovided` names, naming it, and makes no sandbox (ORC-282)', async () => {
       const s = await make();
       const missing = 'contract-no-such-service';
-      expect(s.provider.services).not.toContain(missing);
+      expect(s.provider.unprovided([missing])).toEqual([missing]);
       await expect(s.provider.create({ ...s.request, requirements: { ...s.request.requirements, services: [missing] } })).rejects.toThrow(missing);
       expect(await s.active()).toEqual([]);
     });

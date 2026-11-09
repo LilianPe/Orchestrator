@@ -2524,7 +2524,8 @@ export class Orchestrator {
       // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
       // Provided, or no run starts (ORC-282): never a setup nor an agent in an environment poorer than the repository declares.
-      const unprovided = config.services.filter((s) => !this.d.sandboxes?.services.includes(s));
+      const declared = [...new Set(config.services)];
+      const unprovided = this.d.sandboxes ? this.d.sandboxes.unprovided(declared) : declared;
       if (unprovided.length) throw new Error(servicesUnavailable(unprovided, !!this.d.sandboxes));
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
