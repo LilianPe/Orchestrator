@@ -54,13 +54,15 @@ import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
 import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork } from './intake-checks.js';
 import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
-import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
+import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
+import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
+import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { branchAnew, heldByOther, pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
@@ -69,6 +71,7 @@ import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type Store
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
+  type Blocker,
   type EventPayloads,
   type FeedbackItem,
   type InputKind,
@@ -77,6 +80,7 @@ import {
   type LogicalState,
   type PendingJob,
   type QueueName,
+  type RelayedQuestion,
   type FactoryEvent,
   type RunOutcome,
   type TicketState,
@@ -238,6 +242,8 @@ export interface OrchestratorDeps {
   visualProof?: { shooter: VisualShooter; artifactsDir: string };
   /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
   egressJournal?: (runId: string) => string;
+  /** Where the runner keeps the runs' transcripts (ORC-132): the answer agent reads the session at work there (ORC-182). Absent: it reads none. */
+  transcriptsDir?: string;
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
   sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
@@ -379,7 +385,7 @@ export function logicalFromName(states: Workflow['states'], name: string): Logic
 function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (ticketSession) return 'implementer';
   if (job.queue === 'dev') return 'reviewer';
-  return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
+  return isAnswerer(job) ? 'answerer' : undefined;
 }
 
 /** A job the factory launches: not a `knowledge` one (`learn`, `remember`) of a version frozen before ORC-193. */
@@ -2726,9 +2732,12 @@ export class Orchestrator {
       read.push(...threads);
       const held = ticketSession && !t.newSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
+      // The questions relayed to the agent that implements (ORC-182): any launch of its session takes them all, whatever run they
+      // were handed to before is over. Their taint, the one each question came in with, is part of what the launch reads.
+      const relayed = ticketSession && t.relayed?.length ? await state(this.relayedQuestions(t.relayed)) : [];
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
       const consumes = kind === 'feedback' || stepInbox.length > 0;
-      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
+      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read) ?? (relayed.some((q) => q.untrusted) ? SENSITIVE_PATHS : undefined);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
       // session, what its earlier attempts read, which the branch's mark keeps (ORC-338). The mark read here serves below.
       const seen = !fedUntrusted && resume ? await state(this.readUntrusted(project, t)) : t;
@@ -2737,6 +2746,8 @@ export class Orchestrator {
 
       const claudeSessionId = held ?? this.newId();
       const sessionRole = roleOf(job, ticketSession);
+      // The answer agent reads the run beside the question (ORC-182).
+      const runContext = sessionRole === 'answerer' ? await this.answerContext(project, t, issue.blockedBy) : undefined;
 
       const vars = await this.repoVariablesOf(project, config);
       // A set-up worktree's setup runs again for each attempt's new services (ORC-309), without the secrets (the worktree
@@ -2801,6 +2812,8 @@ export class Orchestrator {
         ...(job.lens ? { lens: job.lens } : {}),
         ...(reviewed ? { commit: reviewed } : {}),
         resumedAfterCut: !!opts.relaunchOf && resume,
+        ...(runContext ? { run: runContext } : {}),
+        ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
       const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
@@ -2862,6 +2875,8 @@ export class Orchestrator {
       await store.putRun(run);
       // Only what this launch read: a message that came in since stays for the next run (ORC-339).
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed', items: t.humanInbox });
+      // Handed to this run: its end answers them (`decide`), a question relayed since waits for the next launch.
+      if (relayed.length) await this.apply(await this.ticket(project.id, ticketId), { type: 'relay.handed', runIds: relayed.map((q) => q.id), to: runId });
       const step = planStepOfJob(job);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
@@ -2921,6 +2936,38 @@ export class Orchestrator {
           .catch((err: Error) => this.log('warn', `worktree of ${ticketId} not removed after a launch that did not set it up: ${err.message}`));
       }
     }
+  }
+
+  /** Each relayed question as the answer agent's run recorded it (ORC-182): its input is the question, its mark the question's. */
+  private async relayedQuestions(relayed: readonly RelayedQuestion[]): Promise<{ id: string; question: string; untrusted: boolean }[]> {
+    const runs = await Promise.all(relayed.map((r) => this.d.store.getRun(r.runId)));
+    return relayed.map((r, i) => ({ id: r.runId, question: runs[i]?.input?.text ?? '(the question is no longer recorded)', untrusted: !!runs[i]?.sensitivePaths }));
+  }
+
+  /**
+   * What the answer agent reads beside the question (ORC-182): the run's state, the ticket's last diff, the end of the transcript
+   * of the implementer's last session (the one at work, if it is), the linked tickets. A read that fails is said or left out:
+   * the answer starts all the same.
+   */
+  private async answerContext(project: ProjectRuntime, t: TicketState, blockers: readonly Blocker[] | undefined): Promise<NonNullable<PromptInput['run']>> {
+    const quiet = <T>(what: string, io: Promise<T>): Promise<T | undefined> =>
+      io.catch((err: Error) => {
+        this.log('warn', `answer of ${t.ticketId}: ${what} not read: ${err.message}`);
+        return undefined;
+      });
+    const dir = this.d.transcriptsDir;
+    // Ordered by their start: the last implementer's is the session at work, or the one that worked last.
+    const lastTranscript = async (from: string) => {
+      const run = (await this.d.store.ticketRuns(project.id, t.ticketId)).findLast((r) => r.sessionRole === 'implementer');
+      return run && transcriptTail(from, run.id);
+    };
+    const [lines, diff] = await Promise.all([
+      dir ? quiet('the transcript', lastTranscript(dir)) : undefined,
+      t.worktreePath ? quiet('the diff', this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath)).then((d) => d ?? '(the diff could not be read)') : undefined,
+    ]);
+    const transcript = lines && formatTranscript(lines);
+    const linked = formatLinked(blockers);
+    return { state: formatRunState(t), ...(diff ? { diff } : {}), ...(transcript ? { transcript } : {}), ...(linked ? { linked } : {}) };
   }
 
   /** A saving of tokens, never a reason to block a ticket: whatever goes wrong, the run starts without the list. */

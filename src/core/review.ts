@@ -18,13 +18,16 @@ export type ReviewFinding = Finding & { lens: ReviewLens; runId: string };
 /** The diff a lens is given in its prompt, at most; past it, the changed files, read in its clone, as many as fit. */
 export const DIFF_MAX = 60_000;
 
-/** The diff, or past `max` the changed files (`stat`, read only then, cut at `max`); `undefined`, a diff whose reading stopped past the cap. */
-export async function capDiff(diff: string | undefined, stat: () => Promise<string>, max = DIFF_MAX): Promise<string> {
+/**
+ * The diff, or past `max` the changed files (`stat`, read only then, cut at `max`); `undefined`, a diff whose reading stopped past the cap.
+ * `past`: what its reader does past the cap; a clone that holds none of the changes (the answer agent's trunk) says so (ORC-182).
+ */
+export async function capDiff(diff: string | undefined, stat: () => Promise<string>, { max = DIFF_MAX, past = 'read the changed files in the clone' } = {}): Promise<string> {
   if (diff !== undefined && !diff.trim()) return '(no change against the trunk)';
   if (diff !== undefined && diff.length <= max) return diff;
   const files = await stat();
   const cut = files.length > max ? `${files.slice(0, max)}\n[… more changed files: list them with Glob]` : files;
-  return `The diff has more than ${max} characters: read the changed files in the clone.\n\n${cut}`;
+  return `The diff has more than ${max} characters: ${past}.\n\n${cut}`;
 }
 
 const LABEL: Record<FindingSeverity, string> = { blocking: 'Blocking', minor: 'Minor', out_of_scope: 'Out of scope' };

@@ -262,6 +262,8 @@ export function createHarness(
     aiReview?: boolean;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
     packDir?: string;
+    /** Where the runs' transcripts are, as a test writes them: the answer agent reads the session at work there (ORC-182). */
+    transcriptsDir?: string;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -308,6 +310,7 @@ export function createHarness(
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(visualProof ? { visualProof } : {}),
+      ...(opts.transcriptsDir ? { transcriptsDir: opts.transcriptsDir } : {}),
     };
     return { ...life, outside };
   };
