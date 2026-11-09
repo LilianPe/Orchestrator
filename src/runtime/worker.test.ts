@@ -632,3 +632,33 @@ describe('Worker: what a dead letter keeps (ORC-175)', () => {
     expect(await store.deadLetters('REL-1')).toMatchObject([{ eventId: 'e1', event: { id: 'e1', payload: { issue } } }]);
   });
 });
+
+describe('Worker: what holds a ticket, for its diagnosis (ORC-350)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('tells the failed row that holds a ticket, its error, its attempts, its retry and the rows behind it; nothing once it passes', async () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    let failing = true;
+    const { store, worker } = setup({
+      retry: { attempts: 5, baseMs: 1_000 },
+      now: () => Date.now(),
+      prepare: async (e) => {
+        if (failing && e.id === 'e1') throw new Error('Linear unreachable');
+        return e;
+      },
+    });
+    await store.appendInbox(event('e1'));
+    await store.appendInbox(event('e2'));
+    await worker.kick();
+    await worker.settle();
+    expect(worker.held('REL-1')).toEqual([{ projectId: 'p', eventId: 'e1', type: 'ticket.delegated', error: 'Linear unreachable', attempts: 1, retryAt: 1_001_000, behind: 1 }]);
+    expect(worker.held('REL-2')).toEqual([]);
+    failing = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settled(worker);
+    expect(worker.held('REL-1')).toEqual([]);
+    worker.stop();
+  });
+});

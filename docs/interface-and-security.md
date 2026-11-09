@@ -61,6 +61,8 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /api/events`, `GET /api/events/recent` | SSE stream, last 100 events | password |
 | `GET /api/runs/:id` | A run's detail: timeline, gates and decisions, findings, checks, cost per step, output, transcript or why there is none (without the run token nor the agent's last text) | password |
 | `GET /api/runs/:id/transcript` | A run's transcript | password |
+| `GET /health` | Health check: the store answers and the factory takes tickets (200), or why not (503: store unreachable, invalid configuration), ORC-350 | password |
+| `GET /tickets/:id/diagnosis?project=` | Why a ticket is stuck: state and block, active run (without its token), the event the worker holds it behind, last failed effect, open dead letters, place in the queues, what holds every ticket; secrets masked (ORC-350). 404 for an unknown ticket, 409 when two projects track it without `project` | password |
 | `POST /api/control/pause`, `/api/control/resume` | Pause / resume | password + origin check |
 | `POST /api/tickets/:projet/:ticket/stop` | Stop a run | password + origin check |
 | `POST /api/runs/:id/pause`, `POST /api/runs/:id/stop` | Pause or stop that run from its inspection (ORC-301); 409 for a run that is not its ticket's agent run at work (ended, a check) | password + origin check |

@@ -10,7 +10,7 @@ import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
 import { messageClassifier } from '../adapters/runner/message-classifier.js';
-import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
+import { purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import { registriesViaEgress } from '../network/egress-fetch.js';
@@ -19,6 +19,7 @@ import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-se
 import { GitPublisher } from '../publish/publish.js';
 import { hostSecretScan, OutputPolicy, sandboxSecretScan } from '../publish/output-policy.js';
 import { checkHostRuns, instanceId, makeSandboxes } from './sandbox-wiring.js';
+import { configProblems } from './config-check.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
@@ -172,7 +173,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) {
       log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
-      log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
+      // Without it, verify refuses to run: one of the `configProblems` below.
+      if (env['FACTORY_ALLOW_HOST_VERIFY'] === '1') log("Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets.");
     }
     // No default cap (ORC-216): the values are to calibrate, any default would be a guess that stops work silently.
     if (yml?.budgets?.perTicketTokens === undefined) log('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
@@ -193,10 +195,19 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('GitHub forge: gh CLI (migration fallback, read-only: without a GitHub App, the factory neither publishes nor merges)');
     }
     const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
-    if (!publisher) log('Warning: publication impossible (it needs the sandboxes and the GitHub App): a verified ticket will be blocked with this reason.');
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
     const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
     if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
+    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health and the diagnosis tell why.
+    const hostChecks = !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1';
+    const problems = configProblems({
+      fakeRunner: !!o.fakeRunner,
+      sandboxes: !!sandboxes,
+      hostVerify: hostChecks,
+      publisher: !!publisher,
+      budgets: yml?.budgets,
+    });
+    for (const p of problems) log(`Invalid configuration, no run is launched until it is fixed and the factory restarted: ${p}`);
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of config.yaml.
@@ -238,7 +249,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       runner,
       workspaces,
       verify: runVerify,
-      hostChecks: !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1',
+      hostChecks,
+      configProblems: problems,
       projects,
       packDir,
       // The answer agent reads the session at work there (ORC-182).
@@ -378,6 +390,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,
       uiPassword,
+      configProblems: problems,
+      heldRows: (ticketId) => orchestrator.heldRows(ticketId),
+      secrets: () => transcriptSecrets(env, daemonSecrets()),
       oauth: linearSettings(o.home, yml)
         ? {
             authorizeUrl: () => {

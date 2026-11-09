@@ -51,6 +51,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
+import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
@@ -264,6 +265,8 @@ export interface OrchestratorDeps {
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
+  /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
+  configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
   claudeAccount?: () => string | undefined;
   newId?: () => string;
@@ -1374,6 +1377,11 @@ export class Orchestrator {
     return flags.includes('1');
   }
 
+  /** The failed inbox rows of this process's worker that hold the ticket (ORC-350), for its diagnosis. */
+  heldRows(ticketId: string): HeldRow[] {
+    return this.worker.held(ticketId);
+  }
+
   private account(): string {
     return this.d.claudeAccount?.() || 'default';
   }
@@ -1399,6 +1407,11 @@ export class Orchestrator {
     const account = this.account();
     const until = Math.max(this.usageHolds.get(account) ?? 0, this.unrecordedHolds.get(account) ?? 0);
     return until > this.d.clock.now() ? until : undefined;
+  }
+
+  /** An invalid configuration holds every launch, as the pause does (ORC-350). */
+  private configHeld(): boolean {
+    return !!this.d.configProblems?.length;
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -1693,7 +1706,7 @@ export class Orchestrator {
     // Read once per drain: its starts, and a limit heard of meanwhile, are held on what this daemon knows (`heldUntil`).
     if (n > 0) await this.readUsageHold(this.account());
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || this.heldUntil() !== undefined || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if (this.configHeld() || (await this.isPaused()) || this.heldUntil() !== undefined || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -2426,7 +2439,7 @@ export class Orchestrator {
       return 'deferred';
     }
     // The account's usage limit holds every launch on it until its reset (ORC-340), a step it cut too (ORC-357): in line meanwhile.
-    if (this.stopping || (await this.isPaused()) || (fromQueue ? this.heldUntil() : await this.usageLimitedUntil()) !== undefined) return requeue();
+    if (this.stopping || this.configHeld() || (await this.isPaused()) || (fromQueue ? this.heldUntil() : await this.usageLimitedUntil()) !== undefined) return requeue();
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];
