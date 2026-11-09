@@ -1,7 +1,7 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { aggregateChecks, excerpt, isKnownBucket, toRepoPermission } from './gh-cli.js';
+import { excerpt, summarizeChecks, toRepoPermission, type CheckSummary } from './gh-cli.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
@@ -464,7 +464,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const [pr] = await this.read('GET', `${repoApi(repo)}/pulls?${query}`, token, isPulls, 'a list of pull requests');
     if (!pr) return undefined;
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
-    const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
+    const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : summarizeChecks([]);
     const merged = state === 'MERGED' ? { ...(pr.merge_commit_sha ? { mergeSha: pr.merge_commit_sha } : {}), mergedAt: Date.parse(pr.merged_at!) } : {};
     return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...merged, ...checks };
   }
@@ -671,22 +671,15 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     repo: GitHubRepoRef,
     sha: string,
     token: string,
-  ): Promise<Pick<PrInfo, 'checks' | 'failedChecks' | 'unknownChecks'>> {
+  ): Promise<CheckSummary> {
     const base = `${repoApi(repo)}/commits/${encodeURIComponent(sha)}`;
     const [runs, statuses] = await Promise.all([
       this.allPages(`${base}/check-runs`, 'check_runs', 'a list of check runs', isCheckRun, token),
       this.allPages(`${base}/status`, 'statuses', 'a list of commit statuses', isStatus, token),
     ]);
-    const checks = [
+    return summarizeChecks([
       ...runs.filter((run) => !isFactoryCheck(run.name)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
       ...statuses.map((status) => ({ name: status.context, bucket: statusBucket(status.state) })),
-    ];
-    const named = (keep: (bucket: string) => boolean) => checks.filter((c) => keep(c.bucket)).map((c) => c.name);
-    const unknownChecks = named((b) => !isKnownBucket(b));
-    return {
-      checks: aggregateChecks(checks.map((c) => c.bucket)),
-      failedChecks: named((b) => b === 'fail'),
-      ...(unknownChecks.length ? { unknownChecks } : {}),
-    };
+    ]);
   }
 }

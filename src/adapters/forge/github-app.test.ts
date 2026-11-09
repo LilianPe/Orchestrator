@@ -322,7 +322,7 @@ describe('GitHubAppForge.findPr', () => {
       headSha: 'abc123',
       checks,
       failedChecks,
-      ...(unknownChecks ? { unknownChecks } : {}),
+      unknownChecks,
     });
   });
 

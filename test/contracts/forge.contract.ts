@@ -43,6 +43,8 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       expect(['OPEN', 'MERGED', 'CLOSED']).toContain(pr!.state);
       expect(['pending', 'pass', 'fail', 'none']).toContain(pr!.checks);
       expect(pr!.failedChecks.length > 0).toBe(pr!.checks === 'fail');
+      // Absent when no check is in a state the forge does not know, never an empty list.
+      expect(pr!.unknownChecks?.length).not.toBe(0);
     });
 
     it('findPr is a read: asking twice gives the same answer', async (ctx) => {
@@ -112,6 +114,10 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       const s = await subjectWith(make, () => ctx.skip(), 'unknownBucket', 'unknownChecks');
       const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
       expect([...(pr!.unknownChecks ?? [])].sort()).toEqual([...s.unknownChecks].sort());
+      // A snapshot the caller may mutate, as `failedChecks`.
+      const before = structuredClone(pr);
+      pr!.unknownChecks?.push('mutated-by-caller');
+      expect(await s.forge.findPr(s.repoPath, s.unknownBucket)).toEqual(before);
     });
 
   });

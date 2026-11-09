@@ -139,7 +139,7 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pending', failedChecks: [], unknownChecks: ['deploy'] });
     await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
     expect(h.forge.merges).toEqual([]);
-    expect(comments(h).at(-1)).toMatch(/checks of the reviewed commit are not green \(deploy: a state the forge does not know\)/);
+    expect(comments(h).at(-1)).toMatch(/checks of the reviewed commit are not green \(pending; in a state the forge does not know: deploy\)/);
     expect(lastMove(h)).toBe('Human Review');
   });
 

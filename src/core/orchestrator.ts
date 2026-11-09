@@ -2162,8 +2162,8 @@ export class Orchestrator {
     }
     else if (pr.checks !== 'pass' && pr.checks !== 'none') {
       // A check in a state the forge does not know is named: a bare `pending` reads as a CI still running (ORC-304).
-      const unknown = pr.unknownChecks?.length ? `${pr.unknownChecks.join(', ')}: a state the forge does not know` : '';
-      reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || unknown || pr.checks})`;
+      const unknown = pr.unknownChecks?.length ? `; in a state the forge does not know: ${pr.unknownChecks.join(', ')}` : '';
+      reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || pr.checks}${unknown})`;
     }
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
