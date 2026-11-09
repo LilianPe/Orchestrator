@@ -294,11 +294,13 @@ export function createHarness(
   // The fake build does what its skill says: it ends on a `submit_result` (ORC-136), on the store of the living process.
   runner.submit = (runId, output) => saveAgentOutput(life.store, runId, output);
   let n = 0;
+  // The bus of the process alive now, which a dashboard reads (ORC-301): each life has its own, as a process does.
+  let bus: EventBus;
   const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Orchestrator({
     store,
     clock,
     bus: (() => {
-      const bus = new EventBus();
+      bus = new EventBus();
       bus.subscribe((m) => void (m.kind === 'log' && logs.push({ level: m.level, message: m.message })));
       return bus;
     })(),
@@ -390,6 +392,9 @@ export function createHarness(
     send, advance, restart, another, project,
     get orch() {
       return orch;
+    },
+    get bus() {
+      return bus;
     },
     /** The store of the process alive now; a brutal restart leaves the dead one's frozen. */
     get store() {
