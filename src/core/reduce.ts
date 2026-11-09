@@ -48,6 +48,17 @@ function reopened(t: TicketState): TicketState {
   return t.prState === 'MERGED' ? { ...t, prState: undefined } : t;
 }
 
+/**
+ * The ticket's branch starts again (ORC-358), merged or made anew on the default branch: its mark and the pushes humans
+ * made to it were the old branch's, and would refuse the trusted commits of the new one. The session that read under the
+ * mark goes too: resumed, it would carry what it read onto a branch that no longer says so. A ticket the mark has not read
+ * yet keeps all: its runs are read once, fail closed.
+ */
+function branchAnew(t: TicketState): TicketState {
+  if (typeof t.untrustedSince === 'string') return { ...t, untrustedSince: null, humanPushes: undefined, claudeSessionId: undefined };
+  return t.humanPushes ? { ...t, humanPushes: undefined } : t;
+}
+
 function external(t: TicketState, e: FactoryEvent): TicketState {
   switch (e.type) {
     case 'ticket.delegated':
@@ -102,7 +113,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'publish.refused':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
     case 'pr.merged':
-      return { ...t, prState: 'MERGED', prNumber: e.payload.number, prUrl: e.payload.url };
+      return { ...branchAnew(t), prState: 'MERGED', prNumber: e.payload.number, prUrl: e.payload.url };
     default:
       return t;
   }
@@ -132,7 +143,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'pending.cleared':
       return e.job && !samePending(t.pendingJob, e.job) ? { ...t } : { ...t, pendingJob: undefined };
     case 'workspace.prepared':
-      return { ...t, worktreePath: e.path, port: e.port, branch: e.branch ?? t.branch };
+      return { ...(e.newBranch ? branchAnew(t) : t), worktreePath: e.path, port: e.port, branch: e.branch ?? t.branch };
     case 'workspace.released':
       return { ...t, worktreePath: undefined, port: undefined };
     case 'run.started': {

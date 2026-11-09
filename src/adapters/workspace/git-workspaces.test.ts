@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
-import { BASE, checkBranchPaths, cloneGit, forkPoint, gitReader } from '../../core/clean-verify.js';
+import { BASE, checkBranchPaths, cloneGit, forkPoint, gitAt, gitReader, type HumanPush } from '../../core/clean-verify.js';
 import { readConventions } from '../../core/prompt.js';
 import { parseRepoConfig } from '../../config/repo-config.js';
 import { execCmd } from '../exec.js';
@@ -185,7 +185,7 @@ describe('GitWorkspaces', () => {
     const from = await forkPoint(clone, head);
 
     // The host's repository has not fetched main since: its reader fetches the forge, as the clone does.
-    const reader = (await ws.branchReader(repo, w.path))!;
+    const reader = (await ws.branchReader(repo, w.path, { fetch: true }))!;
     expect(parseRepoConfig(await reader.baseConfig()).sensitivePaths).toEqual(sensitivePaths);
     for (const since of [undefined, '', mark, '0123456789012345678901234567890123456789']) {
       const untrusted = since === undefined ? undefined : { since, humanPushes: human, sensitivePaths };
@@ -207,7 +207,78 @@ describe('GitWorkspaces', () => {
     expect([...sinceFork].sort()).toEqual([' space.tf', 'CODEOWNERS', 'claims/.env.example', 'infra/new.tf', 'infra/old.tf', 'package.json', 'src/a.ts']);
     // A push recorded without its `before` leaves out nothing: its range cannot be told.
     expect(await reader.agentChanges(mark, [{ after: human[0]!.after }])).toContain('infra/human.tf');
-    expect(await ws.branchReader(repo, join(root, 'nowhere'))).toBeUndefined();
+    expect(await ws.branchReader(repo, join(root, 'nowhere'), { fetch: false })).toBeUndefined();
+  });
+
+  it('reads in one git call which human pushes and which mark the head still holds, however many pushes (ORC-358)', async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    const commit = (path: string) => {
+      mkdirSync(join(w.path, path, '..'), { recursive: true });
+      writeFileSync(join(w.path, path), `${path}\n`);
+      git(w.path, 'add', '-A');
+      git(w.path, 'commit', '-q', '-m', path);
+      return git(w.path, 'rev-parse', 'HEAD');
+    };
+    const mark = commit('infra/old.tf');
+    const human = { before: mark, after: commit('infra/human.tf') };
+    const head = commit('infra/new.tf');
+    const calls: string[][] = [];
+    const counted: typeof execCmd = (cmd, args, opts) => {
+      calls.push(args);
+      return execCmd(cmd, args, opts);
+    };
+    const base = 'refs/remotes/origin/main';
+    const reader = gitReader(gitAt(counted, w.path, {}), base, await forkPoint(cloneGit({ workDir: w.path }, w.path), head, base), head);
+    const read = async (pushes: HumanPush[]) => {
+      calls.length = 0;
+      const changes = await reader.agentChanges(mark, pushes);
+      return { changes: [...changes].sort(), calls: calls.length };
+    };
+    // Pushes the head no longer holds (a rewritten history), up to the ticket's cap.
+    const gone = Array.from({ length: 50 }, (_, i) => ({ before: mark, after: i.toString(16).padStart(40, 'f') }));
+    const one = await read([human]);
+    expect(one.changes).toEqual(['infra/new.tf']);
+    const many = await read([...gone, human]);
+    expect(many).toEqual(one);
+    expect(calls.filter((a) => a.includes('--is-ancestor'))).toEqual([]);
+    // A mark the head no longer holds reads from the fork point, as before.
+    expect([...(await reader.agentChanges('f'.repeat(40), [human]))].sort()).toEqual(['infra/new.tf', 'infra/old.tf']);
+  });
+
+  it('reads the forge\'s own default branch when it fetches, and nothing of the forge when it does not (ORC-358)', async () => {
+    const { base, repo, root } = fixtureRepo();
+    const origin = join(base, 'origin.git');
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    // The forge moves its default branch to `trunk`, which declares `infra` sensitive: the repository's `origin/HEAD` still names `main`.
+    const mate = join(base, 'mate');
+    git(base, 'clone', '-q', origin, mate);
+    git(mate, 'config', 'user.email', 'm@m');
+    git(mate, 'config', 'user.name', 'm');
+    git(mate, 'checkout', '-q', '-b', 'trunk');
+    mkdirSync(join(mate, '.factory'));
+    writeFileSync(join(mate, '.factory/config.yml'), 'sensitive_paths: [infra]\n');
+    git(mate, 'add', '-A');
+    git(mate, 'commit', '-q', '-m', 'trunk');
+    git(mate, 'push', '-q', 'origin', 'trunk');
+    git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    git(repo, 'fetch', '-q', 'origin');
+    expect(git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
+    const refs = () => git(repo, 'for-each-ref', '--format=%(refname)');
+    const before = refs();
+    const fetched = (await ws.branchReader(repo, w.path, { fetch: true }))!;
+    expect(parseRepoConfig(await fetched.baseConfig()).sensitivePaths).toEqual(['infra']);
+    // Its own ref, gone once read: nothing left in the factory's repository.
+    expect(refs()).toBe(before);
+    // Without a fetch, no forge at all: the repository's default branch as it is.
+    git(repo, 'remote', 'set-url', 'origin', join(base, 'nowhere.git'));
+    const local = (await ws.branchReader(repo, w.path, { fetch: false }))!;
+    expect(await local.baseConfig()).toBeUndefined();
+    await expect(ws.branchReader(repo, w.path, { fetch: true })).rejects.toThrow(/forge could not be read/);
   });
 
   it('prepares the read-only trunk and a knowledge worktree', async () => {

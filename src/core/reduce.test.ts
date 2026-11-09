@@ -165,6 +165,23 @@ describe('reduce — facts recorded by the orchestrator', () => {
     expect(t.humanPushes).toEqual([{ before: 'a', after: 'b' }, { after: 'a' }]);
   });
 
+  it('a merge, or a fresh worktree on a branch made anew, ends the old branch\'s mark, its human pushes and the session that read under it (ORC-358)', () => {
+    const merged = ev('pr.merged', { number: 1, url: 'u', branch: 'b' });
+    const anew = { type: 'workspace.prepared', path: '/w', branch: 'b', newBranch: true } as const;
+    const marked = ticket({ untrustedSince: 'h1', humanPushes: [{ before: 'a', after: 'b' }], claudeSessionId: 'c1' });
+    for (const e of [merged, anew]) {
+      const t = reduce(marked, e)!;
+      expect([t.untrustedSince, t.humanPushes, t.claudeSessionId], e.type).toEqual([null, undefined, undefined]);
+      // A trusted branch keeps its session: it read nothing untrusted. Its human pushes were the old branch's.
+      const trusted = reduce(ticket({ untrustedSince: null, humanPushes: [{ after: 'b' }], claudeSessionId: 'c1' }), e)!;
+      expect([trusted.untrustedSince, trusted.humanPushes, trusted.claudeSessionId], e.type).toEqual([null, undefined, 'c1']);
+      // A ticket the mark has not read yet stays so: its runs are read once, fail closed.
+      expect(reduce(ticket({ claudeSessionId: 'c1' }), e)!.untrustedSince, e.type).toBeUndefined();
+    }
+    // A worktree made again on the branch the agent left: still its branch, still its mark.
+    expect(reduce(marked, { type: 'workspace.prepared', path: '/w', branch: 'b' })!.untrustedSince).toBe('h1');
+  });
+
   it('the read of a ticket the mark has not seen is kept once, and never over a mark; a later untrusted run still marks (ORC-338)', () => {
     const read = (since: '' | null) => ({ type: 'untrusted.read', since }) as const;
     const none = reduce(ticket({ untrustedSince: undefined }), read(null))!;

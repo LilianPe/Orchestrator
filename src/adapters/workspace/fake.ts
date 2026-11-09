@@ -74,8 +74,11 @@ export class FakeWorkspaces implements WorkspaceManager {
   gone = new Set<string>();
   /** What each `changedSince` was asked: the mark, and the human heads left out. */
   sinceAsked: { rev: string; humanPushes: readonly HumanPush[] }[] = [];
+  /** How each branch was read: from the forge (`fetch`) or not (ORC-358). */
+  branchReads: { fetch: boolean }[] = [];
 
-  async branchReader(_repoPath: string, path: string): Promise<BranchReader | undefined> {
+  async branchReader(_repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
+    this.branchReads.push({ fetch: o.fetch });
     if (this.gone.has(path)) return undefined;
     const b = this.branches.get(path) ?? { changed: [] };
     return {

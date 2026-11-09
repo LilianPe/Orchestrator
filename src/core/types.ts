@@ -465,7 +465,14 @@ export type ShellEvent =
   | { type: 'pending.set'; job: PendingJob }
   /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
   | { type: 'pending.cleared'; job?: PendingJob }
-  | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
+  | {
+      type: 'workspace.prepared';
+      path: string;
+      port?: number;
+      branch?: string;
+      /** A fresh worktree on a branch made anew, nothing on it beyond the default branch, for a ticket with a mark or human pushes to end (ORC-358). */
+      newBranch?: true;
+    }
   | { type: 'workspace.released' }
   | {
       type: 'run.started';
