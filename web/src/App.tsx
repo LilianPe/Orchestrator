@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
 import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, post, subscribe } from './api.js';
-import { Flow } from './Flow.js';
+import { clockTime, Flow, plural } from './Flow.js';
+import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
 import { Line, RunDetail } from './RunDetail.js';
-import { initialState, reducer } from './state.js';
-import type { FlowView, MeasuredTicketView, RunDetailView, WorkingRunView } from './types.js';
+import { feedKey, initialState, reducer } from './state.js';
+import type { FlowView, MeasuredTicketView, RunDetailView, RunLine, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -124,10 +125,24 @@ export function App() {
     return () => clearTimeout(timer);
   }, [s.flowStale, view, loadFlow]);
 
-  const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`);
+  // A pause or a stop of a run, from its inspection or Working (ORC-301): a refusal is said in its inspection, a success reads the Flow again.
+  const [notice, setNotice] = useState<{ runId: string; text: string }>();
+  const control = (run: WorkingRunView, action: 'pause' | 'stop') => () =>
+    void post(`/api/runs/${run.runId}/${action}`).then(
+      async (res) => {
+        if (res.ok) {
+          setNotice(undefined);
+          return loadFlow();
+        }
+        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+        setNotice({ runId: run.runId, text: error ?? `${action} refused (${res.status})` });
+      },
+      () => setNotice({ runId: run.runId, text: `${action} not sent: the server did not answer` }),
+    );
 
   const snap = s.snapshot;
   const lines = s.selectedRun ? (s.runLines[s.selectedRun] ?? []) : [];
+  const inspected = s.flow?.working.find((w) => w.runId === s.selectedRun);
 
   return (
     <div className="page">
@@ -158,9 +173,12 @@ export function App() {
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (
-            <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={stop} />
+            <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={(run) => control(run, 'stop')()} />
           ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
+        {inspected && (
+          <Inspection run={inspected} feed={s.feeds[feedKey(inspected.projectId, inspected.ticketId)] ?? []} notice={notice?.runId === inspected.runId ? notice.text : undefined} onPause={control(inspected, 'pause')} onStop={control(inspected, 'stop')} />
+        )}
         <section className="run">
           <h2>Live session {s.selectedRun ? `· ${s.selectedRun.slice(0, 8)}` : ''}</h2>
           <div className="lines">
@@ -171,10 +189,10 @@ export function App() {
           <h2>Log</h2>
           <ul>
             {s.logs.slice(0, 5).map((l, i) => (
-              <li key={`log-${i}`} className={`log ${l.level}`}>{new Date(l.at).toLocaleTimeString('en-US')} {l.message}</li>
+              <li key={`log-${i}`} className={`log ${l.level}`}>{clockTime(l.at)} {l.message}</li>
             ))}
             {s.events.map((e) => (
-              <li key={e.id}>{new Date(e.at).toLocaleTimeString('en-US')} <strong>{e.type}</strong> {e.ticketId ?? ''}</li>
+              <li key={e.id}>{clockTime(e.at)} <strong>{e.type}</strong> {e.ticketId ?? ''}</li>
             ))}
           </ul>
         </section>
