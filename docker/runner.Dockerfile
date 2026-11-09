@@ -1,5 +1,5 @@
 # The agent's image (ORC-204), not the daemon's: node (pnpm), python (uv), git, gitleaks and claude, no gh and no daemon code.
-# Build: docker build -f docker/runner.Dockerfile -t factory-runner:<version> docker
+# Build: docker build -f docker/runner.Dockerfile -t factory-runner:<version> docker (BuildKit, or Podman: RUN --mount)
 FROM node:24.22.1-bookworm-slim
 # python3 from the distribution: a runner has no route to download one (`uv python install` would need GitHub's CDN).
 RUN apt-get update \

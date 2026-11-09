@@ -101,7 +101,7 @@ On the server, with the user's rootless engine running:
    docker run --rm -v "$FACTORY_DIR:/base" node:24.22.1-bookworm-slim chmod 600 /base/data/secrets.json
    ```
 
-3. Build the images, one after the other:
+3. Build the images, one after the other (the runner image needs BuildKit, Docker's default builder, or Podman):
 
    ```bash
    docker build -f docker/runner.Dockerfile -t "$FACTORY_RUNNER_IMAGE" docker

@@ -158,7 +158,11 @@ describe('the gitleaks archive of the isolation job (ORC-369)', () => {
   });
 
   it('takes the archive from the build context when it is there, its checksum checked either way', () => {
-    const install = /^RUN --mount=type=bind,target=\/context \\\n {4}cp \/context\/gitleaks_([\d.]+)_linux_x64\.tar\.gz \/tmp\/gitleaks\.tgz 2>\/dev\/null \\\n \|\| node -e "fetch\([^\n]*\\\n && echo "([0-9a-f]{64}) {2}\/tmp\/gitleaks\.tgz" \| sha256sum -c - \\$/m.exec(runner);
-    expect(install?.slice(1)).toEqual([version, sha256]);
+    const install = /^RUN --mount=type=bind,target=\/context[\s\S]*?rm \/tmp\/gitleaks\.tgz$/m.exec(runner)?.[0].replace(/\s*\\\n\s*/g, ' ');
+    // The copy, else the download, and then, for either one, the checksum.
+    expect(install).toMatch(/ cp \/context\/(\S+) \/tmp\/gitleaks\.tgz 2>\/dev\/null \|\| node -e "fetch\('https:\/\/github\.com\/[^']*\/\1'\)[^"]*" && echo "\S+ {2}\/tmp\/gitleaks\.tgz" \| sha256sum -c - && /);
+    // The copied file and the release's tag and file: one version, the cache's.
+    expect(install?.match(/\d+\.\d+\.\d+/g)).toEqual(Array(3).fill(version));
+    expect(install).toContain(`echo "${sha256}  /tmp/gitleaks.tgz"`);
   });
 });
