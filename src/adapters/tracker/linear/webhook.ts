@@ -56,6 +56,13 @@ export function stripMention(body: string): string {
 
 type PartialEvent = { type: FactoryEvent['type']; payload: unknown; suffix?: string };
 
+/**
+ * The text a message's class is read from, by the mapping and by the model alike (ORC-355): a reply's body keeps the
+ * mention it may open with, which is read without; a mention's and a comment's carry none. One rule: stripped twice,
+ * `@factory @bob /stop` would be a command.
+ */
+const classifiedText = (type: FactoryEvent['type'], body: string): string => (type === 'session.prompted' ? stripMention(body) : body);
+
 /** Who did what a webhook reports, as the signed body says it. */
 export interface SignedActor {
   /** Linear id of the workspace user who did it; absent when Linear names none (then `untrusted`). */
@@ -141,7 +148,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
       return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
     }
     const said = message(text);
-    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: classifyMessage(said.body) } }];
+    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: classifyMessage(classifiedText('session.mentioned', said.body)) } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
@@ -150,7 +157,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const command = parseCommand(stripMention(reply));
     if (FACTORY_COMMANDS.includes(command.name)) return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, kind: 'command' } }];
     const said = message(reply);
-    const bare = stripMention(said.body);
+    const bare = classifiedText('session.prompted', said.body);
     const kind = classifyMessage(bare);
     // A command is read by its first word: without the mention it may open with.
     return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
@@ -177,7 +184,7 @@ async function commentEvents(body: any, identifier: string, projectId: string, a
   const ticket = await ctx.ticket(projectId, identifier);
   if (!ticket?.blocked || !ticket.delegated) return [];
   const said = message(text);
-  return [{ type: 'ticket.commented', payload: { ...said, author, kind: classifyMessage(said.body) } }];
+  return [{ type: 'ticket.commented', payload: { ...said, author, kind: classifyMessage(classifiedText('ticket.commented', said.body)) } }];
 }
 
 async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
@@ -309,11 +316,13 @@ const CLASSIFIED = new Set<string>(['session.prompted', 'session.mentioned', 'ti
 /**
  * What of a mapped event the small model classifies (ORC-336): its message as `mapLinearWebhook` classified it, masked
  * and without its mention; nothing for an event that carries none, or for a command. The same mapping decides routing,
- * commands and which comments are journaled: the model sees only what is about to be written.
+ * commands and which comments are journaled: the model sees only what is about to be written, and the text the
+ * mapping classified (`classifiedText`).
  */
 export function messageToClassify(e: FactoryEvent): string | undefined {
   const p = e.payload as { body?: unknown; kind?: string };
-  return CLASSIFIED.has(e.type) && p.kind !== 'command' && typeof p.body === 'string' ? stripMention(p.body) : undefined;
+  if (!CLASSIFIED.has(e.type) || p.kind === 'command' || typeof p.body !== 'string') return undefined;
+  return classifiedText(e.type, p.body);
 }
 
 /** The event classified with the model's verdict, by the same `classifyMessage` as the mapping; without one, the fallback rule. */

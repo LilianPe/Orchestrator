@@ -1431,41 +1431,45 @@ export class PgStore implements AsyncStore {
     `);
   }
 
-  async receiveDelivery(key: string, value: string): Promise<boolean> {
-    const id = metaId(`delivery:${key}`);
-    const hash = createHash('sha256').update(`${id}\0${value}`).digest('hex');
-    const result = await this.db.execute(sql`
-      insert into workflow_versions (id, hash, definition, created_at)
-      values (${id}, ${hash}, ${JSON.stringify({ key: `delivery:${key}`, value })}::jsonb, clock_timestamp())
-      on conflict (id) do nothing
-      returning id
-    `);
-    return result.rows.length > 0;
+  async receiveDelivery(key: string, value: string): Promise<string | undefined> {
+    // A row deleted between the insert and the read (written meanwhile) is kept again.
+    for (;;) {
+      const inserted = await this.db.execute(sql`
+        insert into deliveries (key, aside, value, received_at) values (${key}, false, ${value}, clock_timestamp())
+        on conflict do nothing
+        returning key
+      `);
+      if (inserted.rows.length) return undefined;
+      const kept = await this.db.execute<{ value: string }>(sql`select value from deliveries where key = ${key} and not aside`);
+      if (kept.rows[0]) return kept.rows[0].value;
+    }
   }
 
   async pendingDeliveries(): Promise<{ key: string; value: string }[]> {
-    const prefix = metaId('delivery:');
-    const result = await this.db.execute<{ id: string; value: string }>(sql`
-      select id, definition->>'value' as value from workflow_versions
-      where starts_with(id, ${prefix}) order by created_at, id
-    `);
-    return result.rows.map((r) => ({ key: r.id.slice(prefix.length), value: r.value }));
+    return this.deliveries(false);
+  }
+
+  async asideDeliveries(): Promise<{ key: string; value: string }[]> {
+    return this.deliveries(true);
+  }
+
+  private async deliveries(aside: boolean): Promise<{ key: string; value: string }[]> {
+    const result = await this.db.execute<{ key: string; value: string }>(
+      sql`select key, value from deliveries where aside = ${aside} order by received_at, key`,
+    );
+    return result.rows;
   }
 
   async deleteDelivery(key: string): Promise<void> {
-    await this.db.execute(sql`delete from workflow_versions where id = ${metaId(`delivery:${key}`)}`);
+    await this.db.execute(sql`delete from deliveries where key = ${key} and not aside`);
   }
 
   async asideDelivery(key: string): Promise<void> {
-    const aside = metaId(`delivery-aside:${key}`);
     await this.db.transaction(async (tx) => {
-      await tx.execute(sql`delete from workflow_versions where id = ${aside}`);
-      const kept = await tx.execute<{ value: string }>(sql`select definition->>'value' as value from workflow_versions where id = ${metaId(`delivery:${key}`)} for update`);
-      const value = kept.rows[0]?.value;
-      if (value === undefined) return;
-      // Its hash follows its id, as `setMeta` computes it: the same delivery kept again must not meet it on the hash's unique index.
-      const hash = createHash('sha256').update(`${aside}\0${value}`).digest('hex');
-      await tx.execute(sql`update workflow_versions set id = ${aside}, hash = ${hash} where id = ${metaId(`delivery:${key}`)}`);
+      const kept = await tx.execute(sql`select 1 from deliveries where key = ${key} and not aside for update`);
+      if (!kept.rows.length) return;
+      await tx.execute(sql`delete from deliveries where key = ${key} and aside`);
+      await tx.execute(sql`update deliveries set aside = true where key = ${key} and not aside`);
     });
   }
 
