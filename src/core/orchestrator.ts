@@ -81,7 +81,7 @@ import { runSealedSetup } from './sealed-setup.js';
 import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
-import { inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
+import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -94,6 +94,8 @@ import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+/** The contested findings as the first lens of a round read them (ORC-184): its own end replaces its findings on the commit, which the ids name by rank. */
+const contestedKey = (projectId: string, ticketId: string): string => `contested-input:${projectId}:${ticketId}`;
 /** Set while a fresh worktree is not set up and sealed (ORC-211): a daemon killed before the end leaves it, and the next launch makes the worktree anew. */
 const setupPendingKey = (path: string): string => `setup-pending:${path}`;
 
@@ -1900,6 +1902,18 @@ export class Orchestrator {
     );
   }
 
+  /** What the lenses of a round read of the contested findings (ORC-184), resolved on the commit they were found on, kept for the round. */
+  private async contestedText(projectId: string, ticketId: string, contested: NonNullable<TicketState['contested']>): Promise<string | undefined> {
+    const { store } = this.d;
+    const id = JSON.stringify(contested);
+    const kept = await store.getMeta(contestedKey(projectId, ticketId));
+    const was = kept ? (JSON.parse(kept) as { id: string; text: string }) : undefined;
+    if (was?.id === id) return was.text || undefined;
+    const text = contestedInput(await store.findingsOf(projectId, ticketId, contested.sha), contested.items);
+    await store.setMeta(contestedKey(projectId, ticketId), JSON.stringify({ id, text: text ?? '' }));
+    return text;
+  }
+
   /**
    * The `review` effect (ORC-183): a lens's findings kept on the commit it read, in place of what that lens kept there before.
    * The publishing one then posts every lens's findings on that commit as one GitHub review, each on its line, or listed in its
@@ -2330,15 +2344,12 @@ export class Orchestrator {
       // Its step boundary (ORC-180): the agent that implements starts a step, it reads what came in since its last one.
       const carried = !from && kind !== 'feedback' && ticketSession ? carriedAtLaunch(t.humanInbox) : [];
       const read: FeedbackItem[] = [...carried];
-      if (kind === 'feedback') {
-        read.push(...forAgent(t.humanInbox));
-        // Review comments are external content: whoever can comment on the PR wrote them, and nothing
-        // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says.
-        if (t.prNumber) {
-          const comments = await forge.unresolvedReviewComments(project.repoPath, t.prNumber);
-          read.push(...comments.map((c) => ({ ...c, taint: 'untrusted' as const })));
-        }
-      }
+      if (kind === 'feedback') read.push(...forAgent(t.humanInbox));
+      // Review comments are external content: whoever can comment on the PR wrote them, and nothing
+      // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says. The fix of the review loop reads
+      // them too, as they are, with the review's findings (ORC-184).
+      const threads: FeedbackItem[] = (kind === 'feedback' || kind === 'findings') && t.prNumber ? (await forge.unresolvedReviewComments(project.repoPath, t.prNumber)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
+      read.push(...threads);
       const held = ticketSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
@@ -2390,7 +2401,15 @@ export class Orchestrator {
       if (from) {
         input = from.input;
       } else if (kind === 'diff') {
-        input = { kind, text: ws.diff ?? '' };
+        // The findings the fix contested stay open (ORC-184): the lens judges them again on this commit. Resolved once per contest,
+        // so that the second lens reads what the first did, even when the first replaced its findings on the same commit.
+        const open = t.contested && (await state(this.contestedText(project.id, ticketId, t.contested)));
+        input = { kind, text: open ? `${ws.diff ?? ''}\n\n## Contested findings\n${open}` : (ws.diff ?? '') };
+      } else if (kind === 'findings') {
+        // The fix of the review loop (ORC-184): the review's blocking findings, then the PR's unresolved threads as they are.
+        const sha = t.reviewBlocking?.sha ?? t.verifiedSha ?? '';
+        const findings = findingsInput(sha, blockingFindings(sha ? await state(store.findingsOf(project.id, ticketId, sha)) : []));
+        input = { kind, text: threads.length ? `${findings}\n\n## Unresolved review threads\n${formatFeedback(threads)}` : findings };
       } else if (kind === 'feedback') {
         input = { kind, text: read.length ? formatFeedback(read) : '(no written feedback: read the PR and the Linear thread again)' };
       } else if (kind === 'verify_failures') {
