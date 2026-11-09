@@ -30,8 +30,8 @@ export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
 const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-const JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
-const DEV_JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'review-security'] as const;
+const JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
+const DEV_JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 /** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
 const FREEZES: readonly FrozenTests[] = [
@@ -329,6 +329,38 @@ const redCi: fc.Arbitrary<DraftEntry[]> = fc
     ...Array.from({ length: reports }, (): DraftEntry => ({ kind: 'external', draft: { type: 'pr.checks_failed', payload: { ...p, failures: ['test'] } }, untrusted: false })),
   ]);
 
+/** What a lens or the fix of the review loop hands back (ORC-184): a blocking finding or none; a finding contested or none. */
+const BLOCKING = { file: 'src/a.ts', line: 1, severity: 'blocking' as const, explanation: 'casse', suggestion: '' };
+const handedBack = (more: object) => ({ output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...more }, attempt: 'succeeded' as const });
+
+/**
+ * Rounds of the AI review loop (ORC-184), walked to the bound of the review and CI loop or past it: the fix of the review
+ * loop (or `dev`, the first time) ends, sometimes contesting a finding, its commit found green and published, then both
+ * lenses end on it, each with or without a blocking finding.
+ */
+const reviewLoop: fc.Arbitrary<DraftEntry[]> = fc
+  .array(fc.record({ sha: fc.constantFrom('aaa', 'bbb'), first: fc.boolean(), correctness: fc.boolean(), security: fc.boolean(), contests: fc.boolean(), cut: fc.constantFrom(2, 3, 4, 8, 8, 8) }), { minLength: 1, maxLength: 4 })
+  .map((rounds) =>
+    rounds.flatMap(({ sha, first, correctness, security, contests, cut }): DraftEntry[] => {
+      const j = first ? 'dev' : 'fix-review';
+      const ext = (draft: Draft): DraftEntry => ({ kind: 'external', draft, untrusted: false });
+      const lensEnd = (lens: 'review' | 'review-security', id: string, blocking: boolean): DraftEntry[] => [
+        { kind: 'shell', event: { type: 'run.started', runId: id, job: lens, queue: 'dev', claudeSessionId: 'claude-r' } },
+        ext({ type: 'run.finished', payload: { runId: id, job: lens, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini', ...handedBack({ findings: blocking ? [BLOCKING] : [] }) } }),
+      ];
+      const round: DraftEntry[] = [
+        { kind: 'shell', event: { type: 'run.started', runId: 'r1', job: j, queue: 'dev', claudeSessionId: 'claude-1' } },
+        ext({ type: 'run.finished', payload: { runId: 'r1', job: j, outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini', ...handedBack(contests ? { contested: [{ finding: 'security-1', justification: 'non' }] } : {}) } }),
+        ext({ type: 'verify.passed', payload: { runId: 'r1', job: j, sha } }),
+        ext({ type: 'publish.done', payload: { runId: 'r1', job: j, sha } }),
+        ...lensEnd('review', 'r2', correctness),
+        ...lensEnd('review-security', 'r3', security),
+      ];
+      // Half the rounds stop early: at the fix's end, its verdict or its publication.
+      return round.slice(0, cut);
+    }),
+  );
+
 /** A reply in the dev session, then the debounce it armed fires: feedback relayed by the factory's own timer (I6, I12). */
 const devReply: fc.Arbitrary<Draft> = PAYLOADS['session.prompted'].map((p) => ({ type: 'session.prompted', payload: { ...p, linearSessionId: DEV_SESSION } }));
 const debouncedReply: fc.Arbitrary<DraftEntry[]> = external(devReply).map((reply): DraftEntry[] => [
@@ -351,6 +383,7 @@ const fragment: fc.Arbitrary<DraftEntry[]> = fc.oneof(
   { arbitrary: attempt, weight: 3 },
   { arbitrary: verifyLoop, weight: 2 },
   { arbitrary: redCi, weight: 1 },
+  { arbitrary: reviewLoop, weight: 1 },
   { arbitrary: debouncedReply, weight: 1 },
   { arbitrary: humanFragment, weight: 2 },
   { arbitrary: forge, weight: 2 },

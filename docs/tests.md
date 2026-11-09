@@ -116,7 +116,7 @@ describe('my behavior', () => {
 - `build`: an agent step (the `dev` job);
 - `verify`: a check step (`fake:check`, run by `h.checks`), bounded by `bounds.verifyAttempts`.
 
-`bounds.ciFixAttempts` (default 2, `limits.ci_fix_attempts`) bounds the red-CI loop: `fix-ci` launched at most N times, then the next red CI blocks the ticket. It accepts 0, which has a meaning of its own (block on the first red CI).
+`bounds.ciFixAttempts` (default 2, `limits.ci_fix_attempts`) bounds the review and CI loop, one count per run: `fix-ci`, `rebase` and the AI review's `fix-review` launched at most N times together, then the next red CI, conflict or review that still finds blocks the ticket (ORC-184). It accepts 0, which has a meaning of its own (block on the first red CI).
 
 `build` also covers the jobs that extend `dev` (`dev-feedback`, `fix-ci`): they inherit its `verify`, as in the engine. Every agent run, human feedback or red CI included, is therefore followed by a check that consumes the `h.checks` queue and the same counter.
 
@@ -250,7 +250,7 @@ Each scenario is delivered by the ticket that delivers the behavior it tests, wi
 
 | Scenario | Ticket | Fakes to drive |
 |---|---|---|
-| CI red 3 times | ORC-184 | `h.forge` (failing checks), `h.runner` |
+| CI red 3 times | ORC-184 (done: `test/scenarios/workflow.test.ts`, « CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run… ») | `h.forge` (failing checks), `h.runner` |
 | `.skip` added | ORC-158 | `h.checks`, `h.publisher` |
 | Test config modified | ORC-131 (done: `test/scenarios/freeze.test.ts`) | `h.workspaces` (`heads`, `steps` by `<worktree>@<freeze commit>`), `h.runner` (`hold`), `h.publisher`; once the factory pushes |
 | Human reply during a run | ORC-180 (done: `test/scenarios/human-inbox.test.ts`) | `h.runner` (`hold`), `h.advance` |

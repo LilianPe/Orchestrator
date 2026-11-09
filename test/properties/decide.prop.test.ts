@@ -378,35 +378,44 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     );
 
     /**
-     * The review and CI loop of the pack, bounded by `limits.ci_fix_attempts` (ORC-270): between two resets
-     * (green CI, a human relaunch), red CI starting `fix-ci` and a conflict starting the rebase step (ORC-146) count on
-     * one counter, at most that many runs, and a red CI or a conflict whose rule matches once the bound is reached starts
-     * nothing and blocks the ticket. The count is the model's, kept from the decisions; the ticket's `ciFixAttempts` must
-     * agree with it after every step.
+     * The review and CI loop of the pack, bounded by `limits.ci_fix_attempts` (the preset's `review_ci`): between two resets
+     * (another PR, a human relaunch), red CI starting `fix-ci` (ORC-270), a conflict starting the rebase step (ORC-146) and the
+     * end of the AI review with a blocking finding starting `fix-review` (ORC-184) count on one counter, at most that many
+     * runs; once the bound is reached, a red CI or a conflict whose rule matches, or a review that still finds, starts nothing
+     * and blocks the ticket. A green CI is no reset: the review would loop for good between its fix and the CI. The count is
+     * the model's, kept from the decisions; the ticket's `ciFixAttempts` must agree with it after every step.
      */
-    const LOOP_JOBS: Partial<Record<EventType, string>> = { 'pr.checks_failed': 'fix-ci', 'pr.conflicted': 'rebase' };
+    const LOOP_JOBS: Readonly<Record<string, string>> = { 'pr.checks_failed': 'fix-ci', 'pr.conflicted': 'rebase', 'review-security': 'fix-review' };
+    const loopJob = (e: FactoryEvent): string | undefined => LOOP_JOBS[e.type === 'run.finished' ? e.payload.job : e.type];
     const redCiBounded = (r: Run, bound: number): void => {
       let fixes = 0;
       for (const step of decided(r)) {
         if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.ciFixAttempts === 0)) {
-          // Only a green CI, another PR or a human ends the loop: a reset by anything else would let it run unbounded.
-          expect(CI_RESETS, 'red-CI reset').toContain(step.event.type);
+          // Only another PR or a human ends the loop: a reset by anything else, a green CI included, would let it run unbounded.
+          expect(CI_RESETS, 'reset of the review and CI loop').toContain(step.event.type);
           fixes = 0;
         }
-        const job = LOOP_JOBS[step.event.type];
+        const job = loopJob(step.event);
         const runs = job ? step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === job) : [];
         fixes += runs.length;
         expect(fixes, 'runs of the review and CI loop').toBeLessThanOrEqual(bound);
         if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
         if (!job || (step.before?.ciFixAttempts ?? 0) < bound) continue;
         expect(runs).toEqual([]);
+        const types = step.decision.events.map((e) => e.type);
+        if (step.event.type === 'run.finished') {
+          // The review that publishes with a blocking finding standing, past the bound: published, and the ticket blocked.
+          const found = step.decision.effects.some((e) => e.kind === 'review' && e.publish) && (step.after?.reviewBlocking?.count ?? 0) > 0;
+          if (found) expect(types, 'a review past the bound blocks').toContain('ticket.blocked');
+          continue;
+        }
         const matched = step.decision.trace.includes(`on.${step.event.type}[0]`);
         const refused = step.decision.trace.includes(`merged: refused ${job}`);
-        expect(step.decision.events.map((e) => e.type)).toEqual(matched && !refused ? ['ticket.blocked'] : []);
+        expect(types).toEqual(matched && !refused ? ['ticket.blocked'] : []);
       }
     };
     const ciBound = wf.limits.ciFixAttempts;
-    const CI_RESETS: EventType[] = ['pr.checks_passed', 'pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated'];
+    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
@@ -451,7 +460,43 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       expect(r.final).toMatchObject({ blocked: true, blockReason: `CI still failing after ${ciBound} attempts of fix-ci.`, ciFixAttempts: ciBound });
     });
 
-    it.todo('I5 — the AI review → fix loop is counted by the engine, with the same counter as red CI (ORC-184, preset bounds of ORC-187)');
+    // Found by the review loop (ORC-184): a red CI, then a green one, then two reviews that find; with the count reset by the
+    // green CI, the second review would start a third run of the loop.
+    const reviewRound = (n: number): Entry[] => [
+      sh({ type: 'run.started', runId: `rv${n}`, job: 'review-security', queue: 'dev', claudeSessionId: 'claude-r' }),
+      ext('run.finished', { runId: `rv${n}`, job: 'review-security', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini', attempt: 'succeeded', output: { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings: [{ file: 'src/a.ts', line: 1, severity: 'blocking', explanation: 'casse', suggestion: '' }] } }),
+    ];
+    const reviewCounterexample = seq(
+      ...delegated(),
+      runStarted(),
+      runFinished('success'),
+      ext('verify.passed', { runId: 'r1', job: 'dev', sha: 'aaa' }),
+      ext('publish.done', { runId: 'r1', job: 'dev', sha: 'aaa' }),
+      sh({ type: 'status.recorded', to: 'ai_review' }),
+      ext('pr.opened', { ...pr }),
+      ext('pr.checks_failed', { ...pr, failures: ['test'] }),
+      ext('pr.checks_passed', { ...pr }),
+      ...reviewRound(1),
+      ...reviewRound(2),
+      ...reviewRound(3),
+    );
+
+    it(
+      'the AI review with a blocking finding starts fix-review on the same counter as red CI and conflicts, and past the bound blocks (ORC-184)',
+      () => {
+        fc.assert(
+          fc.property(sequences, fc.integer({ min: 0, max: 3 }), fc.boolean(), (s, bound, aiReview) => redCiBounded(fold(s.withDuplicates, workflow(2, bound, aiReview)), bound)),
+          params<[Sequences, number, boolean]>([[reviewCounterexample, ciBound, true], [reviewCounterexample, ciBound, false]]),
+        );
+      },
+      TIMEOUT,
+    );
+
+    it(`the counterexample of the review loop: ${ciBound} runs of the loop, then the review that still finds blocks the ticket`, () => {
+      const r = fold(reviewCounterexample.withDuplicates, workflow(2, ciBound, true));
+      expect(effects(r).filter((e) => e.kind === 'start_run' && (e.job === 'fix-review' || e.job === 'fix-ci'))).toHaveLength(ciBound);
+      expect(r.final).toMatchObject({ blocked: true, blockKind: 'limit', blockedJob: 'fix-review', ciFixAttempts: ciBound });
+    });
   });
 
   describe('I6 — no human message is lost', () => {

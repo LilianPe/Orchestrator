@@ -32,13 +32,18 @@ export const packDir = join(import.meta.dirname, '../../packs/standard');
 /**
  * The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read.
  * Without `aiReview`, `dev`'s end goes straight to Human Review, as before ORC-183, instead of starting the AI review's two
- * lenses: what the scenarios of the other steps, the properties and the recorded journals run on, their runs and moves counted
- * without the review's. The review's own scenarios (`test/scenarios/review.test.ts`) run the pack as it ships.
+ * lenses, and `fix-ci`'s end starts no review either (ORC-184): what the scenarios of the other steps, the properties and the
+ * recorded journals run on, their runs and moves counted without the review's. The review's own scenarios
+ * (`test/scenarios/review.test.ts`) and the review loop's property run the pack as it ships.
  */
 export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean } = {}): Workflow {
   const wf = projectYaml ? withProjectFile(projectYaml) : loadWorkflow({ packDir });
-  const dev = wf.jobs['dev'];
-  if (!o.aiReview && dev?.onSuccess.run === 'review') dev.onSuccess = { move: 'human_review', post: 'summary' };
+  if (o.aiReview) return wf;
+  // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before.
+  for (const job of Object.values(wf.jobs)) {
+    if (job.onSuccess.run !== 'review') continue;
+    job.onSuccess = job.name === 'dev' ? { move: 'human_review', post: 'summary' } : { ...(job.onSuccess.post ? { post: job.onSuccess.post } : {}) };
+  }
   return wf;
 }
 

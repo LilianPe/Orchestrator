@@ -49,12 +49,13 @@ const workflows = new Map<string, Workflow>();
 /**
  * The standard pack under the test preset: `dev` and the jobs that extend it are verified, bounded at
  * `verifyAttempts`, and red CI starts `fix-ci` at most `ciFixAttempts` times. Frozen, as every property shares it.
+ * `aiReview`: the fixes go back through the AI review, as the pack ships (ORC-184).
  */
-export function workflow(verifyAttempts = 2, ciFixAttempts = 2): Workflow {
-  const key = `${verifyAttempts}:${ciFixAttempts}`;
+export function workflow(verifyAttempts = 2, ciFixAttempts = 2, aiReview = false): Workflow {
+  const key = `${verifyAttempts}:${ciFixAttempts}:${aiReview}`;
   let wf = workflows.get(key);
   if (!wf) {
-    wf = deepFreeze(loadTestWorkflow(testPreset({ verifyAttempts, ciFixAttempts }).yaml));
+    wf = deepFreeze(loadTestWorkflow(testPreset({ verifyAttempts, ciFixAttempts }).yaml, { aiReview }));
     workflows.set(key, wf);
   }
   return wf;

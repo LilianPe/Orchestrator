@@ -1,6 +1,7 @@
 import type { ReviewLens } from '../config/workflow-schema.js';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Finding, FindingSeverity } from './agent-output.js';
+import type { ContestedFinding } from './types.js';
 
 /**
  * The AI review (ORC-183): two read-only lenses on the published commit, whose findings the factory publishes as one GitHub
@@ -81,4 +82,53 @@ export function reviewBody(sha: string, findings: readonly ReviewFinding[], o: {
     if (text.length <= OUTPUT_LIMITS.text) return text;
   }
   return [...parts, `${listed.length} findings, too many to list here: ${listed.slice(0, 50).map(place).join(', ')}`].join('\n\n');
+}
+
+/** A blocking finding as the fix of the review loop is given it (ORC-184): `id`, its lens and its rank among that lens's blocking ones on the commit. */
+export type BlockingFinding = ReviewFinding & { id: string };
+
+/** The blocking findings kept on a commit, each with its id (`correctness-1`): stable, as `findingsOf` keeps each lens's order. */
+export function blockingFindings(findings: readonly ReviewFinding[]): BlockingFinding[] {
+  const rank = new Map<string, number>();
+  return findings
+    .filter((f) => f.severity === 'blocking')
+    .map((f) => {
+      const n = (rank.get(f.lens) ?? 0) + 1;
+      rank.set(f.lens, n);
+      return { ...f, id: `${f.lens}-${n}` };
+    });
+}
+
+const findingText = (f: BlockingFinding): string =>
+  [`### ${f.id} · \`${f.file}:${f.line}\``, f.explanation, ...(f.suggestion ? [`**Suggestion**: ${f.suggestion}`] : [])].join('\n');
+
+/**
+ * The input of the fix of the review loop (ORC-184): the blocking findings of the review, one by one under their ids, and how
+ * the factory takes the work back: one commit per finding fixed, or the finding contested with a justification.
+ */
+export function findingsInput(sha: string, findings: readonly BlockingFinding[]): string {
+  if (!findings.length) return `No blocking finding is kept on \`${sha.slice(0, 12)}\`: read the AI review on the PR.`;
+  return [
+    `The AI review of \`${sha.slice(0, 12)}\` left ${findings.length} blocking finding${findings.length === 1 ? '' : 's'}.`,
+    ...findings.map(findingText),
+    'Fix each finding in a commit of its own, or contest it with a justification. In `submit_result`, every id above goes either in `fixed`, with the commit that fixes it, or in `contested`, with why it does not apply: a contested finding stays open for the next review.',
+  ].join('\n\n');
+}
+
+/**
+ * What a review lens reads of the previous round (ORC-184): the findings the fix contested, each with its justification. They
+ * stay open: the lens judges each again on the commit it reads, and reports it again unless the justification holds. An id
+ * the commit's findings no longer have is left out.
+ */
+export function contestedInput(findings: readonly ReviewFinding[], contested: readonly ContestedFinding[]): string | undefined {
+  const byId = new Map(blockingFindings(findings).map((f) => [f.id, f]));
+  const open = contested.flatMap((c) => {
+    const f = byId.get(c.finding);
+    return f ? [`${findingText(f)}\n**Contested by the implementer**: ${c.justification}`] : [];
+  });
+  if (!open.length) return undefined;
+  return [
+    'The implementer contested these blocking findings of the previous review. Each one is still open: judge it again on this commit, and report it again as blocking unless its justification holds.',
+    ...open,
+  ].join('\n\n');
 }

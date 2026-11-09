@@ -96,6 +96,8 @@ on:
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['dev']!.structuredOutput).toBe(true);
       for (const name of ['tests', 'dev-feedback', 'fix-ci', 'ask']) expect(jobs[name]!.structuredOutput).toBeFalsy();
+      // The fix of the review loop hands back what it did with each finding (ORC-184).
+      expect(jobs['fix-review']!.structuredOutput).toBe(true);
     });
 
     it('runs the AI review as two read-only lenses on Opus, on a fresh clone of the published commit, at network claude-api (ORC-183)', () => {
@@ -108,6 +110,20 @@ on:
       // The first lens hands over to the second; the second publishes both and shows the PR in Human Review.
       expect(jobs['review']!.onSuccess).toEqual({ run: 'review-security' });
       expect(jobs['review-security']!.onSuccess).toEqual({ move: 'human_review', post: 'review' });
+    });
+
+    it('answers a blocking finding with fix-review, which goes back through verify, publish and the review, as fix-ci does (ORC-184)', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['review-security']!.onBlocking).toEqual({ run: 'fix-review' });
+      expect(jobs['review']!.onBlocking).toBeUndefined();
+      expect(jobs['fix-review']).toMatchObject({ step: 'fix', session: 'resume', skill: 'factory:feedback', input: 'findings', structuredOutput: true, repoChecks: true, effort: 'medium', limits: { turns: 60 }, network: 'limited', onStart: {} });
+      for (const name of ['fix-review', 'fix-ci']) expect(jobs[name]!.onSuccess, name).toEqual({ move: 'ai_review', post: 'reply', run: 'review' });
+    });
+
+    it('refuses on_blocking on a job that does not publish the review, or naming a job that does not read the findings (ORC-184)', () => {
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  review: { on_blocking: { run: fix-review } }\n') })).toThrow(/jobs\.review\.on_blocking/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  review-security: { on_blocking: { run: fix-ci } }\n') })).toThrow(/jobs\.review-security\.on_blocking\.run/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  review-security: { on_blocking: { run: nowhere } }\n') })).toThrow(/jobs\.review-security\.on_blocking\.run/);
     });
 
     it("gives each job its step's network level, the jobs out of the preset none (ORC-183)", () => {

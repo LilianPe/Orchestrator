@@ -86,7 +86,8 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
 
 /** The job's `on_success`, its `run` included (ORC-123: `tests` starts `dev`). */
 function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId: string, output?: AgentOutput): Decision {
-  if (job.onSuccess.move) out.effects.push({ kind: 'move', to: job.onSuccess.move });
+  // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
+  if (job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (job.onSuccess.post && job.onSuccess.post !== 'review') out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
@@ -270,16 +271,47 @@ function waitFor(out: Decision, blockers: readonly Blocker[], start: PendingJob)
  * The end of an AI review lens (ORC-183): its findings kept on the published commit it read (`verifiedSha`, what its
  * launch cloned), and published with the other lens's by the job whose `on_success` posts the review; then its `on_success`.
  * A lens that handed back no findings list, or a ticket with no published commit, is blocked: a silent review is no review.
+ *
+ * The review loop (ORC-184): each lens's blocking findings are counted on the commit, and once the lens that publishes ends
+ * with one standing, its `on_blocking` fix starts in place of its `on_success`, one round of the review and CI loop; past
+ * the bound, the ticket is blocked. A version frozen before it, with no `on_blocking`, goes to Human Review as it did.
  */
 function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, lens: ReviewLens, p: EventPayloads['run.finished']): Decision {
   const findings = p.output?.findings;
-  const sha = at.ticket?.verifiedSha;
+  const { ticket, workflow } = at;
+  const sha = ticket?.verifiedSha;
   if (!findings || !sha) {
     const reason = sha ? `The AI review ${job.name} returned no findings list.` : `The AI review ${job.name} has no published commit to review.`;
-    return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
+    return block(out, workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
   }
-  out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(job.onSuccess.post === 'review' ? { publish: true as const } : {}) });
-  return success(out, at, job, p.runId, p.output);
+  const publishes = job.onSuccess.post === 'review';
+  out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(publishes ? { publish: true as const } : {}) });
+  if (!Object.values(workflow.jobs).some((j) => j.onBlocking)) return success(out, at, job, p.runId, p.output);
+  // The first lens's count, then both lenses' once the one that publishes ends: it runs second, on the same commit. Never a
+  // count it wrote itself, on a commit reviewed again.
+  const kept = ticket?.reviewBlocking;
+  const earlier = publishes && kept?.sha === sha && kept.lens !== lens ? kept.count : 0;
+  const blocking = earlier + findings.filter((f) => f.severity === 'blocking').length;
+  // What the fix contested of the previous round, its lenses have read now: the findings standing are this review's.
+  out.events.push({ type: 'ticket.patched', patch: { reviewBlocking: { sha, lens, count: blocking }, ...(publishes && ticket?.contested ? { contested: null } : {}) } });
+  const fix = job.onBlocking && workflow.jobs[job.onBlocking.run];
+  if (!fix || !blocking) return success(out, at, job, p.runId, p.output);
+  if (refusal(at.event, ticket, fix)) {
+    out.trace.push(`review: ${fix.name} refused, the PR is merged`);
+    return out;
+  }
+  return loopRound(out, ticket, workflow, () => startRun(out, at.event, ticket, fix, { input: fix.input }), (bound) => {
+    out.trace.push(`review: ${fix.name} bound ${bound} reached`);
+    const reason = `The AI review still has ${blocking} blocking finding${blocking === 1 ? '' : 's'} on ${sha.slice(0, 12)}, and the review and CI loop has used its ${bound} runs: I am not starting ${fix.name}.`;
+    return block(out, workflow, {
+      kind: 'limit',
+      reason,
+      body: `${reason}\nReply in this thread to relaunch.`,
+      job: fix.name,
+      attempts: bound,
+      tried: [`${bound} run(s) of the review and CI loop (fix-ci, fix-review, rebase).`, `AI review of ${sha.slice(0, 12)}: ${blocking} blocking finding(s), published on the PR.`],
+    });
+  });
 }
 
 /**
@@ -479,10 +511,10 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
   return { kind: 'loop', reason, body: `${reason}\n- \`${seen.command}\`\nReply in this thread to relaunch.`, tried: [`\`${seen.command}\`, ${seen.count} times`] };
 }
 
-/** Events a human sends: unblocking the ticket, they give the red-CI loop its whole bound back (ORC-270). */
+/** Events a human sends: unblocking the ticket, they give the review and CI loop its whole bound back (ORC-270, ORC-184). */
 const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']);
 
-/** The red-CI loop starts over with its whole bound (ORC-270); nothing is recorded when its count is already 0. */
+/** The review and CI loop starts over with its whole bound (ORC-270, ORC-184); nothing is recorded when its count is already 0. */
 function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
   if ((ticket?.ciFixAttempts ?? 0) > 0) out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
 }
@@ -967,28 +999,37 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
 }
 
 /**
- * A rule that answers red CI or a conflict with the default branch with a run, bounded by `limits.ciFixAttempts` (I5,
- * ORC-270): red CI's `fix-ci` and the rebase step (ORC-146) count on this one counter of the review and CI loop. Each run
- * it starts is counted, and once the count reaches the bound the next red CI or conflict blocks the ticket instead of
- * applying the rule. A green CI, another PR or a human relaunch (`unblock`) resets the count. A run the rule would not
- * start anyway (merged PR, I8 b) is neither counted nor blocked.
+ * One round of the review and CI loop (I5): the preset's `review_ci`, carried as `limits.ciFixAttempts`, one count per run.
+ * Red CI's `fix-ci` (ORC-270), the rebase step on a conflict (ORC-146) and the fix of an AI review with a blocking finding
+ * (ORC-184) all count on it: `start` runs and is counted while the count is under the bound, `past` decides otherwise. Only
+ * another PR or a human relaunch (`unblock`) starts the count over: a green CI does not, or a review that keeps finding
+ * would loop for good between its fix and the CI.
+ */
+function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, start: () => void, past: (bound: number) => Decision): Decision {
+  const used = ticket?.ciFixAttempts ?? 0;
+  const bound = workflow.limits.ciFixAttempts;
+  if (used >= bound) return past(bound);
+  start();
+  out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } });
+  return out;
+}
+
+/**
+ * A rule that answers red CI or a conflict with the default branch with a run: a round of the review and CI loop
+ * (`loopRound`). Once the count reaches the bound, the next red CI or conflict blocks the ticket instead of applying the
+ * rule. A run the rule would not start anyway (merged PR, I8 b) is neither counted nor blocked.
  */
 function reviewCiLoop(out: Decision, rule: Rule, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const job = workflow.jobs[rule.run!]!;
   if (refusal(event, ticket, job)) return applyRule(out, rule, event, ticket, workflow);
-  const used = ticket?.ciFixAttempts ?? 0;
-  const bound = workflow.limits.ciFixAttempts;
-  if (used < bound) {
-    applyRule(out, rule, event, ticket, workflow);
-    out.events.push({ type: 'ticket.patched', patch: { ciFixAttempts: used + 1 } });
-    return out;
-  }
-  const conflict = event.type === 'pr.conflicted';
-  out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
-  // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
-  if (ticket?.blocked) return out;
-  const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
-  return block(out, workflow, { ...past, job: job.name, attempts: bound });
+  return loopRound(out, ticket, workflow, () => applyRule(out, rule, event, ticket, workflow), (bound) => {
+    const conflict = event.type === 'pr.conflicted';
+    out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
+    // Already blocked (by a rule without !blocked): the ticket keeps its reason and gets no second notice.
+    if (ticket?.blocked) return out;
+    const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
+    return block(out, workflow, { ...past, job: job.name, attempts: bound });
+  });
 }
 
 /** Red CI past the bound: `ci_bound`, which a green CI lifts. */
@@ -1442,6 +1483,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.lens) return reviewEnd(out, { event, ticket, workflow }, job, job.lens, event.payload);
+        // The findings the fix of the review loop contests stay open: the next review's lenses read them (ORC-184).
+        const review = ticket?.reviewBlocking;
+        if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
@@ -1757,9 +1801,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.trace.push(`${event.type}: recorded for the measures`);
       return out;
     case 'pr.checks_passed':
-      // Green CI ends the red-CI loop: its count starts over (ORC-270). The rules of pr.checks_passed still apply.
-      // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted.
-      resetRedCi(out, ticket);
+      // A ticket blocked by the red-CI bound is no longer blocked for a reason that holds: the block is lifted. The count of
+      // the review and CI loop stays, one per run (ORC-184): a review that keeps finding would loop between its fix and green CI.
+      // The rules of pr.checks_passed still apply.
       if (ticket?.blocked && ticket.blockKind === 'ci_bound') out.events.push({ type: 'ticket.unblocked' });
       break;
     case 'pr.opened': {
@@ -1767,7 +1811,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // unless it was closed: reopened, it is open again (ORC-134).
       const other = event.payload.number !== ticket?.prNumber;
       const reopens = other || ticket?.prState === 'CLOSED';
-      // Another PR is another red-CI loop: the count of the previous one does not carry over (ORC-270).
+      // Another PR is another review and CI loop: the count of the previous one does not carry over (ORC-270).
       if (other) resetRedCi(out, ticket);
       out.events.push({
         type: 'ticket.patched',

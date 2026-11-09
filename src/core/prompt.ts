@@ -35,6 +35,7 @@ const HEADINGS: Record<InputKind, string> = {
   verify_failures: 'Failed checks',
   thread: 'Message',
   diff: 'Diff to review',
+  findings: 'Blocking findings to address',
 };
 
 export function buildPrompt(p: PromptInput): string {
