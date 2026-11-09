@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
+import { fetchBlocks, fetchFlow, fetchMeasures, fetchOverview, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
+import { Overview } from './Overview.js';
 import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
@@ -13,6 +14,8 @@ import { PRODUCT_NAME } from '../../src/product.js';
 /** A burst of ticket updates reads the Flow once. */
 const FLOW_DEBOUNCE_MS = 300;
 const MEASURES_POLL_MS = 30_000;
+/** The overview reads every ticket of 90 days, one journal each, and moves with merges: read less often (ORC-299). */
+const OVERVIEW_POLL_MS = 5 * 60_000;
 
 /** The durations go on between two reads: only the Flow renders each second, not the session nor the journal. */
 function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: number; frozen: boolean } & Omit<ComponentProps<typeof Flow>, 'flow' | 'elapsedMs'>) {
@@ -26,14 +29,15 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'measures' | 'run' | 'security';
-const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
+type View = 'flow' | 'overview' | 'measures' | 'run' | 'security';
+const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'measures', '#security': 'security' };
+const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : PAGES[hash] ?? 'flow');
 
 /**
- * What `read` gives, read now and every 30 s while the page is shown and its tab visible, again when `deps` change; an
+ * What `read` gives, read now and every `everyMs` (30 s) while the page is shown and its tab visible, again when `deps` change; an
  * answer to an earlier read never replaces a later one. `failed`: the last read failed, `data` still the one before.
  */
-function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?: T; failed: boolean } {
+function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[], everyMs = MEASURES_POLL_MS): { data?: T; failed: boolean } {
   const [state, setState] = useState<{ data?: T; failed: boolean }>({ failed: false });
   useEffect(() => {
     let live = true;
@@ -43,7 +47,7 @@ function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?
         () => live && setState((s) => ({ ...s, failed: true })),
       );
     load();
-    const timer = setInterval(() => document.hidden || load(), MEASURES_POLL_MS);
+    const timer = setInterval(() => document.hidden || load(), everyMs);
     return () => {
       live = false;
       clearInterval(timer);
@@ -51,6 +55,17 @@ function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?
     // `read` is rebuilt each render: `deps` say when it changes.
   }, deps);
   return state;
+}
+
+/** The reduced overview (ORC-299), read when shown and every 5 min while it is: the factory computes it over the last 90 days. */
+function OverviewPage() {
+  const { data, failed } = usePolled(fetchOverview, [], OVERVIEW_POLL_MS);
+  return (
+    <div className="flow">
+      {failed && <p className="flow-failed" role="alert">{data ? 'Overview out of date: reading it failed. Retrying within 5 min.' : 'Overview unavailable: reading it failed. Retrying within 5 min.'}</p>}
+      {data ? <Overview overview={data} /> : !failed && <section><p className="empty">Loading the overview…</p></section>}
+    </div>
+  );
 }
 
 /** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
@@ -217,6 +232,7 @@ export function App() {
         <h1>{PRODUCT_NAME}</h1>
         <nav className="views">
           <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
+          <a href="#overview" aria-current={view === 'overview' ? 'page' : undefined}>Overview</a>
           <a href="#measures" aria-current={view === 'measures' || view === 'run' ? 'page' : undefined}>Measures</a>
           <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
         </nav>
@@ -237,7 +253,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
+      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

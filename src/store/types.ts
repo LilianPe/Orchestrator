@@ -322,25 +322,22 @@ export interface MeasureFacts {
   acks: Record<string, number>;
 }
 
-/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms. */
+/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms; never its path nor the proxy's reason, which names it: it can hold a secret. */
 export interface EgressRecord {
   at: number;
   method: string;
   host: string;
   port?: number;
-  path?: string;
   ok: boolean;
-  reason?: string;
   up: number;
   down: number;
 }
 
-/** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule, the command capped. */
+/** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule; never the command nor the path refused, which can hold a secret. */
 export interface RefusalRecord {
   at: number;
   tool: string;
   rule: string;
-  command: string;
 }
 
 /**
@@ -356,6 +353,19 @@ export interface SecurityLog {
   egress: EgressRecord[];
   refusals: RefusalRecord[];
   skipped: { egress: number; refusals: number };
+}
+
+/** What a store keeps of a security log (ORC-296): its fields alone, so a command or a path handed with it is never written. */
+export function keptSecurityLog(log: SecurityLog): SecurityLog {
+  return {
+    runId: log.runId,
+    projectId: log.projectId,
+    ticketId: log.ticketId,
+    at: log.at,
+    egress: log.egress.map(({ at, method, host, port, ok, up, down }) => ({ at, method, host, ...(port === undefined ? {} : { port }), ok, up, down })),
+    refusals: log.refusals.map(({ at, tool, rule }) => ({ at, tool, rule })),
+    skipped: { egress: log.skipped.egress, refusals: log.skipped.refusals },
+  };
 }
 
 /**
@@ -438,6 +448,17 @@ export function blockMoves(decisions: DecisionRecord[], tickets: TicketState[]):
 /** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
 export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string => `${t.projectId}:${t.key}`;
 
+/**
+ * The meta key of the last pause or resume accepted (ORC-335), `1` for a pause: written with its inbox row by `appendInbox`, it
+ * holds the starts before the pause's `set_paused` has run, as a ticket's lane may launch one before the instance's decides it.
+ */
+export const PAUSE_ACCEPTED = 'pause-accepted';
+
+/** The value `appendInbox` writes under `PAUSE_ACCEPTED` for an event: undefined for one that neither pauses nor resumes. */
+export function pauseAcceptedValue(e: FactoryEvent | StoredEvent): '1' | '0' | undefined {
+  return e.type === 'control.pause' ? '1' : e.type === 'control.resume' ? '0' : undefined;
+}
+
 /** The inbox event of a timer's firing (ORC-161), written by `fireTimer`: its id `timer:<key>:<fireAt>` names that firing, once. */
 export function timerEvent(t: TimerRecord, at: number): FactoryEvent<'timer.fired'> {
   return {
@@ -475,6 +496,7 @@ export interface Store {
   /**
    * The inbox (ORC-147): every event is written here, durably, before anything acts on it. False
    * when an event with this id is already in the inbox, processed or not: the id is the dedup key.
+   * A `control.pause` or `control.resume` written sets the meta `PAUSE_ACCEPTED` in the same transaction (ORC-335).
    */
   appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean>;
   /** Whether the inbox already holds an event with this id, processed or not (ORC-336: a redelivered webhook). */

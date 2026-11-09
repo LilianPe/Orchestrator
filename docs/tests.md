@@ -147,12 +147,16 @@ One property per invariant, on what `decide` carries today. The part of an invar
 | Variable | Default | Role |
 |---|---|---|
 | `NUM_RUNS` | 200 | sequences per property; CI runs 10,000 |
-| `PROP_SEED` | random | replays the seed fast-check prints on failure |
+| `PROP_SEED` | drawn once per test file | the run's seed, each test's own derived from it and the test's name; replays a failure |
+| `PROP_PATH` | none | with `PROP_SEED` only, replays the counterexample at fast-check's `path` (narrow the run to its test with `-t`) |
+
+Every property runs on a seed set before it starts (`params` in `fold.ts`, ORC-368): a failed property logs `[properties] "<test>" failed: replay with PROP_SEED=…`, even when it fails by its timeout, which fast-check never gets to report. Replay with that `PROP_SEED`, not the seed in fast-check's report, which is the test's own; that report also gives the counterexample's `path`.
 
 ```bash
 npm test                                   # properties included, 200 sequences
 NUM_RUNS=10000 npm run test:properties     # like the CI `properties` job
 PROP_SEED=149083903 npm run test:properties
+PROP_SEED=149083903 PROP_PATH="12:3:0" npm run test:properties -- -t "red CI relaunches"
 ```
 
 ## The replay oracle
