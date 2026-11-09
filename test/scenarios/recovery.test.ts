@@ -693,6 +693,29 @@ describe('a result set aside before a restart', () => {
     expect((await h.ticket()).verifyingRunId).toBeUndefined();
   });
 
+  it('its repair written while the daemon is down is the decision too: the next start makes up no verdict before it', async () => {
+    const h = createHarness({ preset: testPreset() });
+    const runId = await verdictSetAside(h);
+    // `factory run repair` writes to the database, daemon running or not: the dead letter is no longer open, its repair waits in the inbox.
+    expect(await h.store.repairDeadLetter(`check:${runId}`, 'replay', 'armand', h.clock.now())).toBeDefined();
+    await h.restart({ mode: 'brutal' });
+    expect(h.checks.calls).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.lost')).toEqual([]);
+  });
+
+  it('the end of a run set aside while its record still says running: the attempt gone, no loss is made up for it', async () => {
+    const h = createHarness({ sandboxed: true });
+    const runId = await heldRun(h);
+    const run = (await h.store.getRun(runId))!;
+    await setAside(h, { ...TRUSTED, id: `attempt:${runId}:finished`, type: 'run.finished', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId, job: run.job, outcome: 'success', costUsd: 0, turns: 1, lastText: 'done' } });
+    await lose(h, runId);
+    await h.restart({ mode: 'brutal' });
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: true, blockKind: 'dead_letter', blockedEvent: `attempt:${runId}:finished` });
+    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'run.lost')).toEqual([]);
+  });
+
   it('the end of a run set aside: its step is not started again', async () => {
     const h = createHarness();
     const runId = await heldRun(h);

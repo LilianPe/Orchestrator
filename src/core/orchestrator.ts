@@ -50,7 +50,7 @@ import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../p
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
-import { repairedEvent } from './dead-letter.js';
+import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
@@ -631,8 +631,10 @@ export class Orchestrator {
     const settled = new Set<string>();
     const checked = new Set<string>();
     // A result set aside (ORC-321) is out of the inbox and still the result: its repair decides it, never a check or an end made up here.
+    // Its repair in the inbox carries it; the inbox read first, a row set aside meanwhile is found among the open dead letters.
+    const pending = (await store.pendingInbox(Number.MAX_SAFE_INTEGER)).map(deadLetteredEvent);
     const setAside = (await store.deadLetters()).filter((d) => d.status === 'open').map((d) => d.event);
-    for (const row of [...(await store.pendingInbox(Number.MAX_SAFE_INTEGER)), ...setAside]) {
+    for (const row of [...pending, ...setAside]) {
       if (row.type === 'run.finished' || row.type === 'run.lost') settled.add((row.payload as EventPayloads['run.lost']).runId);
       if (row.type === 'verify.passed' || row.type === 'verify.failed' || row.type === 'verify.errored' || row.type === 'verify.lost' || row.type === 'publish.done' || row.type === 'publish.refused') checked.add((row.payload as EventPayloads['verify.lost']).runId);
     }
