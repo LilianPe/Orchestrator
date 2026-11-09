@@ -30,6 +30,8 @@ export interface RunRequest {
   pluginDir: string;
   settingsPath: string;
   readOnly: boolean;
+  /** The built-in tools the session has, all of them when absent (`claude --tools`): an AI review has `Read`, `Grep` and `Glob` only (ORC-183). */
+  tools?: readonly string[];
   limits: RunLimits;
   env: Record<string, string>;
   /**

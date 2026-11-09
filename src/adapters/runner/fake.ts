@@ -87,7 +87,9 @@ export class FakeRunner implements Runner {
       releaseHold();
     };
     const lastText = [...events].reverse().find((e): e is Extract<RunStreamEvent, { kind: 'text' }> => e.kind === 'text')?.text ?? '';
-    const output: AgentOutput = s.output ?? { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+    // An AI review lens hands back its findings, none by default (ORC-183).
+    const review = req.tools ? { findings: [] } : {};
+    const output: AgentOutput = s.output ?? { status: 'done', summary: lastText || 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...review };
     const submitted = this.submit && s.submit !== false ? this.submit(req.runId, output).catch(() => {}) : Promise.resolve();
     const done: Promise<RunResult> = Promise.all([held, submitted]).then(() => {
       ch.close();

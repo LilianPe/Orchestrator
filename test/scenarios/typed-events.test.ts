@@ -11,6 +11,8 @@ describe('statuses and labels come in as typed events (ORC-160)', () => {
     const h = createHarness({ authz: { githubLogins: { 'user-lilian': 'lilian' } } });
     h.tracker.setTeamMembers('REL', ['user-lilian']);
     h.forge.setRepoPermission('lilian', 'write');
+    // The worktree's head, which verify finds green and the factory publishes: what the AI review reads (ORC-183).
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', delegateId: 'app', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian', taint: 'trusted' });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
@@ -29,8 +31,9 @@ describe('statuses and labels come in as typed events (ORC-160)', () => {
     ]));
     // No free text: nothing waits for an agent to read it.
     expect((await h.ticket()).humanInbox).toEqual([]);
-    // The move to AI Review is decided as a move: the review runs.
-    expect(h.runner.requests).toHaveLength(runs + 1);
-    expect((await h.store.getRun(h.runner.requests.at(-1)!.runId))!.job).toBe('review');
+    // The move to AI Review is decided as a move: the review runs, its two lenses (ORC-183).
+    expect(h.runner.requests).toHaveLength(runs + 2);
+    const jobs = await Promise.all(h.runner.requests.slice(runs).map(async (r) => (await h.store.getRun(r.runId))!.job));
+    expect(jobs).toEqual(['review', 'review-security']);
   });
 });

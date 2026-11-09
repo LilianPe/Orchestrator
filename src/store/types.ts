@@ -1,8 +1,10 @@
 import type { RepoConfig } from '../config/repo-config.js';
-import type { RunLimits } from '../config/workflow-schema.js';
+import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
+import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
+import type { ReviewFinding } from '../core/review.js';
 import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type OverBudget, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import type { StoredEvent } from '../core/upcast.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -355,6 +357,17 @@ export interface SecurityLog {
   skipped: { egress: number; refusals: number };
 }
 
+/** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
+export interface FindingsRecord {
+  projectId: string;
+  ticketId: string;
+  sha: string;
+  lens: ReviewLens;
+  runId: string;
+  at: number;
+  findings: readonly Finding[];
+}
+
 /** What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. */
 export interface SecurityStats {
   hosts: { host: string; requests: number; refused: number }[];
@@ -572,6 +585,10 @@ export interface Store {
   securityLog(runId: string): Promise<SecurityLog | undefined>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
+  /** Keeps a review lens's findings on a commit (ORC-183), in place of what that lens kept there before, in one transaction. */
+  putFindings(r: FindingsRecord): Promise<void>;
+  /** The findings kept on a ticket's commit, by lens (`correctness` first), each lens's in its own order. */
+  findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]>;
   getMeta(key: string): Promise<string | undefined>;
   /**
    * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: false, and nothing

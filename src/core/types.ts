@@ -70,7 +70,8 @@ export type Stagnation =
   | { kind: 'loop'; command: string; failure: string; tree: string; count: number }
   | { kind: 'silent'; silentMs: number };
 
-export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures';
+/** `diff`: the published commit's diff an AI review reads (ORC-183). */
+export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'diff';
 export type QueueName = 'dev' | 'questions';
 
 /** What a human message asks for (ORC-180), classified at its arrival and journaled with it. */

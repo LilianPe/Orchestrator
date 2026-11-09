@@ -5,6 +5,7 @@ import type { Role } from './authz.js';
 import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 const MERGER: Role[] = ['team_member', 'repo_writer', 'repo_merger'];
@@ -101,13 +102,21 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
 
   const pushed = { number: 7, url: 'u', branch: 'b', reason: 'the branch received a push since the review', headMoved: true };
 
-  it('a merge refused for a push since the review sends the new commits through the AI review, not straight to Human Review', () => {
+  it('on a version frozen before ORC-183, a merge refused for a push since the review sends the new commits through its AI review, which took them in', () => {
     // A move by the factory emits no status.changed, so the review is started here, not by the rule `to: ai_review`.
-    const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
+    const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, beforeOrc183(workflow));
     expect(out.effects).toEqual([
       { kind: 'move', to: 'ai_review' },
       { kind: 'comment', body: expect.stringMatching(/push since the review.*go through the AI review again/) },
       { kind: 'start_run', job: 'review' },
+    ]);
+  });
+
+  it('a merge refused for a push since the review goes back to Human Review, saying how the push reaches a merge: the AI review reads only what the factory published (ORC-183)', () => {
+    const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
+    expect(out.effects).toEqual([
+      { kind: 'move', to: 'human_review', keepReviewSha: true },
+      { kind: 'comment', body: expect.stringMatching(/push since the review.*reads only the commits the factory published.*reply in this thread.*move the ticket to AI Review/) },
     ]);
   });
 

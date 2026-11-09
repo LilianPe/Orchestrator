@@ -83,7 +83,7 @@ Its cadence is a **timer in the database** (ORC-185): each project's pseudo-tick
 | Reply in the agent's session | The message is classified on arrival (a small model, bounded at a few seconds), enters `humanInbox`, and a sign of life written without a model goes out right after (see [Human messages](#human-messages-during-a-run)). An instruction is handed to the agent at its next step boundary, without interrupting it; a question also launches a read-only answer (`ask`). On a blocked ticket, a reply relaunches right away. |
 | `/status`, `/stop` as a reply in a session | The ticket's state read from the projection, without a model; the stop, like the stop button. |
 | Move from *Human Review* to *In Progress* | `dev-feedback` run (feedback from the PR and the thread). |
-| Move to *AI Review* | `review` run (AI review loop), then back to *Human Review* for human review. |
+| Move to *AI Review* | The AI review of the published commit again (two read-only lenses, findings on the PR, ORC-183), then back to *Human Review*. `dev`'s end starts it by itself. |
 | `@relais <question>` in a comment | Read-only answer (`ask`), including on a non-delegated ticket. |
 | `@relais retiens <fait>` | PR in the knowledge repository (`remember`). |
 | `@relais fais-le` | Reminds that the ticket must be delegated. |
