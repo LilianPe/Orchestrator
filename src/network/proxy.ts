@@ -388,6 +388,8 @@ export class EgressProxy {
     served.add(req.socket);
     const method = req.method ?? 'GET';
     const path = req.url ?? '/';
+    // A path alone: an absolute URL would go upstream as is, its authority naming a host other than the one checked (ORC-219).
+    if (!path.startsWith('/')) return this.refuse(run, res, method, t.host, path, 'request target refused: not a path');
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
     this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) =>
@@ -663,7 +665,8 @@ function authority(host: string, port: number, defaultPort: number): string {
   return port === defaultPort ? h : `${h}:${port}`;
 }
 
-const pathOf = (path: string) => path.split('?')[0]!;
+/** A path as journaled: never its query, which can carry a token, nor the credentials of an absolute target (ORC-219). */
+const pathOf = (path: string) => path.split('?')[0]!.replace(/^([^:/?#]+:\/\/)[^/?#]*@/, '$1');
 
 /** `host:port` of a CONNECT, IPv6 in brackets, the host normalised. */
 function target(authority: string): { hostname: string; port: number } {

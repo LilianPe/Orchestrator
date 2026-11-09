@@ -142,7 +142,7 @@ describe('ContainerSandboxProvider.create', () => {
     expect(a).toContain('type=bind,source=/home/d/.factory/egress-ca/ca.crt,target=/run/factory/egress-ca.crt,readonly');
     expect(a.some((x) => x.includes('ca.key'))).toBe(false);
     expect(a.slice(a.indexOf('--network'), a.indexOf('--network') + 2)).toEqual(['--network', 'none']);
-    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'NODE_EXTRA_CA_CERTS=/run/factory/egress-ca.crt', 'GIT_SSL_CAINFO=/run/factory/egress-ca.crt', 'YARN_HTTPS_PROXY=http://127.0.0.1:3128', 'YARN_HTTPS_CA_FILE_PATH=/run/factory/egress-ca.crt']) {
+    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'NODE_EXTRA_CA_CERTS=/run/factory/egress-ca.crt', 'GIT_SSL_CAINFO=/run/factory/egress-ca.crt', 'YARN_HTTPS_PROXY=http://127.0.0.1:3128', 'YARN_HTTPS_CA_FILE_PATH=/run/factory/egress-ca.crt', 'COREPACK_NPM_REGISTRY=https://registry.npmjs.org']) {
       expect(a).toContain(v);
     }
     // Yarn ≥ 2 refuses `cafile` ("Unrecognized or legacy configuration settings").

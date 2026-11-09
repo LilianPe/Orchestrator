@@ -4,11 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { copyPythonRepo, pythonRepoFiles } from '../../test/helpers/python-repo.js';
 import { FakeShooter } from '../adapters/browser/fake.js';
 import type { ShootRequest, VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxProvider, SandboxRequest } from '../adapters/sandbox/types.js';
+import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
@@ -765,6 +767,53 @@ describe('runCleanVerify', () => {
     expect(argv.slice(0, 3)).toEqual(['bash', '--norc', '-c']);
     expect(argv[3]).toMatch(/timeout -k \d+ \d+ bash --norc -c "\$1" 2>&1 \| tail -c \d+; exit "\$\{PIPESTATUS\[0\]\}"/);
     expect(argv.at(-1)).toBe('npm test');
+  });
+
+  describe('a Python repository (ORC-172)', () => {
+    const COMMANDS = ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'];
+
+    /** The fixture on the base branch, the agent's branch on it, frozen at its tests and harness; uv answers green. */
+    async function python() {
+      const s = setup({ commands: COMMANDS, setup: ['uv sync --frozen'] });
+      copyPythonRepo(s.origin);
+      commit(s.origin, 'the fixture');
+      git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+      const files = pythonRepoFiles();
+      const frozen = await freezeTests(['tests/test_export.py'], { head: 'freeze', changed: [], filesAtHead: async () => Object.keys(files), showAtHead: async (p) => files[p] });
+      s.sandboxes.answer = (command) => (command.startsWith('uv ') ? { stdout: '', stderr: '', code: 0 } : undefined);
+      return { ...s, req: { ...s.req, frozen } };
+    }
+
+    it('freezes conftest.py and the pytest section of pyproject.toml with the tests', async () => {
+      const { req } = await python();
+      expect(Object.keys(req.frozen.files).sort()).toEqual(['pyproject.toml', 'tests/conftest.py', 'tests/test_export.py']);
+    });
+
+    it('runs its setup, then the commands init proposes for it: green', async () => {
+      const { sandboxes, req } = await python();
+      expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
+      const ran = sandboxes.ran.map((r) => r.command);
+      expect(ran).toContain('uv sync --frozen');
+      expect(ran.slice(-3)).toEqual(COMMANDS);
+    });
+
+    it('criterion 3: a conftest.py the agent changed after the freeze blocks as factory/tests-gelés', async () => {
+      const { repo, req, sandboxes } = await python();
+      write(repo, 'tests/conftest.py', `${pythonRepoFiles()['tests/conftest.py']}\ncollect_ignore = ["test_export.py"]\n`);
+      commit(repo, 'skip the slow tests');
+      const res = await runCleanVerify(req);
+      expect(res.failures).toEqual([{ command: 'factory/tests-gelés', exitCode: 1, output: expect.stringContaining('tests/conftest.py') }]);
+      expect(sandboxes.ran).toEqual([]);
+    });
+
+    it('criterion 4: a # noqa the agent added blocks as factory/anti-triche', async () => {
+      const { repo, req, sandboxes } = await python();
+      write(repo, 'src/app/export.py', pythonRepoFiles()['src/app/export.py']!.replace('import io\n', 'import io\nimport os  # noqa: F401\n'));
+      commit(repo, 'export');
+      const res = await runCleanVerify(req);
+      expect(res.failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('src/app/export.py:5') }]);
+      expect(sandboxes.ran).toEqual([]);
+    });
   });
 
 describe('a failure of its own git (ORC-125)', () => {
