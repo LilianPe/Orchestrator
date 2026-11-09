@@ -20,13 +20,15 @@ on:
   ticket.delegated:
     - { when: "state in [todo, dev] && !blocked", run: dev }
   status.changed:
-    - { from: human_review, to: dev, run: dev-feedback }
-    # The review starts once `dev`, `fix-ci` or `fix-review` is published (their `on_success`). A human's move to AI Review
-    # reviews the published commit again: how a commit `dev-feedback` publishes gets one (human feedback: ORC-190).
+    # The review starts once `dev`, `fix-ci`, `fix-review` or `fix-human` is published (their `on_success`). A human's move to
+    # AI Review reviews the published commit again: how a commit `dev-feedback` publishes gets one.
     - { to: ai_review, run: review }
+  # A reply in the ticket's session; a review written on the PR (`pr.reviewed`) goes through these rules too (ORC-190).
+  # In Human Review, it is a round of human feedback: `fix-human`, on its own counter (`limits.human_review_rounds`).
   session.prompted:
     - { when: "blocked", run: dev-feedback, debounce: 0s }
-    - { when: "state in [dev, human_review]", run: dev-feedback, debounce: 3m }
+    - { when: "state in [human_review]", run: fix-human, debounce: 3m }
+    - { when: "state in [dev]", run: dev-feedback, debounce: 3m }
   # A reply to the blocking comment, written on the ticket. `dev-feedback` stands for a block with no step of its own (ORC-196).
   ticket.commented:
     - { when: "blocked", run: dev-feedback }
@@ -114,6 +116,13 @@ jobs:
     extends: dev-feedback
     input: findings
     structured_output: true
+    on_success: { move: ai_review, post: reply, run: review }
+  # The fix of human review feedback (ORC-190): the ticket's session in its worktree, on the feedback written in Human Review
+  # (the session's replies, the PR's reviews and unresolved threads). Then `verify`, `publish`, the AI review and Human Review
+  # again. Each start is a round of the preset's `human_review` (3), apart from the review and CI loop; past it, blocked.
+  fix-human:
+    extends: dev-feedback
+    counter: human_review
     on_success: { move: ai_review, post: reply, run: review }
   # The `rebase` step of factory/default (ORC-146): rebases the ticket's branch on the default branch in its sandbox, or
   # stops on the three conflicts a human decides (`submit_result` with `reason: conflict`). Its commit goes through `verify`,

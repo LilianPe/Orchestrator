@@ -21,8 +21,12 @@ describe('loadWorkflow', () => {
     expect(wf.limits.parallelSessions).toBe(3);
     expect(wf.limits.perRun.durationMs).toBe(90 * 60_000);
     expect(wf.limits.ciFixAttempts).toBe(2);
-    expect(wf.on['session.prompted']).toHaveLength(2);
-    expect(wf.on['session.prompted']![1]!.debounceMs).toBe(180_000);
+    expect(wf.limits.humanReviewRounds).toBe(3);
+    expect(wf.on['session.prompted']).toHaveLength(3);
+    // In Human Review a reply is a round of human feedback (ORC-190), on its counter.
+    expect(wf.on['session.prompted']![1]).toMatchObject({ run: 'fix-human', debounceMs: 180_000 });
+    expect(wf.jobs['fix-human']).toMatchObject({ counter: 'human_review', input: 'feedback', onSuccess: { move: 'ai_review', post: 'reply', run: 'review' } });
+    expect(wf.on['status.changed']!.some((r) => r.from === 'human_review' && r.to === 'dev')).toBe(false);
     expect(wf.commands).toEqual(['retiens', 'fais-le']);
   });
 

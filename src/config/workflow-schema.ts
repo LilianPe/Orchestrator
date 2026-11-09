@@ -50,6 +50,7 @@ export const rawJobSchema = z
       .strict()
       .optional(),
     on_blocking: z.object({ run: z.string() }).strict().optional(),
+    counter: z.literal('human_review').optional(),
   })
   .strict();
 
@@ -85,6 +86,7 @@ export const rawWorkflowSchema = z
         per_run: rawLimits,
         verify_attempts: z.number().int().nonnegative(),
         ci_fix_attempts: z.number().int().nonnegative(),
+        human_review_rounds: z.number().int().nonnegative(),
         /** Read by nothing since ORC-183, accepted so a project file that still sets it loads. */
         review_rounds: z.number().int().positive(),
       })
@@ -118,6 +120,11 @@ export interface Limits {
   verifyAttempts: number;
   /** Runs red CI and conflicts may start, together, before the next one blocks the ticket (I5, ORC-270, ORC-146); 0 blocks at the first. */
   ciFixAttempts: number;
+  /**
+   * Rounds of human review feedback (ORC-190): starts of the job of the `human_review` counter, before the next feedback blocks the
+   * ticket (the preset's `human_review`, I5), apart from `ciFixAttempts`. Absent from versions frozen before it, which have no such job.
+   */
+  humanReviewRounds?: number;
   /**
    * Same failed commands on an unchanged worktree, N times in a row: blocked, cause « boucle » (ORC-187).
    * Absent from versions frozen before it, which keep deciding without it.
@@ -194,6 +201,11 @@ export interface JobSpec {
    * before it, whose review goes to Human Review whatever it found.
    */
   onBlocking?: { run: string };
+  /**
+   * `human_review`: each start of the job, a relaunch of a lost attempt and a return of `verify` aside, is a round of human review feedback (ORC-190),
+   * counted on the ticket's `humanReviewRounds` up to `limits.humanReviewRounds`; past it, the ticket is blocked instead.
+   */
+  counter?: 'human_review';
 }
 
 export type ReviewLens = 'correctness' | 'security';

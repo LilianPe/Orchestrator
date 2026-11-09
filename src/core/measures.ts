@@ -72,8 +72,9 @@ export interface TicketMeasures {
   firstTry: boolean | null;
   reworks: Rework[];
   /**
-   * Minutes of human review: `pr.reviewed` (ORC-134) says when a review was posted, not how long it took;
-   * the time spent needs the review loop of ORC-190 (start of each human review).
+   * Minutes of human review: `pr.reviewed` (ORC-134) says when a review was posted, not how long it took. The loop of ORC-190
+   * knows when each round starts (the move to Human Review) and ends (the feedback that starts `fix-human`), which is how long
+   * the PR waited for a human, not how long one read it: left without a source until that is decided.
    */
   humanReviewMinutes: null;
   /**

@@ -1,4 +1,4 @@
-import type { Role } from '../../core/authz.js';
+import { githubLogin, type Role } from '../../core/authz.js';
 import type { ProjectAuthz, RepoPermission, RepoPermissions, RoleResolver, TeamDirectory } from './types.js';
 
 /**
@@ -52,20 +52,27 @@ export class CachedRoleResolver implements RoleResolver {
     return request;
   }
 
+  /**
+   * `actorId`: a Linear user id, its GitHub rights read through its configured login; or a GitHub actor (`github:<login>`, ORC-190),
+   * its Linear roles those of the user configured with that login, if any.
+   */
   async rolesOf(projectId: string, actorId: string): Promise<Role[]> {
     const p = this.o.projects(projectId);
     if (!p) return [];
-    const login = p.githubLogins[actorId];
+    const github = githubLogin(actorId);
+    const login = github ?? p.githubLogins[actorId];
+    // A GitHub login configured for no Linear user holds no Linear role.
+    const id = github === undefined ? actorId : Object.keys(p.githubLogins).find((u) => p.githubLogins[u] === github);
     const repo = this.o.repo;
     const [members, permission] = await Promise.all([
       this.cached(`team:${p.teamKey}`, async () => new Set(await this.o.team.teamMembers(p.teamKey))),
       login && repo ? this.cached(`repo:${p.repoPath}:${login}`, () => repo.repoPermission(p.repoPath, login)) : undefined,
     ]);
     const roles: Role[] = [];
-    if (members.has(actorId)) roles.push('team_member');
+    if (id !== undefined && members.has(id)) roles.push('team_member');
     if (permission && WRITES.has(permission)) roles.push('repo_writer', 'repo_merger');
-    if (p.maintainers.includes(actorId)) roles.push('maintainer');
-    if (p.validators.includes(actorId)) roles.push('validator');
+    if (id !== undefined && p.maintainers.includes(id)) roles.push('maintainer');
+    if (id !== undefined && p.validators.includes(id)) roles.push('validator');
     return roles;
   }
 }

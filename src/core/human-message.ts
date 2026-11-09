@@ -38,12 +38,12 @@ export function forAgent(items: readonly FeedbackItem[]): FeedbackItem[] {
 }
 
 /**
- * Whether a message waits for the agent that implements and asks for it to be resumed when no step comes next. A
- * question of a thread has its answer: it goes with the next run, and starts none. An item without a class was written
- * before ORC-180: the debounce relays it, as it did.
+ * Whether a message waits for the agent that implements and asks for it to be resumed when no step comes next: one of its
+ * session, or a review written on the PR (ORC-190). A question of a thread has its answer: it goes with the next run, and
+ * starts none. An item without a class was written before ORC-180: the debounce relays it, as it did.
  */
 export function awaitsAgent(items: readonly FeedbackItem[]): boolean {
-  return items.some((i) => classified(i) && i.source === 'session');
+  return items.some((i) => classified(i) && (i.source === 'session' || i.source === 'review'));
 }
 
 /**

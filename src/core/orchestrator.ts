@@ -2342,18 +2342,22 @@ export class Orchestrator {
       // exist yet: it starts under the id the ticket already holds (ORC-128).
       const ticketSession = job.queue === 'dev' && (from?.sessionRole ? from.sessionRole === 'implementer' : (opts.resume ?? (job.session === 'resume' || job.pickup)));
       // Its step boundary (ORC-180): the agent that implements starts a step, it reads what came in since its last one.
-      const carried = !from && kind !== 'feedback' && ticketSession ? carriedAtLaunch(t.humanInbox) : [];
-      const read: FeedbackItem[] = [...carried];
-      if (kind === 'feedback') read.push(...forAgent(t.humanInbox));
+      const stepInbox = !from && kind !== 'feedback' && ticketSession ? carriedAtLaunch(t.humanInbox) : [];
       // Review comments are external content: whoever can comment on the PR wrote them, and nothing
       // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says. The fix of the review loop reads
       // them too, as they are, with the review's findings (ORC-184).
-      const threads: FeedbackItem[] = (kind === 'feedback' || kind === 'findings') && t.prNumber ? (await forge.unresolvedReviewComments(project.repoPath, t.prNumber)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
+      const readsThreads = (kind === 'feedback' || kind === 'findings') && !!t.prNumber;
+      // An inline comment of a review is read in its thread, unresolved still, not as the inbox kept it (ORC-190): emptied all the same.
+      const shown = (items: FeedbackItem[]) => (readsThreads ? items.filter((i) => !i.thread) : items);
+      const carried = shown(stepInbox);
+      const read: FeedbackItem[] = [...carried];
+      if (kind === 'feedback') read.push(...shown(forAgent(t.humanInbox)));
+      const threads: FeedbackItem[] = readsThreads ? (await forge.unresolvedReviewComments(project.repoPath, t.prNumber!)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
       const held = ticketSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
-      const consumes = kind === 'feedback' || carried.length > 0;
+      const consumes = kind === 'feedback' || stepInbox.length > 0;
       const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
       // session, what its earlier attempts read, which the branch's mark keeps (ORC-338); a knowledge job, whatever its

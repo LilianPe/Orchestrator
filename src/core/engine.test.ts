@@ -55,7 +55,8 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out).toEqual(
       decision({
         events: [{ type: 'feedback.appended', item: { author: 'Lilian', body: 'boutons mal alignés', at: 1000, source: 'session', taint: 'trusted' } }],
-        timers: [{ kind: 'debounce', slot: 'dev-feedback', ms: 180_000, payload: { job: 'dev-feedback' } }],
+        // A round of human feedback in Human Review (ORC-190).
+        timers: [{ kind: 'debounce', slot: 'fix-human', ms: 180_000, payload: { job: 'fix-human' } }],
       }),
     );
   });
@@ -98,9 +99,10 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out.effects[0]).toMatchObject({ kind: 'start_run', job: 'ask', linearSessionId: 's9' });
   });
 
-  it('moves human_review -> dev runs dev-feedback', () => {
+  it('a move human_review -> dev starts nothing: human feedback starts its fix itself (ORC-190)', () => {
     const out = decide(ticket({ logical: 'human_review' }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
-    expect(out).toEqual(decision({ effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback', inputText: undefined, linearSessionId: undefined }] }));
+    expect(out).toEqual(decision());
+    expect(out.trace).toContain('no rule for status.changed');
   });
 
   it('a reconciliation timer reconciles the project and arms the next one in 5 minutes (ORC-185)', () => {
@@ -215,13 +217,13 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u', prState: 'OPEN' } }]);
   });
 
-  it('a review reaches decide without any reaction yet (ORC-190); a conflict goes through the rules (ORC-146)', () => {
+  it('a review goes through the reply rules (ORC-190), never its own `on` rules; a conflict goes through the rules (ORC-146)', () => {
     const pr = { number: 3, url: 'u', branch: 'b' };
     const reviewed = { ...ev('pr.reviewed', { ...pr, kind: 'review' as const, author: 'L', body: 'renomme' }), taint: 'untrusted' as const };
     const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }] } };
-    const out = decide(ticket({ logical: 'human_review', prNumber: 3 }), reviewed, wf);
-    expect(out).toEqual(decision());
-    expect(out.trace).toEqual(['pr.reviewed: no reaction yet']);
+    const out = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), reviewed, wf);
+    expect(out.timers).toEqual([{ kind: 'debounce', slot: 'fix-human', ms: 180_000, payload: { job: 'fix-human', inbox: true } }]);
+    expect(out.trace).toContain('pr.reviewed: on.session.prompted[1]');
     const conflict = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), ev('pr.conflicted', { ...pr, headSha: 'h', baseRef: 'main' }), workflow);
     expect(conflict.trace).toContain('on.pr.conflicted[0]');
   });
@@ -268,7 +270,7 @@ describe('decide — after the merge (ORC-268)', () => {
 
   it('a human status change reopens a merged ticket the factory could not move to done', () => {
     const stuck = merged({ logical: 'human_review' });
-    expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow))).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow))).toEqual([expect.objectContaining({ job: 'review' })]);
     expect(devStarts(decide(stuck, ev('status.changed', { from: 'human_review', to: 'done' }), workflow))).toEqual([]);
   });
 
@@ -481,7 +483,7 @@ describe('decide — taint', () => {
   it('applies the taint of the pending feedback to a run started by a trusted rule that consumes it (ORC-269)', () => {
     const t = ticket({ logical: 'dev', humanInbox: pending('untrusted') });
     expect(decide(t, ev('label.changed', RELAUNCH_LABEL), labelled).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
-    expect(decide({ ...t, logical: 'human_review' }, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+    expect(decide({ ...t, logical: 'human_review' }, ev('timer.fired', { kind: 'debounce', payload: { job: 'fix-human' } }), workflow).effects[0]).toMatchObject({ job: 'fix-human', sensitivePaths: SENSITIVE_PATHS });
   });
 
   it('reads a pending item written before ORC-269, without taint, as trusted, as upcast reads a version 1 event', () => {
@@ -823,7 +825,7 @@ describe('decide — built-ins', () => {
       expect(reply.events[2]).toEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
       const label = decide(blocked, ev('label.changed', RELAUNCH_LABEL), labelled);
       expect(label.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
-      const moved = decide(blocked, ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
+      const moved = decide(blocked, ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
       expect(moved.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
       // A timer armed before the block is no human relaunch: it would undo the bound.
       const timer = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow);
@@ -831,9 +833,9 @@ describe('decide — built-ins', () => {
     });
 
     it('a human who starts work gives the bound back, blocked or not: one count per run (ORC-184)', () => {
-      const back = decide(inReview({ ciFixAttempts: 2 }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
+      const back = decide(inReview({ ciFixAttempts: 2 }), ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
       expect(back.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
-      expect(back.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev-feedback' }));
+      expect(back.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'review' }));
     });
 
     it('a reply on the review loop blocked resumes fix-review itself, on the reply, which then goes back through the review (ORC-184)', () => {

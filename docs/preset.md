@@ -26,7 +26,7 @@ Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze
 | `verify` fails → `build` (or `verify_fix` → `fix`) | `verify` | 3 | Blocked |
 | AI review or red CI → `fix` | `review_ci` | 2, a single counter per run | Blocked |
 | Conflict with the default branch → `rebase` (ORC-146) | `review_ci`, the same | 2, shared with red CI | Blocked, cause « conflict » |
-| Human feedback → `fix` | `human_review` | 3, separate from AI rounds | Blocked |
+| Human feedback → `fix` | `human_review` | 3, separate from AI rounds | Blocked ([below](#human-review-feedback-orc-190)) |
 | Same command, same failure, diff unchanged | `sameFailure` | 3 | Blocked, cause « boucle » (loop): between two `verify` runs and during the attempt ([stagnation](#attempt-stagnation-orc-136)) |
 | Nothing written to the attempt's stream | `silentRun` | 30 min | Blocked ([stagnation](#attempt-stagnation-orc-136)) |
 
@@ -65,8 +65,9 @@ The network level is chosen per repository (Limited by default); a step can only
 | `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 runs per run of the ticket between `fix-ci` on red CI, `rebase` on a conflict (ORC-146) and `fix-review` on a blocking finding of the AI review (ORC-184); the next red CI, conflict or review that still finds blocks |
 | `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Loop » |
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
+| `counters.human_review` (3) | `limits.humanReviewRounds` = 3 | 3 rounds of human review feedback (`fix-human`, the job with `counter: human_review`, ORC-190), apart from `ciFixAttempts`; the 4th feedback blocks |
 
-`verify_attempts` and `ci_fix_attempts` in `workflow.yml` still override the first two, until the YAML is removed (ORC-177).
+`verify_attempts`, `ci_fix_attempts` and `human_review_rounds` in `workflow.yml` still override them, until the YAML is removed (ORC-177).
 
 ## Resuming the blocked step (ORC-196)
 
@@ -182,7 +183,19 @@ Both flag over-engineering (an abstraction with one user, code outside the ticke
 
 **What the factory publishes.** Each lens's findings are kept in the `findings` table, by ticket, commit and lens, a lens run again on the same commit replacing its own. At the end of `review-security` (`on_success.post: review`), every lens's findings on that commit go out as one GitHub review on the PR (a comment, it neither approves nor requests changes), each blocking or minor finding a comment on its line, the out-of-scope ones (on code the diff does not change) listed in the review's text; when GitHub cannot place one (a line the diff does not show), all of them are listed there instead, shortened if they would not fit in one text. The texts are vetted together, one secret scan for them all. Then the `factory/review` check on the commit: failed while a blocking finding stands, green otherwise, its title the count (« 1 blocking finding, 2 minor, 0 out of scope »). Every text goes through the `OutputPolicy`: a refused one is replaced by its notice, its place kept. Nothing goes to Linear. Then the move to Human Review, which records the reviewed commit as before. A review that fails to go out is retried by the outbox; a dead one blocks the ticket, and the move waits.
 
-**Not yet.** A commit `dev-feedback` publishes (human feedback, a reply) gets no review of its own: a human moves the ticket to AI Review to have it reviewed again (ORC-190). A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
+**Not yet.** A commit `dev-feedback` publishes (a reply to a block) gets no review of its own: a human moves the ticket to AI Review to have it reviewed again. Human review feedback does go back through the review (`fix-human`, [below](#human-review-feedback-orc-190)). A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
+
+## Human review feedback (ORC-190)
+
+```
+human_review (gate) → feedback? [ fix → verify_fix → publish → AI review → human_review ]   ≤ 3 rounds
+```
+
+**What starts a round.** In Human Review, a reply in the ticket's session, or a review written on the open PR (`pr.reviewed`, from the GitHub webhook). Nobody moves the ticket: the move from Human Review back to In Progress starts nothing any more. A review must carry words and not be an approval (an approval, or a review with no text, asks for nothing), and its author must have write access to the repository: the matrix checks the GitHub login that signed the webhook (`review_feedback`, `github:<login>`); a refusal is only journaled and logged, never written in the ticket, since a stranger can comment on a public repository's PR. The feedback is kept in `humanInbox`, untrusted for a review (I12), and grouped for 3 minutes like any reply. During other work (a fix running, the AI review), it waits for that work's end, which hands it over (`handOver`). A blocked ticket keeps a review in its inbox; only a reply in Linear relaunches.
+
+**The fix.** `fix-human` (step `fix`, skill `factory:feedback`) resumes the ticket's session in its worktree, on the same branch and PR. Its input is the feedback: the session's messages, the reviews' text, and the PR's unresolved review threads, read from GitHub at the launch (an inline comment is read in its thread, not as the inbox kept it, so a thread resolved meanwhile is not sent). Then `verify_fix`, `publish`, both lenses of the AI review and Human Review again, never straight back. The feedback counts as blocking: the review that follows decides on the new commit, and its own blocking findings take the review loop below.
+
+**Counted.** Each start of `fix-human` is a round (`humanReviewRounds` of the ticket, `limits.humanReviewRounds`), apart from `review_ci`: a relaunch after a cut and a return of `verify_fix` are no new round. With 3 rounds started, the next feedback blocks the ticket (kind `limit`, step `fix`) instead of starting `fix-human`, its feedback kept; a reply relaunches `fix-human` on it and gives the rounds back, as a human relaunch gives every bound back. Another PR starts them over too. A human who writes feedback starts work: the count of `review_ci` starts over with it (ORC-184's rule), so each human round gets the review loop's two rounds again.
 
 ## The review → fix loop (ORC-184)
 

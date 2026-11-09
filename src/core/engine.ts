@@ -131,7 +131,7 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
   const next = rule?.run ? workflow.jobs[rule.run] : undefined;
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);
-  startRun(out, event, after, next, { input: next.input });
+  humanRound(out, event, after, workflow, next, { input: next.input });
 }
 
 /**
@@ -528,8 +528,11 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
   return { kind: 'loop', reason, body: `${reason}\n- \`${seen.command}\`\nReply in this thread to relaunch.`, tried: [`\`${seen.command}\`, ${seen.count} times`] };
 }
 
-/** Events a human sends: unblocking the ticket, they give the review and CI loop its whole bound back (ORC-270, ORC-184). */
-const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']);
+/**
+ * Events a human sends: unblocking the ticket, they give the review and CI loop its whole bound back (ORC-270, ORC-184). A review
+ * on the PR, authorized, starts work as a reply does (ORC-190); it never unblocks.
+ */
+const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
 
 /** The review and CI loop starts over with its whole bound (ORC-270, ORC-184); nothing is recorded when its count is already 0. */
 function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
@@ -545,6 +548,8 @@ function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void 
   out.events.push({ type: 'ticket.unblocked' });
   if (!HUMAN_RELAUNCH.has(event.type)) return;
   resetRedCi(out, ticket);
+  // The human review rounds too (ORC-190): the reply to their own bound relaunches on the feedback it kept.
+  if (ticket.humanReviewRounds) out.events.push({ type: 'ticket.patched', patch: { humanReviewRounds: 0 } });
   // The « Loop » guard starts over too (ORC-187); `null`, not undefined, survives the JSON of the journal.
   if (ticket.repeatedFailure) out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: null } });
   // The red loop too (ORC-123).
@@ -821,6 +826,38 @@ function heldInbox(ticket: TicketState | undefined): string | undefined {
 }
 
 /**
+ * A review written on the PR (ORC-190): human review feedback, read through the reply rules as a session message is. On the
+ * ticket's open PR, with words (an approval or a silent review asks nothing), from a writer of the repository (`review_feedback`,
+ * on its GitHub login): kept in the inbox, untrusted as GitHub's content is, then the first reply rule whose `when` matches
+ * the ticket. In Human Review that is `fix-human`, debounced, a round of human feedback; during other work, it waits for the end
+ * of that work (`handOver`). A blocked ticket keeps it: only a reply in Linear relaunches.
+ */
+function humanReview(out: Decision, event: FactoryEvent<'pr.reviewed'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
+  const { number, kind, author, body, state } = event.payload;
+  if (!ticket?.delegated || ticket.prNumber !== number || ticket.prState !== 'OPEN') {
+    out.trace.push(`pr.reviewed: PR #${number} is not the open PR of a ticket at work`);
+    return out;
+  }
+  if (!body.trim() || state?.toUpperCase() === 'APPROVED') {
+    out.trace.push('pr.reviewed: no feedback to fix (an approval, or no words)');
+    return out;
+  }
+  if (!authorize(out, event, ticket, 'review_feedback', 'pr', matrix)) return out;
+  out.events.push({ type: 'feedback.appended', item: { author, ...(event.actor ? { authorId: event.actor } : {}), body, at: event.at, source: 'review', taint: event.taint, kind: 'instruction', ...(kind === 'comment' ? { thread: true as const } : {}) } });
+  if (ticket.blocked) {
+    out.trace.push('pr.reviewed: kept, a review relaunches no blocked ticket');
+    return out;
+  }
+  const index = firstRule('session.prompted', event, ticket, workflow);
+  if (index < 0) {
+    out.trace.push('pr.reviewed: kept for the end of the work in flight');
+    return out;
+  }
+  out.trace.push(`pr.reviewed: on.session.prompted[${index}]`);
+  return applyRule(out, workflow.on['session.prompted']![index]!, event, ticket, workflow);
+}
+
+/**
  * The regrouping of a message for the agent that implements (ORC-180), by the workflow's reply rule, whichever session it came
  * from: blocked, the rule relaunches at once (ORC-196's path); else it arms the debounce, and no rule leaves it for the next run.
  */
@@ -906,8 +943,9 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
   const verdict = allowed({ action, channel }, event.actor, ticket, matrix, event.roles);
   if (verdict.ok) return true;
   out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
-  // The dashboard is no Linear thread (ORC-301): its refusal is only traced, and logged, which its log shows.
-  if (channel === 'dashboard') return false;
+  // The dashboard is no Linear thread (ORC-301), nor is the PR (ORC-190): the refusal is only traced, and logged. A stranger's
+  // comment on a public repository is answered by no message in the ticket.
+  if (channel === 'dashboard' || channel === 'pr') return false;
   const body = refusalMessage(action, matrix, verdict.reason);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
@@ -932,7 +970,7 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
 
 /** The events a human sends that the matrix may check (`mayCheck`): a cheap filter before any read. */
 export const HUMAN_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
-  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed',
+  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'pr.reviewed',
 ]);
 
 /** A human acting on a run, by a rule (a label, a status change): relaunching it when the ticket is blocked, triggering it otherwise. */
@@ -1003,7 +1041,8 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   // A block on a stranded pending job stays until the debounce fires: it is what tells that reply to start that job (ORC-339).
   const keepsBlock = !!rule.debounceMs && !!strandedPending(ticket, workflow);
   const refused = !job || !!refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input));
-  if (!refused && !keepsBlock && ticket?.blocked) unblock(out, event, ticket);
+  const unblocks = !refused && !keepsBlock && !!ticket?.blocked;
+  if (unblocks) unblock(out, event, ticket!);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
@@ -1026,17 +1065,44 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
     return out;
   }
   if (rule.debounceMs && rule.debounceMs > 0 && !refusal(event, ticket, job)) {
-    const inbox = (event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind;
+    const inbox = ((event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind) || event.type === 'pr.reviewed';
     out.timers.push({ kind: 'debounce', slot: job.name, ms: rule.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
   } else {
     const threaded = event.type === 'session.mentioned' || event.type === 'command';
-    startRun(out, event, ticket, job, {
-      input: resumed ? 'feedback' : job.input,
-      inputText: threaded ? event.payload.body : undefined,
-      linearSessionId: threaded ? event.payload.linearSessionId : undefined,
-    });
+    const run = { input: resumed ? 'feedback' : job.input, inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
+    // A human relaunch in this decision gave the human rounds back (`unblock`).
+    humanRound(out, event, ticket, workflow, job, run, unblocks && HUMAN_RELAUNCH.has(event.type) ? 0 : undefined);
   }
   return out;
+}
+
+/**
+ * Starts `job`; a round of human review feedback when it runs on the `human_review` counter (ORC-190, `fix-human`): counted
+ * on `humanReviewRounds`, apart from the review and CI loop's `ciFixAttempts`. Past `limits.humanReviewRounds`, the ticket is
+ * blocked instead, the feedback left in its inbox for the reply that relaunches it. `used`: the count as this decision leaves
+ * it, when a human relaunch in it gave the rounds back. A start refused anyway (merged PR) is no round.
+ */
+function humanRound(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>, used = ticket?.humanReviewRounds ?? 0): void {
+  const bound = workflow.limits.humanReviewRounds;
+  if (job.counter !== 'human_review' || bound === undefined || refusal(event, ticket, job, runTaint(event, ticket, run.input ?? job.input))) {
+    startRun(out, event, ticket, job, run);
+    return;
+  }
+  if (used < bound) {
+    startRun(out, event, ticket, job, run);
+    out.events.push({ type: 'ticket.patched', patch: { humanReviewRounds: used + 1 } });
+    return;
+  }
+  out.trace.push(`human review: ${job.name} bound ${bound} reached`);
+  const reason = `The ${bound} rounds of human review feedback are used: I am not starting ${job.name} on the new feedback.`;
+  block(out, workflow, {
+    kind: 'limit',
+    reason,
+    body: `${reason}\nThe feedback is kept: reply in this thread to relaunch.`,
+    job: job.name,
+    attempts: bound,
+    tried: [`${bound} round(s) of human review feedback (${job.name}), each through verify and the AI review.`],
+  });
 }
 
 /**
@@ -1809,7 +1875,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return out;
       }
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
-      startRun(out, event, ticket, job, { input: job.input });
+      humanRound(out, event, ticket, workflow, job, { input: job.input });
       return out;
     }
     case 'effect.done':
@@ -1932,9 +1998,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'pr.merge_refused':
       return mergeRefused(out, event, ticket, workflow);
     case 'pr.reviewed':
-      // In the inbox, but no reaction yet (ORC-190): no rule applies to it.
-      out.trace.push(`${event.type}: no reaction yet`);
-      return out;
+      return humanReview(out, event, ticket, workflow, matrix);
     case 'pr.conflicted':
       // The open PR of the ticket only is rebased (ORC-146): another PR's conflict, or a merged or closed one's, is recorded.
       if (ticket?.prNumber !== event.payload.number || ticket.prState !== 'OPEN') {
@@ -1965,6 +2029,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const reopens = other || ticket?.prState === 'CLOSED';
       // Another PR is another review and CI loop: the count of the previous one does not carry over (ORC-270).
       if (other) resetRedCi(out, ticket);
+      // And another round of human review (ORC-190).
+      if (other && ticket?.humanReviewRounds) out.events.push({ type: 'ticket.patched', patch: { humanReviewRounds: 0 } });
       out.events.push({
         type: 'ticket.patched',
         patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },

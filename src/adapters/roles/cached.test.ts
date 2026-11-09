@@ -39,6 +39,15 @@ describe('CachedRoleResolver (ORC-186)', () => {
     expect(await roles.rolesOf('unknown', 'u-dev')).toEqual([]);
   });
 
+  it('resolves a GitHub actor (ORC-190) by its own login: its rights on the repository, and the Linear roles of the user it is configured for', async () => {
+    const { roles, forge } = setup();
+    expect(await roles.rolesOf('p', 'github:dev-gh')).toEqual(['team_member', 'repo_writer', 'repo_merger']);
+    expect(await roles.rolesOf('p', 'github:reader-gh')).toEqual(['team_member']);
+    forge.setRepoPermission('outsider', 'maintain');
+    expect(await roles.rolesOf('p', 'github:outsider')).toEqual(['repo_writer', 'repo_merger']);
+    expect(await roles.rolesOf('p', 'github:stranger')).toEqual([]);
+  });
+
   it('reads no GitHub right for a Linear user without a configured login', async () => {
     const { roles, forge } = setup();
     forge.setRepoPermission('u-maint', 'admin');
