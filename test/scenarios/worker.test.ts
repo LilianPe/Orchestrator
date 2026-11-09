@@ -1,16 +1,15 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ROLES_TTL_MS } from '../../src/adapters/roles/cached.js';
 import { runRepair } from '../../src/cli/repair.js';
-import { loadWorkflow } from '../../src/config/load-workflow.js';
 import { TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { DecisionRequest, Store } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
-import { createHarness, harnessStoreKind, packDir } from '../helpers/harness.js';
+import { createHarness, harnessStoreKind, loadTestWorkflow } from '../helpers/harness.js';
 
 const waitFor = async (cond: () => boolean | Promise<boolean>): Promise<void> => {
   for (let i = 0; i < 400 && !(await cond()); i++) await new Promise((r) => setTimeout(r, 5));
@@ -131,9 +130,7 @@ on:
     const frozen = (await h.ticket()).workflowHash;
     expect(frozen).toMatch(/^[0-9a-f]{64}$/);
 
-    const file = join(mkdtempSync(join(tmpdir(), 'factory-wf-')), 'workflow.yml');
-    writeFileSync(file, version('nouvelle version'));
-    h.project.workflow = loadWorkflow({ packDir, projectFile: file });
+    h.project.workflow = loadTestWorkflow(version('nouvelle version'));
     await h.restart();
 
     await h.send('label.changed', { label: 'agent:x', change: 'added' });

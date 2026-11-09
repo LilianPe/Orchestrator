@@ -84,6 +84,17 @@ describe('OutputPolicy (ORC-214)', () => {
       expect(scanned.filter((t) => t === 'Got it.')).toHaveLength(1);
     });
 
+    it("an AI review's texts in one scan; a secret in one of them withholds that one alone (ORC-183)", async () => {
+      const scanned: string[] = [];
+      const policy = scanning((t) => (scanned.push(t), t.includes(SECRET) ? ['github-pat'] : []));
+      expect(await policy.comments(['the review', 'a finding'])).toEqual(['the review', 'a finding']);
+      expect(scanned).toEqual(['the review\na finding']);
+      const out = await policy.comments(['the review', `token ${SECRET}`]);
+      expect(out[0]).toBe('the review');
+      expect(out[1]).toMatch(/withheld.*github-pat/s);
+      expect(out[1]).not.toContain(SECRET);
+    });
+
     it('a scan that cannot run is no green: it throws, and the write is retried, never posted unscanned', async () => {
       const policy = new OutputPolicy(() => Promise.reject(new Error('gitleaks could not run')));
       await expect(policy.comment('hello')).rejects.toThrow(/gitleaks could not run/);

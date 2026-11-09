@@ -1,4 +1,5 @@
-import type { AgentOutput } from './agent-output.js';
+import type { ReviewLens } from '../config/workflow-schema.js';
+import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
 import type { InputKind, InternalEvent, LogicalState, TimerFired } from './types.js';
 
@@ -33,6 +34,11 @@ export type Effect =
   /** `options`: an elicitation answered by picking one (`select`, ORC-210). */
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string; options?: readonly string[] }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }
+  /**
+   * An AI review lens's findings on the published commit `sha`, kept (ORC-183); `publish`: then every lens's findings on it go
+   * out as one GitHub review with inline comments, and `factory/review`, failed on a blocking one.
+   */
+  | { kind: 'review'; runId: string; lens: ReviewLens; sha: string; findings: readonly Finding[]; publish?: true }
   | { kind: 'link_pr'; url: string }
   /** Compare Linear and GitHub to the factory's state and write what a lost webhook missed to the inbox (ORC-185). */
   | { kind: 'reconcile' }

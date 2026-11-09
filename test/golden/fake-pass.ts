@@ -8,14 +8,14 @@ const shutdown = trackHarnesses();
 
 /**
  * A golden pass on the fake adapters and the fake runner (ORC-236): no model, no network, no external effect.
- * The ticket is delegated on the pack (`packDir`, the standard one by default) and the current preset; the fake
- * agent does its job and commits, and the PR the factory would open stays in the fake publisher, kept as the pass's
- * artifact. Its inputs are what the engine recorded its runs received (ORC-226): prompt, skills, workflow,
+ * The ticket is delegated on the pack (`packDir`, the standard one by default) as it ships, its AI review included
+ * (ORC-183), and the current preset; the fake agent does its job and commits, and the PR the factory would open stays
+ * in the fake publisher, kept as the pass's artifact; the two review lenses find nothing. Its inputs are what the engine recorded its runs received (ORC-226): prompt, skills, workflow,
  * settings and plugin files, model and effort.
  */
 export function fakeGoldenPass({ packDir }: { packDir?: string } = {}): RunGoldenPass {
   return async (ticket: GoldenTicket): Promise<GoldenPass> => {
-    const h = createHarness({ packDir });
+    const h = createHarness({ packDir, aiReview: true });
     try {
       const id = ticket.ticket;
       h.tracker.addIssue({ identifier: id, title: ticket.title, description: `${ticket.title}. Replayed from ${ticket.repo} at ${ticket.startCommit}.` });

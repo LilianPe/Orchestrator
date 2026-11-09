@@ -11,7 +11,8 @@ import type { Verifier } from './verify.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { stateEchoKey } from '../adapters/tracker/types.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
-import { loadWorkflow } from '../config/load-workflow.js';
+import type { loadWorkflow } from '../config/load-workflow.js';
+import { loadTestWorkflow } from '../../test/helpers/harness.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { hashText } from './attempt-labels.js';
 import { EventBus } from './bus.js';
@@ -40,7 +41,8 @@ function setup(
     account?: () => string | undefined;
   } = {},
 ) {
-  const workflow = loadWorkflow({ packDir });
+  // `dev` straight to Human Review, as the harness has it: the AI review's own scenarios are test/scenarios/review.test.ts (ORC-183).
+  const workflow = loadTestWorkflow();
   o.tweak?.(workflow);
   const store = new SqliteStore(':memory:');
   const tracker = new FakeTracker();

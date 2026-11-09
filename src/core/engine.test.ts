@@ -11,6 +11,7 @@ import { reduce } from './reduce.js';
 import { holds, isUnrouted, unroutedReason } from './routing.js';
 import { upcastTicket } from './upcast.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 /** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
 const CUT_BOUND = /^Too many relaunches after a cut: /;
@@ -140,6 +141,10 @@ describe('decide — YAML rules of the standard pack', () => {
       const out = decide(ticket({ blocked: true, activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '' }), workflow);
       expect(out.effects.filter((e) => e.kind === 'labels')).toEqual([]);
     });
+  });
+
+  it("today's AI review writes nothing, so nothing of it is verified nor published (ORC-183)", () => {
+    for (const name of ['review', 'review-security']) expect(workflow.jobs[name]!.repoChecks, name).toBeUndefined();
   });
 
   it('moving to ai_review runs review', () => {
@@ -305,10 +310,11 @@ describe('decide — verify on the same commit (ORC-151)', () => {
     expect(out.effects.some((e) => e.kind === 'move')).toBe(false);
   });
 
-  it('a review goes through it too, and a failure blocks: the review did not write the commit (a push since)', () => {
-    expect(workflow.jobs['review']!.repoChecks).toBe(true);
+  it('a review frozen before ORC-183 goes through it too, and a failure blocks: the review did not write the commit (a push since)', () => {
+    const frozen = beforeOrc183(workflow);
+    expect(frozen.jobs['review']!.repoChecks).toBe(true);
     const t = { ...running(), verifyingRunId: 'r1', activeRunId: undefined };
-    const out = decide(t, event('verify.failed', { runId: 'r1', job: 'review', failures: [{ command: 'npm test', exitCode: 1, output: 'red' }] }), workflow);
+    const out = decide(t, event('verify.failed', { runId: 'r1', job: 'review', failures: [{ command: 'npm test', exitCode: 1, output: 'red' }] }), frozen);
     expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
     expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: expect.stringMatching(/^Checks failing after review/), kind: 'failed' });
     expect(causeOf((out.events[0] as { kind: BlockKind }).kind)).toBe('failed');
@@ -524,8 +530,10 @@ describe('decide — built-ins', () => {
     expect(out).toEqual(
       decision({
         effects: [
-          { kind: 'move', to: 'human_review' },
+          // `dev`'s end starts the AI review (ORC-183).
+          { kind: 'move', to: 'ai_review' },
           { kind: 'post_output', style: 'summary', runId: 'r1' },
+          { kind: 'start_run', job: 'review' },
         ],
       }),
     );
