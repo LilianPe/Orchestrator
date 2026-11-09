@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
@@ -57,39 +57,51 @@ export interface ClaudeAccount {
  * later, a section that does not parse, or a file gone (an editor saving it), keeps the last account, logged once per fault.
  */
 export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = process.env, log: (m: string) => void = () => {}): () => ClaudeAccount {
-  const file = join(home, 'factory.yml');
-  const read = () => (existsSync(file) ? readFileSync(file, 'utf8') : undefined);
   const resolve = (text: string | undefined): ClaudeAccount => {
-    const claude = text === undefined ? undefined : topLevelKey(text, 'claude');
-    const yml = claude === undefined ? undefined : parseFactoryYml(stringify({ claude }), env);
+    const yml = text === undefined ? undefined : parseSection(text, 'claude', env);
     const chosen = activeClaudeToken(yml);
     if (chosen) return { name: yml!.claude!.active, token: chosen };
     const own = claudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
     return own ? { token: own } : {};
   };
-  let text = read();
+  let text = factoryYmlText(home);
   let current = resolve(text);
   let fault: string | undefined;
+  const warn = (message: string) => {
+    if (message !== fault) log(`Warning: factory.yml: the Claude account is not read again, ${current.name ?? 'default'} stays active: ${message}`);
+    fault = message;
+  };
   return () => {
     try {
-      const next = read();
-      if (next === undefined && text !== undefined) throw new Error('the file is gone');
+      const next = factoryYmlText(home);
+      if (next === undefined && text !== undefined) {
+        warn('the file is gone');
+        return current;
+      }
       if (next !== text) {
         text = next;
         current = resolve(next);
       }
       fault = undefined;
     } catch (err) {
-      const message = (err as Error).message;
-      if (message !== fault) log(`Warning: factory.yml: the Claude account is not read again, ${current.name ?? 'default'} stays active: ${message}`);
-      fault = message;
+      warn((err as Error).message);
     }
     return current;
   };
 }
 
-/** The value of a top-level key of the file, undefined when absent or null. Unreadable YAML is a FactoryYmlError. */
-function topLevelKey(text: string, key: string): unknown {
+/** The text of `<home>/factory.yml`, undefined when there is none. Any other read error is thrown as is. */
+function factoryYmlText(home: string): string | undefined {
+  try {
+    return readFileSync(join(home, 'factory.yml'), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
+/** One top-level key of the file, validated as `parseFactoryYml` validates it, the rest of the file left out; undefined when absent or null. */
+function parseSection(text: string, key: string, env?: NodeJS.ProcessEnv): FactoryYml | undefined {
   let raw: unknown;
   try {
     raw = parse(text);
@@ -97,7 +109,7 @@ function topLevelKey(text: string, key: string): unknown {
     throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
   }
   const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>)[key] : undefined;
-  return value ?? undefined;
+  return value === undefined || value === null ? undefined : parseFactoryYml(stringify({ [key]: value }), env);
 }
 
 /**
@@ -141,8 +153,8 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
-  const file = join(home, 'factory.yml');
-  return existsSync(file) ? parseFactoryYml(readFileSync(file, 'utf8'), env) : undefined;
+  const text = factoryYmlText(home);
+  return text === undefined ? undefined : parseFactoryYml(text, env);
 }
 
 /**
@@ -150,10 +162,8 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
  * reads, without resolving the file's `env:` secrets, which the shell it runs in need not have. A read error is thrown as is.
  */
 export function loadFactoryBudgets(home: string): FactoryYml['budgets'] {
-  const file = join(home, 'factory.yml');
-  if (!existsSync(file)) return undefined;
-  const budgets = topLevelKey(readFileSync(file, 'utf8'), 'budgets');
-  return budgets === undefined ? undefined : parseFactoryYml(stringify({ budgets })).budgets;
+  const text = factoryYmlText(home);
+  return text === undefined ? undefined : parseSection(text, 'budgets')?.budgets;
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
