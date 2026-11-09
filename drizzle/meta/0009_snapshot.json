@@ -1,5 +1,5 @@
 {
-  "id": "a5ed8c04-d4f8-4d3a-b05e-b66da7b0ec00",
+  "id": "2426e4c6-8a11-41ea-a253-93435f87c29a",
   "prevId": "96c7ddc5-4901-42c7-977b-1507425c0a1e",
   "version": "7",
   "dialect": "postgresql",
@@ -303,78 +303,60 @@
       },
       "isRLSEnabled": false
     },
-    "public.baselines": {
-      "name": "baselines",
+    "public.changelog": {
+      "name": "changelog",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "since": {
-          "name": "since",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "until": {
-          "name": "until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "measure": {
-          "name": "measure",
+        "ticket_id": {
+          "name": "ticket_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "value": {
-          "name": "value",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "over_count": {
-          "name": "over_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "left_out": {
-          "name": "left_out",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "no_source": {
-          "name": "no_source",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "computed_at": {
-          "name": "computed_at",
+        "at": {
+          "name": "at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "entry": {
+          "name": "entry",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "baselines_project_id_since_until_measure_pk": {
-          "name": "baselines_project_id_since_until_measure_pk",
+      "indexes": {
+        "changelog_at_idx": {
+          "name": "changelog_at_idx",
           "columns": [
-            "project_id",
-            "since",
-            "until",
-            "measure"
-          ]
+            {
+              "expression": "at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

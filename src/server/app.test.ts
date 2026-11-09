@@ -7,7 +7,7 @@ import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
-import type { SecurityLog } from '../store/types.js';
+import type { ChangelogEntry, SecurityLog } from '../store/types.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp, type TakeOverDesk } from './app.js';
@@ -258,6 +258,28 @@ describe('server', () => {
     it('refuses a period that is not one, and asks for the password as the other routes of the interface', async () => {
       expect((await (await setup()).app.request('/api/overview?since=100&until=10')).status).toBe(400);
       expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/overview')).status).toBe(401);
+    });
+  });
+
+  describe('the changelog (ORC-197)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const entry = (id: string, at: number): ChangelogEntry => ({
+      id, projectId: 'p', ticketId: id.split(':')[0]!, title: 'Export CSV', summary: 'Audits export to CSV.', prNumber: 3, prUrl: 'https://gh/pr/3', paths: [], visualProof: { status: 'not_applicable' }, at,
+    });
+
+    it('lists the entries of the period asked, the last 7 days by default, the most recent first, read-only', async () => {
+      const clock = new FakeClock(30 * DAY);
+      const { app, store } = await setup({ clock });
+      for (const e of [entry('REL-1:1:1', 10 * DAY), entry('REL-2:1:1', 25 * DAY), entry('REL-3:1:1', 29 * DAY)]) await store.appendChangelog(e);
+      expect(await (await app.request('/api/changelog')).json()).toEqual({ since: 23 * DAY, until: 30 * DAY, entries: [entry('REL-3:1:1', 29 * DAY), entry('REL-2:1:1', 25 * DAY)] });
+      const all = await (await app.request(`/api/changelog?since=0&until=${30 * DAY}`)).json();
+      expect(all.entries.map((e: ChangelogEntry) => e.ticketId)).toEqual(['REL-3', 'REL-2', 'REL-1']);
+      expect((await app.request('/api/changelog?since=x')).status).toBe(400);
+      await store.appendChangelog({ ...entry('OPS-1:1:1', 29 * DAY), projectId: 'ops' });
+      expect((await (await app.request('/api/changelog?project=ops')).json()).entries.map((e: ChangelogEntry) => e.ticketId)).toEqual(['OPS-1']);
+      // Nothing writes it from outside: the after_merge step alone appends to it.
+      for (const method of ['POST', 'PUT', 'DELETE']) expect((await app.request('/api/changelog', { method })).status).not.toBe(200);
+      expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/changelog')).status).toBe(401);
     });
   });
 

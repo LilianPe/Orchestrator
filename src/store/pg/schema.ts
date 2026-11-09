@@ -14,6 +14,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { FactoryEvent, FeedbackItem } from '../../core/types.js';
+import type { ChangelogEntry } from '../types.js';
 
 /** Every timestamp is `timestamptz`, so Postgres stores it in UTC and returns it in the session zone. */
 const createdAt = () => timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow();
@@ -366,6 +367,19 @@ export const knownFlakyTests = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.test] })],
 );
 
+/** The changelog (ORC-197), append-only: one row per `after_merge` step, by the id of its effect, the entry whole in `entry`. */
+export const changelog = pgTable(
+  'changelog',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    entry: jsonb('entry').$type<ChangelogEntry>().notNull(),
+  },
+  (t) => [index('changelog_at_idx').on(t.at)],
+);
+
 /**
  * A project's baseline over 90 days (ORC-230), frozen by `factory baseline`: one row per measure and period. `value` null
  * when there is nothing to compute it over, or no source (`no_source`); `over_count` and `left_out`, what it counts and leaves out.
@@ -386,7 +400,7 @@ export const baselines = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.since, t.until, t.measure] })],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the baselines (ORC-230). */
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -404,6 +418,7 @@ export const PG_TABLES = {
   egressRequests,
   refusals,
   knownFlakyTests,
+  changelog,
   baselines,
 } as const;
 
@@ -424,6 +439,7 @@ export const PG_TABLE_NAMES = [
   'egress_requests',
   'refusals',
   'known_flaky_tests',
+  'changelog',
   'baselines',
 ] as const;
 

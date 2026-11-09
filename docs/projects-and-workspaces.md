@@ -63,7 +63,7 @@ Lifecycle of a ticket worktree:
 1. **Creation** on the first run: `git fetch origin`, then a new repository on the ticket's branch (reuses a remote branch, failing that a local one, with the same name, otherwise creates it from `origin/<default branch>`). `.claude/` is masked there from that moment, except `.claude/CLAUDE.md`, including for the `setup`.
 2. **Setup**: the `workspace.setup` commands (e.g. `npm ci`) are run once, in order, via `bash -c`, in the attempt's container when `FACTORY_CONTAINER_CLI` is set, on the host otherwise. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »); the next run starts from scratch.
 3. **Reuse**: the ticket's following runs (feedback, CI, review) pick up the same worktree, without setup.
-4. **Cleanup**: when the PR is merged (rule `pr.merged` → `do: cleanup`), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
+4. **Cleanup**: when the PR is merged (rule `pr.merged` → `do: after_merge`, which ends with the cleanup, ORC-197), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
 
 Each question has its own `_trunk/<runId>/`, created for it and deleted when it ends.
 

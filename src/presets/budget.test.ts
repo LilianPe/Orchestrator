@@ -15,6 +15,7 @@ const loop: Preset = {
   silentRun: { minutes: 30 },
   redCi: { goto: 'fix', counter: 'r' },
   conflict: { goto: 'fix', counter: 'r' },
+  approvers: { normal: ['done_merge'], sensitive: ['done_merge'], 'verification-config': ['refreeze', 'done_merge'] },
   steps: [
     { id: 'build', type: 'agent_step', writes: 'code', model: 'm', effort: 'low', maxTurns: 10, network: 'limited', next: 'verify' },
     { id: 'verify', type: 'verify', mode: 'full', network: 'none', next: 'review', onFailure: { goto: 'build', counter: 'v' } },

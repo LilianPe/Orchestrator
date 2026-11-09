@@ -1,3 +1,4 @@
+import type { VisualCapture } from '../checks/visual-proof.js';
 import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
@@ -386,6 +387,33 @@ export interface Artifact {
 }
 
 /**
+ * An entry of the changelog (ORC-197): what a merged PR delivered, appended by the `after_merge` step and never changed. `id`: its
+ * merge's, as the inbox names the `pr.merged` event, its idempotency key. `summary`: what changed, as the published work said it (the ticket's title
+ * when none did); where: `page`, the page the visual proof shot, and `paths`, the paths of the diff that asked for it; `at`: when
+ * GitHub merged it.
+ */
+export interface ChangelogEntry {
+  id: string;
+  projectId: string;
+  ticketId: string;
+  title: string;
+  summary: string;
+  prNumber: number;
+  prUrl: string;
+  mergeSha?: string;
+  page?: string;
+  paths: string[];
+  visualProof: ChangelogProof;
+  at: number;
+}
+
+/** The visual proof of a changelog entry (ORC-176): the captures before and after, each by the artifact kept of it, or why there are none. */
+export type ChangelogProof =
+  | { status: 'taken'; captures: (VisualCapture & { artifactId: string })[] }
+  | { status: 'not_applicable' }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * A test of a project's repository a human listed as flaky (ORC-164): failing, `verify` marks it indicative. `test`, as
  * `verify` names it (`<file> > <full name>`, a pytest node id); `coversFrozen`, the human decided it may be indicative
  * while frozen for a ticket too; `addedBy` and `addedAt`, who decided, and when.
@@ -687,6 +715,10 @@ export interface Store {
   putArtifact(a: Artifact): Promise<boolean>;
   /** A ticket's artifacts, oldest first. */
   artifacts(ticketId: string): Promise<Artifact[]>;
+  /** Appends an entry to the changelog (ORC-197), once by its id: false, and nothing written nor changed, when it is there already. */
+  appendChangelog(e: ChangelogEntry): Promise<boolean>;
+  /** The changelog entries dated in `[since, until)` (ORC-197), of one project when `projectId` is given, the most recent first. */
+  changelog(since: number, until: number, projectId?: string): Promise<ChangelogEntry[]>;
   /** A project's known flaky tests (ORC-164), oldest first. */
   knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]>;
   /** Lists a test as known flaky (ORC-164), in place of its entry if it has one. */

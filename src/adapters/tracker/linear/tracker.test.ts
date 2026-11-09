@@ -55,6 +55,18 @@ describe('LinearTracker', () => {
     });
   });
 
+  it('reads who created the issue, the requester the after_merge step mentions by their profile (ORC-197)', async () => {
+    const creator = { id: 'u-1', name: 'Lilian', url: 'https://linear.app/x/profiles/lilian' };
+    const { api } = fakeLinear({ Issue: () => ({ issue: { ...node, creator } }) });
+    expect((await new LinearTracker(api, 'app-1').getIssue('REL-1')).creator).toEqual(creator);
+    expect(Q.issue).toContain('creator { id name url }');
+    // Not in the paged list of delegated tickets, which reads 100 issues a page under Linear's cost bound.
+    expect(Q.delegated).not.toContain('creator');
+    // Created by an integration, or a user since deleted: no one to mention.
+    const none = fakeLinear({ Issue: () => ({ issue: { ...node, creator: null } }) });
+    expect(await new LinearTracker(none.api, 'app-1').getIssue('REL-1')).not.toHaveProperty('creator');
+  });
+
   it("reads the tickets an issue is « blocked by », every page of its relations, the other kinds left out (ORC-363)", async () => {
     const rel = (type: string, identifier: string, state: { name: string; type: string }) => ({ type, issue: { identifier, state } });
     const { api, calls } = fakeLinear({

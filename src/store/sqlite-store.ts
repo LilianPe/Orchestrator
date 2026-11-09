@@ -44,6 +44,7 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  type ChangelogEntry,
   type SecurityLog,
   type SecurityStats,
   type Store,
@@ -74,6 +75,8 @@ CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TE
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS changelog (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS changelog_at ON changelog (at);
 CREATE TABLE IF NOT EXISTS baselines (project_id TEXT NOT NULL, since INTEGER NOT NULL, until INTEGER NOT NULL, measure TEXT NOT NULL, computed_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, since, until, measure));
 CREATE TABLE IF NOT EXISTS known_flaky_tests (project_id TEXT NOT NULL, test TEXT NOT NULL, added_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, test));
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
@@ -795,6 +798,17 @@ export class SqliteStore implements Store {
 
   async artifacts(ticketId: string): Promise<Artifact[]> {
     return (this.db.prepare('SELECT data FROM artifacts WHERE ticket_id = ? ORDER BY seq').all(ticketId) as { data: string }[]).map((r) => JSON.parse(r.data) as Artifact);
+  }
+
+  async appendChangelog(e: ChangelogEntry): Promise<boolean> {
+    return Number(this.db.prepare('INSERT INTO changelog (id, project_id, at, data) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING').run(e.id, e.projectId, e.at, JSON.stringify(e)).changes) === 1;
+  }
+
+  async changelog(since: number, until: number, projectId?: string): Promise<ChangelogEntry[]> {
+    const rows = this.db
+      .prepare('SELECT data FROM changelog WHERE at >= ?1 AND at < ?2 AND (?3 IS NULL OR project_id = ?3) ORDER BY at DESC, id DESC')
+      .all(since, until, projectId ?? null) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as ChangelogEntry);
   }
 
   async knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]> {
