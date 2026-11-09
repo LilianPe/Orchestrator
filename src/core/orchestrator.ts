@@ -1185,16 +1185,44 @@ export class Orchestrator {
     const job = project.workflow.jobs[c.job];
     // No longer awaited (a newer push, a stop): a replayed effect checks nothing.
     if (!job || t.verifyingRunId !== c.runId) return;
-    const check = async () => {
-      if (!this.d.sandboxes) throw new Error(PUSH_NEEDS_SANDBOXES);
-      try {
-        return await this.cleanCheck(project, t, c.runId, job, { head });
-      } finally {
-        // The check's own folder: no run purges it.
-        if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
-      }
-    };
-    this.track(this.submitVerdict(project, t, c.runId, job, check));
+    // Without sandboxes there is nothing to run, so no slot to wait for: the verdict is the infrastructure failure at once.
+    if (!this.d.sandboxes) return this.track(this.submitVerdict(project, t, c.runId, job, () => Promise.reject(new Error(PUSH_NEEDS_SANDBOXES))));
+    this.withSlot(project, t.ticketId, job.queue, c.runId, (now) =>
+      this.submitVerdict(project, now, c.runId, job, async () => {
+        try {
+          return await this.cleanCheck(project, now, c.runId, job, { head });
+        } finally {
+          // The check's own folder: no run purges it.
+          if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
+        }
+      }),
+    );
+  }
+
+  /**
+   * A check runs the agent's code within the slots of `queue` (ORC-353), as its runs do: `concurrency` bounds both. It waits
+   * for a slot, then checks the ticket as it is by then, nothing if it no longer awaits that check, and drains the queue once
+   * done. A daemon that stops runs its waiting checks without a slot, as before slots counted them, and its shutdown waits
+   * for them: a check dropped would come back at the next start as a cut (`verify.lost`).
+   */
+  private withSlot(project: ProjectRuntime, ticketId: string, queue: QueueName, runId: string, check: (t: TicketState) => Promise<void>): void {
+    const key = `verify:${runId}`;
+    const run = (held: boolean) =>
+      this.track(
+        (async () => {
+          try {
+            const t = await this.ticket(project.id, ticketId);
+            if (t.verifyingRunId === runId) await check(t);
+          } finally {
+            if (held) {
+              this.d.scheduler.release(key);
+              await this.drain(queue);
+            }
+          }
+        })(),
+      );
+    if (this.stopping) return run(false);
+    void this.d.scheduler.acquire(queue, key).then((slot) => run(slot !== null));
   }
 
   /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
@@ -1326,6 +1354,7 @@ export class Orchestrator {
   stopAll(): void {
     this.stopping = true;
     this.worker.stop();
+    this.d.scheduler.cancelWaits();
     for (const runId of [...this.handles.keys()]) {
       // Ended already, its end on its way, or stopped on request: drained() waits for its end, written here.
       if (this.liveRuns.has(runId) && !this.held.get(runId)?.stopped) this.letGo(runId);
@@ -1774,23 +1803,21 @@ export class Orchestrator {
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
         if (!run || !job || t.verifyingRunId !== c.runId) return;
         if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
-        this.track(
-          (async () => {
-            if (job.red) {
-              const red = await this.checkRed(project, run, job.red.command, !!t.frozenTests);
-              const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
-              const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
-              const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
-              await this.submitResult(
-                red.verified
-                  ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
-                  : { ...base, type: 'verify.failed', payload: { ...common, failures } },
-              );
-              return;
-            }
-            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job, c.output), c.output);
-          })(),
-        );
+        this.withSlot(project, t.ticketId, job.queue, c.runId, async (now) => {
+          if (job.red) {
+            const red = await this.checkRed(project, run, job.red.command, !!now.frozenTests);
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+            const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
+            const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
+            await this.submitResult(
+              red.verified
+                ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
+                : { ...base, type: 'verify.failed', payload: { ...common, failures } },
+            );
+            return;
+          }
+          await this.submitVerdict(project, now, run.id, job, () => this.verifyWork(project, now, run, job, c.output), c.output);
+        });
         return;
       }
       case 'move':

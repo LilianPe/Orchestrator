@@ -351,7 +351,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       secret: () => githubSecret,
       accept,
       log,
-      ctx: githubMapContext({ store, forge, projects, repoOf: githubRepoOf(), now: () => clock.now() }),
+      ctx: githubMapContext({ store, forge, projects, repoOf: githubRepoOf(), now: () => clock.now(), factoryAppId: githubApp?.appId }),
     });
 
     const oauthStates = new Set<string>();

@@ -133,7 +133,7 @@ export class GhCliForge implements Forge, RepoPermissions {
           throw execFailure('gh', args, r);
         }
       } else {
-        summary = summarizeChecks(parseChecks(args, r).filter((c) => !isFactoryCheck(c.name)));
+        summary = summarizeChecks(parseChecks(args, r).filter((c) => !isFactoryCheck(c)));
       }
     }
     return {
