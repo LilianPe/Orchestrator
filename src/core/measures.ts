@@ -251,7 +251,7 @@ function redVerdicts(events: FactoryEvent[]): TicketMeasures['red'] {
   return out;
 }
 
-/** An attempt's measure, also the work the recap of Human Review sums (ORC-195). */
+/** An attempt's measure, also the work the recap of Human Review sums (ORC-195) and the run detail's (ORC-298). */
 export const runMeasure = (r: RunRecord): RunMeasure => ({
   id: r.id,
   job: r.job,

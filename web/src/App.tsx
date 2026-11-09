@@ -1,31 +1,17 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { clockTime, Flow, plural } from './Flow.js';
+import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
+import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
-import { Measures } from './Measures.js';
+import { Measures, runIdOf } from './Measures.js';
+import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
-import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunSecurity, fetchSecurity, fetchSnapshot, post, subscribe } from './api.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { FlowView, RunLine, RunSecurityView, WorkingRunView } from './types.js';
+import type { FlowView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
 const FLOW_DEBOUNCE_MS = 300;
 const MEASURES_POLL_MS = 30_000;
-
-function Line({ line }: { line: RunLine }) {
-  switch (line.kind) {
-    case 'text':
-      return <p className="line text">{line.text}</p>;
-    case 'tool':
-      return <p className="line tool"><span>{line.name}</span> {line.input}</p>;
-    case 'tool_result':
-      return line.isError ? <p className="line err">tool error</p> : null;
-    case 'result':
-      return <p className="line result">{line.isError ? 'Failed' : 'Done'} · {plural(line.turns, 'turn')} · ${line.costUsd.toFixed(2)}</p>;
-    default:
-      return null;
-  }
-}
 
 /** The durations go on between two reads: only the Flow renders each second, not the session nor the journal. */
 function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: number; frozen: boolean } & Omit<ComponentProps<typeof Flow>, 'flow' | 'elapsedMs'>) {
@@ -39,8 +25,8 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'measures' | 'security';
-const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
+type View = 'flow' | 'measures' | 'run' | 'security';
+const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
 
 /**
  * What `read` gives, read now and every 30 s while the page is shown and its tab visible, again when `deps` change; an
@@ -114,10 +100,36 @@ function SecurityPage() {
   );
 }
 
-export function App() {
-  const [view, setView] = useState<View>(() => viewOf(window.location.hash));
+/** The detail of a run (ORC-298), read when opened: a finished run's detail changes no more. */
+function RunPage({ runId }: { runId: string }) {
+  const [detail, setDetail] = useState<RunDetailView>();
+  const [failed, setFailed] = useState<'missing' | 'error'>();
   useEffect(() => {
-    const onHash = () => setView(viewOf(window.location.hash));
+    let live = true;
+    setDetail(undefined);
+    setFailed(undefined);
+    void fetchRunDetail(runId).then(
+      (d) => live && (d ? setDetail(d) : setFailed('missing')),
+      () => live && setFailed('error'),
+    );
+    return () => {
+      live = false;
+    };
+  }, [runId]);
+  return (
+    <div className="flow">
+      <p><a href="#measures">← Measures</a></p>
+      {failed && <p className="flow-failed" role="alert">{failed === 'missing' ? `No run ${runId}.` : 'Run detail unavailable: reading it failed. Reload to retry.'}</p>}
+      {detail ? <RunDetail detail={detail} now={Date.now()} /> : !failed && <section><p className="empty">Loading the run…</p></section>}
+    </div>
+  );
+}
+
+export function App() {
+  const [hash, setHash] = useState(() => window.location.hash);
+  const view = viewOf(hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -183,7 +195,7 @@ export function App() {
         <h1>{PRODUCT_NAME}</h1>
         <nav className="views">
           <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
-          <a href="#measures" aria-current={view === 'measures' ? 'page' : undefined}>Measures</a>
+          <a href="#measures" aria-current={view === 'measures' || view === 'run' ? 'page' : undefined}>Measures</a>
           <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
         </nav>
         {snap && (
@@ -203,7 +215,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
+      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

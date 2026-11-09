@@ -113,7 +113,7 @@ describe('server', () => {
       await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'The run dev failed.' });
       await store.recordEvent({ ...TRUSTED, id: 'e1', type: 'run.finished', at: 2, projectId: 'p', ticketId: 'REL-2', payload: { runId: 'r2', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' } });
 
-      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures']) {
+      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures', '/api/runs/r1', '/api/runs/r2']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(200);
         expect(await res.text(), path).not.toContain(TOKEN);
@@ -308,6 +308,65 @@ describe('server', () => {
     it('asks for the password, as the other routes of the interface', async () => {
       const { app } = await setup({ uiPassword: 'secret' });
       for (const path of ['/api/security', '/api/security/runs/r1', '/api/blocks']) expect((await app.request(path)).status, path).toBe(401);
+    });
+  });
+
+  describe('the run detail (ORC-298)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const ended = async (store: SqliteStore, endedAt: number) => {
+      const run = (await store.getRun('r1'))!;
+      await store.putRun({ ...run, status: 'success', endedAt, lastText: 'AGENT-CLAIM: merged at the first try', tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 } });
+    };
+
+    it('serves a finished run: its timeline, decisions, gates, findings, checks, cost per step and its transcript as lines', async () => {
+      const { app, store, transcriptsDir } = await setup();
+      await ended(store, 5);
+      await store.recordEvent({ ...TRUSTED, id: 'd', type: 'ticket.delegated', at: 1, projectId: 'p', ticketId: 'REL-1', actor: 'u-lilian', payload: { linearSessionId: 'ls-1' } });
+      await store.recordEvent({ ...TRUSTED, id: 'f', type: 'run.finished', at: 5, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 0.5, turns: 2, lastText: 'AGENT-CLAIM: merged at the first try', attempt: 'succeeded' } });
+      await store.recordEvent({ ...TRUSTED, id: 'v', type: 'verify.passed', at: 6, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'r1', job: 'dev', commands: ['npm test'] } });
+      writeFileSync(join(transcriptsDir, 'r1.jsonl'), [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Reading the code.' }, { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', num_turns: 2, total_cost_usd: 0.5, result: 'Done' }),
+        '{"type":"res',
+      ].join('\n'));
+      const res = await app.request('/api/runs/r1');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.run).toMatchObject({ id: 'r1', ticketId: 'REL-1', job: 'dev', status: 'success', outcome: 'succeeded', durationMs: 4 });
+      expect(body.timeline.map((e: { id: string; ofRun: boolean }) => [e.id, e.ofRun])).toEqual([['d', false], ['f', true], ['v', true]]);
+      expect(body.decisions).toEqual([expect.objectContaining({ id: 'd', who: 'u-lilian', channel: 'linear' })]);
+      expect(body.checks).toEqual([expect.objectContaining({ check: 'verify', result: 'passed', names: ['npm test'] })]);
+      expect(body.steps).toEqual([expect.objectContaining({ job: 'dev', attempts: 1, turns: 2, tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 } })]);
+      expect(body).toMatchObject({ gates: [], findings: [] });
+      expect(body.transcript).toEqual({
+        status: 'kept',
+        lines: [
+          { kind: 'text', text: 'Reading the code.' },
+          { kind: 'tool', name: 'Bash', input: 'npm test' },
+          { kind: 'result', isError: false, costUsd: 0.5, turns: 2, text: 'Done' },
+        ],
+      });
+      // The agent's last text is not the factory's to serve: only its transcript says what it wrote.
+      expect(JSON.stringify(body)).not.toContain('AGENT-CLAIM');
+    });
+
+    it('says a transcript purged at 30 days instead of failing, and one never written as such, on the simulated clock', async () => {
+      const clock = new FakeClock(10);
+      const { app, store } = await setup({ clock });
+      await ended(store, 10);
+      clock.advance(30 * DAY - 1);
+      let res = await app.request('/api/runs/r1');
+      expect(res.status).toBe(200);
+      expect((await res.json()).transcript).toEqual({ status: 'none' });
+      clock.advance(1);
+      res = await app.request('/api/runs/r1');
+      expect(res.status).toBe(200);
+      expect((await res.json()).transcript).toEqual({ status: 'purged' });
+    });
+
+    it('answers 404 for a run it does not know', async () => {
+      const { app } = await setup();
+      expect((await app.request('/api/runs/nope')).status).toBe(404);
     });
   });
 
@@ -528,7 +587,7 @@ describe('server', () => {
 
     it('requires Basic auth on the API, the UI and /oauth/start', async () => {
       const { app } = await setup({ uiPassword: 's3cret' });
-      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript']) {
+      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript', '/api/runs/r1']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(401);
         expect(res.headers.get('www-authenticate')).toMatch(/^Basic /);
