@@ -239,11 +239,14 @@ export function createLinearIngest(d: IngestDeps) {
     if (!isFresh(body, at)) return { status: 401 };
     const key = deliveryKey(body);
     const issue = issueKeyOf(body) ?? '';
+    // Kept by its kind as well: a reply and the comment Linear writes for it share `key`, and neither may drop the other.
+    const row = `${body.type}:${key}`;
+    const kept = JSON.stringify({ raw, at } satisfies Delivery);
     if (closed) {
       // Stopping: kept for the next start, which writes it; a relay could not send it again. Without a store, 503.
       if (!d.deliveries) return { status: 503 };
       try {
-        await d.deliveries.receiveDelivery(`${body.type}:${key}`, JSON.stringify({ raw, at } satisfies Delivery));
+        await d.deliveries.receiveDelivery(row, kept);
       } catch (err) {
         d.log(`webhook not kept: ${(err as Error).message}`);
         return { status: 500 };
@@ -253,13 +256,11 @@ export function createLinearIngest(d: IngestDeps) {
     // Kept, then answered: classified and written after, behind the ticket's earlier webhooks. One that waits behind
     // such a webhook goes the same way, so that the answer never waits on the model.
     if (d.classify && d.deliveries && (mayCarryMessage(body) || written.has(issue))) {
-      // Kept by its kind as well: a reply and the comment Linear writes for it share `key`, and neither may drop the other.
-      const row = `${body.type}:${key}`;
       // Read before this request's own `deliver` counts: another request keeps or delivers the row. Read after the
       // store answers, its delivery could have written and removed the row meanwhile, and the value returned be stale.
       const busy = active.has(row);
       // The value kept already, if any: undefined when this request kept it.
-      const before = d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery));
+      const before = d.deliveries.receiveDelivery(row, kept);
       void deliver(row, { delivery: { raw, at }, body }, { kept: before.then((v) => v === undefined, () => false) });
       try {
         // Kept already and delivered by no one here: delivered again, timed at its first arrival.
