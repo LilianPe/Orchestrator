@@ -40,7 +40,11 @@ export function isVerificationConfig(path: string): boolean {
 
 /** The class of a diff by its paths alone: a shared file (`package.json`...) counts whole, as `classifyBranch` refines. */
 export function classifyDiff(paths: readonly string[], sensitivePaths: readonly string[]): ClassifiedDiff {
-  const config = paths.filter(isVerificationConfig);
+  return classOf(paths.filter(isVerificationConfig), paths, sensitivePaths);
+}
+
+/** The highest class: `config`, the verification configuration among `paths`, else the sensitive ones among them. */
+function classOf(config: readonly string[], paths: readonly string[], sensitivePaths: readonly string[]): ClassifiedDiff {
   if (config.length) return { class: 'verification-config', paths: config.slice(0, CLASS_PATHS) };
   const sensitive = sensitiveMatcher(sensitivePaths);
   const touched = paths.filter((p) => sensitive(p) !== undefined);
@@ -55,19 +59,17 @@ export interface ClassRead {
 
 /**
  * The class of a branch's diff: as `classifyDiff`, but a harness file whose part the test run reads is the same at the fork
- * point and at the head (a dependency bump in `package.json`) is left out, as the freeze leaves it (`fingerprint`).
- * A file absent or unreadable on either side counts.
+ * point and at the head (a dependency bump in `package.json`) is no verification configuration, as the freeze leaves it
+ * (`fingerprint`); it still counts for `sensitive_paths`. A file absent or unreadable on either side counts.
  */
 export async function classifyBranch(paths: readonly string[], sensitivePaths: readonly string[], read: ClassRead): Promise<ClassifiedDiff> {
-  const kept: string[] = [];
-  for (const path of paths) {
-    if (isFrozenHarness(path)) {
-      const [before, after] = await Promise.all([read.atFork(path), read.atHead(path)]);
-      if (before !== undefined && after !== undefined && fingerprint(path, before) === fingerprint(path, after)) continue;
-    }
-    kept.push(path);
+  const unchanged = new Set<string>();
+  for (const path of paths.filter(isFrozenHarness)) {
+    const [before, after] = await Promise.all([read.atFork(path), read.atHead(path)]);
+    if (before !== undefined && after !== undefined && fingerprint(path, before) === fingerprint(path, after)) unchanged.add(path);
   }
-  return classifyDiff(kept, sensitivePaths);
+  // Left out of the verification configuration only: such a file may still be one of `sensitive_paths`.
+  return classOf(paths.filter((p) => isVerificationConfig(p) && !unchanged.has(p)), paths, sensitivePaths);
 }
 
 /** Whether a class waits, before publication, for a designated maintainer's `/refreeze`. Unknown (verified before ORC-198): no. */

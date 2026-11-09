@@ -510,11 +510,13 @@ export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec)
 }
 
 /**
- * A diff of the verification configuration (ORC-198) whose class asks a designated maintainer's `/refreeze` and whose freeze is
- * none: publication waits. Once refrozen, `factory/tests-gelés` holds the harness as the maintainer approved it.
+ * A diff of the verification configuration (ORC-198) whose class asks a designated maintainer's `/refreeze`, with a path the
+ * freeze of a `/refreeze` does not hold: publication waits. Once refrozen, `factory/tests-gelés` holds those files as approved.
  */
 function unapprovedConfig(ticket: TicketState | undefined, diffClass: ClassifiedDiff): boolean {
-  return needsRefreeze(diffClass.class, factoryDefault.approvers) && !ticket?.frozenTests?.refrozenBy;
+  const frozen = ticket?.frozenTests;
+  // Each path in a maintainer's freeze, where the check holds it; one outside (`.factory/**`, a workflow) was never approved.
+  return needsRefreeze(diffClass.class, factoryDefault.approvers) && !(frozen?.refrozenBy && diffClass.paths.every((p) => p in frozen.files));
 }
 
 /** The block of a diff of the verification configuration held before publication (ORC-198): a refused publication, its relaunch the same. */
@@ -1959,13 +1961,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const toPublish = publishes(job) ? event.payload.sha : undefined;
       // The class verify read of this commit; a commit found green again keeps the one read of it before (ORC-198).
       const diffClass = event.payload.diffClass ?? (event.payload.sha && event.payload.sha === ticket?.verifiedSha ? ticket.diffClass : undefined);
-      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(event.payload.diffClass ? { diffClass: event.payload.diffClass } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(event.payload.sha && diffClass !== ticket?.diffClass ? { diffClass: diffClass ?? null } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
       const pending = ticket?.pendingJob;
       if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
-      if (toPublish && diffClass && unapprovedConfig(ticket, diffClass)) return block(out, workflow, configGate(diffClass, job.name));
+      if (toPublish && diffClass && unapprovedConfig(ticket, diffClass)) return ticket?.blocked ? out : block(out, workflow, configGate(diffClass, job.name));
       if (toPublish) {
         const { runId, output, commands, visualProof } = event.payload;
         out.events.push({ type: 'verify.started', runId });

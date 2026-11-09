@@ -56,6 +56,24 @@ describe('decide — the class of the diff verify read (ORC-198)', () => {
     expect(publishes(decide(verifying({ frozenTests: { ...FROZEN, refrozenBy: 'u-lead' } }), passed(CONFIG), workflow))).toBe(true);
   });
 
+  it("holds a path a maintainer's freeze does not hold: a /refreeze approves what it froze, not what came after", () => {
+    const workflowEdit: ClassifiedDiff = { class: 'verification-config', paths: ['vitest.config.ts', '.github/workflows/ci.yml'] };
+    expect(publishes(decide(verifying({ frozenTests: { ...FROZEN, refrozenBy: 'u-lead' } }), passed(workflowEdit), workflow))).toBe(false);
+  });
+
+  it('a ticket already blocked stays as it is: no second block, nothing published', () => {
+    const t = verifying({ blocked: true, blockKind: 'human_push', blockReason: 'push refused' });
+    const out = decide(t, passed(CONFIG), workflow);
+    expect(publishes(out)).toBe(false);
+    expect(out.events.some((e) => e.type === 'ticket.blocked')).toBe(false);
+  });
+
+  it('a new commit verified without a class clears the class read of the one before', () => {
+    const t = verifying({ verifiedSha: 'old', diffClass: SENSITIVE });
+    const event = passed(undefined, 'abc');
+    expect(after(t, event, decide(t, event, workflow)).diffClass).toBeNull();
+  });
+
   it('a verdict on a commit already classified, without a class of its own (a commit found green again), keeps the gate', () => {
     expect(publishes(decide(verifying({ verifiedSha: 'abc', diffClass: CONFIG }), passed(undefined, 'abc'), workflow))).toBe(false);
     // Another commit: the class read before says nothing of it.

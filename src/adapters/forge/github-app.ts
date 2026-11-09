@@ -626,12 +626,13 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       names.push(...list.map((l) => l.name));
       if (list.length < 100) break;
     }
+    // Added first: a failure between the two leaves a label of the group, never none.
+    if (!names.includes(label)) await this.call('POST', path, token, { labels: [label] });
     for (const other of names.filter((n) => n !== label && group.includes(n))) {
       await this.call('DELETE', `${path}/${encodeURIComponent(other)}`, token).catch((err: unknown) => {
         if (!(err instanceof GitHubApiError && err.status === 404)) throw err;
       });
     }
-    if (!names.includes(label)) await this.call('POST', path, token, { labels: [label] });
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

@@ -59,6 +59,11 @@ describe('classifyBranch (ORC-198)', () => {
     expect(await classifyBranch(['jest.config.js'], [], files({ 'jest.config.js': 'module.exports = {}' }, {}))).toMatchObject({ class: 'verification-config' });
   });
 
+  it('a shared file left out of the verification configuration still counts for sensitive_paths', async () => {
+    const read = files({ 'package.json': pkg({ test: 'vitest' }, { a: '1' }) }, { 'package.json': pkg({ test: 'vitest' }, { a: '2' }) });
+    expect(await classifyBranch(['package.json'], ['package.json'], read)).toEqual({ class: 'sensitive', paths: ['package.json'] });
+  });
+
   it('reads nothing for a path that is no harness', async () => {
     const read = { atFork: async () => { throw new Error('read'); }, atHead: async () => { throw new Error('read'); } };
     expect(await classifyBranch(['src/a.ts', '.github/workflows/ci.yml'], [], read)).toEqual({ class: 'verification-config', paths: ['.github/workflows/ci.yml'] });

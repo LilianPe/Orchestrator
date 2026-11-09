@@ -848,9 +848,10 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     it("takes the group's other label off and adds the one asked, leaving the PR's other labels alone", async () => {
       const { forge, calls } = makeForge([tokenRoute(42), labels(['bug', 'revue: auto']), writes], { installationId: 42 });
       await forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP);
+      // Added before the other is taken off: a failure between the two never leaves the PR without one.
       expect(written(calls)).toEqual([
-        ['DELETE', `${LABELS}/revue: auto`, undefined],
         ['POST', LABELS, { labels: ['revue: requise'] }],
+        ['DELETE', `${LABELS}/revue: auto`, undefined],
       ]);
     });
 

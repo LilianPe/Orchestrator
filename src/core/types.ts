@@ -541,8 +541,8 @@ export interface TicketState {
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
-  /** The class of the diff of `verifiedSha` against the default branch (ORC-198), as `verify` read it. Absent before ORC-198. */
-  diffClass?: ClassifiedDiff;
+  /** The class of the diff of `verifiedSha` against the default branch (ORC-198), as `verify` read it. Absent before ORC-198, null for a commit verified without one. */
+  diffClass?: ClassifiedDiff | null;
   /**
    * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
    * `''` when that head was not read or the run came before the mark existed: from then on, what the agent's commits
