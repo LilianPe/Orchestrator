@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
 import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, post, subscribe } from './api.js';
-import { clockTime, Flow, plural } from './Flow.js';
+import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { FlowView, MeasuredTicketView, RunDetailView, RunLine, WorkingRunView } from './types.js';
+import type { FlowView, MeasuredTicketView, RunDetailView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
