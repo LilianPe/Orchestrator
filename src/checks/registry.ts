@@ -12,6 +12,9 @@ export interface PackageRegistry {
   lookup(ecosystem: Ecosystem, name: string): Promise<RegistryLookup>;
 }
 
+/** The registries opened for the check `id` and closed after it, by the daemon through the egress proxy (ORC-371). */
+export type RegistryOpener = (id: string) => Promise<{ registry: PackageRegistry; close: () => Promise<void> }>;
+
 export interface HttpPackageRegistryOptions {
   /** Injected so the egress proxy (ORC-213) can carry the requests; defaults to the global `fetch`. */
   fetch?: typeof fetch;

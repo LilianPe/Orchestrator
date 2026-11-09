@@ -165,6 +165,12 @@ export class EgressProxy {
     return this.tls.ca.certPath;
   }
 
+  /** The CA certificate itself, for the daemon's own requests through a run (ORC-371): under compose, the daemon does not mount its folder. */
+  get caCertPem(): string {
+    if (!this.tls) throw new Error('egress: no run opened yet, so no CA');
+    return this.tls.ca.certPem;
+  }
+
   socketPath(runId: string): string {
     // Hashed: a Unix socket path is capped near 108 bytes. In a dir of its own, the sandbox's mount:
     // bound anew after a daemon restart, the living container sees it (ORC-220).
