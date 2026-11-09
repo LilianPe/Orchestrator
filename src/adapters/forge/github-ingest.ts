@@ -65,7 +65,7 @@ export function githubMapContext(d: {
       return project && t.branch ? d.forge.findPr(project.repoPath, t.branch) : undefined;
     },
     now: d.now,
-    ...(d.factoryAppId ? { factoryAppId: d.factoryAppId } : {}),
+    factoryAppId: d.factoryAppId,
   };
 }
 

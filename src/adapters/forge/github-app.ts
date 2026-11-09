@@ -166,7 +166,7 @@ const isCheckRun = (r: unknown): r is Pick<CheckRunDto, 'name' | 'status' | 'con
   typeof r.name === 'string' &&
   typeof r.status === 'string' &&
   (r.conclusion === null || typeof r.conclusion === 'string') &&
-  (r.app === undefined || r.app === null || (isRecord(r.app) && typeof r.app.id === 'number'));
+  (r.app == null || (isRecord(r.app) && typeof r.app.id === 'number'));
 
 const isPull = (p: unknown): p is PullRequestDto =>
   isRecord(p) &&

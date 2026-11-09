@@ -9,7 +9,7 @@ import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
-import { branchName } from '../core/naming.js';
+import { branchName, FACTORY_BRANCHES } from '../core/naming.js';
 
 /**
  * Branches as the factory names them (`branchName`, ORC-353): a team key for every initial (one with a digit too), numbers
@@ -18,9 +18,12 @@ import { branchName } from '../core/naming.js';
  * every branch (docs/github.md).
  */
 const PROBE_TITLES = ['', 'Fix the login', '2026 : Été', 'x'.repeat(60), 'a-b c', 'Upgrade to v2', '42'];
-const FACTORY_PROBES = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'].flatMap((key, i) =>
-  PROBE_TITLES.map((title, j) => branchName(`${key}-${[1, 42, 353, 70000][(i + j) % 4]}`, title)),
-);
+let probes: string[] | undefined;
+/** Built once, on first use: the CLI imports doctor for every command. */
+const factoryProbes = (): string[] =>
+  (probes ??= [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'].flatMap((key, i) =>
+    PROBE_TITLES.map((title, j) => branchName(`${key}-${[1, 42, 353, 70000][(i + j) % 4]}`, title)),
+  ));
 
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
@@ -60,12 +63,13 @@ interface ParsedWorkflow {
   triggers: Map<string, TriggerFilters>;
   jobEnvironments: Map<string, string>;
   environmentNames: string[];
-  jobIds: string[];
   hasSecrets: boolean;
   /** Jobs that can see a secret; every job when a workflow-level value references one. */
   secretJobs: string[];
   /** Jobs whose GITHUB_TOKEN can write, by job, with their rights. */
   tokenWrites: Map<string, string>;
+  /** Jobs that can see a secret or a writable GITHUB_TOKEN, in the workflow's order. */
+  sensitiveJobs: string[];
 }
 
 type ParseResult = { ok: true; workflow: ParsedWorkflow } | { ok: false; reason: string };
@@ -251,10 +255,11 @@ function parseWorkflow(content: string): ParseResult {
       triggers: parsedOn,
       jobEnvironments,
       environmentNames,
-      jobIds: [...jobs.keys()],
       hasSecrets: rootSecrets || secretJobs.length > 0,
       secretJobs,
       tokenWrites,
+      // A writable GITHUB_TOKEN is a secret by what it can do on the repository (ORC-353): it pushes, tags, releases.
+      sensitiveJobs: [...jobs.keys()].filter((jobId) => secretJobs.includes(jobId) || tokenWrites.has(jobId)),
     },
   };
 }
@@ -292,10 +297,10 @@ function globToRegExp(glob: string): RegExp {
 
 function canMatchFactory(pattern: string): boolean {
   // A pattern of the factory's own space may name a team key no probe has: it reaches, fail closed.
-  if (pattern.startsWith('factory/')) return true;
+  if (pattern.startsWith(FACTORY_BRANCHES)) return true;
   try {
     const regexp = globToRegExp(pattern);
-    return FACTORY_PROBES.some((probe) => regexp.test(probe));
+    return factoryProbes().some((probe) => regexp.test(probe));
   } catch {
     // Unreadable glob: fail closed, the workflow may reach a factory branch.
     return true;
@@ -306,7 +311,7 @@ function canMatchFactory(pattern: string): boolean {
 function coversAllFactoryBranches(pattern: string): boolean {
   try {
     const regexp = globToRegExp(pattern);
-    return FACTORY_PROBES.every((probe) => regexp.test(probe));
+    return factoryProbes().every((probe) => regexp.test(probe));
   } catch {
     // Unreadable glob: fail closed, it is not read as excluding the factory's branches.
     return false;
@@ -404,8 +409,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     requiredReviewers: environments.get(name)?.requiredReviewers === true,
   }));
   const exposure = exposureReasons(workflow.triggers);
-  // A writable GITHUB_TOKEN is a secret by what it can do on the repository (ORC-353): it pushes, tags, releases.
-  const sensitiveJobs = workflow.jobIds.filter((jobId) => workflow.secretJobs.includes(jobId) || workflow.tokenWrites.has(jobId));
+  const { sensitiveJobs } = workflow;
   const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
 

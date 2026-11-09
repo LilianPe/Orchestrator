@@ -119,7 +119,7 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
   const check = body[kind];
   if (body.action !== 'completed' || typeof check?.head_sha !== 'string') return NOTHING;
   // The factory's own verdict is no CI; its check suite, named by no check, the forge's reading below leaves out.
-  if (kind === 'check_run' && isFactoryCheck({ ...check, name: check.name ?? '' }, ctx.factoryAppId)) return NOTHING;
+  if (kind === 'check_run' && isFactoryCheck({ name: check.name ?? '', app: check.app }, ctx.factoryAppId)) return NOTHING;
   const found = await checkedPr(repo, check, ctx);
   if (!found) return NOTHING;
   const { ticket: t, ref } = found;

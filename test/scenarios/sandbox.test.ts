@@ -1,6 +1,6 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
@@ -142,17 +142,13 @@ describe('a disposable sandbox per attempt', () => {
         return { ok: true, failures: [], sha: 'abc', tree: 'tree' };
       },
     });
-    const until = async (cond: () => Promise<boolean>) => {
-      for (let i = 0; i < 2000 && !(await cond()); i++) await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(await cond()).toBe(true);
-    };
     const first = delegate(h);
     await inVerify;
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     const second = h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
     // REL-2 is in line behind the check, not started beside it.
     const runsOf = (id: string) => h.runner.requests.filter((r) => r.prompt.includes(id));
-    await until(async () => runsOf('REL-2').length > 0 || (await h.store.listQueue()).some((q) => q.ticketId === 'REL-2'));
+    await vi.waitFor(async () => expect(runsOf('REL-2').length > 0 || (await h.store.listQueue()).some((q) => q.ticketId === 'REL-2')).toBe(true), { timeout: 10_000 });
     expect(runsOf('REL-2')).toEqual([]);
     open();
     await Promise.all([first, second]);
