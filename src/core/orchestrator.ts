@@ -51,7 +51,7 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { AUTHZ_REFUSED, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { runMeasure } from './measures.js';
@@ -1050,7 +1050,7 @@ export class Orchestrator {
    */
   private async journalOf(project: ProjectRuntime, t: TicketState): Promise<{ events: FactoryEvent[]; refused: Set<string> }> {
     const entries = await this.d.store.ticketJournal(project.id, t.ticketId);
-    const refused = new Set(entries.filter((j) => j.decision?.trace?.some((l) => l.startsWith(AUTHZ_REFUSED))).map((j) => j.event.id));
+    const refused = new Set(entries.filter((j) => authzRefusal(j.decision?.trace ?? [])).map((j) => j.event.id));
     return { events: entries.map((j) => upcast(j.event)), refused };
   }
 

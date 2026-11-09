@@ -69,12 +69,8 @@ const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompt
  * review with GitHub webhooks off) is not in the journal, so not here either.
  */
 export function ingestedConversation(events: readonly FactoryEvent[], refused: ReadonlySet<string> = new Set()): FeedbackItem[] {
-  return events.flatMap((e) => {
-    if (e.taint === 'untrusted' || !CONVERSATION.has(e.type) || refused.has(e.id)) return [];
-    const { author, body, kind } = (e as FactoryEvent<'session.prompted' | 'ticket.commented'>).payload;
-    if (kind === 'command' || !body.trim()) return [];
-    return [{ author, ...(e.actor ? { authorId: e.actor } : {}), body, at: e.at, source: 'session' as const, ...(kind ? { kind } : {}), taint: 'trusted' as const }];
-  });
+  const given = events.filter((e): e is HumanMessage => e.taint !== 'untrusted' && CONVERSATION.has(e.type) && !refused.has(e.id));
+  return forAgent(given.map((e) => messageItem(e, 'session'))).filter((i) => i.body.trim());
 }
 
 /** A review without a word (an approval, most often): it brings nothing a run reads. */
@@ -745,9 +741,14 @@ const commandText = (event: FactoryEvent<'command'>): string => `${event.payload
 
 /** Records a human message: it waits in humanInbox for the next run that consumes it (I6), its taint with it (I12). */
 function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread'): void {
+  out.events.push({ type: 'feedback.appended', item: messageItem(event, source) });
+}
+
+/** A human message as an agent is handed it: kept in humanInbox (`keepMessage`), or given to `learn` (`ingestedConversation`). */
+function messageItem(event: HumanMessage, source: 'session' | 'thread'): FeedbackItem {
   const { author, kind } = event.payload;
   const body = event.type === 'command' && kind ? commandText(event) : event.payload.body;
-  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
+  return { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) };
 }
 
 /**
@@ -831,6 +832,8 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
 
 /** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
 export const AUTHZ_REFUSED = 'authz: refused ';
+/** The trace of a decision the authorization matrix refused (ORC-186): its refusal line, else undefined. */
+export const authzRefusal = (trace: readonly string[]): string | undefined => trace.find((t) => t.startsWith(AUTHZ_REFUSED));
 
 /**
  * Checks the matrix on the event's signed actor and the roles journaled with it (ORC-186). A refusal is
