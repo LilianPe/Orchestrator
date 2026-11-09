@@ -73,6 +73,8 @@ export interface RunRecord {
   infra?: true;
   /** The limits it was launched with when they are not its job's: the ticket's token budget lowered them (ORC-340). A reattach keeps them. */
   limits?: RunLimits;
+  /** The Claude account it was launched on (`claude.active`, ORC-215): a usage limit holds that one, whatever is active by its end. Absent on older records. */
+  account?: string;
   /** The subscription's usage limit stopped the attempt (ORC-340). */
   usageLimit?: { resetAt?: number };
   /** The cap of its budget that stopped the attempt (ORC-216): recover() sends it again with its result. */
