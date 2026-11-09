@@ -14,7 +14,7 @@ import type { StepSettings } from './load-workflow.js';
 export interface FactoryYml {
   linear?: { clientId?: string; clientSecret?: string; webhookSecret?: string };
   github?: { appId: string; privateKey: string; installationId?: string; webhookSecret?: string };
-  /** `effort` is applied by `stepSettings` (ORC-136); the rest of the choice of account waits for ORC-215. */
+  /** `effort` is applied by `stepSettings` (ORC-136); `accounts` and `active` read again at each launch by `claudeAccountReader` (ORC-215). */
   claude?: {
     runtime: 'claude-code';
     accounts: { name: string; token: string }[];
@@ -39,9 +39,59 @@ export interface FactoryYml {
 /** Sealing purges the files that hold a secret: a value this short would be found in many that do not. */
 const MIN_REPO_SECRET_LENGTH = 8;
 
-/** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). ORC-215 owns the choice of the account. */
+/** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). */
 export function activeClaudeToken(yml: FactoryYml | undefined): string | undefined {
   return claudeToken(yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token, 'claude.active in factory.yml');
+}
+
+/** The account runs use (ORC-215): `name` absent when it is the daemon's own `CLAUDE_CODE_OAUTH_TOKEN`, `token` absent when none is set. */
+export interface ClaudeAccount {
+  name?: string;
+  token?: string;
+}
+
+/**
+ * The Claude account runs use (ORC-215): `claude.active` of `<home>/factory.yml` with its token, else the daemon's
+ * `CLAUDE_CODE_OAUTH_TOKEN`. The file is read at each call and its `claude` section parsed again when the text changed:
+ * a change of `active` counts from the next launch, without a restart. The first read throws as the daemon's start does;
+ * a later file whose section does not parse keeps the last account, logged once for that text.
+ */
+export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = process.env, log: (m: string) => void = () => {}): () => ClaudeAccount {
+  const file = join(home, 'factory.yml');
+  const read = () => (existsSync(file) ? readFileSync(file, 'utf8') : undefined);
+  const resolve = (text: string | undefined): ClaudeAccount => {
+    const claude = text === undefined ? undefined : section(text, 'claude');
+    const yml = claude === undefined ? undefined : parseFactoryYml(stringify({ claude }), env);
+    const chosen = activeClaudeToken(yml);
+    if (chosen) return { name: yml!.claude!.active, token: chosen };
+    const own = claudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
+    return own ? { token: own } : {};
+  };
+  let text = read();
+  let current = resolve(text);
+  return () => {
+    try {
+      const next = read();
+      if (next === text) return current;
+      text = next;
+      current = resolve(next);
+    } catch (err) {
+      log(`Warning: factory.yml: the Claude account is not read again, ${current.name ?? 'default'} stays active: ${(err as Error).message}`);
+    }
+    return current;
+  };
+}
+
+/** The value of a top-level key of the file, undefined when absent or null. Unreadable YAML is a FactoryYmlError. */
+function section(text: string, key: string): unknown {
+  let raw: unknown;
+  try {
+    raw = parse(text);
+  } catch (err) {
+    throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
+  }
+  const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>)[key] : undefined;
+  return value ?? undefined;
 }
 
 /**
@@ -96,15 +146,8 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
 export function loadFactoryBudgets(home: string): FactoryYml['budgets'] {
   const file = join(home, 'factory.yml');
   if (!existsSync(file)) return undefined;
-  let raw: unknown;
-  try {
-    raw = parse(readFileSync(file, 'utf8'));
-  } catch (err) {
-    if (err instanceof Error && 'code' in err) throw err;
-    throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
-  }
-  const budgets = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>)['budgets'] : undefined;
-  return budgets === undefined || budgets === null ? undefined : parseFactoryYml(stringify({ budgets })).budgets;
+  const budgets = section(readFileSync(file, 'utf8'), 'budgets');
+  return budgets === undefined ? undefined : parseFactoryYml(stringify({ budgets })).budgets;
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */

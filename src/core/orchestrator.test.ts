@@ -510,6 +510,24 @@ describe('Orchestrator', () => {
       expect(await orch.usageLimitedUntil()).toBeUndefined();
     });
 
+    it('the hold is the account the run was launched on, even when `active` changed under it (ORC-215)', async () => {
+      let account = 'acc-1';
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait', account: () => account });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 }, hold: true });
+      await orch.accept(delegated());
+      await orch.drained();
+      const runId = runner.requests[0]!.runId;
+      expect(await store.getRun(runId)).toMatchObject({ account: 'acc-1' });
+      account = 'acc-2';
+      runner.release(runId);
+      await orch.drained();
+      expect(await orch.usageLimitedUntil()).toBeUndefined();
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ kind: 'usage.reset', payload: { account: 'acc-1' } }]);
+      account = 'acc-1';
+      expect(await orch.usageLimitedUntil()).toBe(1_000_000);
+    });
+
     it('a store that fails to record the hold never holds back the result: the step still waits for its reset', async () => {
       const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
       tracker.addIssue({ identifier: 'REL-1', title: 'A' });
