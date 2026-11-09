@@ -180,7 +180,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: chosenClaudeToken, sandboxClaudeToken: claudeTokenOf, log, ...(sandboxes ? { sandboxes } : {}) });
-    const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath, log });
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, log });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
       : new GhCliForge();
@@ -247,7 +247,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // The account whose token the runner and the proxy use (`claudeAccount` above): `claude.active` when its token is the one resolved,
       // else the daemon's CLAUDE_CODE_OAUTH_TOKEN, held as `default`. A usage limit holds the launches of that account only (ORC-340).
       claudeAccount: () => claudeAccount().name,
-      knowledgeConfigured: !!instance.knowledge,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       repoConfig: makeRepoConfig({ log }),

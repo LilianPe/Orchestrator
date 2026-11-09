@@ -17,7 +17,6 @@ export const REFUSAL_RULES = [
   'push-trunk',
   'push',
   'full-read',
-  'forge-read',
 ] as const;
 
 /** Postgres text and jsonb refuse NUL: a line carrying one would fail the whole write. */

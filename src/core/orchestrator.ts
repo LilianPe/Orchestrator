@@ -21,7 +21,7 @@ import {
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
-import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
+import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
@@ -53,7 +53,7 @@ import type { Effect } from './decision.js';
 import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork } from './intake-checks.js';
@@ -64,7 +64,7 @@ import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
-import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
+import { MERGE_PUSHED, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
 import type { Scheduler } from './scheduler.js';
 import {
   CREATES_TICKET,
@@ -259,8 +259,6 @@ export interface OrchestratorDeps {
   newId?: () => string;
   activityIntervalMs?: number;
   beforeRun?: (run: RunRecord) => Promise<void>;
-  /** False when no knowledge repo is configured: `knowledge` jobs (learn, remember) are then skipped. Default true. */
-  knowledgeConfigured?: boolean;
   /**
    * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
@@ -363,6 +361,13 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (job.queue === 'dev') return 'reviewer';
   return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
 }
+
+/** A job the factory launches: not a `knowledge` one (`learn`, `remember`) of a version frozen before ORC-193. */
+type AwakeJob = JobSpec & { workspace: WorkspaceKind };
+const awake = (job: JobSpec): job is AwakeJob => job.workspace !== 'knowledge';
+
+/** The answer in its session to a `remember` of a version frozen before ORC-193, which no longer runs. */
+const MEMORY_ASLEEP = `${PRODUCT_NAME} no longer writes to its knowledge base: I record nothing.`;
 
 /** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
 function checksPermission(err: { status?: number }): string {
@@ -1205,16 +1210,6 @@ export class Orchestrator {
   private async untrustedMark(project: ProjectRuntime, t: TicketState): Promise<UntrustedMark | undefined> {
     const since = (await this.readUntrusted(project, t)).untrustedSince;
     return since === null || since === undefined ? undefined : { since, humanPushes: t.humanPushes ?? [] };
-  }
-
-  /**
-   * The ticket's journal, as a knowledge job reads the ticket: its taint (`historyTaint`, ORC-349) and its conversation
-   * (`ingestedConversation`, ORC-361), with the events whose decision the authorization matrix refused.
-   */
-  private async journalOf(project: ProjectRuntime, t: TicketState): Promise<{ events: FactoryEvent[]; refused: Set<string> }> {
-    const entries = await this.d.store.ticketJournal(project.id, t.ticketId);
-    const refused = new Set(entries.filter((j) => authzRefusal(j.decision?.trace ?? [])).map((j) => j.event.id));
-    return { events: entries.map((j) => upcast(j.event)), refused };
   }
 
   /** The one-time read of `untrustedMark`, for a ticket the mark has not seen; the ticket as it is otherwise. */
@@ -2261,11 +2256,13 @@ export class Orchestrator {
       this.log('info', `refused ${job.name} on ${ticketId}: a check passed since the failures it was to fix`);
       return 'done';
     }
-    if (job.workspace === 'knowledge' && this.d.knowledgeConfigured === false) {
-      this.log('info', `skipped ${job.name} on ${ticketId}: no knowledge repo configured`);
+    // The memory in writing sleeps (ORC-193): a version frozen before keeps its `learn` and `remember`, decided as they were,
+    // never launched.
+    if (!awake(job)) {
+      this.log('info', `refused ${job.name} on ${ticketId}: the memory in writing sleeps`);
       if (opts.linearSessionId) {
         await this.d.tracker
-          .activity(opts.linearSessionId, { type: 'response', body: `No knowledge base is configured for ${PRODUCT_NAME}: I cannot remember anything.` })
+          .activity(opts.linearSessionId, { type: 'response', body: MEMORY_ASLEEP })
           .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
       }
       return 'done';
@@ -2385,7 +2382,7 @@ export class Orchestrator {
   private async launch(
     project: ProjectRuntime,
     ticketId: string,
-    job: JobSpec,
+    job: AwakeJob,
     opts: StartOpts,
     slot: number,
     key: string,
@@ -2405,7 +2402,7 @@ export class Orchestrator {
   private async launchRun(
     project: ProjectRuntime,
     ticketId: string,
-    job: JobSpec,
+    job: AwakeJob,
     opts: StartOpts,
     slot: number,
     key: string,
@@ -2580,24 +2577,11 @@ export class Orchestrator {
       const consumes = kind === 'feedback' || stepInbox.length > 0;
       const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
-      // session, what its earlier attempts read, which the branch's mark keeps (ORC-338); a knowledge job, whatever its
-      // input, the ticket and its PR (`gh`, `/agent/issue`), so their whole history too. The mark read here serves below.
-      const knowledge = job.workspace === 'knowledge';
-      const readsTicket = !fedUntrusted && (resume || knowledge);
+      // session, what its earlier attempts read, which the branch's mark keeps (ORC-338). The mark read here serves below.
+      const readsTicket = !fedUntrusted && resume;
       const seen = readsTicket ? await state(this.readUntrusted(project, t)) : t;
       const marked = typeof seen.untrustedSince === 'string';
-      const journal = readsTicket && knowledge && !marked ? await state(this.journalOf(project, t)) : undefined;
-      const history = readsTicket && (marked || (!!journal && historyTaint(journal.events) === 'untrusted'));
-      const sensitivePaths = fedUntrusted ?? (history ? SENSITIVE_PATHS : undefined);
-      if (sensitivePaths && knowledge) {
-        // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
-        this.d.scheduler.release(key);
-        this.log('warn', `refused ${job.name} on ${ticketId}: it would write the knowledge base from untrusted content`);
-        await tracker
-          .activity(linearSessionId, { type: 'response', body: taintedKnowledge(job.name, fedUntrusted ? 'read' : 'history') })
-          .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
-        return;
-      }
+      const sensitivePaths = fedUntrusted ?? (readsTicket && marked ? SENSITIVE_PATHS : undefined);
 
       const claudeSessionId = held ?? this.newId();
       const sessionRole = roleOf(job, ticketSession);
@@ -2662,9 +2646,6 @@ export class Orchestrator {
         activeWork,
         // intake's leads to existing code (ORC-207), for the dev work that follows it.
         reuse: job.queue === 'dev' && job.step !== 'intake' && t.reuse?.length ? formatReuse(t.reuse) : undefined,
-        // A knowledge job without an input (`learn` after a merge) is given what the factory ingested of the ticket, and reads
-        // nothing else of the forge but the merged diff (ORC-361): a comment never ingested carries no taint.
-        conversation: journal && !input ? ingestedConversation(journal.events, journal.refused) : undefined,
         ...(job.lens ? { lens: job.lens } : {}),
         ...(reviewed ? { commit: reviewed } : {}),
         resumedAfterCut: !!opts.relaunchOf && resume,
@@ -2761,7 +2742,6 @@ export class Orchestrator {
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
           // Read by the pack's PreToolUse hook: a knowledge run reads of the forge only its ticket's merged diff (ORC-361).
-          ...(knowledge ? { FACTORY_KNOWLEDGE_RUN: '1', FACTORY_PR_URL: t.prUrl ?? '' } : {}),
           ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,

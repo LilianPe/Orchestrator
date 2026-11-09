@@ -10,12 +10,11 @@ import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { runInit, type InitIO } from './init.js';
 
-function scriptedIO(answers: string[], confirms: boolean[]): InitIO & { printed: string[] } {
+function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   const printed: string[] = [];
   return {
     printed,
     ask: async (_q, def) => answers.shift() || def || '',
-    confirm: async (_q, def) => confirms.shift() ?? def ?? false,
     print: (s) => void printed.push(s),
   };
 }
@@ -32,7 +31,7 @@ async function initWorkflow(files: Record<string, string>, o: { python?: boolean
   const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   if (o.python) copyPythonRepo(repo);
   for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
-  const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret', ''], [false]);
+  const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret', '']);
   await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
   return { wf: loadWorkflow({ packDir, projectFile: join(repo, '.factory/workflow.yml') }), printed: io.printed.join('\n') };
 }
@@ -51,7 +50,7 @@ describe('factory init', () => {
         return { stdout: '', stderr: 'x', code: 1 };
       }
     };
-    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret', ''], [false]);
+    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret', '']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: realExec });
 
     const cfg = loadInstance(home);
@@ -115,7 +114,6 @@ describe('factory init', () => {
         if (!answers.length) throw new Error(`no more answers (${q})`);
         return answers.shift() || def || '';
       },
-      confirm: async () => false,
       print: () => {},
     };
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
@@ -132,7 +130,7 @@ describe('factory init', () => {
     saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project], limits: {} });
     const exec: Exec = async (cmd, args) =>
       cmd === 'git' && args[0] === 'rev-parse' ? { stdout: '', stderr: 'not a git repository', code: 128 } : { stdout: '', stderr: '', code: 0 };
-    const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret', ''], [false]);
+    const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret', '']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
     expect(loadInstance(home).projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
   });

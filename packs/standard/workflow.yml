@@ -32,11 +32,9 @@ on:
   # A reply to the blocking comment, written on the ticket. `dev-feedback` stands for a block with no step of its own (ORC-196).
   ticket.commented:
     - { when: "blocked", run: dev-feedback }
+  # A mention asks a question. The memory in writing sleeps (ORC-193): no `retiens` command, a `retiens` is a message as any other.
   session.mentioned:
     - { run: ask }
-  command:
-    - { say: retiens, run: remember }
-    - { say: "fais-le", do: propose_delegate }
   label.changed:
     - { label: "agent:stop", do: stop }
   session.stopped:
@@ -48,8 +46,9 @@ on:
   # During another step, the rebase waits for that work to end: the agent at work never resolves the conflict.
   pr.conflicted:
     - { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }
+  # The memory in writing sleeps (ORC-193): a merge starts no run.
   pr.merged:
-    - { move: done, do: cleanup, run: learn }
+    - { move: done, do: cleanup }
 jobs:
   # The `intake` step of factory/default (ORC-206): reads the ticket and the code, returns size, risk, completeness and
   # screen through `submit_result`. Its end is the guard before In Progress: a complete ticket starts `dev`, an
@@ -176,16 +175,4 @@ jobs:
     skill: "factory:ask"
     input: thread
     limits: { turns: 30, duration: 5m }
-    on_success: { post: reply }
-  learn:
-    queue: questions
-    model: haiku
-    workspace: knowledge
-    session: new
-    skill: "factory:learn"
-    limits: { turns: 40, duration: 10m }
-    on_success: {}
-  remember:
-    extends: learn
-    input: thread
     on_success: { post: reply }

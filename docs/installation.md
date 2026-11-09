@@ -62,7 +62,6 @@ All of the instance's state lives in **`RELAIS_HOME`**, by default `~/.relais` (
 | `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`operations.md`](operations.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
 | `workspaces/<project>/<ticket>/` | Git worktree of each ticket in progress. | — |
 | `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |
-| `workspaces/_kb/<runId>/` | Worktrees of the knowledge repository for `learn` / `remember` runs. | — |
 | `logs/` | Created at startup but not used yet: the daemon's logs go to standard output. | — |
 | `knowledge/` | Location targeted by `relais init` for the knowledge repository (see [`projects-and-workspaces.md`](projects-and-workspaces.md#shared-knowledge-base)). | — |
 

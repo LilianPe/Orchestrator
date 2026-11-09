@@ -194,7 +194,7 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(by('session.prompted').event).toMatchObject({ taint: 'untrusted' });
     expect(by('session.prompted').event).not.toHaveProperty('actor');
     expect(by('timer.fired').decision?.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'fix-human', sensitivePaths: expect.any(Array) })]);
-    expect(by('command').decision?.trace).toContain('taint: refused remember');
+    expect(by('session.mentioned').decision?.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'ask', sensitivePaths: expect.any(Array) })]);
     expect(replayJournal(journal).divergences).toEqual([]);
   });
 

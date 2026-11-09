@@ -98,7 +98,6 @@ export function promptTemplate(p: PromptInput): string {
     reuse: p.reuse && '<REUTILISER>',
     commit: p.commit && '<COMMIT>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
-    conversation: p.conversation && (p.conversation.length ? [{ author: '<AUTEUR>', body: '<MESSAGE>', at: 0, source: 'session' }] : []),
   });
 }
 

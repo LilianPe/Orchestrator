@@ -105,7 +105,7 @@ On each repository entrusted to Relais, the `gh` account must be able to:
 | Read checks and CI logs | daemon, agents | `gh pr checks`, `gh run view --log-failed` |
 | Read review threads | daemon | `gh api graphql` (`reviewThreads`) |
 
-With a fine-grained token: *Contents*, *Pull requests*, *Actions* and *Checks* read, *Metadata* read. With a classic token: `repo` scope. For `relais init` → « Create a private GitHub repository "relais-knowledge" », the account must also be able to create a repository.
+With a fine-grained token: *Contents*, *Pull requests*, *Actions* and *Checks* read, *Metadata* read. With a classic token: `repo` scope.
 
 ## Human permissions
 
@@ -129,7 +129,7 @@ Events produced (see [`workflow.md`](workflow.md#3-the-on-rules)):
 | New PR for the branch | `pr.opened` | URL added to the Linear session |
 | CI turning red | `pr.checks_failed` (with the list of failing checks) | `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (`limits.ci_fix_attempts`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`workflow.md`](workflow.md#limits)) |
 | CI turning green | `pr.checks_passed` | lifts the block caused by the red-CI limit; the count of the loop stays, one per run (ORC-184) |
-| PR merged | `pr.merged` | *Done*, worktree deleted, `learn`; after that, no more code runs on the ticket |
+| PR merged | `pr.merged` | *Done*, worktree deleted, no run (ORC-193); after that, no more code runs on the ticket |
 | Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |
 | PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`workflow.md`](workflow.md#configurable-events)) |
 
