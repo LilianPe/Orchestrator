@@ -30,7 +30,7 @@ To unblock it: **reply in the ticket** (comment, or the agent's session): the bl
 
 ## Pause
 
-`relais pause` (or the UI button): no run starts any more, requests stay queued; runs in progress finish. `relais resume` resumes. The pause state survives a restart. Useful before maintenance, an upgrade, or to stop spending without stopping the daemon (webhooks and reconciliation keep going).
+`relais pause` (or the UI button): no run starts any more, requests stay queued; runs in progress finish. `relais resume` resumes. The pause state survives a restart. A pause holds every request accepted after it, from the moment it is recorded: a delegation that follows it at once starts no run, even if it is decided first (ORC-335). Useful before maintenance, an upgrade, or to stop spending without stopping the daemon (webhooks and reconciliation keep going).
 
 To stop a single ticket: `relais stop <ID>`, the Stop button, the `agent:stop` label, or stop in the Linear session.
 
@@ -60,7 +60,7 @@ The SQLite schema is defined in `src/store/sqlite-store.ts`; the `data` columns 
 
 ## Measures (ORC-235)
 
-The measures from the MVP doc are collected from the first run. The dashboard shows them on its **Measures** page (`#measures`, ORC-223), read from `GET /api/measures` (the 50 most recently updated tickets, read-only), plus the tokens of the Flow (ORC-297). They are not copied into a separate table: the database keeps the facts, and `measureTicket(store, projet, ticket)` (`src/core/measures.ts`) computes them on demand, purely (same facts, same measures). The facts read (`Store.measureFacts`): the ticket's journal in order, its attempts (`attempts` / `runs`, with their ORC-226 labels, which allows slicing each measure by label), its outbox rows and the acknowledgement time of its inbox events. Two facts were recorded nowhere and now are: each attempt's tokens and the acknowledgement time of a webhook. **No measure is read from an agent's text** (last message, `run.finished.lastText`): tokens come from the `result` line of `claude -p`, the rest from factory events and effects.
+The measures from the MVP doc are collected from the first run. The dashboard shows them on its **Measures** page (`#measures`, ORC-223), read from `GET /api/measures` (the 50 most recently updated tickets, read-only), summed over a period on its **Overview** (`#overview`, ORC-299: `overview` of `src/core/overview.ts`, read from `GET /api/overview`, which reads only the tickets updated since the period began), plus the tokens of the Flow (ORC-297). They are not copied into a separate table: the database keeps the facts, and `measureTicket(store, projet, ticket)` (`src/core/measures.ts`) computes them on demand, purely (same facts, same measures). The facts read (`Store.measureFacts`): the ticket's journal in order, its attempts (`attempts` / `runs`, with their ORC-226 labels, which allows slicing each measure by label), its outbox rows and the acknowledgement time of its inbox events. Two facts were recorded nowhere and now are: each attempt's tokens and the acknowledgement time of a webhook. **No measure is read from an agent's text** (last message, `run.finished.lastText`): tokens come from the `result` line of `claude -p`, the rest from factory events and effects.
 
 | Measure | Source | Computation |
 |---|---|---|

@@ -663,16 +663,17 @@ describe("a run's security log", () => {
     return { h, runId };
   }
   const at = '2026-11-03T10:00:00.000Z';
-  const request = (host: string, ok: boolean) => JSON.stringify({ at, method: 'GET', host, path: '/', ok, ...(ok ? {} : { reason: 'host not allowed' }), up: 0, down: 0 });
+  const request = (host: string, ok: boolean) => JSON.stringify({ at, method: 'GET', host, path: '/bot1:s3cr3t/send', ok, ...(ok ? {} : { reason: 'host not allowed' }), up: 0, down: 0 });
   const refusal = (rule: string, ticket = 'REL-1') => JSON.stringify({ at, tool: 'Bash', command: 'git push origin main # TOKEN=s3cr3t', rule, ticket });
   const summaries = (h: ReturnType<typeof createHarness>) => h.tracker.activities('ls-1').flatMap((a) => ('body' in a && a.body.startsWith('Refusals during this run') ? [{ type: a.type, body: a.body }] : []));
 
-  it('stores the connections and refusals of the run, tied to it and its ticket, and posts a summary without the commands', async () => {
+  it('stores the connections and refusals of the run, tied to it and its ticket, by rule and host without a command nor a path, and posts a summary without them', async () => {
     const { h, runId } = await runWith([request('registry.npmjs.org', true), request('evil.example', false)], [refusal('push-trunk'), refusal('push-trunk')]);
     const log = await h.store.securityLog(runId);
     expect(log).toMatchObject({ runId, projectId: 'p', ticketId: 'REL-1', skipped: { egress: 0, refusals: 0 } });
     expect(log!.egress.map((e) => [e.host, e.ok])).toEqual([['registry.npmjs.org', true], ['evil.example', false]]);
     expect(log!.refusals.map((r) => r.rule)).toEqual(['push-trunk', 'push-trunk']);
+    expect(JSON.stringify(log)).not.toContain('s3cr3t');
     const [summary] = summaries(h);
     expect(summary).toMatchObject({ type: 'thought' });
     expect(summary!.body).toContain('`push-trunk`: 2');
@@ -681,10 +682,12 @@ describe("a run's security log", () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
 
-  it('stores a whole read the hook refused and counts its rule, never naming the path in the session (ORC-279)', async () => {
+  it('stores a whole read the hook refused by its rule, never its path, nor names it in the session (ORC-279)', async () => {
     const line = JSON.stringify({ at, tool: 'Read', command: '/work/src/secret-name.ts', rule: 'full-read', ticket: 'REL-1' });
     const { h, runId } = await runWith([], [line]);
-    expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [{ tool: 'Read', rule: 'full-read', command: '/work/src/secret-name.ts' }], skipped: { refusals: 0 } });
+    const log = await h.store.securityLog(runId);
+    expect(log).toMatchObject({ refusals: [{ tool: 'Read', rule: 'full-read' }], skipped: { refusals: 0 } });
+    expect(JSON.stringify(log)).not.toContain('secret-name');
     expect(summaries(h)[0]!.body).toContain('`full-read`: 1');
     expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('secret-name');
   });
