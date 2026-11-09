@@ -25,6 +25,8 @@ interface IssueNode {
   inverseRelations: Connection<RelationNode>;
   delegate: { id: string } | null;
   team: { id: string; key: string };
+  /** Null for an issue an integration created, or whose creator was deleted. Absent from answers older than ORC-197. */
+  creator?: { id: string; name: string; url: string } | null;
 }
 /** `parent`: the label group, whose labels are exclusive in Linear (one per issue). */
 interface LabelNode {
@@ -87,6 +89,7 @@ function toIssue(n: IssueNode): TrackerIssue {
       r.type === 'blocks' && r.issue && !r.issue.trashed ? [{ identifier: r.issue.identifier, stateName: r.issue.state.name, stateType: r.issue.state.type }] : [],
     ),
     delegateId: n.delegate?.id,
+    ...(n.creator ? { creator: { id: n.creator.id, name: n.creator.name, url: n.creator.url } } : {}),
     teamKey: n.team.key,
     priority: n.priority,
     createdAt: Date.parse(n.createdAt),

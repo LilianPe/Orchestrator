@@ -5,7 +5,7 @@ const INVERSE_RELATIONS = `nodes { type issue { identifier trashed state { name 
 // read by `issueRelations`, for the few issues that have more.
 const ISSUE_FIELDS = `id identifier title description url priority createdAt updatedAt trashed
   state { id name type } labels { nodes { id name parent { id } } ${PAGE} } inverseRelations(first: 10) { ${INVERSE_RELATIONS} }
-  delegate { id } team { id key }`;
+  delegate { id } team { id key } creator { id name url }`;
 
 export const Q = {
   issue: `query Issue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`,
