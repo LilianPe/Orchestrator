@@ -29,7 +29,6 @@ export class FakeWorkspaces implements WorkspaceManager {
       this.trunks.add(trunk);
       return req.sha ? { path: trunk, diff: this.diffs.get(req.sha) ?? 'diff --git a/src/export.ts b/src/export.ts\n+export const csv = 1;' } : { path: trunk };
     }
-    if (req.kind === 'knowledge') return { path: `/tmp/factory-fake/_kb/${req.runId}` };
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;
     const fresh = !this.made.has(path);
     this.made.add(path);

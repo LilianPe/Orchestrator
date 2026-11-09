@@ -27,7 +27,15 @@ describe('loadWorkflow', () => {
     expect(wf.on['session.prompted']![1]).toMatchObject({ run: 'fix-human', debounceMs: 180_000 });
     expect(wf.jobs['fix-human']).toMatchObject({ counter: 'human_review', input: 'feedback', onSuccess: { move: 'ai_review', post: 'reply', run: 'review' } });
     expect(wf.on['status.changed']!.some((r) => r.from === 'human_review' && r.to === 'dev')).toBe(false);
-    expect(wf.commands).toEqual(['retiens', 'fais-le']);
+    // The memory in writing sleeps (ORC-193): no `retiens` nor `fais-le`, no `learn` nor `remember`.
+    expect(wf.commands).toEqual([]);
+    expect(Object.keys(wf.jobs)).not.toContain('learn');
+    expect(Object.keys(wf.jobs)).not.toContain('remember');
+  });
+
+  it('refuses a knowledge workspace and the fais-le answer: the memory in writing sleeps (ORC-193)', () => {
+    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  ask: { workspace: knowledge }\n') })).toThrow(/jobs\.ask\.workspace/);
+    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  command:\n    - { say: "fais-le", do: propose_delegate }\n') })).toThrow(/do/);
   });
 
   it('reads the command that starts the application for the visual proof, absent by default (ORC-176)', () => {
@@ -74,7 +82,6 @@ on:
     expect(wf.jobs['fix-ci']!.input).toBe('ci_failures');
     expect(wf.jobs['fix-ci']!.skill).toBe('factory:fix-ci');
     expect(wf.jobs['fix-ci']!.session).toBe('resume');
-    expect(wf.jobs['remember']!.workspace).toBe('knowledge');
     // No dollars (ORC-216): a budget is tokens and turns.
     expect(wf.jobs['ask']!.limits).toEqual({ turns: 30, durationMs: 5 * 60_000 });
     expect(wf.jobs['dev']!.limits.turns).toBe(150);
@@ -147,14 +154,14 @@ on:
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: ['Read', 'Grep', 'Glob'] });
       for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read', 'Grep', 'Glob']);
-      for (const name of ['dev', 'tests', 'dev-feedback', 'ask', 'learn']) expect(jobs[name], name).not.toHaveProperty('tools');
+      for (const name of ['dev', 'tests', 'dev-feedback', 'ask']) expect(jobs[name], name).not.toHaveProperty('tools');
       // A step that writes no code is not read-only for that: after_merge keeps its shell.
-      const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:learn" }\n';
+      const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:dev" }\n';
       expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']).not.toHaveProperty('tools');
     });
 
     it('takes the after_merge step on a merge only: no other event carries a merged PR (ORC-197)', () => {
-      expect(loadWorkflow({ packDir }).on['pr.merged']).toEqual([{ move: 'done', do: 'after_merge', run: 'learn' }]);
+      expect(loadWorkflow({ packDir }).on['pr.merged']).toEqual([{ move: 'done', do: 'after_merge' }]);
       expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  pr.closed:\n    - { do: after_merge }\n') })).toThrow(/on\.pr\.closed\[0\]\.do: after_merge/);
     });
 

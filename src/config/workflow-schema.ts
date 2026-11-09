@@ -19,7 +19,7 @@ export const rawRuleSchema = z
     move: logical.optional(),
     labels: z.object({ add: z.array(z.string()).default([]), remove: z.array(z.string()).default([]) }).optional(),
     comment: z.string().optional(),
-    do: z.enum(['stop', 'cleanup', 'propose_delegate', 'after_merge']).optional(),
+    do: z.enum(['stop', 'cleanup', 'after_merge']).optional(),
   })
   .strict();
 
@@ -32,7 +32,7 @@ export const rawJobSchema = z
     step: z.string().optional(),
     queue: z.enum(['dev', 'questions']).optional(),
     model: z.string().optional(),
-    workspace: z.enum(['worktree', 'trunk-readonly', 'knowledge', 'published']).optional(),
+    workspace: z.enum(['worktree', 'trunk-readonly', 'published']).optional(),
     session: z.enum(['new', 'resume']).optional(),
     skill: z.string().optional(),
     lens: z.enum(['correctness', 'security']).optional(),
@@ -150,7 +150,10 @@ export interface Rule {
   move?: LogicalState;
   labels?: { add: string[]; remove: string[] };
   comment?: string;
-  /** `after_merge` (ORC-197): the step of a merged PR, on `pr.merged` only: the requester told, the changelog entry, then `cleanup`. */
+  /**
+   * `after_merge` (ORC-197): the step of a merged PR, on `pr.merged` only: the requester told, the changelog entry, then `cleanup`.
+   * `propose_delegate`: the answer to `fais-le`, only in versions frozen before ORC-193, which decide as they did.
+   */
   do?: 'stop' | 'cleanup' | 'propose_delegate' | 'after_merge';
 }
 
@@ -165,6 +168,8 @@ export interface JobSpec {
   /**
    * `published`: a fresh clone of the commit the factory published, detached, gone with the run (ORC-183): what an AI review
    * reads, never the agent's worktree. Only a job of the `review` step has it.
+   * `knowledge`: a worktree of the knowledge repository (`learn`, `remember`), only in versions frozen before ORC-193, which
+   * decide as they did: the memory in writing sleeps, the launch refuses the job (`Orchestrator.startRun`).
    */
   workspace: 'worktree' | 'trunk-readonly' | 'knowledge' | 'published';
   session: 'new' | 'resume';

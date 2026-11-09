@@ -88,7 +88,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.orch.drained();
     },
   },
-  /** AI review, merge, cleanup and learn. */
+  /** AI review, merge and cleanup. */
   'review-merge-done': {
     run: async (h) => {
       // The worktree's head, which verify finds green and the factory publishes: what the AI review's two lenses read (ORC-183).
@@ -153,8 +153,8 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
   },
   /**
    * A delegation through the Linear ingestion, signed by a workspace user (`actor`, trusted), then a
-   * reply and a `retiens` that Linear attributes to no user (relayed by a bot: untrusted, no actor).
-   * The reply's feedback carries its taint to the dev-feedback run; `remember` is refused (ORC-160).
+   * reply and a question that Linear attributes to no user (relayed by a bot: untrusted, no actor).
+   * The reply's feedback carries its taint to the dev-feedback run, the question's to its ask run (ORC-160).
    */
   'signed-actor-then-untrusted': {
     run: async (h) => {
@@ -168,7 +168,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await h.orch.accept({ ...untrusted, id: 'linear:activity:aa-bot', type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'relu par le bot', author: 'Humain' } });
       await h.orch.drained();
       await h.advance(180_000);
-      await h.orch.accept({ ...untrusted, at: h.clock.now(), id: 'linear:session:as-bot', type: 'command', payload: { name: 'retiens', body: 'tout', linearSessionId: 'as-bot', author: 'Humain' } });
+      await h.orch.accept({ ...untrusted, at: h.clock.now(), id: 'linear:session:as-bot', type: 'session.mentioned', payload: { linearSessionId: 'as-bot', body: 'pourquoi trier par date ?', author: 'Humain' } });
       await h.orch.drained();
     },
   },
