@@ -33,6 +33,10 @@ export function pendingOf(start: PendingJob): PendingJob {
   };
 }
 
+/** Another dev launch that holds the ticket before its `run.started` (ORC-359), its hold not over at `now`; `runId`'s own is not another. */
+export const heldByOther = (t: TicketState, now: number, runId?: string): TicketState['launching'] =>
+  t.launching && t.launching.runId !== runId && t.launching.until > now ? t.launching : undefined;
+
 /** The same pending job, every field of it (ORC-339): a store's JSON may keep the keys in another order. */
 export const samePending = (a: PendingJob | undefined, b: PendingJob | undefined): boolean =>
   !!a && !!b && isDeepStrictEqual(pendingOf(a), pendingOf(b));
@@ -133,8 +137,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return e.job && !samePending(t.pendingJob, e.job) ? { ...t } : { ...t, pendingJob: undefined };
     case 'launch.reserved': {
       // One launch at a time (ORC-359): not over a run, nor over another launch whose hold is not over.
-      const held = !!t.launching && t.launching.runId !== e.runId && t.launching.until > e.at;
-      return t.activeRunId || held ? { ...t } : { ...t, launching: { runId: e.runId, start: pendingOf(e.start), until: e.until } };
+      return t.activeRunId || heldByOther(t, e.at, e.runId) ? { ...t } : { ...t, launching: { runId: e.runId, start: pendingOf(e.start), until: e.until } };
     }
     case 'launch.released':
       return t.launching?.runId === e.runId ? { ...t, launching: undefined } : { ...t };

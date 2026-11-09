@@ -578,7 +578,7 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
  * good, in silence. The ticket is blocked on that job instead; the job stays pending, all of it (its input, its
  * restrictions), and a reply starts that very job (`resumedPending`). Anything else: only logged.
  */
-function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number, queued: boolean | undefined): Decision {
+function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, { error, attempts, queued }: EventPayloads['effect.failed']): Decision {
   const pending = ticket.pendingJob;
   if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait || ticket.blocked || settledTicket(ticket)) return out;
   // Queued before it died (ORC-359): the queue launches it, and its run takes it off the ticket. A block would refuse that start.
@@ -2135,7 +2135,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged, unless it leaves a
       // pending job no run will start (ORC-339). Its block says so, and a reply resumes the ticket (ORC-196).
       const { kind, error, eventId } = event.payload;
-      if (kind === 'settle') return ticket ? stuckPending(out, ticket, workflow, error, event.payload.attempts, event.payload.queued) : out;
+      if (kind === 'settle') return ticket ? stuckPending(out, ticket, workflow, event.payload) : out;
       if (!ticket) return out;
       if (isRefusedNotice(eventId)) {
         out.trace.push('effect.failed ignored: the notice of a refused event, which blocks nothing');

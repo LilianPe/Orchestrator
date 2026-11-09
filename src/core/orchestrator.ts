@@ -61,7 +61,7 @@ import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
-import { pendingOf, reduce, samePending } from './reduce.js';
+import { heldByOther, pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
@@ -74,6 +74,7 @@ import {
   type InternalEvent,
   type IssueSnapshot,
   type LogicalState,
+  type PendingJob,
   type QueueName,
   type FactoryEvent,
   type RunOutcome,
@@ -308,7 +309,6 @@ interface StartOpts {
 /** Where a launch is (`launchRun`): past its `run.started`, holding the ticket (ORC-359), and what keeps its hold. */
 interface LaunchAt {
   started: boolean;
-  reserved?: boolean;
   renew?: ReturnType<typeof setInterval>;
 }
 
@@ -341,9 +341,8 @@ export const START_RETRY = { attempts: 5, transientWindowMs: TRANSIENT_WINDOW_MS
 type StateIo = <T>(io: Promise<T>) => Promise<T>;
 const asIs: StateIo = (io) => io;
 
-/** Another dev launch that holds the ticket before its `run.started` (ORC-359), its hold not over at `now`; `runId`'s own is not another. */
-const otherLaunch = (t: TicketState, now: number, runId?: string): TicketState['launching'] =>
-  t.launching && t.launching.runId !== runId && t.launching.until > now ? t.launching : undefined;
+/** A start behind another daemon's launch not started yet (ORC-359): that very start is that launch's, another goes back in line. */
+const behindLaunch = (launch: NonNullable<TicketState['launching']>, start: PendingJob): 'deferred' | 'queued' => (samePending(launch.start, start) ? 'deferred' : 'queued');
 
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
@@ -2355,12 +2354,12 @@ export class Orchestrator {
       return 'queued';
     };
     // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
-    // Another daemon's launch under way holds it too (ORC-359).
-    const launch = otherLaunch(t, this.d.clock.now());
-    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId || t.usageWait || launch)) {
+    const busy = t.activeRunId || t.verifyingRunId || t.usageWait;
+    // Behind another daemon's launch alone, which may end with no run whose end starts what waits (ORC-359).
+    const launch = heldByOther(t, this.d.clock.now());
+    if (job.queue === 'dev' && !busy && launch) return behindLaunch(launch, pendingOf({ ...opts, job: job.name })) === 'deferred' ? 'deferred' : requeue();
+    if (job.queue === 'dev' && busy) {
       const start = pendingOf({ ...opts, job: job.name });
-      // Behind a launch alone, which may end with no run whose end starts what waits (ORC-359): that very start is its own, another waits in line.
-      if (launch && !t.activeRunId && !t.verifyingRunId && !t.usageWait) return samePending(launch.start, start) ? 'deferred' : requeue();
       // Handed out of the queue to a ticket that holds another pending job: it stays in line, never in that one's place (ORC-339).
       if (fromQueue && t.pendingJob && !samePending(t.pendingJob, start)) return requeue();
       await this.apply(t, { type: 'pending.set', job: start });
@@ -2463,19 +2462,19 @@ export class Orchestrator {
       if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) throw new RetryableStart(err);
       throw err;
     } finally {
-      clearInterval(at.renew);
       // Ended without taking the ticket: the next launch need not wait for the hold to run out (ORC-359), which it does if this write fails.
-      if (at.reserved) {
-        await (async () => this.apply(await this.ticket(project.id, ticketId), { type: 'launch.released', runId }))().catch((err: Error) =>
-          this.log('warn', `${job.name} on ${ticketId}: the launch's hold on the ticket not let go of (${err.message}), it runs out by itself`),
-        );
+      if (at.renew) {
+        clearInterval(at.renew);
+        await this.ticket(project.id, ticketId)
+          .then((t) => this.apply(t, { type: 'launch.released', runId }))
+          .catch((err: Error) => this.log('warn', `${job.name} on ${ticketId}: the launch's hold on the ticket not let go of (${err.message}), it runs out by itself`));
       }
     }
   }
 
   /**
-   * `at.started`: set once the launch writes its `run.started`; from there, the run may be the ticket's. `at.reserved`: while
-   * the launch holds the ticket (ORC-359), `at.renew` keeping its hold.
+   * `at.started`: set once the launch writes its `run.started`; from there, the run may be the ticket's. `at.renew`: while the
+   * launch holds the ticket (ORC-359), what keeps its hold.
    */
   private async launchRun(
     project: ProjectRuntime,
@@ -2498,7 +2497,7 @@ export class Orchestrator {
         throw new RetryableStart(err);
       });
     /** The ticket holds another dev run, or another launch holds it (another daemon's launch won the race). */
-    const taken = (x: TicketState): boolean => job.queue === 'dev' && (!!x.activeRunId || !!otherLaunch(x, clock.now(), runId));
+    const taken = (x: TicketState): boolean => job.queue === 'dev' && (!!x.activeRunId || !!heldByOther(x, clock.now(), runId));
     /**
      * Another launch took the ticket (ORC-339). Its run is this very start, all of it (a settle taken up by another
      * worker after a lost lease): nothing more to start. Another start: this one waits behind it, pending, as
@@ -2508,11 +2507,11 @@ export class Orchestrator {
      */
     const lose = async (holder: TicketState): Promise<StartOutcome> => {
       this.d.scheduler.release(key);
-      const launch = holder.activeRunId ? undefined : otherLaunch(holder, clock.now(), runId);
+      const launch = holder.activeRunId ? undefined : heldByOther(holder, clock.now(), runId);
       if (launch) {
-        const same = samePending(launch.start, start);
-        this.log('warn', `${job.name} on ${ticketId} not launched: the launch of ${launch.runId}${same ? ' of the same start' : ''} took the ticket first${same ? '' : ': back in line'}`);
-        return same ? 'deferred' : 'queued';
+        const behind = behindLaunch(launch, start);
+        this.log('warn', `${job.name} on ${ticketId} not launched: the launch of ${launch.runId} took the ticket first${behind === 'queued' ? ': back in line' : ', for the same start'}`);
+        return behind;
       }
       if (samePending(holder.activeStart, start)) {
         this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} of the same start took the ticket first`);
@@ -2545,7 +2544,6 @@ export class Orchestrator {
       if (job.queue === 'dev') {
         t = await state(this.apply(t, hold()));
         if (t.launching?.runId !== runId) return { lost: t } as const;
-        at.reserved = true;
         at.renew = setInterval(() => {
           this.apply(t, hold())
             .then((x) => x.launching?.runId === runId || this.log('warn', `${job.name} on ${ticketId}: the launch's hold on the ticket was taken over`))
@@ -2574,17 +2572,13 @@ export class Orchestrator {
         const reason = failures.join(' ');
         const refused = await state(this.apply(t, blockedOn(project.workflow, 'pickup', reason, job.name)));
         // The ticket is blocked: a failed notice must not make the block a launch error, nor its retry find the ticket blocked.
-        try {
-          await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
-            const session = await this.sessionFor(blocked);
-            await tracker.activity(session, {
-              type: 'elicitation',
-              body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
-            });
+        await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
+          const session = await this.sessionFor(blocked);
+          await tracker.activity(session, {
+            type: 'elicitation',
+            body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
           });
-        } catch (err) {
-          this.log('warn', `could not post the refused pickup of ${ticketId}: ${(err as Error).message}`);
-        }
+        }).catch((err: Error) => this.log('warn', `could not post the refused pickup of ${ticketId}: ${err.message}`));
         return undefined;
       }
       if (!intake && blockers.length) {
@@ -2825,8 +2819,8 @@ export class Orchestrator {
       // Taken in the same write by another launch (`reduce` refuses this one): it waits behind that run.
       if (job.queue === 'dev' && took.activeRunId !== runId) return await lose(took);
       // Its run.started ended its hold.
-      at.reserved = false;
       clearInterval(at.renew);
+      at.renew = undefined;
       await store.putRun(run);
       // Only what this launch read: a message that came in since stays for the next run (ORC-339).
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed', items: t.humanInbox });
