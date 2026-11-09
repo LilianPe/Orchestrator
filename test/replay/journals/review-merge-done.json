@@ -892,6 +892,10 @@
             "risks": [],
             "untested": [],
             "review_hints": []
+          },
+          "diffClass": {
+            "class": "normal",
+            "paths": []
           }
         }
       },
@@ -950,6 +954,10 @@
           "verifyingRunId": "id-1",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": "human_review"
         },
         "effects": [
@@ -1028,6 +1036,10 @@
           "verifyingRunId": "id-1",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": "human_review"
         },
         "ticket": {
@@ -1054,6 +1066,10 @@
           "verifyingRunId": "id-1",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": "human_review"
         },
         "effects": [],
@@ -1110,6 +1126,10 @@
           "verifyingRunId": "id-1",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": "human_review"
         },
         "ticket": {
@@ -1136,6 +1156,10 @@
           "verifyingRunId": "id-1",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": "human_review",
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1210,6 +1234,10 @@
           "verifyingRunId": "id-1",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": "human_review",
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1238,6 +1266,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1320,6 +1352,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1349,6 +1385,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1409,6 +1449,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1438,6 +1482,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1498,6 +1546,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1527,6 +1579,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1587,6 +1643,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1616,6 +1676,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1676,6 +1740,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1705,6 +1773,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1765,6 +1837,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1794,6 +1870,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1852,6 +1932,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1880,6 +1964,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1944,6 +2032,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -1977,6 +2069,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2055,6 +2151,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2088,6 +2188,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2168,6 +2272,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2207,6 +2315,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2277,6 +2389,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2316,6 +2432,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2400,6 +2520,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2439,6 +2563,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2521,6 +2649,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2557,6 +2689,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2624,6 +2760,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2660,6 +2800,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2727,6 +2871,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2763,6 +2911,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2830,6 +2982,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2866,6 +3022,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2932,6 +3092,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 1,
           "prUrl": "https://github.test/pr/1",
@@ -2968,6 +3132,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3049,6 +3217,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3082,6 +3254,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3146,6 +3322,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3179,6 +3359,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3243,6 +3427,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3276,6 +3464,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3340,6 +3532,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3373,6 +3569,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3450,6 +3650,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3483,6 +3687,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3551,6 +3759,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",
@@ -3584,6 +3796,10 @@
           "claudeSessionId": "id-2",
           "untrustedSince": null,
           "verifiedSha": "abc123",
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "owedMove": null,
           "prNumber": 3,
           "prUrl": "https://gh/pr/3",

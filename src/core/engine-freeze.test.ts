@@ -52,7 +52,7 @@ describe('decide — the freeze of the tests (ORC-131)', () => {
 
   it('/refreeze by a designated maintainer freezes the branch head, journaled', () => {
     const out = decide(ticket({ frozenTests: FROZEN }), refreeze(LATER, { actor: 'u-lead', roles: ['team_member', 'maintainer'] }), workflow);
-    expect(frozenPatch(out)).toEqual([LATER]);
+    expect(frozenPatch(out)).toEqual([{ ...LATER, refrozenBy: 'u-lead' }]);
     expect(out.trace).toContain('refreeze by u-lead: 2 files frozen at sha-2');
     expect(out.effects).toEqual([{ kind: 'activity', type: 'response', linearSessionId: 's-q', body: expect.stringMatching(/^Refrozen: 2 files/) }]);
     expect(out.effects).not.toContainEqual(expect.objectContaining({ kind: 'start_run' }));

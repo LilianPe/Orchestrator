@@ -84,9 +84,10 @@ import {
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { RegistryOpener } from '../checks/registry.js';
-import { checkBranchPaths, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
+import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
+import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from './diff-class.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
@@ -98,6 +99,7 @@ import { captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
+import { factoryDefault } from '../presets/factory-default.js';
 import { READ_TOOLS } from '../presets/preset.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
@@ -399,7 +401,7 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
 }
 
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
-type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky'] };
+type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky']; diffClass?: CleanVerifyResult['diffClass'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
@@ -1062,12 +1064,12 @@ export class Orchestrator {
       const sha = await this.d.workspaces.head(run.cwd);
       if (sha && sha === green) return { ok: true, failures: [], sha };
       // As on the clone, before any command: a refused branch runs nothing.
-      const paths = await this.checkPathsOnHost(project, t, run);
+      const { failures: paths, diffClass } = await this.checkPathsOnHost(project, t, run);
       const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
       const blocking = [...paths, ...frozen];
-      return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
+      return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify, diffClass };
     }
     // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
     // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
@@ -1180,7 +1182,7 @@ export class Orchestrator {
     }
     await this.submitResult(
       res.ok
-        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}), ...(res.flaky ? { flaky: res.flaky } : {}) } }
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}), ...(res.flaky ? { flaky: res.flaky } : {}), ...(res.diffClass ? { diffClass: res.diffClass } : {}) } }
         : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}), ...(res.flaky ? { flaky: res.flaky } : {}) } },
     );
   }
@@ -1190,11 +1192,14 @@ export class Orchestrator {
    * on the factory's repository against the forge's default branch. As on the clone, what gives no verdict throws, an
    * infrastructure or config failure the agent is not sent: no worktree, a read that fails, a config the default branch refuses.
    */
-  private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<VerifyFailure[]> {
+  private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<{ failures: VerifyFailure[]; diffClass: ClassifiedDiff }> {
     const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd);
     if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
     const untrusted = await this.untrustedMark(project, t);
-    return checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, parseRepoConfig(await reader.baseConfig())));
+    const config = parseRepoConfig(await reader.baseConfig());
+    // The class of the diff (ORC-198), read as the clone's.
+    const [failures, diffClass] = await Promise.all([checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, config)), classOfBranch(reader, config)]);
+    return { failures, diffClass };
   }
 
   /**
@@ -1244,17 +1249,19 @@ export class Orchestrator {
 
   /**
    * A `/refreeze` gets the freeze at its ticket's branch head before its decision (ORC-131), as roles are resolved:
-   * `decide` stays pure and a replay regels the same files. The files frozen before, and the harness. No freeze or no
-   * worktree, none: it is the way out of a freeze, not a way in. The head alone: the frozen commit may be gone after a rebase.
+   * `decide` stays pure and a replay regels the same files. The files frozen before, and the harness. No worktree, none; no
+   * freeze, none either, it is the way out of a freeze, not a way in, but for a diff of the verification configuration held for
+   * this very `/refreeze` (ORC-198): its harness is frozen as the maintainer approved it. The head alone: the frozen commit may
+   * be gone after a rebase.
    */
   private async withFreeze(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.type !== 'command' || event.payload.name !== REFREEZE || event.payload.frozen || !event.ticketId) return event;
     const t = await this.d.store.getTicket(event.projectId, event.ticketId);
-    if (!t?.worktreePath || !t.frozenTests) return event;
+    if (!t?.worktreePath || (!t.frozenTests && !needsRefreeze(t.diffClass?.class, factoryDefault.approvers))) return event;
     const head = await this.d.workspaces.head(t.worktreePath);
     const diff = head ? await this.d.workspaces.stepDiff(this.project(event.projectId).repoPath, t.worktreePath, head) : undefined;
     if (!diff) return event;
-    return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(t.frozenTests.files), diff) } };
+    return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(t.frozenTests?.files ?? {}), diff) } };
   }
 
   /**
@@ -1741,6 +1748,7 @@ export class Orchestrator {
         // The factory's own work ended; a move back after a refusal concludes nothing.
         if (c.to === 'human_review' && !c.keepReviewSha) {
           await this.prReady(project, t);
+          await this.labelReview(project, await this.ticket(project.id, ticketId));
           await this.updatePlan(t, (plan) => closePlan(plan, t.prNumber !== undefined));
         }
         return;
@@ -1925,6 +1933,23 @@ export class Orchestrator {
   private async prReady(project: ProjectRuntime, t: TicketState): Promise<void> {
     if (t.prNumber === undefined || t.prState !== 'OPEN' || !this.d.forgeWriter) return;
     await this.d.forgeWriter.markPrReady(project.repoPath, t.prNumber).catch((err: Error) => this.log('warn', `PR #${t.prNumber} of ${t.ticketId} still a draft: ${err.message}`));
+  }
+
+  /**
+   * The PR's `revue:` label (ORC-198), as the ticket goes to Human Review: from the class of the commit shown (unknown, a class
+   * read of another commit), the AI review's blocking findings on it, and the draw. Best effort, as `prReady`: it tells the
+   * reviewer where to look, and every PR goes through Human Review whatever it says. A final state: a replay writes nothing.
+   */
+  private async labelReview(project: ProjectRuntime, t: TicketState): Promise<void> {
+    if (t.prNumber === undefined || t.prState !== 'OPEN' || !this.d.forgeWriter) return;
+    const sha = t.reviewSha ?? t.verifiedSha;
+    try {
+      const blocking = sha ? blockingFindings(await this.d.store.findingsOf(project.id, t.ticketId, sha)).length : 0;
+      const label = reviewLabel({ diffClass: sha === t.verifiedSha ? t.diffClass?.class : undefined, blocking, ticketId: t.ticketId });
+      await this.d.forgeWriter.setExclusiveLabel(project.repoPath, t.prNumber, label, REVIEW_LABELS);
+    } catch (err) {
+      this.log('warn', `review label of PR #${t.prNumber} of ${t.ticketId} not set: ${(err as Error).message}`);
+    }
   }
 
   /**

@@ -20,6 +20,7 @@ import { isTestSpec } from '../checks/test-files.js';
 import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
+import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
 import { VERIFY_TIMEOUT_MS, type VerifyResult } from './verify.js';
@@ -91,7 +92,8 @@ export interface VisualRequest {
  * `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again.
  * `flaky`: the failing tests the factory reran (ORC-164), with what each attempt found, those that do not count `indicative`.
  */
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] } };
+/** `diffClass`: the class of the diff against the default branch (ORC-198), absent on a commit found green again. */
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -197,6 +199,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
+    // Only a verdict that passes carries it: a branch refused already is not read again.
+    const diffClass = failures.length ? undefined : await classOfBranch(gitReader(git, BASE, from, sha), config);
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config));
     const manifests = failures.length ? [] : await changedManifests(git, from, sha);
@@ -211,7 +215,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     let flaky: FlakyTest[] = [];
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
-      ok: !failures.length, failures, sha, tree, commands,
+      ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
       ...(flaky.length ? { flaky } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
@@ -685,6 +689,11 @@ export const untrustedCheck = (mark: UntrustedMark, config: RepoConfig): Untrust
   sensitivePaths: config.sensitivePaths,
   ...(config.sensitivePathWarnings ? { sensitivePathWarnings: config.sensitivePathWarnings } : {}),
 });
+
+/** The class of a branch's diff (ORC-198), read as the path rules read it, under the default branch's `sensitive_paths`. */
+export async function classOfBranch(reader: BranchReader, config: RepoConfig): Promise<ClassifiedDiff> {
+  return classifyBranch((await reader.changed()).map((c) => c.path), config.sensitivePaths, reader);
+}
 
 /**
  * `factory/chemins-interdits` on a branch, whoever reads it: the forbidden paths, outward links and `package.json#scripts`
