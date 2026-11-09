@@ -322,25 +322,22 @@ export interface MeasureFacts {
   acks: Record<string, number>;
 }
 
-/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms. */
+/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms; never its path nor the proxy's reason, which names it: it can hold a secret. */
 export interface EgressRecord {
   at: number;
   method: string;
   host: string;
   port?: number;
-  path?: string;
   ok: boolean;
-  reason?: string;
   up: number;
   down: number;
 }
 
-/** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule, the command capped. */
+/** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule; never the command nor the path refused, which can hold a secret. */
 export interface RefusalRecord {
   at: number;
   tool: string;
   rule: string;
-  command: string;
 }
 
 /**
@@ -356,6 +353,19 @@ export interface SecurityLog {
   egress: EgressRecord[];
   refusals: RefusalRecord[];
   skipped: { egress: number; refusals: number };
+}
+
+/** What a store keeps of a security log (ORC-296): its fields alone, so a command or a path handed with it is never written. */
+export function keptSecurityLog(log: SecurityLog): SecurityLog {
+  return {
+    runId: log.runId,
+    projectId: log.projectId,
+    ticketId: log.ticketId,
+    at: log.at,
+    egress: log.egress.map(({ at, method, host, port, ok, up, down }) => ({ at, method, host, ...(port === undefined ? {} : { port }), ok, up, down })),
+    refusals: log.refusals.map(({ at, tool, rule }) => ({ at, tool, rule })),
+    skipped: { egress: log.skipped.egress, refusals: log.skipped.refusals },
+  };
 }
 
 /**

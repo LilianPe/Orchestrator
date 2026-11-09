@@ -50,6 +50,13 @@
       "when": 1794170000000,
       "tag": "0006_review_findings",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794196285542,
+      "tag": "0007_security_log_rule_and_host",
+      "breakpoints": true
     }
   ]
 }
