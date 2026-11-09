@@ -266,7 +266,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
       specCheckReturns: presetBound(preset, 'spec_check'),
       specChanges: presetBound(preset, 'spec_review'),
     },
-    workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200 },
+    workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200, ...(raw.workspace?.preview ? { preview: raw.workspace.preview } : {}) },
     commands: [...new Set((on.command ?? []).map((r) => r.say).filter((s): s is string => !!s))],
     on,
     jobs,

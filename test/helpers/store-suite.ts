@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { TicketHeldError, timerEvent, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import { TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -273,6 +273,17 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.mergedPrOf('p', 'ddd')).toBeUndefined();
     expect(await s.mergedPrOf('p', 'eee')).toBeUndefined();
     expect(await s.mergedPrOf('p', 'zzz')).toBeUndefined();
+  });
+
+  it('keeps an artifact once by its id, listed by ticket oldest first, with its hash (ORC-176)', async () => {
+    const s = await store();
+    const a: Artifact = { id: 'visual:r1:after:1280', ticketId: 'REL-1', attemptId: 'r1', kind: 'visual-proof', path: '/home/artifacts/REL-1/aa.png', sha256: 'a'.repeat(64), createdAt: 1_700_000_000_000 };
+    expect(await s.artifacts('REL-1')).toEqual([]);
+    expect(await s.putArtifact(a)).toBe(true);
+    expect(await s.putArtifact({ ...a, path: '/elsewhere.png' })).toBe(false);
+    await s.putArtifact({ ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 });
+    await s.putArtifact({ ...a, id: 'other', ticketId: 'REL-2' });
+    expect(await s.artifacts('REL-1')).toEqual([a, { ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 }]);
   });
 
   it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {

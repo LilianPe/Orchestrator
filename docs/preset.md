@@ -123,7 +123,7 @@ At its end, `decide` records the assessment in the ticket's state:
 
 - `size`, the last assessment's;
 - `risk`, the higher of the ticket's and the proposed one: within a run, the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`);
-- `visualProof: required` when the ticket speaks of a screen; never lifted within a run: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+- `visualProof: required` when the ticket speaks of a screen; never lifted within a run: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176): required too when the diff touches `visual_paths`.
 
 A new run starts again from its own level (ORC-365). A delegation whose decision starts a run, on a ticket already assessed, marks the run's boundary: `risk` and `visualProof` go to `null`, a run not yet assessed, so the new run's intake sets them from what it proposes. A delegation that starts nothing (refused by the matrix, made while a run is active, on a blocked ticket, or one waiting on its blockers) leaves the run as it is. A ticket from before ORC-365 has no boundary marked: it stays in its run and decides as before.
 
