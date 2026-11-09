@@ -87,9 +87,9 @@ export const CLAUDE_BODY_DEPTH = 64;
 /**
  * How many values a model call may hold (ORC-373), counted on the raw bytes before anything parses them as the
  * brackets and the commas outside strings: a list or an object, and each member past its first. A parse costs per
- * value, not per byte: 16 MiB of empty objects took 41 times their size in RSS, 656 MiB, and 1.6 s of the event loop;
- * refused here, ~10 ms. Claude Code's conversations hold one value per 160 to 460 bytes (measured on long sessions'
- * messages), ~100 000 at the cap; the bound, one per 32 bytes there, is five times that.
+ * value, not per byte: 16 MiB of empty objects took 41 times their size. Claude Code's conversations hold one value
+ * per 160 to 460 bytes (measured on long sessions' messages), ~100 000 at the cap; the bound, one per 32 bytes there,
+ * is five times that.
  */
 export const CLAUDE_BODY_VALUES = 512 * 1024;
 

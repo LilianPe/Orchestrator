@@ -459,20 +459,21 @@ describe('EgressProxy', () => {
     it('refuses a run\'s model calls of empty objects past the bound before any parse, in a loop, while another run\'s calls go through (ORC-373)', async () => {
       const hostile = await proxy.open('run-1', { level: 'limited', allow: [] });
       const other = await proxy.open('run-2', { level: 'limited', allow: [] });
-      const empties = Buffer.from(`{"model":"claude-haiku-4-5","max_tokens":1,"messages":[${Array(CLAUDE_BODY_VALUES).fill('{}').join(',')}]}`);
+      const empties = Buffer.from(`{"model":"${MESSAGE.model}","max_tokens":1,"messages":[${'{},'.repeat(CLAUDE_BODY_VALUES)}{}]}`);
+      const ROUNDS = 3;
       const flood = (async () => {
         const answers: number[] = [];
-        for (let round = 0; round < 3; round++) {
+        for (let round = 0; round < ROUNDS; round++) {
           const calls = Array.from({ length: CLAUDE_READS_PER_RUN }, () => viaTls(hostile, CLAUDE, 'POST', '/v1/messages', {}, undefined, empties));
           answers.push(...(await Promise.all(calls)).map((r) => r.status));
         }
         return answers;
       })();
       const served: number[] = [];
-      for (let i = 0; i < 3; i++) served.push((await call(other, MESSAGE)).status);
-      expect(await flood).toEqual(Array(3 * CLAUDE_READS_PER_RUN).fill(403));
-      expect(served).toEqual([200, 200, 200]);
-      expect(new Set((await journal('run-1')).map((e) => e.reason))).toEqual(new Set([`Claude API body refused: more than ${CLAUDE_BODY_VALUES} values`]));
+      for (let i = 0; i < ROUNDS; i++) served.push((await call(other, MESSAGE)).status);
+      expect(await flood).toEqual(Array(ROUNDS * CLAUDE_READS_PER_RUN).fill(403));
+      expect(served).toEqual(Array(ROUNDS).fill(200));
+      expect((await journal('run-1')).map((e) => e.reason)).toEqual(Array(ROUNDS * CLAUDE_READS_PER_RUN).fill(`Claude API body refused: more than ${CLAUDE_BODY_VALUES} values`));
     }, 30_000);
 
     it('cuts a model call whose body is too slow to come in, and frees its place', async () => {
