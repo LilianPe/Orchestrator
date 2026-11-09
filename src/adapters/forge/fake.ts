@@ -41,7 +41,7 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   async findPr(_repoPath: string, branch: string): Promise<PrInfo | undefined> {
     this.answer();
     const pr = this.prs.get(branch);
-    return pr && { ...pr, failedChecks: [...pr.failedChecks] };
+    return pr && { ...pr, failedChecks: [...pr.failedChecks], ...(pr.unknownChecks ? { unknownChecks: [...pr.unknownChecks] } : {}) };
   }
 
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

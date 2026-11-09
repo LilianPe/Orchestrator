@@ -23,6 +23,8 @@ export interface ForgeSubject {
   checksDown?: string;
   /** The branch of an open PR whose checks include one in a state the forge does not know, the others green; absent, the case is skipped. */
   unknownBucket?: string;
+  /** The names of the checks on `unknownBucket` in a state the forge does not know; absent, the case naming them is skipped. */
+  unknownChecks?: string[];
 }
 
 export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>, options?: ContractOptions): void {
@@ -104,6 +106,12 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       expect(pr).toMatchObject({ branch: s.unknownBucket, state: 'OPEN' });
       expect(['pending', 'fail']).toContain(pr!.checks);
       expect(pr!.failedChecks.length > 0).toBe(pr!.checks === 'fail');
+    });
+
+    it('findPr names each check whose state it does not know', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'unknownBucket', 'unknownChecks');
+      const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
+      expect([...(pr!.unknownChecks ?? [])].sort()).toEqual([...s.unknownChecks].sort());
     });
 
   });

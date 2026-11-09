@@ -2160,7 +2160,11 @@ export class Orchestrator {
       reason = MERGE_PUSHED;
       headMoved = true;
     }
-    else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || pr.checks})`;
+    else if (pr.checks !== 'pass' && pr.checks !== 'none') {
+      // A check in a state the forge does not know is named: a bare `pending` reads as a CI still running (ORC-304).
+      const unknown = pr.unknownChecks?.length ? `${pr.unknownChecks.join(', ')}: a state the forge does not know` : '';
+      reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || unknown || pr.checks})`;
+    }
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
       // GitHub merges no draft: a Done is a merge decision, whatever became of the move's best effort (`prReady`).

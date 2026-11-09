@@ -1,7 +1,7 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
+import { aggregateChecks, excerpt, isKnownBucket, toRepoPermission } from './gh-cli.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
@@ -125,7 +125,10 @@ export function parseGitHubRemote(remote: string): GitHubRepoRef | undefined {
   return owner && name ? { owner, name } : undefined;
 }
 
-/** Bucket of a check run, as `aggregateChecks` reads it; also read by the GitHub webhook (ORC-134). */
+/**
+ * Bucket of a check run, as `aggregateChecks` reads it; also read by the GitHub webhook (ORC-134). A completed run with a
+ * conclusion it does not know (or none) gets `unknown`, a bucket outside them: `pending` in the verdict, and named (ORC-304).
+ */
 export function checkRunBucket(run: { status: string; conclusion: string | null }): string {
   if (run.status !== 'completed') return 'pending';
   switch (run.conclusion) {
@@ -141,14 +144,14 @@ export function checkRunBucket(run: { status: string; conclusion: string | null 
     case 'startup_failure':
       return 'fail';
     default:
-      return 'pending';
+      return 'unknown';
   }
 }
 
 function statusBucket(state: string): string {
   if (state === 'success') return 'pass';
   if (state === 'failure' || state === 'error') return 'fail';
-  return 'pending';
+  return state === 'pending' ? 'pending' : 'unknown';
 }
 
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -668,25 +671,22 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     repo: GitHubRepoRef,
     sha: string,
     token: string,
-  ): Promise<{ checks: PrInfo['checks']; failedChecks: string[] }> {
+  ): Promise<Pick<PrInfo, 'checks' | 'failedChecks' | 'unknownChecks'>> {
     const base = `${repoApi(repo)}/commits/${encodeURIComponent(sha)}`;
     const [runs, statuses] = await Promise.all([
       this.allPages(`${base}/check-runs`, 'check_runs', 'a list of check runs', isCheckRun, token),
       this.allPages(`${base}/status`, 'statuses', 'a list of commit statuses', isStatus, token),
     ]);
-    const buckets: string[] = [];
-    const failedChecks: string[] = [];
-    for (const run of runs) {
-      if (isFactoryCheck(run.name)) continue;
-      const bucket = checkRunBucket(run);
-      buckets.push(bucket);
-      if (bucket === 'fail') failedChecks.push(run.name);
-    }
-    for (const status of statuses) {
-      const bucket = statusBucket(status.state);
-      buckets.push(bucket);
-      if (bucket === 'fail') failedChecks.push(status.context);
-    }
-    return { checks: aggregateChecks(buckets), failedChecks };
+    const checks = [
+      ...runs.filter((run) => !isFactoryCheck(run.name)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
+      ...statuses.map((status) => ({ name: status.context, bucket: statusBucket(status.state) })),
+    ];
+    const named = (keep: (bucket: string) => boolean) => checks.filter((c) => keep(c.bucket)).map((c) => c.name);
+    const unknownChecks = named((b) => !isKnownBucket(b));
+    return {
+      checks: aggregateChecks(checks.map((c) => c.bucket)),
+      failedChecks: named((b) => b === 'fail'),
+      ...(unknownChecks.length ? { unknownChecks } : {}),
+    };
   }
 }

@@ -6,9 +6,14 @@ import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, type Forge, type ForgeBranch, type OpenPr, type PrInfo } from './types.js';
 
+const BUCKETS = new Set(['pass', 'skipping', 'fail', 'cancel', 'pending']);
+/** Whether `bucket` is one `aggregateChecks` knows; `GitHubAppForge` maps a state it does not know to none of them. */
+export const isKnownBucket = (bucket: string) => BUCKETS.has(bucket);
+
 /**
  * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
- * PR poller sends no `pr.checks_passed`, and a merge, which reads checks through `GitHubAppForge` (it shares this aggregate), refuses.
+ * PR poller sends no `pr.checks_passed`, and a merge, which reads checks through `GitHubAppForge` (it shares this aggregate),
+ * refuses, naming the check (`unknownChecks`, ORC-304).
  */
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   if (buckets.length === 0) return 'none';
@@ -104,6 +109,7 @@ export class GhCliForge implements Forge, RepoPermissions {
     if (!pr) return undefined;
     let checks: PrInfo['checks'] = 'none';
     let failedChecks: string[] = [];
+    let unknownChecks: string[] = [];
     if (pr.state === 'OPEN') {
       const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
       const r = await this.exec('gh', args, { cwd: repoPath });
@@ -116,6 +122,7 @@ export class GhCliForge implements Forge, RepoPermissions {
         const list = parseChecks(args, r).filter((c) => !isFactoryCheck(c.name));
         checks = aggregateChecks(list.map((c) => c.bucket));
         failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
+        unknownChecks = list.filter((c) => !isKnownBucket(c.bucket)).map((c) => c.name);
       }
     }
     return {
@@ -128,6 +135,7 @@ export class GhCliForge implements Forge, RepoPermissions {
       ...(pr.state === 'MERGED' && pr.mergedAt && Number.isFinite(Date.parse(pr.mergedAt)) ? { mergedAt: Date.parse(pr.mergedAt) } : {}),
       checks,
       failedChecks,
+      ...(unknownChecks.length ? { unknownChecks } : {}),
     };
   }
 
