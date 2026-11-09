@@ -8,17 +8,31 @@ const THREATS = ['Compromised agent', 'Trapped repository or dependency', 'Malic
 
 interface Row { threat: string; attack: string; defense: string; tests: string }
 
-// The rows of each threat's table: `| Attack | Defense | Tests |`, under `## <n>. <threat>`.
+// The rows of each threat's table: `| Attack | Defense | Tests |`, under `## <n>. <threat>`. A `\|` is a pipe in a cell.
 const sections = doc.split(/^## /m).slice(1).map((s) => ({ title: s.slice(0, s.indexOf('\n')), body: s }));
 const rows: Row[] = sections.flatMap(({ title, body }) =>
   body.split('\n').filter((l) => l.startsWith('|') && !/^\|\s*(Attack\s*\||-)/.test(l)).map((line) => {
-    const [attack = '', defense = '', tests = ''] = line.split('|').slice(1, -1).map((c) => c.trim());
+    const [attack = '', defense = '', tests = ''] = line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim());
     return { threat: title, attack, defense, tests };
   }),
 );
 
 // A cited test: a backticked `*.test.ts` path, then optionally « a fragment of a test title in it ».
 const citations = (tests: string) => [...tests.matchAll(/`([^`]+\.test\.ts)`(?:\s*«\s*([^»]+?)\s*»)?/g)].map((m) => ({ file: m[1]!, title: m[2] }));
+
+// The titles a test file declares: the string opening an `it(`, `test(`, `describe(` or the call after `it.each(…)`,
+// escapes undone as the doc writes them; never an `it.todo` nor an `it.skip`, which test nothing.
+const titles = new Map<string, string[]>();
+function titlesOf(file: string): string[] {
+  let found = titles.get(file);
+  if (!found) {
+    const source = readFileSync(join(root, file), 'utf8');
+    const call = /(?:\b(?:it|test|describe)(?:\.only|\.concurrent)?|\))\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+    found = [...source.matchAll(call)].map((m) => m[2]!.replace(/\\(.)/g, '$1'));
+    titles.set(file, found);
+  }
+  return found;
+}
 
 describe('docs/threat-model.md', () => {
   it('covers the five threats, in order, each with rows', () => {
@@ -32,12 +46,11 @@ describe('docs/threat-model.md', () => {
     expect(bare).toEqual([]);
   });
 
-  it('cites only test files that exist, and titles that are in them', () => {
+  it('cites only test files that exist, and titles of tests they declare', () => {
     const missing: string[] = [];
     for (const { file, title } of rows.flatMap((r) => citations(r.tests))) {
       if (!existsSync(join(root, file))) missing.push(file);
-      // Titles are matched on the source with its escapes undone, as the doc writes them.
-      else if (title && !readFileSync(join(root, file), 'utf8').replace(/\\(['`])/g, '$1').includes(title)) missing.push(`${file} « ${title} »`);
+      else if (title && !titlesOf(file).some((t) => t.includes(title))) missing.push(`${file} « ${title} »`);
     }
     expect(missing).toEqual([]);
   });
