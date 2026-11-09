@@ -1343,6 +1343,24 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     expect([t.pendingJob?.job, ...(await h.store.listQueue()).map((q) => q.job)]).toContain('dev');
   });
 
+  it('a start that meets another daemon launching another job goes in line, never pending behind a hold that may end with no run', async () => {
+    const h = createHarness();
+    const first = await pendingBehind(h);
+    // Another daemon holds the ticket for `dev`; it dies before its run.started, and its hold runs out.
+    await h.store.updateTicket('p', 'REL-1', (t) => ({ ...t, launching: { runId: 'other', start: { job: 'dev' }, until: h.clock.now() + 60_000 } }));
+    h.runner.enqueue({ hold: true });
+    h.runner.release(first);
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect((await h.ticket()).pendingJob).toBeUndefined();
+    expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['dev-feedback']);
+    await h.advance(60_001);
+    await h.orch.tick();
+    await h.orch.drained();
+    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(await h.ticket()).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
+  });
+
   it('a store error in the move of its start: retried, never a launch error', async () => {
     const { w, wrap } = failing('putEcho', () => true);
     w.on = false;

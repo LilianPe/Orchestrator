@@ -2356,8 +2356,11 @@ export class Orchestrator {
     };
     // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
     // Another daemon's launch under way holds it too (ORC-359).
-    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId || t.usageWait || otherLaunch(t, this.d.clock.now()))) {
+    const launch = otherLaunch(t, this.d.clock.now());
+    if (job.queue === 'dev' && (t.activeRunId || t.verifyingRunId || t.usageWait || launch)) {
       const start = pendingOf({ ...opts, job: job.name });
+      // Behind a launch alone, which may end with no run whose end starts what waits (ORC-359): that very start is its own, another waits in line.
+      if (launch && !t.activeRunId && !t.verifyingRunId && !t.usageWait) return samePending(launch.start, start) ? 'deferred' : requeue();
       // Handed out of the queue to a ticket that holds another pending job: it stays in line, never in that one's place (ORC-339).
       if (fromQueue && t.pendingJob && !samePending(t.pendingJob, start)) return requeue();
       await this.apply(t, { type: 'pending.set', job: start });
@@ -2498,23 +2501,28 @@ export class Orchestrator {
     const taken = (x: TicketState): boolean => job.queue === 'dev' && (!!x.activeRunId || !!otherLaunch(x, clock.now(), runId));
     /**
      * Another launch took the ticket (ORC-339). Its run is this very start, all of it (a settle taken up by another
-     * worker after a lost lease): nothing more to start; still launching, the job stays where it is until its run takes it.
-     * Another start: this one waits behind it, pending, as `startRun` sets a start that meets a busy ticket, unless the
-     * ticket holds another pending job, which it never replaces: then it goes back in line (`queued`).
+     * worker after a lost lease): nothing more to start. Another start: this one waits behind it, pending, as
+     * `startRun` sets a start that meets a busy ticket, unless the ticket holds another pending job, which it never
+     * replaces: then it goes back in line (`queued`). Behind another daemon's launch not started yet (ORC-359), as
+     * `startRun` does: that very start stays where it is, its launch's; another goes back in line.
      */
     const lose = async (holder: TicketState): Promise<StartOutcome> => {
       this.d.scheduler.release(key);
       const launch = holder.activeRunId ? undefined : otherLaunch(holder, clock.now(), runId);
-      const by = holder.activeRunId ? `run ${holder.activeRunId}` : `the launch of ${launch?.runId ?? 'another run'}`;
-      if (samePending(holder.activeStart ?? launch?.start, start)) {
-        this.log('warn', `${job.name} on ${ticketId} not launched: ${by} of the same start took the ticket first`);
-        return launch ? 'deferred' : 'done';
+      if (launch) {
+        const same = samePending(launch.start, start);
+        this.log('warn', `${job.name} on ${ticketId} not launched: the launch of ${launch.runId}${same ? ' of the same start' : ''} took the ticket first${same ? '' : ': back in line'}`);
+        return same ? 'deferred' : 'queued';
+      }
+      if (samePending(holder.activeStart, start)) {
+        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} of the same start took the ticket first`);
+        return 'done';
       }
       if (holder.pendingJob && !samePending(holder.pendingJob, start)) {
-        this.log('warn', `${job.name} on ${ticketId} not launched: ${by} took the ticket first, and another job waits behind it: back in line`);
+        this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} took the ticket first, and another job waits behind it: back in line`);
         return 'queued';
       }
-      this.log('warn', `${job.name} on ${ticketId} not launched: ${by} took the ticket first, it waits behind it`);
+      this.log('warn', `${job.name} on ${ticketId} not launched: run ${holder.activeRunId} took the ticket first, it waits behind it`);
       if (!holder.pendingJob) await state(this.apply(holder, { type: 'pending.set', job: start }));
       return 'deferred';
     };
@@ -2803,7 +2811,8 @@ export class Orchestrator {
       if (marks) await state(this.readUntrusted(project, seen));
       const untrusted = marks ? { untrusted: { head: (await workspaces.head(ws.path)) ?? '' } } : {};
       at.started = true;
-      const took = await this.apply(t, {
+      // Its hold written again in the same write (ORC-359): one run out never refuses it, another launch's live one does.
+      const took = await this.apply(t, ...(job.queue === 'dev' ? [hold()] : []), {
         type: 'run.started',
         runId,
         job: job.name,
@@ -2817,6 +2826,7 @@ export class Orchestrator {
       if (job.queue === 'dev' && took.activeRunId !== runId) return await lose(took);
       // Its run.started ended its hold.
       at.reserved = false;
+      clearInterval(at.renew);
       await store.putRun(run);
       // Only what this launch read: a message that came in since stays for the next run (ORC-339).
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed', items: t.humanInbox });
