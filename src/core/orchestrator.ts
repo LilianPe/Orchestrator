@@ -82,7 +82,7 @@ import { runSealedSetup } from './sealed-setup.js';
 import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
-import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
+import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -90,6 +90,7 @@ import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
+import { READ_TOOLS } from '../presets/preset.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -854,7 +855,7 @@ export class Orchestrator {
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
    * hook's log outlives the sandbox. The pack and the run settings read-only.
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
-   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): the repository's
+   * from writing, as on the host, or for `intake` its tools, `Read`, `Grep` and `Glob` (ORC-367). The network is applied by the egress proxy (ORC-213): the repository's
    * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
    */
   private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
@@ -2515,6 +2516,8 @@ export class Orchestrator {
       // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` took. A failure leaves it to the next beat.
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
+      // A review job of a version frozen before ORC-367 has its lens, not yet its tools.
+      const tools = job.tools ?? (job.lens ? READ_TOOLS : undefined);
       const handle = this.d.runner.start({
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
@@ -2526,9 +2529,10 @@ export class Orchestrator {
         ...bounds,
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
-        readOnly: job.workspace === 'trunk-readonly',
-        // An AI review reads and searches, nothing else: no write tool, no shell (ORC-183).
-        ...(job.lens ? { tools: REVIEW_TOOLS } : {}),
+        // Plan mode, for a question that has every tool. A job held to its tools needs none, and plan mode could refuse its `submit_result`.
+        readOnly: job.workspace === 'trunk-readonly' && !tools,
+        // A read-only step reads and searches, nothing else: no write tool, no shell (ORC-183, ORC-367).
+        ...(tools ? { tools } : {}),
         limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).
