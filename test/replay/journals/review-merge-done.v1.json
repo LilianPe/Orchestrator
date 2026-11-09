@@ -2021,8 +2021,9 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "correctness",
-            "count": 0
+            "counts": {
+              "correctness": 0
+            }
           }
         },
         "effects": [
@@ -2100,8 +2101,9 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "correctness",
-            "count": 0
+            "counts": {
+              "correctness": 0
+            }
           },
           "activeRunId": "id-7",
           "activeJob": "review-security",
@@ -2138,8 +2140,9 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "correctness",
-            "count": 0
+            "counts": {
+              "correctness": 0
+            }
           },
           "activeRunId": "id-7",
           "activeJob": "review-security",
@@ -2207,8 +2210,9 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "correctness",
-            "count": 0
+            "counts": {
+              "correctness": 0
+            }
           },
           "activeRunId": "id-7",
           "activeJob": "review-security",
@@ -2245,8 +2249,9 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "correctness",
-            "count": 0
+            "counts": {
+              "correctness": 0
+            }
           },
           "activeRunId": "id-7",
           "activeJob": "review-security",
@@ -2328,8 +2333,9 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "correctness",
-            "count": 0
+            "counts": {
+              "correctness": 0
+            }
           },
           "activeRunId": "id-7",
           "activeJob": "review-security",
@@ -2366,8 +2372,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           }
         },
         "effects": [
@@ -2446,8 +2454,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2480,8 +2490,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2545,8 +2557,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2579,8 +2593,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2644,8 +2660,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2678,8 +2696,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2743,8 +2763,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2777,8 +2799,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2841,8 +2865,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2875,8 +2901,10 @@
           "reviewSha": "abc123",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "human_review"
         },
@@ -2953,8 +2981,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -2984,8 +3014,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3046,8 +3078,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3077,8 +3111,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3139,8 +3175,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3170,8 +3208,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3232,8 +3272,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3263,8 +3305,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3338,8 +3382,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3369,8 +3415,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3435,8 +3483,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
@@ -3466,8 +3516,10 @@
           "prState": "MERGED",
           "reviewBlocking": {
             "sha": "abc123",
-            "lens": "security",
-            "count": 0
+            "counts": {
+              "correctness": 0,
+              "security": 0
+            }
           },
           "recordedStatus": "done"
         },
