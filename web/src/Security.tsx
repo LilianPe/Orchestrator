@@ -54,15 +54,22 @@ function Counts<T>({ title, head, items, cells, empty }: { title: string; head: 
   );
 }
 
+/** The hook's refusals per rule and the hosts contacted, of a run or of the period. */
+function RulesAndHosts({ rules, hosts }: Pick<RunSecurityView, 'rules' | 'hosts'>) {
+  return (
+    <div className="split">
+      <Counts title="Refusals per rule" head={['Rule', 'Refusals']} items={rules} cells={(r) => [r.rule, r.refusals]} empty="No refusal of the hook." />
+      <Counts title="Hosts contacted" head={['Host', 'Requests', 'Refused']} items={hosts} cells={(h) => [h.host, h.requests, h.refused]} empty="No request through the proxy." />
+    </div>
+  );
+}
+
 function Run({ run }: { run: RunSecurityView }) {
   const skipped = run.skipped.egress + run.skipped.refusals;
   return (
     <section>
       <h2>Run {run.runId.slice(0, 8)} · {run.ticketId}</h2>
-      <div className="split">
-        <Counts title="Refusals per rule" head={['Rule', 'Refusals']} items={run.rules} cells={(r) => [r.rule, r.refusals]} empty="No refusal of the hook." />
-        <Counts title="Hosts contacted" head={['Host', 'Requests', 'Refused']} items={run.hosts} cells={(h) => [h.host, h.requests, h.refused]} empty="No request through the proxy." />
-      </div>
+      <RulesAndHosts rules={run.rules} hosts={run.hosts} />
       {run.refusals.length > 0 && (
         <ul className="refusals">
           {run.refusals.map((r, i) => <li key={i}>{time(r.at)} <span className="step">{r.tool}</span> {r.rule}</li>)}
@@ -115,10 +122,7 @@ export function Security({ period, blocks, run, runFailed, selected, onSelect }:
           {runFailed ? <section><p className="flow-failed" role="alert">Reading the run failed. Pick it again to retry.</p></section> : run && <Run run={run} />}
           <section>
             <h2>Security log of the period</h2>
-            <div className="split">
-              <Counts title="Refusals per rule" head={['Rule', 'Refusals']} items={period.rules} cells={(r) => [r.rule, r.refusals]} empty="No refusal of the hook." />
-              <Counts title="Hosts contacted" head={['Host', 'Requests', 'Refused']} items={period.hosts} cells={(h) => [h.host, h.requests, h.refused]} empty="No request through the proxy." />
-            </div>
+            <RulesAndHosts rules={period.rules} hosts={period.hosts} />
           </section>
         </>
       )}

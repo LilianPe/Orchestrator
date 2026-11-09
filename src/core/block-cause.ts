@@ -31,7 +31,10 @@ export interface ParetoCause {
 /** The causes of moves into Blocked, by their kinds, most frequent first; a tie in the Flow's order of the causes. */
 export function blockPareto(kinds: readonly (BlockKind | undefined)[]): ParetoCause[] {
   const counts = new Map<BlockCause, number>();
-  for (const k of kinds) counts.set(causeOf(k), (counts.get(causeOf(k)) ?? 0) + 1);
+  for (const k of kinds) {
+    const cause = causeOf(k);
+    counts.set(cause, (counts.get(cause) ?? 0) + 1);
+  }
   const sorted = BLOCK_CAUSES.filter((c) => counts.has(c)).sort((a, b) => counts.get(b)! - counts.get(a)!);
   let upTo = 0;
   return sorted.map((cause) => {

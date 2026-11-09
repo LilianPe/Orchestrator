@@ -1,4 +1,4 @@
-import type { BlockCause, BlockKind } from '../../src/core/block-cause.js';
+import type { BlockCause, BlockKind, ParetoCause } from '../../src/core/block-cause.js';
 
 export interface RunView {
   id: string;
@@ -153,5 +153,5 @@ export interface BlockParetoView {
   since: number;
   until: number;
   total: number;
-  causes: { cause: BlockCause; count: number; share: number; cumulative: number }[];
+  causes: ParetoCause[];
 }

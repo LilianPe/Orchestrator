@@ -238,24 +238,25 @@ export function createApp(d: ServerDeps): Hono {
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
   // rules and runs over a period; a run's refusals and hosts. Never a command, a path nor a host that is not a plain name:
   // they can hold a secret.
-  app.get('/api/security', async (c) => {
+  // A route over a period: 400 when the query asks for one that is not.
+  const overPeriod = (serve: (c: Context, period: { since: number; until: number }) => Promise<Response>) => (c: Context) => {
     const period = periodOf(c, d.clock.now());
-    if (!period) return c.json({ error: 'since and until: whole ms, since before until' }, 400);
+    return period ? serve(c, period) : c.json({ error: 'since and until: whole ms, since before until' }, 400);
+  };
+  app.get('/api/security', overPeriod(async (c, period) => {
     const { hosts, rules, runs } = await d.store.securityStats(period.since, period.until);
     return c.json({ ...period, hosts: shownHosts(hosts), rules, runs: runs.slice(0, SECURITY_RUNS), runsLeftOut: Math.max(0, runs.length - SECURITY_RUNS) });
-  });
+  }));
   app.get('/api/security/runs/:id', async (c) => {
     const log = await d.store.securityLog(c.req.param('id'));
     return log ? c.json(runSecurityView(log)) : c.notFound();
   });
 
   // The Pareto of the block causes (ORC-300): the moves into Blocked of the period, by their typed kind's cause (ORC-345).
-  app.get('/api/blocks', async (c) => {
-    const period = periodOf(c, d.clock.now());
-    if (!period) return c.json({ error: 'since and until: whole ms, since before until' }, 400);
+  app.get('/api/blocks', overPeriod(async (c, period) => {
     const blocks = await d.store.blocksEntered(period.since, period.until);
     return c.json({ ...period, total: blocks.length, causes: blockPareto(blocks.map((b) => b.kind)) });
-  });
+  }));
 
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 

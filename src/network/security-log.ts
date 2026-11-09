@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readCapped } from '../adapters/read-capped.js';
-import type { EgressRecord, RefusalRecord, SecurityLog } from '../store/types.js';
+import type { EgressRecord, RefusalRecord, SecurityLog, SecurityStats } from '../store/types.js';
 
 /** The rules of the pack's PreToolUse hook (`packs/standard/hooks/pre-tool-use.mjs`): a refusal naming another is forged. */
 export const REFUSAL_RULES = [
@@ -148,14 +148,14 @@ export interface RunSecurityView {
   projectId: string;
   ticketId: string;
   at: number;
-  rules: { rule: string; refusals: number }[];
+  rules: SecurityStats['rules'];
   refusals: { at: number; tool: string; rule: string }[];
   /** Contacted, with the requests the proxy refused; those not a plain host name together, under `OTHER_HOSTS`. */
   hosts: HostCount[];
   skipped: SecurityLog['skipped'];
 }
 
-type HostCount = { host: string; requests: number; refused: number };
+type HostCount = SecurityStats['hosts'][number];
 
 /** The row of the hosts that are not a plain host name: the agent wrote them, they can hold anything. */
 export const OTHER_HOSTS = '(not a host name)';

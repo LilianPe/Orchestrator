@@ -4,7 +4,7 @@ import { Flow, plural } from './Flow.js';
 import { Measures } from './Measures.js';
 import { Security } from './Security.js';
 import { initialState, reducer } from './state.js';
-import type { BlockParetoView, FlowView, MeasuredTicketView, RunLine, RunSecurityView, SecurityPeriodView, WorkingRunView } from './types.js';
+import type { FlowView, RunLine, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -41,30 +41,38 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
 type View = 'flow' | 'measures' | 'security';
 const viewOf = (hash: string): View => (hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
 
-/** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
-function MeasuresPage() {
-  const [tickets, setTickets] = useState<MeasuredTicketView[]>();
-  const [failed, setFailed] = useState(false);
-  const [selected, setSelected] = useState<string>();
-  const [now, setNow] = useState(() => Date.now());
+/**
+ * What `read` gives, read now and every 30 s while the page is shown and its tab visible, again when `deps` change; an
+ * answer to an earlier read never replaces a later one. `failed`: the last read failed, `data` still the one before.
+ */
+function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?: T; failed: boolean } {
+  const [state, setState] = useState<{ data?: T; failed: boolean }>({ failed: false });
   useEffect(() => {
     let live = true;
     const load = () =>
-      void fetchMeasures().then(
-        (t) => live && (setTickets(t), setFailed(false), setNow(Date.now())),
-        () => live && setFailed(true),
+      void read().then(
+        (data) => live && setState({ data, failed: false }),
+        () => live && setState((s) => ({ ...s, failed: true })),
       );
     load();
-    const timer = setInterval(load, MEASURES_POLL_MS);
+    const timer = setInterval(() => document.hidden || load(), MEASURES_POLL_MS);
     return () => {
       live = false;
       clearInterval(timer);
     };
-  }, []);
+    // `read` is rebuilt each render: `deps` say when it changes.
+  }, deps);
+  return state;
+}
+
+/** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
+function MeasuresPage() {
+  const { data, failed } = usePolled(async () => ({ tickets: await fetchMeasures(), now: Date.now() }), []);
+  const [selected, setSelected] = useState<string>();
   return (
     <div className="flow">
-      {failed && <p className="flow-failed" role="alert">{tickets ? 'Measures out of date: reading them failed. Retrying within 30 s.' : 'Measures unavailable: reading them failed. Retrying within 30 s.'}</p>}
-      {tickets ? <Measures tickets={tickets} now={now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
+      {failed && <p className="flow-failed" role="alert">{data ? 'Measures out of date: reading them failed. Retrying within 30 s.' : 'Measures unavailable: reading them failed. Retrying within 30 s.'}</p>}
+      {data ? <Measures tickets={data.tickets} now={data.now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
     </div>
   );
 }
@@ -75,35 +83,19 @@ const PERIODS = [7, 30, 90] as const;
 /** The security log and the Pareto of the blocks (ORC-300), over the last days chosen, read when shown and every 30 s while it is. */
 function SecurityPage() {
   const [days, setDays] = useState<(typeof PERIODS)[number]>(7);
-  const [read, setRead] = useState<{ period: SecurityPeriodView; blocks: BlockParetoView }>();
-  const [failed, setFailed] = useState(false);
-  const [selected, setSelected] = useState<string>();
+  const { data, failed } = usePolled(() => {
+    const until = Date.now();
+    const since = until - days * DAY_MS;
+    return Promise.all([fetchSecurity(since, until), fetchBlocks(since, until)]).then(([period, blocks]) => ({ period, blocks }));
+  }, [days]);
   const [run, setRun] = useState<{ runId: string; view?: RunSecurityView; failed?: boolean }>();
   // Another period lists other runs: the one selected goes with the last one.
   const choose = (d: (typeof PERIODS)[number]) => {
     setDays(d);
-    setSelected(undefined);
+    setRun(undefined);
   };
-  useEffect(() => {
-    let live = true;
-    const load = () => {
-      const until = Date.now();
-      const since = until - days * DAY_MS;
-      void Promise.all([fetchSecurity(since, until), fetchBlocks(since, until)]).then(
-        ([period, blocks]) => live && (setRead({ period, blocks }), setFailed(false)),
-        () => live && setFailed(true),
-      );
-    };
-    load();
-    const timer = setInterval(load, MEASURES_POLL_MS);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [days]);
   // Picking a run reads it, picking it again reads it again: a failed read is the run's, not the period's.
   const select = (runId: string) => {
-    setSelected(runId);
     setRun({ runId });
     void fetchRunSecurity(runId).then(
       (view) => setRun((r) => (r?.runId === runId ? { runId, view } : r)),
@@ -115,8 +107,8 @@ function SecurityPage() {
       <nav className="periods" aria-label="Period">
         {PERIODS.map((d) => <button key={d} aria-pressed={d === days} onClick={() => choose(d)}>Last {d} days</button>)}
       </nav>
-      {failed && <p className="flow-failed" role="alert">{read ? 'Security log out of date: reading it failed. Retrying within 30 s.' : 'Security log unavailable: reading it failed. Retrying within 30 s.'}</p>}
-      {read ? <Security period={read.period} blocks={read.blocks} run={selected ? run?.view : undefined} runFailed={!!selected && run?.failed} selected={selected} onSelect={select} /> : !failed && <section><p className="empty">Loading the security log…</p></section>}
+      {failed && <p className="flow-failed" role="alert">{data ? 'Security log out of date: reading it failed. Retrying within 30 s.' : 'Security log unavailable: reading it failed. Retrying within 30 s.'}</p>}
+      {data ? <Security period={data.period} blocks={data.blocks} run={run?.view} runFailed={run?.failed} selected={run?.runId} onSelect={select} /> : !failed && <section><p className="empty">Loading the security log…</p></section>}
     </div>
   );
 }
