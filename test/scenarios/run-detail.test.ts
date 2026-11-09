@@ -47,11 +47,13 @@ describe('the run detail on the engine (ORC-298)', () => {
       expect.objectContaining({ gate: 'merge', to: 'ai_review', closedBy: 't-1' }),
       expect.objectContaining({ gate: 'merge', to: 'done', closedAt: expect.any(Number) }),
     ]);
-    expect(d.findings).toEqual([expect.objectContaining({ source: 'ai', job: 'review', status: 'success', outcome: 'succeeded' })]);
-    expect(d.checks).toEqual([
-      expect.objectContaining({ check: 'verify', result: 'passed', runId: dev.id, job: 'dev' }),
-      expect.objectContaining({ check: 'verify', result: 'passed', job: 'review' }),
+    // The two review lenses (ORC-183), each a round with the findings it handed back: none here.
+    expect(d.findings).toEqual([
+      expect.objectContaining({ source: 'ai', job: 'review', status: 'success', outcome: 'succeeded', findings: [] }),
+      expect.objectContaining({ source: 'ai', job: 'review-security', status: 'success', outcome: 'succeeded', findings: [] }),
     ]);
+    // The dev run's verify; the review lenses write nothing, so nothing is verified after them (ORC-183).
+    expect(d.checks).toEqual([expect.objectContaining({ check: 'verify', result: 'passed', runId: dev.id, job: 'dev' })]);
     expect(d.steps).toEqual(expect.arrayContaining([
       expect.objectContaining({ job: 'dev', attempts: 1, tokens: DEV_TOKENS }),
       expect.objectContaining({ job: 'review', attempts: 1, tokens: REVIEW_TOKENS }),
