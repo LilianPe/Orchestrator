@@ -56,6 +56,20 @@ const runFinished = (outcome: 'success' | 'failure', job = 'dev', runId = 'r1') 
 const verifyFailed = (job = 'dev', runId = 'r1') => ext('verify.failed', { runId, job, failures: VERIFY_FAILURES });
 /** A run of `job` that ends, then its verification fails. */
 const failedAttempt = (job: string, runId: string) => [runStarted(job, runId), runFinished('success', job, runId), verifyFailed(job, runId)];
+/** The relaunch of fix-ci its verify.failed decides waits behind the tests run, which dev's start keeps there (ORC-360). */
+const pendingRelaunch = [
+  ...delegated(),
+  runStarted('fix-ci'),
+  runFinished('success', 'fix-ci'),
+  runStarted('tests'),
+  verifyFailed('fix-ci'),
+  runFinished('success', 'tests'),
+  verifyFailed('tests'),
+];
+/** The PR in review fails its CI past the red-CI bound: fix-ci is blocked. */
+const redCiBound = () => [ext('status.changed', { from: 'dev', to: 'human_review' }), ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] }))];
+/** The settle after the run's end dies, its retries spent (ORC-339). */
+const settleDied = () => ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' });
 const reply = (taint: 'trusted' | 'untrusted' = 'trusted') => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian' }, taint);
 
 /** Every property gets the same generator; `examples` are tried first, before the random sequences. */
@@ -341,19 +355,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
   describe('a settle stuck on a ticket blocked already (ORC-362)', () => {
     it('shows the block that was there alone, and the lift of that block starts the pending job, once', () => {
       // A relaunch of fix-ci kept pending behind the tests run, the red-CI bound blocks fix-ci, then the settle dies.
-      const stuck = [
-        ...delegated(),
-        runStarted('fix-ci'),
-        runFinished('success', 'fix-ci'),
-        runStarted('tests'),
-        verifyFailed('fix-ci'),
-        runFinished('success', 'tests'),
-        verifyFailed('tests'),
-        ext('status.changed', { from: 'dev', to: 'human_review' }),
-        ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
-        ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
-      ];
-      const r = run(seq(...stuck, ext('pr.checks_passed', pr), runStarted('fix-ci', 'r9'), runFinished('success', 'fix-ci', 'r9')));
+      const r = run(seq(...pendingRelaunch, ...redCiBound(), settleDied(), ext('pr.checks_passed', pr), runStarted('fix-ci', 'r9'), runFinished('success', 'fix-ci', 'r9')));
       const died = decided(r).find((s) => s.event.type === 'effect.failed')!;
       expect(died.before?.blocked).toBe(true);
       expect(died.decision.events.map((e) => e.type)).not.toContain('ticket.blocked');
@@ -378,39 +380,13 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         // Today the bound counts attempts (verify_attempts), the target counts relaunches (ORC-138, point 8):
         // N + 1 attempts here is the target's bound N, until ORC-187 converts the unit.
         // Counted as the runner gets them (`loopBounded`): a decision that starts a pending job hands over the start an earlier one made.
-        // The relaunch of fix-ci its verify.failed decides waits behind the tests run, which dev's start keeps there.
-        const pendingRelaunch = [
-          ...delegated(),
-          runStarted('fix-ci'),
-          runFinished('success', 'fix-ci'),
-          runStarted('tests'),
-          verifyFailed('fix-ci'),
-          runFinished('success', 'tests'),
-          verifyFailed('tests'),
-        ];
         // Found by fast-check (ORC-360): the red-CI bound then blocks fix-ci, and a debounce took that block for a pending job
         // no settle could start: it lifted the block and started the relaunch, in place of its own job.
-        const redCiOnPending = seq(
-          ...pendingRelaunch,
-          ext('status.changed', { from: 'dev', to: 'human_review' }),
-          ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
-          ext('timer.fired', DEBOUNCE),
-        );
+        const redCiOnPending = seq(...pendingRelaunch, ...redCiBound(), ext('timer.fired', DEBOUNCE));
         // ORC-339's own path: the settle dies, the ticket is blocked on the pending relaunch, the debounce starts it, once.
-        const stuckSettle = seq(
-          ...pendingRelaunch,
-          ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
-          ext('timer.fired', DEBOUNCE),
-        );
+        const stuckSettle = seq(...pendingRelaunch, settleDied(), ext('timer.fired', DEBOUNCE));
         // ORC-362: the settle dies on the ticket the red-CI bound blocked, and a green CI lifts that block: the relaunch starts, once.
-        const stuckOnBlocked = seq(
-          ...pendingRelaunch,
-          ext('status.changed', { from: 'dev', to: 'human_review' }),
-          ...Array.from({ length: 3 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
-          ext('effect.failed', { effectId: 'REL-1:1:1', kind: 'settle', eventId: 'ex-1', attempts: 8, error: 'Linear down' }),
-          ext('pr.checks_passed', pr),
-          ...failedAttempt('fix-ci', 'r9'),
-        );
+        const stuckOnBlocked = seq(...pendingRelaunch, ...redCiBound(), settleDied(), ext('pr.checks_passed', pr), ...failedAttempt('fix-ci', 'r9'));
         // Found by the count of launches (ORC-360): a relaunch kept pending outlived the green check that started the loop over;
         // settle then started it, on failures gone, and the new loop still had all its relaunches (attempts 3).
         const pendingPastGreen = seq(

@@ -1080,17 +1080,23 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
 /** ORC-362: the follow-ups of ORC-360, at the orchestrator's level. */
 const FAILED = JSON.stringify([{ command: 'npm test', exitCode: 1, output: '1 failed' }]);
 
+/**
+ * What settle leaves of the relaunch a verify.failed decided, once it could not launch it (paused, no free slot): an item of
+ * the queue, off the ticket, in the loop its failure counted.
+ */
+async function queuedRelaunch(h: H): Promise<void> {
+  const now = h.clock.now();
+  await h.store.putTicket({ ...(await h.ticket()), verifyAttempts: 1 });
+  await h.store.enqueue({ projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', input: 'verify_failures', inputText: FAILED, resume: true, priority: 0, enqueuedAt: now, startMark: `start:p:REL-1:dev:${now}:queued` });
+}
+
 describe('a relaunch past a green check, a settle stuck on a ticket blocked already', () => {
   it('a verify relaunch settle queued does not start once a green check came before its launch', async () => {
     const h = createHarness();
     const first = await heldRun(h);
     await control(h, 'g1', 'control.pause');
     await h.orch.drained();
-    // What settle leaves of the relaunch a verify.failed decided, once it could not launch it (paused, no free slot): an item of
-    // the queue, off the ticket, in the loop its failure counted.
-    const now = h.clock.now();
-    await h.store.putTicket({ ...(await h.ticket()), verifyAttempts: 1 });
-    await h.store.enqueue({ projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', input: 'verify_failures', inputText: FAILED, resume: true, priority: 0, enqueuedAt: now, startMark: `start:p:REL-1:dev:${now}:queued` });
+    await queuedRelaunch(h);
     // The check of the ticket's run passes before the queue hands the relaunch out: the loop starts over, its failures gone.
     h.runner.release(first);
     await h.orch.drained();
@@ -1110,9 +1116,7 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
     await h.orch.drained();
     await control(h, 'g1', 'control.pause');
     await h.orch.drained();
-    const now = h.clock.now();
-    await h.store.putTicket({ ...(await h.ticket()), verifyAttempts: 1 });
-    await h.store.enqueue({ projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', input: 'verify_failures', inputText: FAILED, resume: true, priority: 0, enqueuedAt: now, startMark: `start:p:REL-1:dev:${now}:queued` });
+    await queuedRelaunch(h);
     h.runner.enqueue({ hold: true });
     await control(h, 'g2', 'control.resume');
     await h.orch.drained();
