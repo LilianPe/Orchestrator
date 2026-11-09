@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -120,12 +121,12 @@ const FETCH_GRACE_MS = 5_000;
  * `git fetch origin` in `repo`, never longer than `deadlineMs` and never a prompt for a credential: past the deadline,
  * git and what stayed in its process group (its ssh) are killed, and the launch stops waiting a few seconds later
  * whatever still holds git's output. A failure's message reaches the ticket (Linear): it names neither the server's
- * path nor the command, which go to `log`.
+ * path nor the command, which go to `log`. `refspecs`: what to fetch, instead of what the remote's config says.
  */
-export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void } = {}): Promise<void> {
+export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: number; log?: (message: string) => void; refspecs?: readonly string[] } = {}): Promise<void> {
   const deadlineMs = o.deadlineMs ?? FETCH_DEADLINE_MS;
   const silent = `the forge no longer responds after ${deadlineMs / 1000} s`;
-  const args = ['-C', repo, 'fetch', '--quiet', 'origin'];
+  const args = ['-C', repo, 'fetch', '--quiet', 'origin', ...(o.refspecs ?? [])];
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
   const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
@@ -153,8 +154,8 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /** Bounded: a forge that does not answer refuses the launch, which never waits for it forever (ORC-209). */
-  private fetch(repo: string): Promise<void> {
-    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log });
+  private fetch(repo: string, refspecs?: readonly string[]): Promise<void> {
+    return fetchOrigin(this.exec, repo, { deadlineMs: this.o.fetchDeadlineMs, log: this.o.log, ...(refspecs ? { refspecs } : {}) });
   }
 
   async prepare(req: WorkspaceRequest): Promise<Workspace> {
@@ -331,15 +332,27 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   /**
-   * The same reading as the clone's (`gitReader`), on the factory's repository: its default branch fetched from the forge
-   * first, as the clone fetches it, so that the fork point and the config are the forge's. A forge that does not answer rejects.
+   * The same reading as the clone's (`gitReader`), on the factory's repository. With `fetch`, against the forge's default
+   * branch, its `HEAD` fetched as the clone fetches it, so that the fork point and the config are the forge's even when
+   * `origin/HEAD`, which no fetch refreshes, still names an old one (ORC-358); a forge that does not answer rejects.
+   * Without, against the repository's default branch as it is, no forge read.
    */
-  async branchReader(repoPath: string, path: string): Promise<BranchReader | undefined> {
+  async branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
     const at = await this.worktreeGit(repoPath, path);
     if (!at) return undefined;
-    await this.fetch(repoPath);
-    const base = await originHead(this.exec, repoPath);
+    const base = o.fetch ? await this.forgeHead(repoPath) : await originHead(this.exec, repoPath);
     return gitReader(at.git, base, await forkPoint(at.git, at.head, base), at.head);
+  }
+
+  /** The commit of the forge's `HEAD`, fetched to a ref of its own, read, then removed: two reads at once never share one. */
+  private async forgeHead(repo: string): Promise<string> {
+    const ref = `refs/factory/forge-head/${randomUUID()}`;
+    await this.fetch(repo, [`+HEAD:${ref}`]);
+    try {
+      return (await this.git(repo, 'rev-parse', '--verify', `${ref}^{commit}`)).trim();
+    } finally {
+      await this.git(repo, 'update-ref', '-d', ref).catch(() => {});
+    }
   }
 
   /** Git in the agent's directory, on the host: only without sandboxes (`FACTORY_ALLOW_HOST_VERIFY`), where the agent runs on the host anyway. */

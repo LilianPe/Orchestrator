@@ -1,7 +1,7 @@
 import type { ReviewLens } from '../config/workflow-schema.js';
 import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
-import type { InputKind, InternalEvent, LogicalState, TimerFired } from './types.js';
+import type { DecidedEvent, InputKind, LogicalState, TimerFired } from './types.js';
 import type { VisualProof } from '../checks/visual-proof.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
@@ -77,7 +77,7 @@ export type Timer = TimerFired & { slot: string; ms: number };
 
 /** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */
 export interface Decision {
-  events: InternalEvent[];
+  events: DecidedEvent[];
   effects: Effect[];
   timers: Timer[];
   trace: string[];
