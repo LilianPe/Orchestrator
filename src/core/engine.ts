@@ -55,6 +55,24 @@ export function historyTaint(events: readonly FactoryEvent[]): Taint {
   return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
 }
 
+/**
+ * The Linear messages whose text `ingestedConversation` gives. A command is control, not knowledge; a review is GitHub's,
+ * untrusted whoever wrote it (ORC-160), so never given.
+ */
+const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
+
+/**
+ * What `learn` after a merge is given of the ticket's conversation, in place of reading the PR itself (ORC-361): the Linear
+ * messages the factory ingested, in their order, as it would hand them to an agent (`keepMessage`, `forAgent`). Only trusted
+ * ones, never one the matrix refused (`refused`, the ids of those events): untrusted content is never read as knowledge,
+ * whatever `historyTaint` lets through. What the forge holds that was never ingested (a comment on the PR's conversation, any
+ * review with GitHub webhooks off) is not in the journal, so not here either.
+ */
+export function ingestedConversation(events: readonly FactoryEvent[], refused: ReadonlySet<string> = new Set()): FeedbackItem[] {
+  const given = events.filter((e): e is HumanMessage => e.taint !== 'untrusted' && CONVERSATION.has(e.type) && !refused.has(e.id));
+  return forAgent(given.map((e) => messageItem(e, 'session'))).filter((i) => i.body.trim());
+}
+
 /** A review without a word (an approval, most often): it brings nothing a run reads. */
 function silentReview(e: FactoryEvent): boolean {
   return e.type === 'pr.reviewed' && !(e as FactoryEvent<'pr.reviewed'>).payload.body.trim();
@@ -115,9 +133,9 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 }
 
 /**
- * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. The risk never goes down
- * (I4) and the visual proof only hardens to `required`. A ticket not complete enough, by intake's judgement or by the
- * deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
+ * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. Within a run the risk
+ * never goes down (I4) and the visual proof only hardens to `required`; a new run starts from neither (`newRun`). A
+ * ticket not complete enough, by intake's judgement or by the deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
  * Progress meanwhile. A complete one « blocked by » a ticket not done waits for it (ORC-363).
  */
 function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
@@ -740,9 +758,14 @@ const commandText = (event: FactoryEvent<'command'>): string => `${event.payload
 
 /** Records a human message: it waits in humanInbox for the next run that consumes it (I6), its taint with it (I12). */
 function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread'): void {
+  out.events.push({ type: 'feedback.appended', item: messageItem(event, source) });
+}
+
+/** A human message as an agent is handed it: kept in humanInbox (`keepMessage`), or given to `learn` (`ingestedConversation`). */
+function messageItem(event: HumanMessage, source: 'session' | 'thread'): FeedbackItem {
   const { author, kind } = event.payload;
   const body = event.type === 'command' && kind ? commandText(event) : event.payload.body;
-  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
+  return { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) };
 }
 
 /**
@@ -826,6 +849,8 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
 
 /** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
 export const AUTHZ_REFUSED = 'authz: refused ';
+/** The trace of a decision the authorization matrix refused (ORC-186): its refusal line, else undefined. */
+export const authzRefusal = (trace: readonly string[]): string | undefined => trace.find((t) => t.startsWith(AUTHZ_REFUSED));
 
 /**
  * Checks the matrix on the event's signed actor and the roles journaled with it (ORC-186). A refusal is
@@ -1352,10 +1377,22 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
+  if (event.type === 'ticket.delegated') newRun(out, state, workflow);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
   if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
   return out;
+}
+
+/**
+ * The boundary of a run (ORC-365): a delegation whose decision starts a dev run starts a new run, which takes its risk and
+ * its visual proof from its own assessment, not from the last run's (I4): they are cleared (`null`) until it assesses.
+ * A delegation that starts nothing (refused, a run active, a blocked ticket, one waiting on its blockers) leaves the run
+ * as it is; a ticket never assessed has nothing to clear, and patches nothing.
+ */
+function newRun(out: Decision, state: TicketState | undefined, workflow: Workflow): void {
+  const starts = out.effects.some((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
+  if ((state?.risk || state?.visualProof) && starts) out.events.push({ type: 'ticket.patched', patch: { risk: null, visualProof: null } });
 }
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */
