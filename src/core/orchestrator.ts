@@ -1076,6 +1076,7 @@ export class Orchestrator {
         setup: project.workflow.workspace.setup,
         commands: job.verify,
         gitleaks: true,
+        semgrep: true,
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
