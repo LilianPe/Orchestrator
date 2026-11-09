@@ -162,6 +162,34 @@ describe('PreToolUse guard of the standard pack', () => {
     expect(bash('gh pr view 3').denied).toBe(false);
   });
 
+  it('refuses a knowledge run any read of the forge but the merged diff: it reads what the factory ingested (ORC-361)', () => {
+    const knowledge = { FACTORY_KNOWLEDGE_RUN: '1', FACTORY_TICKET: 'REL-1', FACTORY_PR_URL: 'https://gh/pr/3' };
+    for (const command of [
+      // Another PR's diff, an outside contributor's open one say, is no merged diff of the ticket.
+      'gh pr diff 99',
+      'gh pr diff -R other/repo 3',
+      'gh pr diff https://gh/pr/3 -R other/repo',
+      'gh pr diff',
+      'gh pr view https://gh/pr/3 --comments',
+      'gh pr view 3 --json comments,reviews',
+      'gh -R o/r pr view 3',
+      'gh api repos/o/r/issues/3/comments',
+      'gh issue view 3 --comments',
+      'gh pr diff https://gh/pr/3 && gh pr view 3 -c',
+      'bash -c "gh pr view 3 --comments"',
+    ]) {
+      const r = bash(command, knowledge);
+      expect(r.denied, command).toBe(true);
+      expect(r.reason).toContain('reads only what the factory gives it');
+      expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Bash', command, rule: 'forge-read', ticket: 'REL-1' }]);
+    }
+    for (const command of ['gh pr diff https://gh/pr/3', 'gh pr diff https://gh/pr/3 --name-only', 'git log --oneline', 'grep -ril csv notes/']) expect(bash(command, knowledge).denied, command).toBe(false);
+    // Without a PR (`remember` on a ticket that has none), no diff at all.
+    expect(bash('gh pr diff https://gh/pr/3', { ...knowledge, FACTORY_PR_URL: '' }).denied).toBe(true);
+    // Any other run keeps its reads of the PR.
+    expect(bash('gh pr view 3 --comments').denied).toBe(false);
+  });
+
   it('journals the ticket of the run', () => {
     expect(bash('rm -rf /', { FACTORY_TICKET: 'REL-7' }).lines).toEqual([
       { at: expect.any(String), tool: 'Bash', command: 'rm -rf /', rule: 'rm-root', ticket: 'REL-7' },
