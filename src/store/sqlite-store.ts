@@ -25,6 +25,8 @@ import {
   effectResult,
   timerEvent,
   timerRowId,
+  PAUSE_ACCEPTED,
+  pauseAcceptedValue,
   type BlockEntry,
   type DecisionOutcome,
   type DecisionRecord,
@@ -190,18 +192,16 @@ export class SqliteStore implements Store {
 
   /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
-    return this.appendResult(e);
+    return this.atomically(() => {
+      const fresh = this.appendResult(e);
+      const paused = pauseAcceptedValue(e);
+      if (fresh && paused !== undefined) this.writeMeta(PAUSE_ACCEPTED, paused);
+      return fresh;
+    });
   }
 
   async inboxHas(id: string): Promise<boolean> {
     return this.db.prepare('SELECT 1 FROM inbox WHERE id = ?').get(id) !== undefined;
-  }
-
-  async pauseAccepted(): Promise<boolean> {
-    const last = this.db
-      .prepare(`SELECT json_extract(data, '$.type') AS type FROM inbox WHERE json_extract(data, '$.type') IN ('control.pause', 'control.resume') ORDER BY seq DESC LIMIT 1`)
-      .get() as { type: string } | undefined;
-    return last?.type === 'control.pause';
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -815,6 +815,10 @@ export class SqliteStore implements Store {
   }
 
   async setMeta(key: string, value: string): Promise<void> {
+    this.writeMeta(key, value);
+  }
+
+  private writeMeta(key: string, value: string): void {
     this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO UPDATE SET value = excluded.value').run(key, value);
   }
 

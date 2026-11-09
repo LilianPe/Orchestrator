@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -206,17 +206,18 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.inboxHas('e2')).toBe(false);
   });
 
-  it('tells whether the last pause or resume accepted is a pause, processed or not (ORC-335)', async () => {
+  it('records the last pause or resume written to the inbox, with its row (ORC-335)', async () => {
     const s = await store();
     const control = (id: string, type: 'control.pause' | 'control.resume') => ({ id, type, at: 10, projectId: '*', payload: {} }) as FactoryEvent;
-    expect(await s.pauseAccepted()).toBe(false);
+    expect(await s.getMeta(PAUSE_ACCEPTED)).toBeUndefined();
     await s.appendInbox(control('g1', 'control.pause'));
     await s.appendInbox(delegatedEvent('e1'));
-    expect(await s.pauseAccepted()).toBe(true);
-    await s.markInboxProcessed('g1');
-    expect(await s.pauseAccepted()).toBe(true);
+    expect(await s.getMeta(PAUSE_ACCEPTED)).toBe('1');
     await s.appendInbox(control('g2', 'control.resume'));
-    expect(await s.pauseAccepted()).toBe(false);
+    expect(await s.getMeta(PAUSE_ACCEPTED)).toBe('0');
+    // A pause written again is a duplicate: it changes nothing.
+    expect(await s.appendInbox(control('g1', 'control.pause'))).toBe(false);
+    expect(await s.getMeta(PAUSE_ACCEPTED)).toBe('0');
   });
 
   it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {

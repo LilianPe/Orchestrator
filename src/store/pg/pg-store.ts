@@ -25,6 +25,8 @@ import {
   effectResult,
   timerEvent,
   timerRowId,
+  PAUSE_ACCEPTED,
+  pauseAcceptedValue,
   LEASE_MS,
   blockEntry,
   byMostRefused,
@@ -282,22 +284,17 @@ export class PgStore implements AsyncStore {
   async appendInbox(event: FactoryEvent | StoredEvent): Promise<boolean> {
     return this.db.transaction(async (tx) => {
       await tx.execute(ticketLock(event.ticketId));
-      return this.appendResult(tx, event);
+      const fresh = await this.appendResult(tx, event);
+      // Under the lock of the rows without a ticket: two controls write it in their inbox order.
+      const paused = pauseAcceptedValue(event);
+      if (fresh && paused !== undefined) await this.writeMeta(tx, PAUSE_ACCEPTED, paused);
+      return fresh;
     });
   }
 
   async inboxHas(id: string): Promise<boolean> {
     const result = await this.db.execute(sql`select 1 from inbox where id = ${id}`);
     return result.rows.length > 0;
-  }
-
-  async pauseAccepted(): Promise<boolean> {
-    const result = await this.db.execute<{ type: string }>(sql`
-      select type from inbox where type in ('control.pause', 'control.resume')
-      order by received_at desc, id desc
-      limit 1
-    `);
-    return result.rows[0]?.type === 'control.pause';
   }
 
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
@@ -1347,9 +1344,13 @@ export class PgStore implements AsyncStore {
   }
 
   async setMeta(key: string, value: string): Promise<void> {
+    await this.writeMeta(this.db, key, value);
+  }
+
+  private async writeMeta(db: Tx | NodePgDatabase<typeof schema>, key: string, value: string): Promise<void> {
     const id = metaId(key);
     const hash = createHash('sha256').update(`${id}\0${value}`).digest('hex');
-    await this.db.execute(sql`
+    await db.execute(sql`
       insert into workflow_versions (id, hash, definition, created_at)
       values (
         ${id}, ${hash}, ${JSON.stringify({ key, value })}::jsonb, to_timestamp(${this.now() / 1000})

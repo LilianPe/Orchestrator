@@ -31,6 +31,7 @@ import { Worker } from '../runtime/worker.js';
 import { workflowVersion } from '../runtime/workflow-version.js';
 import {
   LEASE_MS,
+  PAUSE_ACCEPTED,
   RUN_LEASE_MS,
   RUN_SILENT_MS,
   type DecisionOutcome,
@@ -1285,9 +1286,9 @@ export class Orchestrator {
     return p;
   }
 
-  /** Paused by `set_paused`, or by a pause accepted whose effect has not run yet (ORC-335): its lane and a ticket's go side by side. */
+  /** Paused by `set_paused`, or by a pause accepted whose `set_paused` has not run yet (`PAUSE_ACCEPTED`, ORC-335): its lane and a ticket's go side by side. */
   async isPaused(): Promise<boolean> {
-    return (await this.d.store.getMeta('paused')) === '1' || (await this.d.store.pauseAccepted());
+    return (await this.d.store.getMeta('paused')) === '1' || (await this.d.store.getMeta(PAUSE_ACCEPTED)) === '1';
   }
 
   private account(): string {
