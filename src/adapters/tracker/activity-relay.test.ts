@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActivityRelay } from './activity-relay.js';
+import { ActivityRelay, composedActivity } from './activity-relay.js';
 import type { ActivityInput } from './types.js';
 
 describe('ActivityRelay', () => {
@@ -41,5 +41,13 @@ describe('ActivityRelay', () => {
     await relay.flush();
     await vi.advanceTimersByTimeAsync(5000);
     expect(sent).toEqual([{ type: 'action', action: 'Searching the code', parameter: 'step build', ephemeral: true }]);
+  });
+});
+
+describe('composedActivity (ORC-301)', () => {
+  it("what the dashboard's live feed shows of a stream event: the factory's words and the step, nothing of the agent", () => {
+    expect(composedActivity({ kind: 'tool', name: 'Bash', input: 'cat .env' }, 'build')).toEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
+    expect(composedActivity({ kind: 'tool', name: 'mcp__evil__x', input: '{}' }, 'build')).toMatchObject({ action: 'Using a tool' });
+    expect(composedActivity({ kind: 'text', text: 'ghp_secret' }, 'build')).toBeUndefined();
   });
 });
