@@ -92,7 +92,7 @@ interface Report {
   ran: number;
 }
 
-const stripAnsi = (s: string): string => s.replace(ANSI, '');
+export const stripAnsi = (s: string): string => s.replace(ANSI, '');
 
 // An assertion library's error: chai's and node's `AssertionError`, jest's `expect(received)`, pytest's rewritten `assert`.
 const ASSERTION_FAILURE = [/^(?:\w+\.)*AssertionError\b/, /^(?:Error: )?expect[.(]/, /^assert /, /^E\s+(?:AssertionError\b|assert )/m];
@@ -140,8 +140,8 @@ function entity(all: string, e: string): string {
   return String.fromCodePoint(parseInt(e.slice(hex ? 2 : 1), hex ? 16 : 10));
 }
 // In one pass: `&amp;lt;` reads `&lt;`, not `<`.
-const unescapeXml = (s: string): string => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, entity);
-const attribute = (attrs: string, name: string): string => unescapeXml(new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '');
+export const unescapeXml = (s: string): string => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, entity);
+export const attribute = (attrs: string, name: string): string => unescapeXml(new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '');
 
 /**
  * The JUnit report of pytest: a `testcase` per test, its `failure`, `error` or `skipped`. A collection failure is an
@@ -174,13 +174,14 @@ function parseReport(text: string): Report | undefined {
   }
 }
 
-type Runner = 'vitest' | 'jest' | 'pytest';
+export type Runner = 'vitest' | 'jest' | 'pytest';
 
 // The report of each runner, written to `$f` (set by the command that runs it): the default output stays as it was.
-const REPORT_FLAGS: Record<Runner, string> = {
+// pytest's `xunit1` gives each test its file, which names it to rerun it (ORC-164).
+export const REPORT_FLAGS: Record<Runner, string> = {
   vitest: '--reporter=default --reporter=json --outputFile.json="$f"',
   jest: '--json --outputFile="$f"',
-  pytest: '--junitxml="$f"',
+  pytest: '--junitxml="$f" -o junit_family=xunit1',
 };
 
 /** The runner the last command of a shell line runs, which the arguments appended to the line reach. */
@@ -200,7 +201,7 @@ const PACKAGE_SCRIPT = /^(?:npm|pnpm)\s+(?:run(?:-script)?\s+)?([\w:.-]+)\s+(?:.
  * The runner of the repository's test command: named in it, or in the `package.json` script it runs through npm or pnpm
  * past a `--`. Undefined when the flags would reach another program: the text output is read.
  */
-async function runnerOfCommand(command: string, deps: RedDeps): Promise<Runner | undefined> {
+export async function runnerOfCommand(command: string, deps: Pick<RedDeps, 'showAtHead'>): Promise<Runner | undefined> {
   const script = PACKAGE_SCRIPT.exec(`${command} `)?.[1];
   if (!script) return runnerOf(command);
   try {
@@ -233,7 +234,7 @@ function tsCandidates(module: string, test: string): string[] {
 
 const pyCandidates = (module: string): string[] => PY_ROOTS.flatMap((r) => [`${r}${module.replace(/\./g, '/')}.py`, `${r}${module.replace(/\./g, '/')}/__init__.py`]);
 
-const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * The module the test file `path` imports `symbol` from: on the syntax tree for TS and JS (ORC-342), on the source for
@@ -285,7 +286,7 @@ export interface RedResult {
   detail: string;
 }
 
-const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+export const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** Runs the tests the step added with the repository's test command, and says whether they are red for the right reason. */
 export async function checkRed(command: string, deps: RedDeps): Promise<RedResult> {
