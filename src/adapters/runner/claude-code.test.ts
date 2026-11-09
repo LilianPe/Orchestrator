@@ -608,9 +608,9 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
     const { sandboxes, id, spawnCommand } = await sandbox();
     const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
-    const make = (token: string | undefined) => new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, sandboxClaudeToken: () => token });
-    await make(undefined).start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
-    await make('resolved').start(req({ sandboxId: id, cwd: '/work', runId: 'r-2' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    const make = (has: boolean) => new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, proxyHasToken: () => has });
+    await make(false).start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    await make(true).start(req({ sandboxId: id, cwd: '/work', runId: 'r-2' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
     const envs = spawnCommand.mock.calls.map((c) => (c as Parameters<SandboxProvider['spawnCommand']>)[2]!.env);
     expect(envs[0]).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
     expect(envs[1]).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
@@ -724,7 +724,7 @@ describe('childEnv: a run on the host (ORC-211)', () => {
   });
 
   it('without a chosen account, a host run keeps both logins of the daemon, as before ORC-337', () => {
-    // The daemon's CLAUDE_CODE_OAUTH_TOKEN goes to the proxy for the sandboxes (`sandboxClaudeToken`), never as a chosen account here.
+    // The daemon's CLAUDE_CODE_OAUTH_TOKEN goes to the proxy for the sandboxes (`proxyHasToken`), never as a chosen account here.
     expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {})).toEqual({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old', ...NO_PUSH });
   });
 

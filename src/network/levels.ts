@@ -62,9 +62,12 @@ export const CLAUDE_BETAS: ReadonlySet<string> = new Set([
 export const CLAUDE_BODY_MAX = 16 * 1024 * 1024;
 
 /**
- * Model calls held at once, from their first byte until they are sent on, per run and in all (ORC-337): memory held
- * at worst, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`. A run gets its share alone, so four runs at least are served
- * side by side. Past it, a 429, which Claude Code retries.
+ * Model calls held at once, from their first byte until they are sent on, per run and in all (ORC-337). A run gets
+ * its share alone, so four runs at least are served side by side. Past it, a 429, which Claude Code retries.
+ * Memory at worst, to size the proxy's container by: the calls held, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`, plus
+ * about 5 copies of the one being checked (`claudeBody`: its bytes joined, decoded, parsed, serialised again and
+ * encoded), one call at a time since the check is synchronous: (8 + 5) × 16 MiB, ~210 MiB, over the process's own.
+ * A body outside Latin-1 decodes to two bytes a character, so a little more.
  */
 export const CLAUDE_READS_PER_RUN = 2;
 export const CLAUDE_READS_MAX = 8;
