@@ -95,7 +95,40 @@ on:
     it('asks a submit_result of the build only, until ORC-191 rewrites the other skills', () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['dev']!.structuredOutput).toBe(true);
-      for (const name of ['tests', 'dev-feedback', 'fix-ci', 'review', 'ask']) expect(jobs[name]!.structuredOutput).toBeFalsy();
+      for (const name of ['tests', 'dev-feedback', 'fix-ci', 'ask']) expect(jobs[name]!.structuredOutput).toBeFalsy();
+    });
+
+    it('runs the AI review as two read-only lenses on Opus, on a fresh clone of the published commit, at network claude-api (ORC-183)', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      for (const [name, lens] of [['review', 'correctness'], ['review-security', 'security']] as const) {
+        expect(jobs[name], name).toMatchObject({ step: 'review', model: 'opus', effort: 'high', limits: { turns: 25 }, workspace: 'published', session: 'new', skill: 'factory:review', lens, structuredOutput: true, network: 'claude-api' });
+        expect(jobs[name]!.repoChecks, name).toBeUndefined();
+        expect(jobs[name]!.verify, name).toEqual([]);
+      }
+      // The first lens hands over to the second; the second publishes both and shows the PR in Human Review.
+      expect(jobs['review']!.onSuccess).toEqual({ run: 'review-security' });
+      expect(jobs['review-security']!.onSuccess).toEqual({ move: 'human_review', post: 'review' });
+    });
+
+    it("gives each job its step's network level, the jobs out of the preset none (ORC-183)", () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['dev']!.network).toBe('limited');
+      expect(jobs['dev-feedback']!.network).toBe('limited');
+      expect(jobs['ask']).not.toHaveProperty('network');
+    });
+
+    it('starts the AI review once the build is published, in AI Review (ORC-183)', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['dev']!.onSuccess).toEqual({ move: 'ai_review', post: 'summary', run: 'review' });
+    });
+
+    it('refuses a lens on a job of no review step, and a published workspace out of one', () => {
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { lens: security }\n') })).toThrow(/jobs\.dev\.lens/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { workspace: published }\n') })).toThrow(/jobs\.dev\.workspace/);
+      // A review job without its lens, or a review posted by another job, would drop the findings in silence.
+      const lensless = 'version: 1\njobs:\n  extra: { step: review, queue: dev, model: opus, workspace: published, skill: "factory:review" }\n';
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile(lensless) })).toThrow(/jobs\.extra\.lens/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  dev: { on_success: { post: review } }\n') })).toThrow(/jobs\.dev\.on_success\.post/);
     });
 
     it('lets a project narrow the turns of a step, never widen them', () => {
@@ -182,7 +215,7 @@ on:
     const wf = loadWorkflow({ packDir });
     expect(Object.values(wf.states)).not.toContain('Ready to Merge');
     expect(wf.states.ready).toBeUndefined();
-    expect(wf.jobs['review']!.onSuccess.move).toBe('human_review');
+    expect(wf.jobs['review-security']!.onSuccess.move).toBe('human_review');
   });
 
   it('refuses a move to a status the workflow does not declare', () => {

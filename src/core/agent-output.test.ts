@@ -41,6 +41,24 @@ describe('parseAgentOutput', () => {
   });
 });
 
+describe('findings of a review lens (ORC-183)', () => {
+  const finding = { file: 'src/auth.ts', line: 12, severity: 'blocking', explanation: 'The token is compared with ==.', suggestion: 'Use timingSafeEqual.' } as const;
+
+  it('takes structured findings, a violated fact optional', () => {
+    expect(parseAgentOutput({ ...done, findings: [] }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, findings: [finding, { ...finding, severity: 'minor', fact: 'F-12' }, { ...finding, severity: 'out_of_scope', suggestion: '' }] }).ok).toBe(true);
+  });
+
+  it('refuses a severity, a line or a field outside the schema, naming it', () => {
+    expect(parseAgentOutput({ ...done, findings: [{ ...finding, severity: 'important' }] })).toEqual({ ok: false, error: expect.stringContaining('findings.0.severity') });
+    expect(parseAgentOutput({ ...done, findings: [{ ...finding, line: 0 }] })).toEqual({ ok: false, error: expect.stringContaining('findings.0.line') });
+    expect(parseAgentOutput({ ...done, findings: [{ ...finding, file: '' }] })).toEqual({ ok: false, error: expect.stringContaining('findings.0.file') });
+    expect(parseAgentOutput({ ...done, findings: [{ ...finding, explanation: '' }] })).toEqual({ ok: false, error: expect.stringContaining('findings.0.explanation') });
+    expect(parseAgentOutput({ ...done, findings: [{ ...finding, extra: 1 }] }).ok).toBe(false);
+    expect(parseAgentOutput({ ...done, findings: Array.from({ length: 51 }, () => finding) })).toEqual({ ok: false, error: expect.stringContaining('findings') });
+  });
+});
+
 describe('attemptOutcome', () => {
   const blocked = (reason?: 'needs_input' | 'spec_impossible'): AgentOutput => ({ ...done, status: 'blocked', question: '?', ...(reason ? { reason } : {}) });
   it.each([

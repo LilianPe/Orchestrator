@@ -63,6 +63,8 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     '--setting-sources', '',
     '--strict-mcp-config',
     '--mcp-config', FACTORY_MCP,
+    // The only built-in tools the model is given (ORC-183): an AI review gets no write tool and no shell at all, whatever the settings allow.
+    ...(req.tools ? ['--tools', req.tools.join(',')] : []),
   ];
   if (req.readOnly) args.push('--permission-mode', 'plan');
   return args;
