@@ -3,6 +3,7 @@ import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { measureTicket } from '../../src/core/measures.js';
 import { exportJournal } from '../../src/runtime/replay.js';
 import { createHarness } from '../helpers/harness.js';
+import { pythonRepoFiles } from '../helpers/python-repo.js';
 
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const SYNTAX = 'FAIL src/export.test.ts\nError: Transform failed with 1 error';
@@ -101,5 +102,52 @@ describe('the tests step and the red check (ORC-123)', () => {
     expect(h.checks.calls).toEqual([]);
     expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
+  });
+});
+
+describe('the red check on a Python repository (ORC-172)', () => {
+  const AUDIT_TEST = 'from app.audit import summary\n\n\ndef test_summary() -> None:\n    assert summary([]) == {}\n';
+  /** pytest's collection error, as it prints it, on a test file that imports `module`. */
+  const collectionError = (module: string) => `==================================== ERRORS ====================================
+____________________ ERROR collecting tests/test_audit.py ______________________
+ImportError while importing test module '/work/tests/test_audit.py'.
+E   ModuleNotFoundError: No module named '${module}'
+=========================== short test summary info ============================
+ERROR tests/test_audit.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!`;
+
+  /** The fixture repository at baseSha, its tests step adding `tests/test_audit.py`, the red command `init` proposes for it. */
+  function python() {
+    const h = createHarness({
+      projectYaml: `version: 1
+on:
+  ticket.delegated:
+    - { when: "state in [todo, dev] && !blocked", run: tests }
+jobs:
+  tests:
+    red: { command: "uv run pytest", mode: measure }
+`,
+    });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Audit summary', description: 'Résumer les scores des audits par identifiant dans un module à part.' });
+    h.workspaces.heads.set(WORKTREE, 'base-sha');
+    const base = pythonRepoFiles();
+    h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'tests/test_audit.py', deleted: false }], base, head: { ...base, 'tests/test_audit.py': AUDIT_TEST } });
+    return h;
+  }
+
+  it('criterion 2: a ModuleNotFoundError on a module absent at baseSha is a verified red, and the build starts', async () => {
+    const h = python();
+    h.checks.failNext(collectionError('app.audit'));
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.checks.calls[0]!.commands[0]).toContain(`uv run pytest 'tests/test_audit.py' --junitxml=`);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'missing_module' }]);
+  });
+
+  it('a module the repository has at baseSha is no red: the import is broken', async () => {
+    const h = python();
+    h.checks.failNext(collectionError('app.export'));
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: false, cause: 'module_at_base' }]);
   });
 });
