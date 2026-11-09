@@ -245,6 +245,37 @@ describe('reduce — facts recorded by the orchestrator', () => {
     });
   });
 
+  describe('the hold of a launch (ORC-359)', () => {
+    const start = { job: 'dev-feedback', resume: true };
+    const hold = (runId: string, at: number, until = at + 60): InternalEvent => ({ type: 'launch.reserved', runId, start, at, until });
+    const started = (runId: string) => ({ type: 'run.started', runId, job: 'dev-feedback', queue: 'dev', claudeSessionId: 'c', starts: start }) as const;
+
+    it('one launch at a time: not over a run, nor over another launch whose hold is not over', () => {
+      expect(reduce(ticket(), hold('r1', 0))!.launching).toEqual({ runId: 'r1', start, until: 60 });
+      const held = fold(ticket(), hold('r1', 0))!;
+      expect(reduce(held, hold('r2', 59))).toEqual(held);
+      expect(reduce(ticket({ activeRunId: 'r0' }), hold('r1', 0))!.launching).toBeUndefined();
+      // Its holder keeps it; a hold run out goes to the next launch.
+      expect(reduce(held, hold('r1', 50))!.launching).toEqual({ runId: 'r1', start, until: 110 });
+      expect(reduce(held, hold('r2', 60))!.launching).toEqual({ runId: 'r2', start, until: 120 });
+      // A hold its daemon dropped (its launch ended without letting go of it) is taken over by name, and only that one.
+      expect(reduce(held, { ...hold('r2', 10), over: 'r1' } as InternalEvent)!.launching).toEqual({ runId: 'r2', start, until: 70 });
+      expect(reduce(held, { ...hold('r2', 10), over: 'r0' } as InternalEvent)).toEqual(held);
+    });
+
+    it('only its holder lets go of it, and its run.started ends it', () => {
+      const held = fold(ticket(), hold('r1', 0))!;
+      expect(reduce(held, { type: 'launch.released', runId: 'r2' })).toEqual(held);
+      expect(reduce(held, { type: 'launch.released', runId: 'r1' })!.launching).toBeUndefined();
+      expect(reduce(held, started('r1'))).toMatchObject({ activeRunId: 'r1', launching: undefined });
+    });
+
+    it('a run of a launch whose hold another took over does not take the ticket', () => {
+      const t = fold(ticket(), hold('r1', 0), hold('r2', 60))!;
+      expect(reduce(t, started('r1'))).toEqual(t);
+    });
+  });
+
   it('a cleared run frees the ticket, and keeps the verification', () => {
     const t = ticket({ activeRunId: 'r1', activeJob: 'dev', verifyingRunId: 'r0' });
     expect(reduce(t, { type: 'run.cleared' })).toMatchObject({ activeRunId: undefined, activeJob: undefined, verifyingRunId: 'r0' });
