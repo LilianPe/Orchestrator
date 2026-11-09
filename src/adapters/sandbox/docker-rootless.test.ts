@@ -653,6 +653,12 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', agent.id], ['rm', '-f', '-v', '--depend', 'svc1']]);
   });
 
+  it('removes with --depend under Podman even as the first command of a provider, before it asked anything else (ORC-348)', async () => {
+    const e = engine(() => ok());
+    await new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec }).destroy('svc1');
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', 'svc1']]);
+  });
+
   it('list gives the services under the key they serve, so recover destroys those of dead attempts', async () => {
     const e = stateful();
     const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });

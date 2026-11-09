@@ -320,6 +320,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
    * container still joins (a `setup` left by a crash, which `recover()` destroys at the same time); Docker removes it.
    */
   private async remove(id: string): Promise<void> {
+    // Its flags depend on the engine: asked first, perhaps the provider's first command.
+    await this.kind();
     const r = await this.engine(['rm', '-f', '-v', ...(this.podman ? ['--depend'] : []), id]);
     if (r.code !== 0 && !/no such container|already in progress/i.test(r.stderr)) throw new Error(`container sandbox: rm ${id}: ${r.stderr.trim()}`);
   }

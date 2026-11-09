@@ -203,6 +203,19 @@ describe('runCleanVerify', () => {
     }
   });
 
+  it("a command that outlived its cap's TERM, killed after it (137), fails with no exit code too (ORC-348)", async () => {
+    const { sandboxes, req } = setup({ commands: ['stubborn'] });
+    sandboxes.answer = () => {
+      vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
+      return { stdout: 'part', stderr: '', code: 137 };
+    };
+    try {
+      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'stubborn', exitCode: null, output: 'part' }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a command that exits 124 itself, before its cap, keeps its exit code (ORC-348)', async () => {
     const { sandboxes, req } = setup({ commands: ['exit 124'] });
     sandboxes.answer = () => ({ stdout: 'part', stderr: '', code: 124 });
