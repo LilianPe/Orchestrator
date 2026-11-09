@@ -52,11 +52,13 @@ jobs:
   # The `intake` step of factory/default (ORC-206): reads the ticket and the code, returns size, risk, completeness and
   # screen through `submit_result`. Its end is the guard before In Progress: a complete ticket starts `dev`, an
   # incomplete one is blocked with its questions. Off until a rule runs it (`ticket.delegated: run: intake`).
+  # On a fresh clone of the trunk, gone with its run, with the Read, Grep and Glob tools only, as the step writes nothing
+  # (ORC-367): a ticket that does not start keeps no worktree.
   intake:
     step: intake
     queue: dev
     model: sonnet
-    workspace: worktree
+    workspace: trunk-readonly
     session: new
     skill: "factory:intake"
     structured_output: true

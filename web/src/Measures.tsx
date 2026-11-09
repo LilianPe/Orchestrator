@@ -15,6 +15,18 @@ function median(values: number[]): number | null {
   return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
+/** Where a run's detail is (ORC-298): `#run/<id>`. */
+export const runHash = (runId: string): string => `#run/${encodeURIComponent(runId)}`;
+export function runIdOf(hash: string): string | undefined {
+  if (!hash.startsWith('#run/')) return undefined;
+  try {
+    return decodeURIComponent(hash.slice(5)) || undefined;
+  } catch {
+    // A malformed link: no run, the Flow instead of a blank page.
+    return undefined;
+  }
+}
+
 /** An attempt that ended its duration; one running its time so far; one cut without an end none. */
 export function runDuration(run: RunMeasureView, now: number): string {
   if (run.durationMs !== null) return formatDuration(run.durationMs);
@@ -102,7 +114,7 @@ function Attempts({ ticket, now }: { ticket: MeasuredTicketView; now: number }) 
           <tbody>
             {m.runs.map((r) => (
               <tr key={r.id}>
-                <td className="step">{r.job}</td>
+                <td className="step"><a href={runHash(r.id)}>{r.job}</a></td>
                 <td>{r.role ?? '—'}</td>
                 <td>{r.status}</td>
                 <td className="num">{runDuration(r, now)}</td>
