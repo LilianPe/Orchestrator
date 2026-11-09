@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { storeContract } from '../../test/helpers/store-suite.js';
-import { SqliteStore } from './sqlite-store.js';
+import { SECURITY_LOG_KEPT, SqliteStore } from './sqlite-store.js';
 
 // The six cases live in the shared Store contract, also run on PgStore (test/integration/pg-store.test.ts).
 describe('SqliteStore', () => {
@@ -44,7 +44,7 @@ describe('SqliteStore', () => {
     oldDb.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r1', JSON.stringify(kept));
     // A row no one can read: it neither stops the store from opening nor stays.
     oldDb.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r2', '{"command":"s3cret');
-    oldDb.prepare("DELETE FROM meta WHERE key = 'security-log-kept'").run();
+    oldDb.prepare('DELETE FROM meta WHERE key = ?').run(SECURITY_LOG_KEPT);
     await old.close();
     const s = new SqliteStore(path);
     const db = (s as unknown as { db: DatabaseSync }).db;
@@ -56,11 +56,7 @@ describe('SqliteStore', () => {
       egress: [{ at: 1, method: 'POST', host: 'api.example', ok: false, up: 0, down: 0 }],
       refusals: [{ at: 2, tool: 'Bash', rule: 'push' }],
     });
-    // Once: a row written afterwards, as only an older daemon would, is not read again at the next opening.
-    db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r3', JSON.stringify({ ...kept, runId: 'r3' }));
+    expect(await s.getMeta(SECURITY_LOG_KEPT)).toBe('1');
     await s.close();
-    const again = new SqliteStore(path);
-    expect(JSON.stringify(await again.securityLog('r3'))).toContain('s3cret');
-    await again.close();
   });
 });

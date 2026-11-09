@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readCapped } from '../adapters/read-capped.js';
-import { keptSecurityLog, type SecurityLog } from '../store/types.js';
+import type { SecurityLog } from '../store/types.js';
 
 /** The rules of the pack's PreToolUse hook (`packs/standard/hooks/pre-tool-use.mjs`): a refusal naming another is forged. */
 export const REFUSAL_RULES = [
@@ -94,7 +94,13 @@ export function readSecurityLog(
 ): SecurityLog {
   const egress = parse(paths.egress, EGRESS_MAX_BYTES, egressLine, isNote);
   const refusals = parse(paths.refusals, REFUSALS_MAX_BYTES, refusalLine(run.ticketId));
-  return keptSecurityLog({ ...run, egress: egress.entries, refusals: refusals.entries, skipped: { egress: egress.skipped, refusals: refusals.skipped } });
+  // The lines' fields not declared above, a command, a path, the proxy's reason, are already left out by the parse.
+  return {
+    ...run,
+    egress: egress.entries,
+    refusals: refusals.entries.map(({ at, tool, rule }) => ({ at, tool, rule })),
+    skipped: { egress: egress.skipped, refusals: refusals.skipped },
+  };
 }
 
 /** A host as the proxy saw it, from the agent's request: posted only when it is a plain host name. */

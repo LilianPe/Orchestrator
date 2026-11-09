@@ -92,6 +92,9 @@ function deadLetterRow(r: DeadLetterSqlRow): DeadLetter {
   };
 }
 
+/** The meta row that says the security logs no longer hold a command, a path nor a proxy's reason (ORC-296). */
+export const SECURITY_LOG_KEPT = 'security-log-kept';
+
 /** Columns added after their table was first created (ORC-150): `ALTER TABLE` on an older file. */
 const ADDED_COLUMNS: [table: string, column: string, definition: string][] = [
   ['outbox', 'attempts', 'INTEGER NOT NULL DEFAULT 0'],
@@ -165,18 +168,22 @@ export class SqliteStore implements Store {
    * hold a secret. Rewritten once, a row no one can read deleted, their old bytes overwritten in the file and the WAL.
    */
   private forgetSecrets(): void {
-    if (this.db.prepare("SELECT 1 FROM meta WHERE key = 'security-log-kept'").get()) return;
+    if (this.db.prepare('SELECT 1 FROM meta WHERE key = ?').get(SECURITY_LOG_KEPT)) return;
+    const mark = () => this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run(SECURITY_LOG_KEPT, '1');
+    // A new file, or one without a security log: nothing to rewrite.
+    if (!this.db.prepare('SELECT 1 FROM security_logs LIMIT 1').get()) return void mark();
     this.db.exec('PRAGMA secure_delete = ON');
     this.atomically(() => {
       const rewrite = this.db.prepare('UPDATE security_logs SET data = ? WHERE run_id = ?');
+      const remove = this.db.prepare('DELETE FROM security_logs WHERE run_id = ?');
       for (const r of this.db.prepare('SELECT run_id, data FROM security_logs').all() as { run_id: string; data: string }[]) {
         try {
           rewrite.run(JSON.stringify(keptSecurityLog(JSON.parse(r.data) as SecurityLog)), r.run_id);
         } catch {
-          this.db.prepare('DELETE FROM security_logs WHERE run_id = ?').run(r.run_id);
+          remove.run(r.run_id);
         }
       }
-      this.db.prepare("INSERT INTO meta (key, value) VALUES ('security-log-kept', '1')").run();
+      mark();
     });
     this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     this.db.exec('PRAGMA secure_delete = OFF');
