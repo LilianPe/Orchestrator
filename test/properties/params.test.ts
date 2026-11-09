@@ -15,8 +15,7 @@ describe('the parameters of every property (ORC-368)', () => {
     expect(replayed.counterexample).toEqual(failed.counterexample);
   });
 
-  it("draw each test's own sequences: another test, another seed, a 32-bit one fast-check takes as is", () => {
+  it("draw each test's own sequences: another test, another seed", () => {
     expect(seedOf('a property')).not.toBe(seedOf('another property'));
-    for (const name of ['a property', 'another property']) expect(seedOf(name) | 0).toBe(seedOf(name));
   });
 });

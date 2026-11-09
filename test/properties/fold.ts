@@ -27,9 +27,10 @@ function intFromEnv(name: string, min: number): number | undefined {
  * Without `PROP_SEED` the seed is drawn once per test file, as fast-check draws it, and set explicitly (ORC-368).
  */
 const NUM_RUNS = intFromEnv('NUM_RUNS', 1) ?? 200;
-export const SEED = intFromEnv('PROP_SEED', Number.MIN_SAFE_INTEGER) ?? (Date.now() ^ (Math.random() * 0x1_0000_0000));
+const ENV_SEED = intFromEnv('PROP_SEED', Number.MIN_SAFE_INTEGER);
+const SEED = ENV_SEED ?? (Date.now() ^ (Math.random() * 0x1_0000_0000));
 const PATH = process.env['PROP_PATH'] || undefined;
-if (PATH !== undefined && process.env['PROP_SEED'] === undefined) throw new Error('PROP_PATH replays a counterexample of PROP_SEED: set both');
+if (PATH !== undefined && ENV_SEED === undefined) throw new Error('PROP_PATH replays a counterexample of PROP_SEED: set both');
 /** The tests whose failure already logs the seed: one line each, however many properties they check. */
 const logged = new Set<string>();
 
@@ -46,11 +47,12 @@ export function seedOf(test: string | undefined): number {
  */
 export function params<Ts extends unknown[]>(examples: Ts[] = []): Parameters<Ts> {
   const test = expect.getState().currentTestName;
+  const seed = seedOf(test);
   if (test !== undefined && !logged.has(test)) {
     logged.add(test);
-    onTestFailed(() => console.error(`[properties] "${test}" failed: replay with PROP_SEED=${SEED} NUM_RUNS=${NUM_RUNS} (fast-check's seed ${seedOf(test)} is this test's, derived from it), and PROP_PATH from fast-check's report if it gave one`));
+    onTestFailed(() => console.error(`[properties] "${test}" failed: replay with PROP_SEED=${SEED} NUM_RUNS=${NUM_RUNS} (fast-check's seed ${seed} is this test's, derived from it), and PROP_PATH from fast-check's report if it gave one`));
   }
-  return { numRuns: NUM_RUNS, seed: seedOf(test), ...(PATH === undefined ? {} : { path: PATH }), examples };
+  return { numRuns: NUM_RUNS, seed, ...(PATH === undefined ? {} : { path: PATH }), examples };
 }
 
 /** Timeout of one property test, generous enough for 10 000 sequences on a CI runner. */
