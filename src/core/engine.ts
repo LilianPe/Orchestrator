@@ -1173,9 +1173,9 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   // A block on a stranded pending job stays until the debounce fires: it is what tells that reply to start that job (ORC-339).
   const keepsBlock = !!rule.debounceMs && !!strandedPending(ticket, workflow);
   const refused = !job || !!refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input));
-  // A merge lifts the block of the ticket it delivers: its rule starts no run since ORC-193, its learn run did before.
-  const delivered = event.type === 'pr.merged' && !rule.run;
-  if ((!refused || delivered) && !keepsBlock && ticket?.blocked) unblock(out, event, ticket);
+  // Already lifted by the merge itself (its built-in, ORC-193).
+  const unblocked = event.type === 'pr.merged' && out.events.some((e) => e.type === 'ticket.unblocked');
+  if (!refused && !keepsBlock && ticket?.blocked && !unblocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
@@ -2135,6 +2135,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
       // Before the rule's effects, so its cleanup comes after the stop.
       cancelWork(out, 'built-in pr.merged: work cancelled');
+      // And its block lifted: the learn run of a version frozen before ORC-193 lifted it through its rule, which decides as it did.
+      if (ticket?.blocked && !Object.values(workflow.jobs).some((j) => j.workspace === 'knowledge')) unblock(out, event, ticket);
       break;
     case 'pr.closed': {
       // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close

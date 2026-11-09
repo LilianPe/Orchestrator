@@ -528,7 +528,7 @@ describe('I12: the taint of a run is what it reads at its launch (ORC-274)', () 
 });
 
 describe('the memory in writing sleeps, on a version frozen before it too (ORC-193)', () => {
-  it('decides learn and remember as the version did, and launches neither: a retiens is answered that nothing is recorded', async () => {
+  it('decides learn and remember as the version did, and launches neither', async () => {
     const h = createHarness();
     h.project.workflow = beforeOrc193(h.project.workflow);
     await h.restart();
@@ -537,7 +537,6 @@ describe('the memory in writing sleeps, on a version frozen before it too (ORC-1
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     await h.orch.drained();
     expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev']);
-    expect(h.tracker.activities('ls-10').at(-1)).toEqual({ type: 'response', body: expect.stringContaining('no longer writes to its knowledge base') });
     expect(await h.ticket()).toMatchObject({ logical: 'done', blocked: false });
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });

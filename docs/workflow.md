@@ -334,7 +334,7 @@ To express an "or", write several rules in a row: the first one that matches win
 3. The rule produces commands. For `run: <job>`, it is a "launch a run" command that carries the job's name (or a delay, with `debounce`).
 4. The orchestrator then reads `jobs.<job>`:
    - `dev` queue on a non-delegated ticket: refused;
-   - `knowledge` job (`learn`, `remember` of a version frozen before ORC-193): refused, a `remember` answered in its session that nothing is recorded;
+   - `knowledge` job (`learn`, `remember` of a version frozen before ORC-193): refused, only logged;
    - `dev` queue while a run or checks are in progress on this ticket: the job is put **on hold on the ticket** and launched as soon as the current run is finished. There is only one waiting slot per ticket: a new request replaces the previous one;
    - queue paused or the Claude account's usage limit reached: queued;
    - no free slot in the queue (`parallel_sessions` / `question_sessions`): queued;

@@ -237,6 +237,9 @@ describe('decide — after the merge (ORC-268)', () => {
     const t = ticket({ logical: 'ai_review', blocked: true, blockReason: 'Launch error: x', blockKind: 'infra' });
     expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow).events).toContainEqual({ type: 'ticket.unblocked' });
     expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), beforeOrc193(workflow)).events.filter((e) => e.type === 'ticket.unblocked')).toHaveLength(1);
+    // A version frozen before, whose project's merge rule started no learn, kept the block: it decides as it did.
+    const noLearn = { ...beforeOrc193(workflow), on: { ...workflow.on, 'pr.merged': [{ move: 'done' as const, do: 'cleanup' as const }] } };
+    expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), noLearn).events).not.toContainEqual({ type: 'ticket.unblocked' });
   });
 
   it('a merge stops the dev work in flight, pending, queued or debounced, before its rule cleans up', () => {

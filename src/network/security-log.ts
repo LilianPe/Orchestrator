@@ -17,6 +17,8 @@ export const REFUSAL_RULES = [
   'push-trunk',
   'push',
   'full-read',
+  // The hook's refusal of a knowledge run before ORC-193: a log written then is still read.
+  'forge-read',
 ] as const;
 
 /** Postgres text and jsonb refuse NUL: a line carrying one would fail the whole write. */

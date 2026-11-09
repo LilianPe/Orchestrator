@@ -368,9 +368,6 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
 type AwakeJob = JobSpec & { workspace: WorkspaceKind };
 const awake = (job: JobSpec): job is AwakeJob => job.workspace !== 'knowledge';
 
-/** The answer in its session to a `remember` of a version frozen before ORC-193, which no longer runs. */
-const MEMORY_ASLEEP = `${PRODUCT_NAME} no longer writes to its knowledge base: I record nothing.`;
-
 /** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
 function checksPermission(err: { status?: number }): string {
   return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
@@ -2259,6 +2256,12 @@ export class Orchestrator {
       this.log('error', `unknown job ${opts.job}`);
       return 'done';
     }
+    // The memory in writing sleeps (ORC-193): a version frozen before keeps its `learn` and `remember`, decided as they were,
+    // never launched. No command starts `remember` any more: only a start accepted before the upgrade gets here.
+    if (!awake(job)) {
+      this.log('info', `refused ${job.name} on ${ticketId}: the memory in writing sleeps`);
+      return 'done';
+    }
     const t = await this.ticket(project.id, ticketId);
     // As decide refuses it, also for the starts it does not see: the pending job by settle, the queue by drain.
     const refused = refusesDevWork(t, job);
@@ -2279,17 +2282,6 @@ export class Orchestrator {
     }
     if (staleRelaunch(t, job, opts.input)) {
       this.log('info', `refused ${job.name} on ${ticketId}: a check passed since the failures it was to fix`);
-      return 'done';
-    }
-    // The memory in writing sleeps (ORC-193): a version frozen before keeps its `learn` and `remember`, decided as they were,
-    // never launched.
-    if (!awake(job)) {
-      this.log('info', `refused ${job.name} on ${ticketId}: the memory in writing sleeps`);
-      if (opts.linearSessionId) {
-        await this.d.tracker
-          .activity(opts.linearSessionId, { type: 'response', body: MEMORY_ASLEEP })
-          .catch((err: Error) => this.log('warn', `could not answer ${ticketId}: ${err.message}`));
-      }
       return 'done';
     }
     // Handed out of the queue: back in line through its claim (`releaseQueued`), not as a new request.
@@ -2388,7 +2380,7 @@ export class Orchestrator {
     return value === '1' || (await this.d.store.getRun(value)) !== undefined;
   }
 
-  /** Tokens the ticket's code runs spent (`budgets.per_ticket_tokens`, ORC-340), cache reads left out: its questions (`ask`, `learn`) do not count. */
+  /** Tokens the ticket's code runs spent (`budgets.per_ticket_tokens`, ORC-340), cache reads left out: its questions (`ask`) do not count. */
   private async codeTokensSpent(projectId: string, ticketId: string): Promise<number> {
     return codeRunTokens(await this.d.store.ticketRuns(projectId, ticketId)) ?? 0;
   }
@@ -2603,10 +2595,9 @@ export class Orchestrator {
       const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
       // session, what its earlier attempts read, which the branch's mark keeps (ORC-338). The mark read here serves below.
-      const readsTicket = !fedUntrusted && resume;
-      const seen = readsTicket ? await state(this.readUntrusted(project, t)) : t;
+      const seen = !fedUntrusted && resume ? await state(this.readUntrusted(project, t)) : t;
       const marked = typeof seen.untrustedSince === 'string';
-      const sensitivePaths = fedUntrusted ?? (readsTicket && marked ? SENSITIVE_PATHS : undefined);
+      const sensitivePaths = fedUntrusted ?? (resume && marked ? SENSITIVE_PATHS : undefined);
 
       const claudeSessionId = held ?? this.newId();
       const sessionRole = roleOf(job, ticketSession);
@@ -2766,7 +2757,6 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
-          // Read by the pack's PreToolUse hook: a knowledge run reads of the forge only its ticket's merged diff (ORC-361).
           ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
