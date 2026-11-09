@@ -21,6 +21,7 @@ What it shows, live:
   - **Security log of the period**: the hook's refusals per rule, and the hosts contacted with their requests and refusals.
   - **Only the rule and the host** are shown: never a command, a path nor the proxy's reason, which can hold a secret or what the agent wrote; a host that is not a plain host name (the agent wrote it) is counted under « (not a host name) ». The database keeps them for the maintainers.
   - **No source yet**: the dependencies added and refused. The dependency check (`src/checks/deps.ts`, ORC-165) lists them, but `verify` does not run it yet: nothing records what it finds.
+- **Inspection** (ORC-301), for the run selected in Working: its live feed since the page was opened, on the SSE stream `GET /api/events` (`activity` events): what the agent does in the factory's words, the closed table and the step its Linear session shows (« Running a command », `step build`, ORC-214), never its text nor its tools' parameters, and the events of its ticket's journal. **Pause** and **Stop** of that run (`POST /api/runs/<id>/pause|stop`), checked on the authorization matrix and journaled with their author (below): the run is stopped, and the ticket waits in Needs you under « Stopped on request », a pause with the reason `Paused from the dashboard`, until a reply relaunches it. A refusal (a run no longer at work) is said in the inspection; a refusal by the matrix is only journaled and in the log. **Take over** stays disabled until ORC-234. A loop the detector sees (the same failing command, the same failure, no change of the worktree, ORC-136) stops the run and puts the ticket in Needs you under « Loop ».
 - **Live session**: the output of the selected run (text, tool calls), received live since the page was opened. A run's full transcript remains available via the API (`/api/runs/<id>/transcript`) and in `<RELAIS_HOME>/transcripts/`.
 - **Log**: the daemon's latest messages and the events received.
 
@@ -47,6 +48,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /api/runs/:id/transcript` | A run's transcript | password |
 | `POST /api/control/pause`, `/api/control/resume` | Pause / resume | password + origin check |
 | `POST /api/tickets/:projet/:ticket/stop` | Stop a run | password + origin check |
+| `POST /api/runs/:id/pause`, `POST /api/runs/:id/stop` | Pause or stop that run from its inspection (ORC-301); 409 for a run that is not its ticket's agent run at work (ended, a check) | password + origin check |
 | `GET /oauth/start` | Starts the Linear connection | password |
 | `GET /oauth/callback` | Linear OAuth callback | random, single-use `state` parameter |
 | `POST /webhooks/linear` | Linear webhooks | HMAC signature + 60 s freshness |
@@ -66,6 +68,8 @@ To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `c
 With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401.
 
 The `relais status|pause|resume|stop` commands send `RELAIS_UI_PASSWORD` if the variable is set in the shell.
+
+**Who acts from the dashboard (ORC-301).** A pause or a stop from the dashboard, and the CLI's stop, are checked on the [authorization matrix](linear.md#authorizations-who-can-do-what) and journaled with their author: `dashboard:<user>`, the user name given to the HTTP Basic auth (letters, digits, `.`, `_`, `@`, `-`, 64 at most), or `dashboard:local` on the loopback without a password. Whoever passed the guard (the password, or the loopback without one) holds the `operator` role, which the matrix asks for. The name is not signed: every holder of the password is an operator and names themself, until the dashboard has named authentication (ORC-222).
 
 Basic auth sends the password with every request: when exposed to the Internet, put Relais behind an **HTTPS** proxy (Caddy, nginx, Traefik, Cloudflare tunnel) and set `publicUrl` to the HTTPS URL.
 

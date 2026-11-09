@@ -60,7 +60,9 @@ a { color: var(--agent); }
 .line.tool span { color: var(--agent); font-weight: 600; }
 .line.err { color: var(--danger); }
 .line.result { color: var(--muted); border-top: 1px dashed var(--line); padding-top: 4px; }
-.journal ul { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow: auto; font-size: 12px; }
+.journal ul, .feed { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow: auto; font-size: 12px; }
+.inspection .actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.feed .event { color: var(--muted); }
 .log.error { color: var(--danger); } .log.warn { color: var(--human); }
 .empty { margin: 0; color: var(--muted); }
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }

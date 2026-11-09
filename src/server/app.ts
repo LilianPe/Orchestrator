@@ -89,12 +89,26 @@ function sameSecret(a: string, b: string): boolean {
   return timingSafeEqual(h(a), h(b));
 }
 
-function basicPassword(header: string | undefined): string | undefined {
+/** The user and the password of an HTTP Basic header. */
+function basicCredentials(header: string | undefined): { user: string; password: string } | undefined {
   const m = header?.match(/^Basic\s+(.+)$/i);
   if (!m) return undefined;
   const decoded = Buffer.from(m[1]!, 'base64').toString('utf8');
   const i = decoded.indexOf(':');
-  return i < 0 ? undefined : decoded.slice(i + 1);
+  return i < 0 ? undefined : { user: decoded.slice(0, i), password: decoded.slice(i + 1) };
+}
+
+/** The longest operator name journaled, of what the HTTP Basic user gives. */
+const OPERATOR_NAME_MAX = 64;
+
+/**
+ * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: the user of its HTTP Basic
+ * auth behind the password, `local` on the loopback without one, whatever header comes then. Not signed: whoever passed
+ * the guard is an operator, and names themself.
+ */
+function operator(c: Context, password: string | undefined): Pick<FactoryEvent, 'actor' | 'roles'> {
+  const user = password && basicCredentials(c.req.header('authorization'))?.user.replace(/[^\p{L}\p{N}._@-]/gu, '').slice(0, OPERATOR_NAME_MAX);
+  return { actor: `dashboard:${user || 'local'}`, roles: ['operator'] };
 }
 
 function isPublicPath(method: string, path: string): boolean {
@@ -121,7 +135,7 @@ export function createApp(d: ServerDeps): Hono {
     const password = d.uiPassword;
     app.use('*', async (c, next) => {
       if (isPublicPath(c.req.method, c.req.path)) return next();
-      const given = basicPassword(c.req.header('authorization'));
+      const given = basicCredentials(c.req.header('authorization'))?.password;
       if (given === undefined || !sameSecret(given, password)) {
         return c.text('Authentication required', 401, { 'WWW-Authenticate': `Basic realm="${PRODUCT_NAME}", charset="UTF-8"` });
       }
@@ -314,12 +328,27 @@ export function createApp(d: ServerDeps): Hono {
   };
   app.post('/api/control/pause', control('control.pause'));
   app.post('/api/control/resume', control('control.resume'));
+  // A stop is checked on the matrix by `decide` (ORC-301), on the operator journaled with it.
   app.post('/api/tickets/:projectId/:ticketId/stop', async (c) => {
     const at = d.clock.now();
     const ticketId = c.req.param('ticketId');
-    await d.submit({ ...TRUSTED, id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
+    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
   });
+  // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check,
+  // not a question). The same check here answers the operator at once; `decide`'s is the one journaled.
+  const runControl = (action: 'pause' | 'stop') => async (c: Context) => {
+    const runId = c.req.param('id')!;
+    const run = await d.store.getRun(runId);
+    if (!run) return c.json({ error: `unknown run ${runId}` }, 404);
+    if ((await d.store.getTicket(run.projectId, run.ticketId))?.activeRunId !== runId) return c.json({ error: `run ${runId} is not the ticket's run at work` }, 409);
+    const at = d.clock.now();
+    const payload = action === 'pause' ? { runId, pause: true as const } : { runId };
+    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${action}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
+    return c.json({ ok: true });
+  };
+  app.post('/api/runs/:id/pause', runControl('pause'));
+  app.post('/api/runs/:id/stop', runControl('stop'));
 
   const agent = new Hono<AgentEnv>();
   agent.use('*', async (c, next) => {

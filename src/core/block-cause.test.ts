@@ -85,6 +85,9 @@ describe('the kind of a block, set by the code that builds it (ORC-345)', () => 
     expect(causeOf('asked')).toBe('question');
     expect(causeOf('stuck')).toBe('infra');
     expect(causeOf('ci_bound')).toBe('limit');
+    // A pause from the dashboard (ORC-301) is a stop that says so.
+    expect(causeOf('paused')).toBe('stopped');
+    expect(restatesCause('paused')).toBe(false);
     expect(causeOf('red')).toBe('red');
     expect(causeOf(undefined)).toBe('other');
     // Written by a newer version: its ticket stays in sight.
