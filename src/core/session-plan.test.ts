@@ -42,5 +42,7 @@ describe('session plan (ORC-171)', () => {
     expect(planStepOfJob({ queue: 'dev', skill: 'factory:feedback', onSuccess: { post: 'reply' } })).toBeUndefined();
     expect(planStepOfJob({ queue: 'dev', skill: 'factory:review', onSuccess: toReview })).toBeUndefined();
     expect(planStepOfJob({ queue: 'questions', skill: 'factory:ask', onSuccess: { post: 'reply' } })).toBeUndefined();
+    // The spec step (ORC-212): the tests step after its gate takes the plan on.
+    expect(planStepOfJob({ queue: 'dev', step: 'spec_draft', skill: 'factory:spec', onSuccess: { run: 'tests' } })).toBe('Spec');
   });
 });

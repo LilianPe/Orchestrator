@@ -30,6 +30,12 @@ describe('loadWorkflow', () => {
     expect(wf.commands).toEqual(['retiens', 'fais-le']);
   });
 
+  it('reads the command that starts the application for the visual proof, absent by default (ORC-176)', () => {
+    expect(loadWorkflow({ packDir }).workspace).not.toHaveProperty('preview');
+    const wf = loadWorkflow({ packDir, projectFile: projectFile('version: 1\nworkspace:\n  preview: npm run preview\n') });
+    expect(wf.workspace.preview).toBe('npm run preview');
+  });
+
   it('accepts the former event names of a project file as aliases', () => {
     const wf = loadWorkflow({
       packDir,
@@ -135,6 +141,22 @@ on:
       expect(jobs['dev']!.network).toBe('limited');
       expect(jobs['dev-feedback']!.network).toBe('limited');
       expect(jobs['ask']).not.toHaveProperty('network');
+    });
+
+    it('gives a read-only step (intake, clarify) and the AI review the read and search tools only; every other job all of them (ORC-367)', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: ['Read', 'Grep', 'Glob'] });
+      for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read', 'Grep', 'Glob']);
+      for (const name of ['dev', 'tests', 'dev-feedback', 'ask', 'learn']) expect(jobs[name], name).not.toHaveProperty('tools');
+      // A step that writes no code is not read-only for that: after_merge keeps its shell.
+      const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:learn" }\n';
+      expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']).not.toHaveProperty('tools');
+    });
+
+    it("refuses a read-only step anywhere but a clone of its own: never the ticket's worktree (ORC-367)", () => {
+      for (const ws of ['worktree', 'knowledge']) {
+        expect(() => loadWorkflow({ packDir, projectFile: projectFile(`version: 1\njobs:\n  intake: { workspace: ${ws} }\n`) }), ws).toThrow(/jobs\.intake\.workspace/);
+      }
     });
 
     it('starts the AI review once the build is published, in AI Review (ORC-183)', () => {

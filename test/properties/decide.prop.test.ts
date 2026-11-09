@@ -7,6 +7,7 @@ import type { Effect } from '../../src/core/decision.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { blockingTotal } from '../../src/core/review.js';
 import { reduce } from '../../src/core/reduce.js';
+import { SPEC_COMMANDS } from '../../src/core/spec.js';
 import {
   higherRisk,
   newTicketState,
@@ -110,6 +111,9 @@ function loopBounded(r: Run, counter: 'verifyAttempts' | 'redAttempts', bound: n
     expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
   }
 }
+
+/** The commands the matrix refuses without resolved roles too (`roles ?? []`): `/refreeze` (ORC-131) and the spec gate's (ORC-212). */
+const closedByDefault = (e: FactoryEvent): boolean => e.type === 'command' && [REFREEZE, ...SPEC_COMMANDS].includes(e.payload.name);
 
 describe('decide — properties over generated sequences (ORC-173)', () => {
   it(
@@ -1014,9 +1018,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             const answers = step.decision.effects.filter((e) => !(isDone(step) && backToReview(e)));
             expect(answers, 'refusal not answered once').toHaveLength(answered ? 1 : 0);
             for (const e of answers) expect(['activity', 'comment']).toContain(e.kind);
-            // But `/refreeze` (ORC-131), refused without roles too: a freeze never opens by default.
-            const refreeze = step.event.type === 'command' && step.event.payload.name === REFREEZE;
-            if (!refreeze) expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
+            // But `/refreeze` (ORC-131) and the spec gate's commands (ORC-212), refused without roles too: a freeze or a gate never opens by default.
+            if (!closedByDefault(step.event)) expect(step.event.roles, 'refused an event whose roles were not resolved').toBeDefined();
             // The orchestrator resolves roles only where `mayCheck` says the matrix may be checked.
             expect(mayCheck(step.event, wf), `${step.event.type} refused where the orchestrator resolves no roles`).toBe(true);
           }
@@ -1037,9 +1040,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
               expect(unchecked.effects.some((e) => e.kind === 'merge'), 'an unchecked Done merged').toBe(false);
               continue;
             }
-            // So does a /refreeze (ORC-131): unchecked, it never regels.
-            if (step.event.type === 'command' && step.event.payload.name === REFREEZE) {
-              expect(unchecked.events, 'an unchecked /refreeze regeled').toEqual([]);
+            // So does a /refreeze (ORC-131): unchecked, it never regels; nor does a spec gate's command approve, change or reject (ORC-212).
+            if (closedByDefault(step.event)) {
+              expect(unchecked.events, `an unchecked ${(step.event.payload as { name: string }).name} changed the ticket`).toEqual([]);
               continue;
             }
             // Only a checked delegation names the run's initiator: the one event an unchecked decision leaves out.

@@ -2,11 +2,12 @@ import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import type { ReviewFinding } from '../core/review.js';
 import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type OverBudget, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
-import type { StoredEvent } from '../core/upcast.js';
+import { upcastTicket, type StoredEvent } from '../core/upcast.js';
 import { factoryDefault } from '../presets/factory-default.js';
 
 /**
@@ -357,6 +358,20 @@ export interface SecurityLog {
   skipped: { egress: number; refusals: number };
 }
 
+/**
+ * A file the factory made and kept for a ticket (ORC-176: a visual-proof capture), on the daemon's disk out of any mount of
+ * the agent's runner, known by its hash. `attemptId`: the run it was made for.
+ */
+export interface Artifact {
+  id: string;
+  ticketId: string;
+  attemptId?: string;
+  kind: string;
+  path: string;
+  sha256: string;
+  createdAt: number;
+}
+
 /** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
 export interface FindingsRecord {
   projectId: string;
@@ -368,10 +383,56 @@ export interface FindingsRecord {
   findings: readonly Finding[];
 }
 
-/** What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. */
+/**
+ * What the security logs hold over a period (ORC-296): requests per host, refusals per rule, most first. `runs`
+ * (ORC-300): each run with an entry in the period, its requests, refused requests and hook refusals there, the most
+ * refused first.
+ */
 export interface SecurityStats {
   hosts: { host: string; requests: number; refused: number }[];
   rules: { rule: string; refusals: number }[];
+  runs: { runId: string; projectId: string; ticketId: string; requests: number; refused: number; refusals: number }[];
+}
+
+/**
+ * A move of a ticket into Blocked (ORC-300), wherever it was made: by a decision (its projection blocked, and not before
+ * it), or outside one by the orchestrator (a launch error, a refused pickup), which journals nothing; such a move is
+ * found by the next decision of the ticket (its `before` blocked, the decision before it left the ticket free) or, when
+ * none came since, by the projection. `at`: the decision's clock, or the blocked ticket's `updatedAt` for a move outside
+ * a decision (a later change outside a decision, a session linked, pushes it back). `kind`: the typed kind, got back
+ * from its reason for a block written before ORC-345 (`upcastTicket`), as the Flow reads it.
+ */
+export interface BlockEntry {
+  projectId: string;
+  ticketId: string;
+  at: number;
+  kind: BlockKind;
+}
+
+/** The order of `SecurityStats.runs`: refused requests and hook refusals together, most first, then by run id. */
+export const byMostRefused = (a: SecurityStats['runs'][number], b: SecurityStats['runs'][number]): number =>
+  b.refused + b.refusals - (a.refused + a.refusals) || a.runId.localeCompare(b.runId);
+
+/** The move into Blocked of a blocked ticket, at `at`. */
+export const blockEntry = (t: TicketState, at: number): BlockEntry => ({ projectId: t.projectId, ticketId: t.ticketId, at, kind: upcastTicket(t).blockKind ?? 'other' });
+
+/**
+ * The moves into Blocked (`BlockEntry`) the decisions and the projections hold: `decisions` in each ticket's order, those
+ * without a projection left out. What SQLite computes in memory; Postgres the same in SQL.
+ */
+export function blockMoves(decisions: DecisionRecord[], tickets: TicketState[]): BlockEntry[] {
+  const key = (projectId: string, ticketId: string) => `${projectId}/${ticketId}`;
+  const blockedAfter = new Map<string, boolean>();
+  const moves: BlockEntry[] = [];
+  for (const d of decisions) {
+    if (!d.ticket || d.at === undefined) continue;
+    const k = key(d.projectId, d.ticket.ticketId);
+    if (d.before?.blocked && !blockedAfter.get(k)) moves.push(blockEntry(d.before, d.before.updatedAt));
+    if (d.ticket.blocked && !d.before?.blocked) moves.push(blockEntry(d.ticket, d.at));
+    blockedAfter.set(k, d.ticket.blocked);
+  }
+  for (const t of tickets) if (t.blocked && !blockedAfter.get(key(t.projectId, t.ticketId))) moves.push(blockEntry(t, t.updatedAt));
+  return moves;
 }
 
 /** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
@@ -583,8 +644,14 @@ export interface Store {
   putSecurityLog(log: SecurityLog): Promise<boolean>;
   /** The security log of a run (ORC-296), its entries in journal order. */
   securityLog(runId: string): Promise<SecurityLog | undefined>;
+  /** Keeps an artifact (ORC-176), once by its id: false, and nothing written, when it is kept already. */
+  putArtifact(a: Artifact): Promise<boolean>;
+  /** A ticket's artifacts, oldest first. */
+  artifacts(ticketId: string): Promise<Artifact[]>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
+  /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */
+  blocksEntered(since: number, until: number): Promise<BlockEntry[]>;
   /** Keeps a review lens's findings on a commit (ORC-183), in place of what that lens kept there before, in one transaction. */
   putFindings(r: FindingsRecord): Promise<void>;
   /** The findings kept on a ticket's commit, by lens (`correctness` first), each lens's in its own order. */

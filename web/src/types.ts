@@ -1,4 +1,4 @@
-import type { BlockCause, BlockKind } from '../../src/core/block-cause.js';
+import type { BlockCause, BlockKind, ParetoCause } from '../../src/core/block-cause.js';
 
 export interface RunView {
   id: string;
@@ -129,4 +129,56 @@ export interface MeasuredTicketView extends FlowTicketView {
   /** Of a blocked ticket, from its typed kind as the Flow classes it (ORC-345); null when not blocked. */
   blockCause: BlockCause | null;
   measures: TicketMeasuresView | null;
+}
+
+/** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */
+export interface SecurityPeriodView {
+  since: number;
+  until: number;
+  hosts: { host: string; requests: number; refused: number }[];
+  rules: { rule: string; refusals: number }[];
+  /** The most refused runs, 50 at most: `runsLeftOut` counts the others. */
+  runs: { runId: string; projectId: string; ticketId: string; requests: number; refused: number; refusals: number }[];
+  runsLeftOut: number;
+}
+
+/** `GET /api/security/runs/:id` (ORC-300): `RunSecurityView` of src/network/security-log.ts, never a command nor a path. */
+export interface RunSecurityView {
+  runId: string;
+  projectId: string;
+  ticketId: string;
+  at: number;
+  rules: { rule: string; refusals: number }[];
+  refusals: { at: number; tool: string; rule: string }[];
+  hosts: { host: string; requests: number; refused: number }[];
+  skipped: { egress: number; refusals: number };
+}
+
+/** `GET /api/blocks` (ORC-300): the moves into Blocked of `[since, until)`, their causes most frequent first. */
+export interface BlockParetoView {
+  since: number;
+  until: number;
+  total: number;
+  causes: ParetoCause[];
+}
+
+/**
+ * `GET /api/runs/:id` (ORC-298): `RunDetail` of src/core/run-detail.ts and the run's transcript, as the server reads them.
+ * Its `output` is what the agent handed back through `submit_result`, as the factory validated it.
+ */
+export interface RunDetailView {
+  run: RunMeasureView & { projectId: string; ticketId: string; queue: string; outcome: string | null; infra: boolean; labels: Record<string, unknown> | null };
+  timeline: { id: string; type: string; at: number; ofRun: boolean; what: string }[];
+  decisions: { id: string; type: string; at: number; channel: 'linear' | 'github' | 'dashboard' | 'cli'; who: string | null; what: string }[];
+  gates: { gate: string; openedAt: number; closedAt: number | null; to: string | null; closedBy: string | null }[];
+  findings: (
+    | { source: 'human'; id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }
+    | { source: 'ai'; runId: string; at: number; job: string; status: string; outcome: string | null; findings: { file: string; line: number; severity: string; explanation: string; suggestion: string }[] }
+  )[];
+  checks: { id: string; at: number; check: 'verify' | 'red' | 'ci'; result: 'passed' | 'failed' | 'errored'; runId: string | null; job: string | null; names: string[]; red: string | null }[];
+  steps: { job: string; attempts: number; tokens: TokensView | null; attemptsWithoutTokens: number; turns: number; workMs: number; costUsd: number }[];
+  attempts: RunMeasureView[];
+  output: { status: string; summary: string; question?: string; tests_added: string[]; why: string; assumptions: string[]; risks: string[]; untested: string[]; review_hints: { file: string; reason: string }[] } | null;
+  /** `purged`: past the 30 days transcripts are kept; `none`: no transcript recorded (a launch that failed, a run still to write one). */
+  transcript: { status: 'kept'; lines: RunLine[] } | { status: 'purged' } | { status: 'none' };
 }

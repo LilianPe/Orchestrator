@@ -60,9 +60,9 @@ function runOne(cwd: string, command: string, timeoutMs: number, env: Record<str
 /** Each command's cap, on the host and (setup) in a sandbox. */
 export const VERIFY_TIMEOUT_MS = 15 * 60_000;
 
-/** `command` in a sandbox under the same cap, by coreutils' `timeout` in the image: 124 is its exit on expiry. */
-export function cappedCommand(command: string): string[] {
-  return ['timeout', String(VERIFY_TIMEOUT_MS / 1000), 'bash', '--norc', '-c', command];
+/** `command` in a sandbox under the same cap, or `seconds`, by coreutils' `timeout` in the image: 124 is its exit on expiry. */
+export function cappedCommand(command: string, seconds = VERIFY_TIMEOUT_MS / 1000): string[] {
+  return ['timeout', String(seconds), 'bash', '--norc', '-c', command];
 }
 
 export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS, env = {}) => {

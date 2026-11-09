@@ -37,6 +37,33 @@ describe('intake, the first step (ORC-206)', () => {
     expect(dev?.labels?.risk).toBe('medium');
   });
 
+  it('runs on a clone of its own with the read and search tools only: a write or a command is refused by the run, not the skill (ORC-367)', async () => {
+    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
+    h.runner.enqueue(assessment(), DEV);
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const [intake, dev] = h.runner.requests;
+    // No write tool and no shell: `claude --tools Read,Grep,Glob`, as the AI review's lenses. No plan mode either, which could refuse `submit_result`.
+    expect(intake).toMatchObject({ tools: ['Read', 'Grep', 'Glob'], readOnly: false });
+    expect(intake!.cwd).toBe(`/tmp/factory-fake/${h.project.id}/_trunk/${intake!.runId}`);
+    expect(h.workspaces.prepared[0]).toMatchObject({ kind: 'trunk-readonly', runId: intake!.runId });
+    expect(h.workspaces.released).toContain(intake!.cwd);
+    // dev, which writes, has every tool, in the ticket's worktree.
+    expect(dev).not.toHaveProperty('tools');
+    expect(dev!.cwd).toBe(`/tmp/factory-fake/${h.project.id}/REL-1`);
+  });
+
+  it('an incomplete ticket leaves no worktree behind: intake never made one (ORC-367)', async () => {
+    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export', description: DESCRIPTION });
+    h.runner.enqueue(assessment({ complete: false, missing: ['CSV or XLSX?'] }));
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await h.ticket()).clarify).toMatchObject({ job: 'intake' });
+    expect(h.workspaces.prepared.map((r) => r.kind)).toEqual(['trunk-readonly']);
+    expect(h.workspaces.released).toEqual([h.runner.requests[0]!.cwd]);
+    expect((await h.ticket()).worktreePath).toBeUndefined();
+  });
+
   it('an incomplete ticket goes to clarify instead of starting: asked its questions, never moved to In Progress', async () => {
     const h = createHarness({ projectYaml: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export', description: DESCRIPTION });

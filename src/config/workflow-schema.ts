@@ -93,7 +93,7 @@ export const rawWorkflowSchema = z
       .partial()
       .optional(),
     workspace: z
-      .object({ setup: z.array(z.string()), ports: z.object({ base: z.number().int().positive() }) })
+      .object({ setup: z.array(z.string()), ports: z.object({ base: z.number().int().positive() }), preview: z.string().min(1) })
       .partial()
       .optional(),
     on: z.record(z.string(), z.array(rawRuleSchema)).optional(),
@@ -132,6 +132,10 @@ export interface Limits {
   repeatedFailures?: number;
   /** An attempt that writes nothing for this long is stopped (ORC-136). Absent from versions frozen before it, which do not watch it. */
   silentAfterMs?: number;
+  /** Returns to `spec_draft` after a failed `spec_check`, the next failure blocks (ORC-212). Absent from versions frozen before it. */
+  specCheckReturns?: number;
+  /** `/changes` rounds of the spec review, one more blocks (ORC-212). Absent from versions frozen before it. */
+  specChanges?: number;
 }
 
 export interface Rule {
@@ -168,6 +172,11 @@ export interface JobSpec {
   lens?: ReviewLens;
   /** The network level of the job's preset step (ORC-183), narrowed by the repository's at the launch. Absent from the jobs out of the preset. */
   network?: NetworkLevel;
+  /**
+   * The built-in tools of the job's preset step when the step is read-only (`stepTools`, ORC-367): `Read`, `Grep` and `Glob`,
+   * refused anything else by the run itself, whatever its skill says. Absent: every tool.
+   */
+  tools?: readonly string[];
   input?: InputKind;
   verify: string[];
   /**
@@ -221,7 +230,8 @@ export interface Workflow {
   /** `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. */
   states: Record<Exclude<LogicalState, 'ready'>, string> & { ready?: string };
   limits: Limits;
-  workspace: { setup: string[]; portBase: number };
+  /** `preview`: the command that starts the application for the visual proof (ORC-176), on `PORT`; absent, the proof is unavailable. */
+  workspace: { setup: string[]; portBase: number; preview?: string };
   commands: string[];
   on: Partial<Record<EventType, Rule[]>>;
   jobs: Record<string, JobSpec>;

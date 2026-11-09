@@ -20,6 +20,7 @@ import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../
 import { devCapacity, Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
+import type { VisualShooter } from '../../src/adapters/browser/types.js';
 import type { CleanVerifier, CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
@@ -254,6 +255,8 @@ export function createHarness(
     onUsageLimit?: 'wait';
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
+    /** The browser of the visual proof (ORC-176), with sandboxes; its captures kept in a temporary dir. */
+    visualShooter?: VisualShooter;
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
@@ -275,6 +278,7 @@ export function createHarness(
   const publisher = new FakePublisher(forge);
   const sessionsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-sessions-')) : undefined;
   const runsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-runs-')) : undefined;
+  const visualProof = opts.visualShooter && { shooter: opts.visualShooter, artifactsDir: mkdtempSync(join(tmpdir(), 'factory-artifacts-')) };
   /** The orchestrator's log lines, every life of it. */
   const logs: { level: string; message: string }[] = [];
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
@@ -302,6 +306,7 @@ export function createHarness(
       cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(visualProof ? { visualProof } : {}),
     };
     return { ...life, outside };
   };

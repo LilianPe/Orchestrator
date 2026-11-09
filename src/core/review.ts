@@ -11,8 +11,6 @@ import type { ContestedFinding } from './types.js';
 
 /** The check the review publishes on the commit it read: failed while a blocking finding stands. */
 export const REVIEW_CHECK = 'factory/review';
-/** The built-in tools a lens has: it reads and searches its clone, it writes nothing and runs no command. */
-export const REVIEW_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob'];
 
 /** A finding as the factory keeps it: the lens and the run that made it. */
 export type ReviewFinding = Finding & { lens: ReviewLens; runId: string };

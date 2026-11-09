@@ -54,11 +54,13 @@ jobs:
   # The `intake` step of factory/default (ORC-206): reads the ticket and the code, returns size, risk, completeness and
   # screen through `submit_result`. Its end is the guard before In Progress: a complete ticket starts `dev`, an
   # incomplete one is blocked with its questions. Off until a rule runs it (`ticket.delegated: run: intake`).
+  # On a fresh clone of the trunk, gone with its run, with the Read, Grep and Glob tools only, as the step writes nothing
+  # (ORC-367): a ticket that does not start keeps no worktree.
   intake:
     step: intake
     queue: dev
     model: sonnet
-    workspace: worktree
+    workspace: trunk-readonly
     session: new
     skill: "factory:intake"
     structured_output: true
@@ -80,6 +82,18 @@ jobs:
     on_start: { move: dev }
     # Published, then the AI review (ORC-183), whose end shows the PR in Human Review.
     on_success: { move: ai_review, post: summary, run: review }
+  # The `spec_draft` step of factory/default (ORC-212): writes the spec through `submit_result`, nothing in the
+  # worktree. Its end is `spec_check`, then the spec is published and waits for a validator's `/approve`
+  # (`spec_review`), which starts `tests`. Off until a rule runs it (intake's `on_success: { run: spec }`).
+  spec:
+    step: spec_draft
+    queue: dev
+    model: sonnet
+    workspace: worktree
+    session: new
+    skill: "factory:spec"
+    structured_output: true
+    on_success: { run: tests }
   # The `tests` step of factory/default (ORC-123): tests of the acceptance criteria only, then the `red`
   # check, then `dev`. Off until a rule runs it (`ticket.delegated: run: tests`); `red.mode: blocking`
   # once the golden tickets validate it.
