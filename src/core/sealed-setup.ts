@@ -1,7 +1,7 @@
 import { open, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider } from '../adapters/sandbox/types.js';
-import { cappedCommand, VERIFY_TIMEOUT_MS } from './verify.js';
+import { cappedCommand, cappedExit, VERIFY_TIMEOUT_MS } from './verify.js';
 
 /**
  * A version younger than this is refused at install (ORC-211): a package compromised and published this
@@ -196,8 +196,9 @@ async function setUpIn(sandboxes: Pick<SandboxProvider, 'exec' | 'destroy'>, id:
     const rc = await sandboxes.exec(id, YARN1_NO_SCRIPTS, { env: { HOME: SETUP_HOME } });
     if (rc.code !== 0) throw new Error(`The worktree setup failed: Yarn 1 scripts not disabled (${rc.stderr.trim()})`);
     for (const command of req.commands) {
+      const started = Date.now();
       const { code } = await sandboxes.exec(id, (req.argv ?? cappedCommand)(command), { env });
-      if (code === 124) throw new Error(`The worktree setup failed: ${command} (timed out after ${VERIFY_TIMEOUT_MS / 60_000} min)`);
+      if (cappedExit(code, started) === null) throw new Error(`The worktree setup failed: ${command} (timed out after ${VERIFY_TIMEOUT_MS / 60_000} min)`);
       if (code !== 0) throw new Error(`The worktree setup failed: ${command}`);
     }
   } finally {

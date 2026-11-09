@@ -92,7 +92,7 @@ import { runSealedSetup } from './sealed-setup.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
-import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
+import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from './diff-class.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -1064,8 +1064,9 @@ export class Orchestrator {
         if (status.code !== 0) throw new Error(`git status: ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
         runTests = async (cmd) => {
+          const started = Date.now();
           const r = await sandboxes.exec(box.id, cappedCommand(cmd), { env });
-          return { exitCode: r.code === 124 ? null : r.code, output: r.stdout + r.stderr };
+          return { exitCode: cappedExit(r.code, started), output: r.stdout + r.stderr };
         };
       }
       const red = await checkRed(command, { ...diff, uncommitted, run: runTests });

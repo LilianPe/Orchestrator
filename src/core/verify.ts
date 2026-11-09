@@ -69,6 +69,15 @@ export function cappedCommand(command: string, seconds = VERIFY_TIMEOUT_MS / 100
   return ['timeout', String(seconds), 'bash', '--norc', '-c', command];
 }
 
+/**
+ * The exit of a command started at `startedAt` under the default cap (`cappedCommand`, `verifyCommand`), `null` when it met it (ORC-348), as the factory's own clock
+ * tells it: a failure once the cap has passed, 124 or the 137 of a command killed after ignoring the TERM (`timeout -k`).
+ * Before it, any code is the command's, a 124 of its own included.
+ */
+export function cappedExit(code: number, startedAt: number): number | null {
+  return code !== 0 && Date.now() - startedAt >= VERIFY_TIMEOUT_MS ? null : code;
+}
+
 export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS, env = {}, warn) => {
   const failures: VerifyFailure[] = [];
   for (const command of commands) {

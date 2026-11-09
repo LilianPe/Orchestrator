@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EgressPolicy } from '../../network/levels.js';
 import type { Exec, ExecResult } from '../exec.js';
-import { ContainerSandboxProvider, defaultLimits, isPodman, POSTGRES_IMAGE } from './docker-rootless.js';
+import { ContainerSandboxProvider, defaultLimits, POSTGRES_IMAGE } from './docker-rootless.js';
 import { DEFAULT_REQUIREMENTS, type SandboxRequest } from './types.js';
 
 const ok = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
@@ -10,14 +10,26 @@ const ok = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
 const QUIET = '--log-level=error';
 const sub = (args: string[]) => (args[0] === QUIET ? args.slice(1) : args);
 
-/** A scripted engine: `answer` gets the args after the cli (and podman's global flag) and says what the cli prints. */
-function engine(answer: (args: string[], env?: Record<string, string>) => ExecResult) {
+/** What `version --format '{{json .Client}}'` prints: Docker's client has `Os` and `Arch`, Podman's `OsArch`. */
+const DOCKER_CLIENT = ok('{"Version":"28.2.2","ApiVersion":"1.50","Os":"linux","Arch":"amd64","Context":"default"}\n');
+const PODMAN_CLIENT = ok('{"APIVersion":"5.4.0","Version":"5.4.0","GoVersion":"go1.23.6","Built":1739318400,"OsArch":"linux/amd64","Os":"linux"}\n');
+
+/**
+ * A scripted engine: `answer` gets the args after the cli (and podman's global flag) and says what the cli prints. Its
+ * `version`, out of `calls`, is `client`'s: by default Podman's for a cli named podman, Docker's otherwise.
+ */
+function engine(answer: (args: string[], env?: Record<string, string>) => ExecResult, client?: ExecResult) {
   const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
+  const versions: string[][] = [];
   const exec: Exec = async (cmd, args, opts) => {
+    if (args[0] === 'version') {
+      versions.push(args);
+      return client ?? (/podman/.test(cmd) ? PODMAN_CLIENT : DOCKER_CLIENT);
+    }
     calls.push({ cmd, args, ...(opts?.env ? { env: opts.env } : {}) });
     return answer(sub(args), opts?.env);
   };
-  return { calls, exec };
+  return { calls, versions, exec };
 }
 
 const req = (over: Partial<SandboxRequest> = {}): SandboxRequest => ({
@@ -106,8 +118,32 @@ describe('ContainerSandboxProvider.create', () => {
     expect(defaultLimits(16).cpus).toBe(2);
   });
 
-  it('knows podman by its basename', () => {
-    expect([isPodman('podman'), isPodman('/usr/bin/podman-remote'), isPodman('docker'), isPodman('/opt/podman/bin/docker')]).toEqual([true, true, false, false]);
+  it("knows podman by what its CLI reports of itself, never by its name: a `docker` that is Podman's takes Podman's flags (ORC-348)", async () => {
+    const shim = engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()), PODMAN_CLIENT);
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: shim.exec }).create(req());
+    expect(shim.versions).toEqual([['version', '--format', '{{json .Client}}']]);
+    expect(shim.calls.every((c) => c.args[0] === QUIET)).toBe(true);
+    expect(runArgs(shim.calls)).toContain('--userns=keep-id');
+    const named = engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()), DOCKER_CLIENT);
+    await new ContainerSandboxProvider({ ...opts, cli: '/usr/bin/podman', exec: named.exec }).create(req());
+    expect(named.calls.some((c) => c.args[0] === QUIET)).toBe(false);
+    expect(runArgs(named.calls)).not.toContain('--userns=keep-id');
+  });
+
+  it("reads Docker's client when its daemon does not answer (exit 1), asks once, and asks again after an answer it cannot read", async () => {
+    const down = engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()), { ...PODMAN_CLIENT, stderr: 'Cannot connect to the server', code: 1 });
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: down.exec });
+    await p.create(req());
+    await p.create(req({ runId: 'r2' }));
+    expect(down.versions).toHaveLength(1);
+    expect(runArgs(down.calls)).toContain('--userns=keep-id');
+    let client: ExecResult = { stdout: '', stderr: 'docker: command not found', code: 127 };
+    const flaky = engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()));
+    const exec: Exec = async (cmd, args, o) => (args[0] === 'version' ? client : flaky.exec(cmd, args, o));
+    const q = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec });
+    await expect(q.create(req())).rejects.toThrow('docker version --format {{json .Client}}: docker: command not found');
+    client = DOCKER_CLIENT;
+    await expect(q.create(req())).resolves.toMatchObject({ id: 'c1' });
   });
 
   it('keeps the uid under podman with --userns=keep-id', async () => {
@@ -615,6 +651,12 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
     const agent = await p.create(req({ requirements: pg }));
     await p.destroy(agent.id);
     expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', agent.id], ['rm', '-f', '-v', '--depend', 'svc1']]);
+  });
+
+  it('removes with --depend under Podman even as the first command of a provider, before it asked anything else (ORC-348)', async () => {
+    const e = engine(() => ok());
+    await new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec }).destroy('svc1');
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', 'svc1']]);
   });
 
   it('list gives the services under the key they serve, so recover destroys those of dead attempts', async () => {

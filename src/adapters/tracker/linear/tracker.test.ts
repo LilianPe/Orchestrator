@@ -103,8 +103,16 @@ describe('LinearTracker', () => {
     const answering = (errors: unknown[]): LinearApi =>
       new LinearApi(async () => 'tok', async () => ({ ok: true, status: 200, json: async () => ({ data: null, errors }) }));
     // What Linear answers for an unknown or deleted issue: an error, not `issue: null`.
-    const notFound = { message: 'Entity not found: Issue', extensions: { type: 'invalid input', userPresentableMessage: 'Could not find referenced Issue.' } };
+    const notFound = { message: 'Entity not found: Issue', path: ['issue'], extensions: { type: 'invalid input', userPresentableMessage: 'Could not find referenced Issue.' } };
     await expect(new LinearTracker(answering([notFound]), 'app-1').getIssue('REL-9')).rejects.toBeInstanceOf(IssueNotFoundError);
+    // Read on its fields, not its words (ORC-348): the same refusal in other words is the same answer.
+    const reworded = { ...notFound, message: 'No such issue', extensions: { type: 'invalid input', userPresentableMessage: 'Issue missing.' } };
+    await expect(new LinearTracker(answering([reworded]), 'app-1').getIssue('REL-9')).rejects.toBeInstanceOf(IssueNotFoundError);
+    // A refusal below the issue, or the words without the fields, is no answer about the issue.
+    const below = new LinearTracker(answering([{ ...notFound, path: ['issue', 'team'] }]), 'app-1').getIssue('REL-9');
+    await expect(below).rejects.not.toBeInstanceOf(IssueNotFoundError);
+    const words = new LinearTracker(answering([{ message: 'Entity not found: Issue' }]), 'app-1').getIssue('REL-9');
+    await expect(words).rejects.not.toBeInstanceOf(IssueNotFoundError);
     const { api } = fakeLinear({ Issue: () => ({ issue: null }) });
     await expect(new LinearTracker(api, 'app-1').getIssue('REL-9')).rejects.toBeInstanceOf(IssueNotFoundError);
     const other = new LinearTracker(answering([{ message: 'Rate limit exceeded' }]), 'app-1').getIssue('REL-9');

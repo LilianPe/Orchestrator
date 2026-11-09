@@ -5,8 +5,13 @@ export type FetchLike = (
 
 export interface LinearGqlError {
   message: string;
-  /** `code`: `RATELIMITED` for Linear's rate limit, which it answers with a 400 (ORC-343). */
-  extensions?: { userPresentableMessage?: string; code?: string };
+  /** The field it is about, as GraphQL gives it: `['issue']` for the issue a query names. */
+  path?: readonly (string | number)[];
+  /**
+   * `code`: `RATELIMITED` for Linear's rate limit, which it answers with a 400 (ORC-343). `type`: its kind, `invalid input`
+   * for an identifier Linear does not have.
+   */
+  extensions?: { userPresentableMessage?: string; code?: string; type?: string };
 }
 
 /** A refusal of Linear's API: its GraphQL errors, and the HTTP status it came with (`isTransient` reads both, ORC-343). */
