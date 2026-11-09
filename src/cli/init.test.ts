@@ -3,8 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
+import { loadWorkflow } from '../config/load-workflow.js';
 import { runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[], confirms: boolean[]): InitIO & { printed: string[] } {
@@ -15,6 +17,17 @@ function scriptedIO(answers: string[], confirms: boolean[]): InitIO & { printed:
     confirm: async (_q, def) => confirms.shift() ?? def ?? false,
     print: (s) => void printed.push(s),
   };
+}
+
+const packDir = join(import.meta.dirname, '../../packs/standard');
+const gitTop: (repo: string) => Exec = (repo) => async (cmd, args) =>
+  cmd === 'git' && args[0] === 'rev-parse' ? { stdout: `${repo}\n`, stderr: '', code: 0 } : { stdout: '', stderr: '', code: 0 };
+
+/** Runs init on `repo`, every proposal kept, and the workflow it wrote merged with the pack. */
+async function initWorkflow(repo: string) {
+  const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+  await runInit({ io: scriptedIO(['REL', 'cid', 'csecret', 'whsecret', ''], [false]), home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
+  return loadWorkflow({ packDir, projectFile: join(repo, '.factory/workflow.yml') });
 }
 
 describe('factory init', () => {
@@ -47,6 +60,45 @@ describe('factory init', () => {
     expect(out).toContain('https://smee.io/abc');
     expect(out).toContain('Agent session events');
     expect(existsSync(join(home, 'config.yaml'))).toBe(true);
+  });
+
+  it('criterion 1 (ORC-172): a Python repository with no config gets uv sync --frozen, ruff, mypy and pytest, the red check included', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    copyPythonRepo(repo);
+    const wf = await initWorkflow(repo);
+    expect(wf.workspace.setup).toEqual(['uv sync --frozen']);
+    expect(wf.jobs.dev!.verify).toEqual(['uv run ruff check', 'uv run mypy .', 'uv run pytest']);
+    expect(wf.jobs.tests!.red?.command).toBe('uv run pytest');
+  });
+
+  it('a pyproject.toml without uv.lock proposes nothing: a `uv run` would write a lockfile into the worktree', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    writeFileSync(join(repo, 'pyproject.toml'), '[project]\nname = "x"\n');
+    const wf = await initWorkflow(repo);
+    expect(wf.workspace.setup).toEqual([]);
+    expect(wf.jobs.dev!.verify).toEqual([]);
+    expect(wf.jobs.tests!.red?.command).toBe('npm test --');
+  });
+
+  it('a repository with both proposes both, the red check on the Node tests', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    copyPythonRepo(repo);
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    writeFileSync(join(repo, 'package-lock.json'), '{}');
+    const wf = await initWorkflow(repo);
+    expect(wf.workspace.setup).toEqual(['npm ci', 'uv sync --frozen']);
+    expect(wf.jobs.dev!.verify).toEqual(['npm test', 'uv run ruff check', 'uv run mypy .', 'uv run pytest']);
+    expect(wf.jobs.tests!.red?.command).toBe('npm test --');
+  });
+
+  it('a TypeScript repository with a pnpm-lock.yaml gets pnpm commands', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint .', typecheck: 'tsc', test: 'vitest run' } }));
+    writeFileSync(join(repo, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+    const wf = await initWorkflow(repo);
+    expect(wf.workspace.setup).toEqual(['pnpm install --frozen-lockfile']);
+    expect(wf.jobs.dev!.verify).toEqual(['pnpm run lint', 'pnpm run typecheck', 'pnpm test']);
+    expect(wf.jobs.tests!.red?.command).toBe('pnpm test --');
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {

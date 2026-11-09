@@ -40,7 +40,17 @@ jobs:
     verify: ["npm run lint", "npm run typecheck", "npm test"]
 ```
 
-`setup` is `["npm ci"]` if the repository has a `package-lock.json`, otherwise `[]`. `verify` suggests the `lint`, `typecheck` and `test` scripts found in `package.json`; you can edit the list during `init`.
+`setup` is `["npm ci"]` if the repository has a `package-lock.json`, otherwise `[]`. `verify` suggests the `lint`, `typecheck` and `test` scripts found in `package.json`; you can edit the list during `init`. With a `test` script, `jobs.tests.red.command` is written too (`npm test --`, the pack's own).
+
+What `init` detects (ORC-172), in this order when a repository has both:
+
+| Repository | `setup` | `verify` | `jobs.tests.red.command` |
+|---|---|---|---|
+| `package.json` + `package-lock.json` | `npm ci` | `npm run lint`, `npm run typecheck`, `npm test` (the scripts it has) | `npm test --` |
+| `package.json` + `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` | `pnpm run lint`, `pnpm run typecheck`, `pnpm test` (the scripts it has) | `pnpm test --` |
+| `pyproject.toml` + `uv.lock` | `uv sync --frozen` | `uv run ruff check`, `uv run mypy .`, `uv run pytest` | `uv run pytest` |
+
+A `pyproject.toml` without `uv.lock` gets nothing: a `uv run` would write the lockfile into the worktree, and a plain `uv sync` rewrites it under the setup's age cap ([`repository-configuration.md`](repository-configuration.md)). The red check runs one command: in a repository with both, Node's. `test/fixtures/python-repo/` is a Python repository with no config, on which `uv sync --frozen` and the three commands pass.
 
 ## 2. Key-by-key reference
 

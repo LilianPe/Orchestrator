@@ -20,11 +20,39 @@ export interface InitDeps {
   exec: Exec;
 }
 
-function detectVerify(repo: string): string[] {
+/** What `init` proposes for a repository: its install, its checks, and the test command the red check appends the new tests to. */
+interface Detected {
+  setup: string[];
+  verify: string[];
+  red?: string;
+}
+
+/** npm, or pnpm when its lockfile is there: the scripts `lint`, `typecheck` and `test` the repository has. */
+function detectNode(repo: string): Detected {
   const pkgFile = join(repo, 'package.json');
-  if (!existsSync(pkgFile)) return [];
+  if (!existsSync(pkgFile)) return { setup: [], verify: [] };
   const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
-  return ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `npm ${s === 'test' ? 'test' : `run ${s}`}`);
+  const pm = existsSync(join(repo, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm';
+  const setup = pm === 'pnpm' ? ['pnpm install --frozen-lockfile'] : existsSync(join(repo, 'package-lock.json')) ? ['npm ci'] : [];
+  const verify = ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `${pm} ${s === 'test' ? 'test' : `run ${s}`}`);
+  return { setup, verify, ...(scripts.test ? { red: `${pm} test --` } : {}) };
+}
+
+/**
+ * uv (ORC-172), on its lockfile only: without one, a `uv run` would write it into the worktree. `--frozen` keeps it as
+ * it is, where a plain `uv sync` resolves again under the setup's age cap and rewrites it (docs/repository-configuration.md).
+ */
+function detectPython(repo: string): Detected {
+  if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], verify: [] };
+  return { setup: ['uv sync --frozen'], verify: ['uv run ruff check', 'uv run mypy .', 'uv run pytest'], red: 'uv run pytest' };
+}
+
+/** Both when the repository has both: the red check runs one command, Node's first. */
+function detect(repo: string): Detected {
+  const node = detectNode(repo);
+  const python = detectPython(repo);
+  const red = node.red ?? python.red;
+  return { setup: [...node.setup, ...python.setup], verify: [...node.verify, ...python.verify], ...(red ? { red } : {}) };
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
@@ -90,12 +118,11 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   const wfFile = join(repoPath, '.factory/workflow.yml');
   if (!existsSync(wfFile)) {
-    const detected = detectVerify(repoPath);
+    const { setup, verify: detected, red } = detect(repoPath);
     const verify = (await io.ask('Verification commands after each run (separated by ;)', detected.join('; ')))
       .split(';')
       .map((s) => s.trim())
       .filter(Boolean);
-    const setup = existsSync(join(repoPath, 'package-lock.json')) ? ['npm ci'] : [];
     mkdirSync(join(repoPath, '.factory'), { recursive: true });
     writeFileSync(
       wfFile,
@@ -110,6 +137,7 @@ export async function runInit(d: InitDeps): Promise<void> {
         'jobs:',
         '  dev:',
         `    verify: ${JSON.stringify(verify)}`,
+        ...(red ? ['  tests:', `    red: ${JSON.stringify({ command: red })}`] : []),
         '',
       ].join('\n'),
     );
