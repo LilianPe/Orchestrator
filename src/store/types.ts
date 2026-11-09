@@ -98,6 +98,8 @@ export interface RunRecord {
   pickup?: string[];
   /** The tickets not done it was « blocked by » at the launch of an `intake` run (ORC-363), for its guard. Absent when none. */
   blockedBy?: Blocker[];
+  /** The head of its worktree at the launch of the workflow's relay job (ORC-375), which its end compares. Absent for any other job. */
+  startHead?: string;
 }
 
 /**

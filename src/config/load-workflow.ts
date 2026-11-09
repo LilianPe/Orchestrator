@@ -220,10 +220,13 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
     if (j.onBlocking && jobs[j.onBlocking.run]?.input !== 'findings') throw new WorkflowError(`jobs.${j.name}.on_blocking.run: "${j.onBlocking.run}" must be a job that reads the findings (input: findings)`);
   }
 
-  // It asks the agent that implements: a job of the ticket session, resumed (ORC-375).
+  // It asks the agent that implements: a job of the ticket session, resumed, on the feedback input; no round (ORC-375).
   const relay = raw.relay_job;
-  if (relay && !jobs[relay]) throw new WorkflowError(`relay_job: unknown job "${relay}"`);
-  if (relay && (jobs[relay]!.queue !== 'dev' || jobs[relay]!.session !== 'resume')) throw new WorkflowError(`relay_job: "${relay}" must resume the ticket session (queue: dev, session: resume)`);
+  const answers = relay ? jobs[relay] : undefined;
+  if (relay && !answers) throw new WorkflowError(`relay_job: unknown job "${relay}"`);
+  if (answers && (answers.queue !== 'dev' || answers.session !== 'resume' || answers.input !== 'feedback' || answers.counter)) {
+    throw new WorkflowError(`relay_job: "${relay}" must resume the ticket session on the feedback input, with no counter (queue: dev, session: resume, input: feedback)`);
+  }
 
   const on: Partial<Record<EventType, Rule[]>> = {};
   for (const [type, rules] of Object.entries(raw.on ?? {})) {

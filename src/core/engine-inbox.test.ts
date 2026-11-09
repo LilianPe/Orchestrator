@@ -442,37 +442,40 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
 
   describe('the end of the relay job (ORC-375)', () => {
     const sha = 'a'.repeat(40);
+    const FROZEN: TicketState['frozenTests'] = { sha, files: {} };
     const answered = { ...output, answers: [{ question: 'q1', answer: 'Le ticket demande du CSV.' }] };
-    const end = (head?: string) => ev('run.finished', { runId: 'r1', job: 'answer-relayed', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: answered, ...(head ? { head } : {}) });
+    const end = (committed = false) => ev('run.finished', { runId: 'r1', job: 'answer-relayed', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: answered, ...(committed ? { committed: true as const } : {}) });
     const inReviewAnswering = (patch: Partial<TicketState> = {}) =>
       ticket({ logical: 'human_review', activeRunId: 'r1', activeJob: 'answer-relayed', verifiedSha: sha, relayed: [handed('q1', 'r1')], ...patch });
 
     it('with no commit: the answer is relayed, and nothing moves, posts, checks or reviews (criterion 1)', () => {
-      for (const head of [sha, undefined]) {
-        const out = decide(inReviewAnswering(), end(head), workflow);
-        expect(activities(out), String(head)).toEqual([expect.objectContaining({ runId: 'q1', body: 'The agent that implements answers: Le ticket demande du CSV.' })]);
-        expect(out.effects.map((e) => e.kind), String(head)).toEqual(['activity']);
-        expect(out.events.map((e) => e.type), String(head)).toEqual(['relay.done']);
+      // Frozen tests too (ORC-131): they check a commit, and the answer wrote none.
+      for (const t of [inReviewAnswering(), inReviewAnswering({ frozenTests: FROZEN })]) {
+        const out = decide(t, end(), workflow);
+        expect(activities(out)).toEqual([expect.objectContaining({ runId: 'q1', body: 'The agent that implements answers: Le ticket demande du CSV.' })]);
+        expect(out.effects.map((e) => e.kind)).toEqual(['activity']);
+        expect(out.events.map((e) => e.type)).toEqual(['relay.done']);
       }
     });
 
     it('with a commit: the reply rule\'s path, its checks, then its publication, move and review', () => {
       const t = inReviewAnswering();
-      const out = decide(t, end('b'.repeat(40)), workflow);
+      const out = decide(t, end(true), workflow);
       expect(out.events).toContainEqual({ type: 'verify.started', runId: 'r1' });
       expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'run_verify', runId: 'r1', job: 'fix-human' }));
       expect(out.effects.filter((e) => e.kind === 'move' || e.kind === 'post_output' || e.kind === 'start_run')).toEqual([]);
       // Not a round of human review: a question started it.
       expect(out.events.filter((e) => e.type === 'ticket.patched')).toEqual([]);
-      let after = reduce(t, end('b'.repeat(40)));
+      let after = reduce(t, end(true));
       for (const e of out.events) after = reduce(after, e);
       const published = decide({ ...after!, owedMove: 'ai_review' }, ev('publish.done', { runId: 'r1', job: 'fix-human', sha: 'b'.repeat(40) }), workflow);
       expect(published.effects.filter((e) => e.kind === 'move' || e.kind === 'start_run')).toEqual([{ kind: 'move', to: 'ai_review' }, expect.objectContaining({ job: 'review' })]);
     });
 
     it('in a state where no reply starts a job any more, a commit still goes through the relay job\'s own end', () => {
-      const out = decide(inReviewAnswering({ logical: 'ai_review' }), end('b'.repeat(40)), workflow);
+      const out = decide(inReviewAnswering({ logical: 'ai_review' }), end(true), workflow);
       expect(out.effects.filter((e) => e.kind === 'run_verify')).toEqual([]);
+      expect(out.trace).toContainEqual(expect.stringContaining('left unpublished'));
     });
   });
 

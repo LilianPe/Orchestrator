@@ -2846,6 +2846,8 @@ export class Orchestrator {
       };
       const prompt = buildPrompt(promptInput);
       const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
+      // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
+      const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;
 
       const run: RunRecord = {
         id: runId,
@@ -2872,6 +2874,7 @@ export class Orchestrator {
         ...(limits !== job.limits ? { limits } : {}),
         ...(pickup ? { pickup } : {}),
         ...(blockedBy ? { blockedBy } : {}),
+        ...(startHead ? { startHead } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
@@ -3190,19 +3193,18 @@ export class Orchestrator {
         ...(run.blockedBy ? { blockedBy: run.blockedBy } : {}),
         ...(usageLimit ? { usageLimit } : {}),
         ...(result.overBudget ? { overBudget: result.overBudget } : {}),
-        ...(await this.answerHead(run)),
+        ...(await this.answerCommitted(run)),
       },
     };
   }
 
   /**
-   * The commit the worktree of the workflow's relay job holds at its end (ORC-375): the engine sends a commit the answer
-   * wrote the reply rule's way. Nothing for any other job, nor when it cannot be read: the answer then stays light.
+   * The relay job's attempt moved the head of its worktree since its launch (ORC-375): the engine sends that commit the
+   * reply rule's way. Nothing for an attempt launched without a head (any other job), nor for a head it cannot read.
    */
-  private async answerHead(run: RunRecord): Promise<{ head?: string }> {
-    const project = await this.runtimeFor(run.projectId, run.ticketId);
-    if (!project?.workflow.relayJob || project.workflow.relayJob !== run.job) return {};
+  private async answerCommitted(run: RunRecord): Promise<{ committed?: true }> {
+    if (run.startHead === undefined) return {};
     const head = await this.d.workspaces.head(run.cwd).catch(() => undefined);
-    return head ? { head } : {};
+    return head && head !== run.startHead ? { committed: true } : {};
   }
 }

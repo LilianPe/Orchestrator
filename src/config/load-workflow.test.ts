@@ -339,14 +339,16 @@ on:
     expect(job).toMatchObject({ queue: 'dev', session: 'resume', workspace: 'worktree', input: 'feedback', verify: [], onStart: {}, onSuccess: {} });
     expect(job).not.toHaveProperty('repoChecks');
     expect(job).not.toHaveProperty('counter');
-    // A project may leave it out: the reply rules' job answers then, as before ORC-375.
+    // A project may name another job of the ticket session.
     expect(loadWorkflow({ packDir, projectFile: projectFile('version: 1\nrelay_job: dev-feedback\n') }).relayJob).toBe('dev-feedback');
   });
 
   it('refuses a relay job that is unknown, or does not resume the session of the agent that implements (ORC-375)', () => {
     expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\nrelay_job: nope\n') })).toThrow(/relay_job: unknown job "nope"/);
-    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\nrelay_job: ask\n') })).toThrow(/relay_job: "ask" must resume the ticket session/);
-    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\nrelay_job: review\n') })).toThrow(/relay_job: "review" must resume the ticket session/);
+    // A questions job, a review, a rebase, a fix on another input, or one counted as a round of human review.
+    for (const job of ['ask', 'review', 'rebase', 'fix-ci', 'fix-human']) {
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile(`version: 1\nrelay_job: ${job}\n`) }), job).toThrow(new RegExp(`relay_job: "${job}" must resume the ticket session`));
+    }
   });
 
   it('rejects a rule that runs an unknown job', () => {
