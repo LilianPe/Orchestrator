@@ -2516,8 +2516,10 @@ export class Orchestrator {
         if (held && ev.kind === 'result') held.silentMs = Infinity;
         bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
         const activity = composedActivity(ev, step);
-        if (activity) bus.publish({ kind: 'activity', projectId: run.projectId, runId: run.id, ticketId: run.ticketId, activity, at: clock.now() });
-        relay.push(ev);
+        if (activity) {
+          bus.publish({ kind: 'activity', projectId: run.projectId, runId: run.id, ticketId: run.ticketId, activity, at: clock.now() });
+          relay.pushActivity(activity);
+        }
       }
       this.liveRuns.delete(run.id);
       if (!this.held.has(run.id)) return;

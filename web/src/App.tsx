@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
 import { fetchFlow, fetchMeasures, fetchSnapshot, post, subscribe } from './api.js';
-import { Flow, plural } from './Flow.js';
+import { clockTime, Flow, plural } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures } from './Measures.js';
 import { feedKey, initialState, reducer } from './state.js';
@@ -113,8 +113,7 @@ export function App() {
     return () => clearTimeout(timer);
   }, [s.flowStale, view, loadFlow]);
 
-  const stop = (run: WorkingRunView) => void post(`/api/tickets/${run.projectId}/${run.ticketId}/stop`);
-  // A pause or a stop from a run's inspection (ORC-301): a refusal is said there, a success reads the Flow again.
+  // A pause or a stop of a run, from its inspection or Working (ORC-301): a refusal is said in its inspection, a success reads the Flow again.
   const [notice, setNotice] = useState<{ runId: string; text: string }>();
   const control = (run: WorkingRunView, action: 'pause' | 'stop') => () =>
     void post(`/api/runs/${run.runId}/${action}`).then(
@@ -162,7 +161,7 @@ export function App() {
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (
-            <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={stop} />
+            <LiveFlow flow={s.flow} flowAt={s.flowAt} frozen={s.flowFailed} selectedRun={s.selectedRun} onSelect={(runId) => dispatch({ type: 'select', runId })} onStop={(run) => control(run, 'stop')()} />
           ) : !s.flowFailed && <section><p className="empty">Loading the Flow…</p></section>}
         </div>
         {inspected && (
@@ -178,10 +177,10 @@ export function App() {
           <h2>Log</h2>
           <ul>
             {s.logs.slice(0, 5).map((l, i) => (
-              <li key={`log-${i}`} className={`log ${l.level}`}>{new Date(l.at).toLocaleTimeString('en-US')} {l.message}</li>
+              <li key={`log-${i}`} className={`log ${l.level}`}>{clockTime(l.at)} {l.message}</li>
             ))}
             {s.events.map((e) => (
-              <li key={e.id}>{new Date(e.at).toLocaleTimeString('en-US')} <strong>{e.type}</strong> {e.ticketId ?? ''}</li>
+              <li key={e.id}>{clockTime(e.at)} <strong>{e.type}</strong> {e.ticketId ?? ''}</li>
             ))}
           </ul>
         </section>

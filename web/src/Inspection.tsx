@@ -1,3 +1,4 @@
+import { clockTime } from './Flow.js';
 import type { FeedLine, WorkingRunView } from './types.js';
 
 /** Of the ticket's feed, this run's: its composed activities and the ticket's events, not another run's activities. */
@@ -29,7 +30,7 @@ export function Inspection({ run, feed, notice, onPause, onStop }: {
         {lines.length ? (
           lines.map((l, i) => (
             <li key={l.kind === 'event' ? l.id : `a-${i}`}>
-              {new Date(l.at).toLocaleTimeString('en-US')} {l.kind === 'activity' ? <><strong>{l.action}</strong> {l.parameter}</> : <span className="event">{l.type}</span>}
+              {clockTime(l.at)} {l.kind === 'activity' ? <><strong>{l.action}</strong> {l.parameter}</> : <span className="event">{l.type}</span>}
             </li>
           ))
         ) : (

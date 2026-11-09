@@ -294,19 +294,20 @@ export function createApp(d: ServerDeps): Hono {
     await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
   });
-  // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check, not a question).
-  const runControl = (pause: boolean) => async (c: Context) => {
+  // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check,
+  // not a question). The same check here answers the operator at once; `decide`'s is the one journaled.
+  const runControl = (action: 'pause' | 'stop') => async (c: Context) => {
     const runId = c.req.param('id')!;
     const run = await d.store.getRun(runId);
     if (!run) return c.json({ error: `unknown run ${runId}` }, 404);
     if ((await d.store.getTicket(run.projectId, run.ticketId))?.activeRunId !== runId) return c.json({ error: `run ${runId} is not the ticket's run at work` }, 409);
     const at = d.clock.now();
-    const payload = pause ? { runId, pause: true as const } : { runId };
-    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${pause ? 'pause' : 'stop'}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
+    const payload = action === 'pause' ? { runId, pause: true as const } : { runId };
+    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${action}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
     return c.json({ ok: true });
   };
-  app.post('/api/runs/:id/pause', runControl(true));
-  app.post('/api/runs/:id/stop', runControl(false));
+  app.post('/api/runs/:id/pause', runControl('pause'));
+  app.post('/api/runs/:id/stop', runControl('stop'));
 
   const agent = new Hono<AgentEnv>();
   agent.use('*', async (c, next) => {

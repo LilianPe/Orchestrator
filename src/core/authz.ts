@@ -34,6 +34,11 @@ export interface MatrixRow {
 
 export type AuthzMatrix = Readonly<Record<AuthzAction, MatrixRow>>;
 
+/** A row of a run's inspection on the dashboard (ORC-301): its operators alone. */
+function dashboardRow(what: string): MatrixRow {
+  return { anyOf: [['operator']], channels: ['dashboard'], what, who: 'operators of the dashboard' };
+}
+
 /**
  * The default matrix of the MVP doc. A constant until the `factory/default` preset declares it (ORC-187):
  * `decide` takes it as a parameter so that a preset can pass its own.
@@ -77,25 +82,10 @@ export const DEFAULT_MATRIX: AuthzMatrix = {
     who: 'humans with GitHub merge rights on the repository',
   },
   // A run's inspection (ORC-301). Stopping from Linear (`agent:stop`, removing the delegation) stays outside the matrix.
-  pause_run: {
-    anyOf: [['operator']],
-    channels: ['dashboard'],
-    what: 'pausing a run',
-    who: 'operators of the dashboard',
-  },
-  stop_run: {
-    anyOf: [['operator']],
-    channels: ['dashboard'],
-    what: 'stopping a run',
-    who: 'operators of the dashboard',
-  },
+  pause_run: dashboardRow('pausing a run'),
+  stop_run: dashboardRow('stopping a run'),
   /** Wired by ORC-234, which brings the take-over itself. */
-  take_over: {
-    anyOf: [['operator']],
-    channels: ['dashboard'],
-    what: 'taking over a run',
-    who: 'operators of the dashboard',
-  },
+  take_over: dashboardRow('taking over a run'),
 };
 
 export interface AuthzRequest {

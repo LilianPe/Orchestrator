@@ -51,7 +51,11 @@ export class ActivityRelay {
 
   push(ev: RunStreamEvent): void {
     const a = composedActivity(ev, this.step);
-    if (!a) return;
+    if (a) this.pushActivity(a);
+  }
+
+  /** An activity already composed (`composedActivity`), as the orchestrator does once for the dashboard too (ORC-301). */
+  pushActivity(a: ActivityInput): void {
     this.pending = a;
     const wait = this.last + this.intervalMs - this.now();
     if (wait <= 0) this.fire();
