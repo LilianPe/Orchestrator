@@ -94,6 +94,28 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     this.readied.push(number);
   }
 
+  private prLabels = new Map<number, string[]>();
+  /** How many label writes reached the forge (ORC-198): a final state already in place adds none. */
+  labelWrites = 0;
+
+  /** The labels of a PR, as a test or a human set them. */
+  setPrLabels(number: number, labels: readonly string[]): void {
+    this.prLabels.set(number, [...labels]);
+  }
+
+  labelsOf(number: number): string[] {
+    return [...(this.prLabels.get(number) ?? [])];
+  }
+
+  async setExclusiveLabel(_repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
+    this.answer();
+    const now = this.labelsOf(number);
+    const next = [...now.filter((l) => l === label || !group.includes(l)), ...(now.includes(label) ? [] : [label])];
+    if (next.length === now.length && next.every((l) => now.includes(l))) return;
+    this.labelWrites++;
+    this.prLabels.set(number, next);
+  }
+
   /** Where the factory's git goes: a local repository in a test. */
   gitUrl = 'https://github.test/acme/app.git';
   gitEnv: Record<string, string> = {};

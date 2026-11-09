@@ -163,7 +163,7 @@ describe('clarify (ORC-210)', () => {
     ]);
     // A later freeze, or a refreeze, holds the ticket's decisions as they are then.
     const refrozen = decide({ ...answered, frozenTests: { sha: 'old', files: {} } }, ev('command', { name: '/refreeze', body: '', linearSessionId: 's1', author: 'M', frozen: { sha: 'new', files: {} } }, { roles: ['maintainer'], actor: 'u-m' }), workflow);
-    expect(refrozen.events).toContainEqual({ type: 'ticket.patched', patch: { frozenTests: { sha: 'new', files: {}, decisions: answered.decisions } } });
+    expect(refrozen.events).toContainEqual({ type: 'ticket.patched', patch: { frozenTests: { sha: 'new', files: {}, decisions: answered.decisions, refrozenBy: 'u-m' } } });
     const frozen = { sha: 'abc', files: { 'test/rate.test.ts': 'f1' }, rules: 1 };
     const t = after({ ...answered, activeRunId: 'r2', activeJob: 'tests', verifyingRunId: 'r2' }, ev('verify.passed', { runId: 'r2', job: 'tests', red: 'assertion', frozen }));
     expect(t.frozenTests).toMatchObject({ sha: 'abc', decisions: answered.decisions });

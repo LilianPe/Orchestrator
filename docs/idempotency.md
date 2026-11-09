@@ -31,7 +31,7 @@ The other effects of `decide`, attached as ORC-138 proposes (point 6):
 | Effect | Duplicate behavior |
 |---|---|
 | `ack` (acknowledgment, ORC-171) | the Comment and Activity rows, on the same key: a replay looks for each and only writes what is missing; the plan (`setSessionPlan`) is a final state; the time kept on the inbox row is the first one. A refused write is logged, neither retried nor blocking: the acknowledgment does not hold back the run |
-| `move` (status) | final state, naturally idempotent; echo filtered |
+| `move` (status) | final state, naturally idempotent; echo filtered. The move to Human Review also labels the PR `revue:` (ORC-198), a final state too: `setExclusiveLabel` reads the PR's labels and writes only what differs, so a replay writes nothing and one label of the group stays (`FakeForge`, `GitHubAppForge`: `test/scenarios/diff-class.test.ts`, `github-app.test.ts`) |
 | `link_pr` (`addExternalUrl`) | final state: the Linear adapter reads the session's links again and does not add a URL already there (the fake too) |
 | `stop_run`, `cleanup` | naturally idempotent: stopping what is stopped, deleting what no longer exists does nothing |
 | `run_verify` | its verdict comes back as `check:<run>`: the inbox deduplicates by id, and a verdict from a replaced verification is fenced |
