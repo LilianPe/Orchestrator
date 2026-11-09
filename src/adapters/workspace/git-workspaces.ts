@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { branchName } from '../../core/naming.js';
+import { capDiff, DIFF_MAX } from '../../core/review.js';
 import { forkPoint, gitAt, gitReader, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
@@ -161,6 +162,7 @@ export class GitWorkspaces implements WorkspaceManager {
     assertSafe(req.ticketId);
     if (req.kind === 'trunk-readonly') return this.trunkWorkspace(req);
     if (req.kind === 'knowledge') return this.knowledgeWorkspace(req);
+    if (req.kind === 'published') return this.publishedWorkspace(req);
     const path = join(this.o.root, req.projectId, req.ticketId);
     const port = req.portBase + req.slot;
     if (existsSync(path)) {
@@ -244,12 +246,33 @@ export class GitWorkspaces implements WorkspaceManager {
 
   /** One per question, gone with it (`release`): what a question's agent left is for nobody else, and nothing has to be put back. */
   private async trunkWorkspace(req: WorkspaceRequest): Promise<Workspace> {
-    assertSafe(req.runId);
-    const path = join(this.o.root, req.projectId, '_trunk', req.runId);
-    await this.fetch(req.repoPath);
-    const ref = await originHead(this.exec, req.repoPath);
-    await this.agentRepository(req.repoPath, path, ref, ['--detach', ref]);
+    const { path, trunk } = await this.runClone(req);
+    await this.agentRepository(req.repoPath, path, trunk, ['--detach', trunk]);
     return { path };
+  }
+
+  /** Where a run's own repository goes (`_trunk/<runId>`, gone with it), and the trunk, read once the forge is fetched. */
+  private async runClone(req: WorkspaceRequest): Promise<{ path: string; trunk: string }> {
+    assertSafe(req.runId);
+    await this.fetch(req.repoPath);
+    return { path: join(this.o.root, req.projectId, '_trunk', req.runId), trunk: await originHead(this.exec, req.repoPath) };
+  }
+
+  /**
+   * What an AI review reads (ORC-183): a repository of its own, like a question's trunk, on the commit the factory published,
+   * detached: never the ticket's worktree, which an agent wrote. Its diff against the trunk is read on the factory's repository
+   * before any agent runs, its external diff drivers and text conversions off. Gone with its run (`release`).
+   */
+  private async publishedWorkspace(req: WorkspaceRequest): Promise<Workspace> {
+    if (!req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
+    if (!SHA.test(req.sha)) throw new Error(`Not a commit id: ${req.sha}`);
+    const { path, trunk } = await this.runClone(req);
+    const range = `${trunk}...${req.sha}`;
+    const git = gitAt(this.exec, req.repoPath, {});
+    // Read up to past the cap only: a diff that big is given as its changed files, by name.
+    const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
+    await this.agentRepository(req.repoPath, path, trunk, ['--detach', req.sha]);
+    return { path, diff: await capDiff(diff, () => git.raw('diff', '--name-only', range)) };
   }
 
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {

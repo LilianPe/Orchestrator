@@ -217,7 +217,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it("I1 at the factory's own push: a publish effect is only ever on the commit its decision found green (ORC-125)", () => {
       const t: TicketState = { ...newTicketState(PROJECT, TICKET, 'T', 'dev', 0), delegated: true, verifyingRunId: 'r1', verifiedSha: 'old' };
       fc.assert(
-        fc.property(fc.constantFrom('dev', 'dev-feedback', 'fix-ci', 'review'), fc.option(fc.constantFrom('aaa', 'bbb'), { nil: undefined }), (job, sha) => {
+        // The jobs that write: the AI review writes nothing since ORC-183, it publishes no commit.
+        fc.property(fc.constantFrom('dev', 'dev-feedback', 'fix-ci'), fc.option(fc.constantFrom('aaa', 'bbb'), { nil: undefined }), (job, sha) => {
           const e = { id: 'x', at: 1, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, type: 'verify.passed', payload: { runId: 'r1', job, ...(sha ? { sha } : {}) } } as FactoryEvent;
           const out = decide(t, e, wf);
           const after = out.events.reduce<TicketState | undefined>((s, ev) => reduce(s, ev), reduce(t, e));
@@ -230,7 +231,56 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     });
   });
 
-  it.todo('I2 — no gate passed without an approval later than the last push (no gate in decide yet: human gates of ORC-212, ORC-198)');
+  describe('I2 — no gate passed without an approval later than the last push', () => {
+    it(
+      'the merge gate: whatever was shown, pushed by a human or found green, in any order, a Done after a human push merges nothing until a new head is shown (ORC-159)',
+      () => {
+        const SHAS = ['aaa', 'bbb', 'ccc'];
+        const step = fc.oneof(
+          fc.record({ shown: fc.constantFrom(...SHAS) }),
+          fc.record({ pushed: fc.constantFrom(...SHAS) }),
+          fc.record({ green: fc.constantFrom(...SHAS) }),
+          fc.record({ done: fc.constant(true) }),
+        );
+        fc.assert(
+          fc.property(fc.array(step, { maxLength: 12 }), (steps) => {
+            let t: TicketState = { ...newTicketState(PROJECT, TICKET, 'T', 'human_review', 0), delegated: true, prNumber: 1, prState: 'OPEN', reviewSha: 'aaa', verifiedSha: 'aaa' };
+            // A human pushed since the commit shown to the reviewer: no approval of that commit counts any more.
+            let pushedSinceShown = false;
+            let n = 0;
+            const apply = (e: FactoryEvent, before: TicketState) => decide(before, e, wf).events.reduce((x, ev) => reduce(x, ev as InternalEvent)!, reduce(before, e)!);
+            for (const s of steps) {
+              n += 1;
+              const base = { id: `i2-${n}`, at: n, projectId: PROJECT, ticketId: TICKET, ...TRUSTED };
+              if ('shown' in s) {
+                t = reduce({ ...t, blocked: false, blockKind: undefined }, { type: 'status.recorded', to: 'human_review', reviewSha: s.shown } as InternalEvent)!;
+                pushedSinceShown = false;
+                continue;
+              }
+              if ('pushed' in s) {
+                // The factory's own publication (the commit found green) is no human push.
+                if (s.pushed !== t.verifiedSha) pushedSinceShown = true;
+                t = apply({ ...base, taint: 'untrusted', type: 'push.human', payload: { branch: 'agent/rel-1', sha: s.pushed, author: 'h' } } as FactoryEvent, t);
+                continue;
+              }
+              if ('green' in s) {
+                t = apply({ ...base, type: 'verify.passed', payload: { runId: 'r', job: 'dev', sha: s.green } } as FactoryEvent, { ...t, verifyingRunId: 'r' });
+                t = { ...t, logical: 'human_review' };
+                continue;
+              }
+              const e = { ...base, type: 'status.changed', actor: 'u', roles: ['team_member', 'repo_writer', 'repo_merger'], payload: { from: 'human_review', to: 'done' } } as FactoryEvent;
+              const merges = decide({ ...t, recordedStatus: undefined }, e, wf).effects.filter((x) => x.kind === 'merge');
+              if (pushedSinceShown) expect(merges).toEqual([]);
+            }
+          }),
+          params(),
+        );
+      },
+      TIMEOUT,
+    );
+
+    it.todo('I2 on the other gates: the spec gate (no gate in decide yet: human gates of ORC-212, ORC-198)');
+  });
   describe('I3 — a frozen test leaves the freeze only through a human /refreeze', () => {
     // Two red checks of the tests step, each with its freeze, then a /refreeze by a member who is not a maintainer.
     const A = { sha: 'aaa', files: { 'a.test.ts': '1' } };

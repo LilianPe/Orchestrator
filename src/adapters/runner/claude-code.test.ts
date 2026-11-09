@@ -131,6 +131,14 @@ describe('buildClaudeArgs', () => {
     expect(args.slice(args.indexOf('--effort'), args.indexOf('--effort') + 2)).toEqual(['--effort', 'medium']);
     expect(buildClaudeArgs(req())).not.toContain('--effort');
   });
+  it('limits the built-in tools to the ones a job lists, and keeps them all for a job that lists none (ORC-183)', () => {
+    const args = buildClaudeArgs(req({ tools: ['Read', 'Grep', 'Glob'] }));
+    expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2)).toEqual(['--tools', 'Read,Grep,Glob']);
+    // The factory's MCP stays: `--tools` names built-in tools only, `submit_result` is the review's way out.
+    expect(args).toContain('--mcp-config');
+    expect(args).not.toContain('--permission-mode');
+    expect(buildClaudeArgs(req())).not.toContain('--tools');
+  });
   it('resumes read-only', () => {
     const args = buildClaudeArgs(req({ resume: true, readOnly: true }));
     expect(args.slice(5, 7)).toEqual(['--resume', 'uuid-1']);

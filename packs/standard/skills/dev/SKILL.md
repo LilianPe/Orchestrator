@@ -41,6 +41,10 @@ If the ticket asks for several changes (several modules, a migration plus code, 
 2. Commit everything that must go out, then end your turn. **The factory publishes, not you**: it verifies your last commit in a fresh clone, checks its diff, pushes it to the branch and opens the draft PR. You have neither the token nor the network to do it, and nothing of the kind is allowed to you: do not try. What is not committed does not go out.
 3. The diff must neither touch the forbidden paths (anything under `.github/` (workflows, actions, `dependabot.yml`), `CODEOWNERS` wherever it is, `.env`, `.envrc` and every `.env.*` but `.env.example`, `.env.sample` and `.env.template`, `.factory/`, `.claude/`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc*`, `.yarn/releases/`, `.yarn/plugins/`, `.pnpmfile.cjs`, `setup.py`, `.husky/`, `.vscode/`, `Dockerfile*`, `.devcontainer/`, `claims/`, the `scripts` of a `package.json`), nor carry a secret, a binary or a symbolic link pointing outside the repository: all of these block publication. When your input holds content the factory does not trust (a review comment on the PR, a reply from outside the team), the `sensitive_paths` of `.factory/config.yml` on the default branch are forbidden too, for the rest of the ticket. A ticket that requires changing any of these: `factory-agent ask`, never a commit.
 
+## A human pushed to your branch
+
+The factory pauses you when a human pushes to the branch, and a human resumes you. Before anything else: `git fetch origin`, and if `origin/<branch>` has commits you do not have, `git rebase origin/<branch>` (your commits not yet published go on top of theirs). Resolve each conflicting hunk you have read with Edit, keeping the intent of both sides, then `git add` and continue the rebase; when the two sides contradict, two migrations change the same tables, or the resolution goes beyond the ticket, `git rebase --abort` and `factory-agent ask`. This is the branch, not the trunk: the trunk stays `factory:rebase`'s. Without it, the factory refuses your commit (`factory/commits-humains`): it never publishes over a human's commits.
+
 ## Forbidden
 
 Never merge. Never push, to any branch, never open or edit a PR: the factory publishes. Do not rewrite a published history. Do not switch branches. Touch nothing outside the worktree, and do not change the git configuration.
@@ -48,6 +52,8 @@ Never merge. Never push, to any branch, never open or edit a PR: the factory pub
 ## End of turn: `submit_result`
 
 **Always** end with the `mcp__factory__submit_result` tool. The factory reads nothing else: without a valid result, your work counts as a failure, even if finished. If it rejects the result, fix the fields it names and send it again. `summary` carries the message below, which the factory publishes in Linear: nothing else you write is.
+
+The factory writes the PR's description from your other fields, one section each, in this order: `why`, `summary`, `assumptions`, `risks`, `untested`, `trusted`, `review_hints`, then what it verified itself and your `tests_added`. Fill them for the human reviewer, one short entry per item: `trusted` lists what you took as correct without verifying it (libraries, external services, assumed behaviours), starting with the « trusted without verification » section of the approved spec when there is one; `review_hints` names the files to read first, and why.
 
 ## `submit_result` summary (published in Linear)
 

@@ -6,10 +6,11 @@ import { z } from 'zod';
 import { execCmd, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
-import { agentOutputSchema, formatResult, type AgentOutput } from '../core/agent-output.js';
+import { agentOutputSchema, type AgentOutput } from '../core/agent-output.js';
 import { boxOpener, gitleaksArgv, gitleaksFindings, sandboxGitleaksArgv, withDeadline } from '../core/clean-verify.js';
 import type { PlanStep } from '../core/session-plan.js';
 import { VERIFY_TIMEOUT_MS } from '../core/verify.js';
+import { formatRecap, type RecapRun } from './describe.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 
 /** What the policy refuses, and where: never the text itself, which may be the secret. */
@@ -101,14 +102,15 @@ const withheld = (refusals: readonly Refusal[]): string =>
 
 /**
  * The comment of a run's end, composed by the factory from what the agent submitted (ORC-289, ORC-214), never from its last
- * text: a build's fields (`formatResult`), a reply's or a synthesis's summary alone. A run that submitted nothing has
- * `NO_RESULT`; a result its schema refuses today (a row older than the caps) has the notice that it is withheld.
+ * text: a build's recap, with the work of the ticket's attempts `runs` (`formatRecap`, ORC-195), a reply's or a synthesis's
+ * summary alone. A run that submitted nothing has `NO_RESULT`; a result its schema refuses today (a row older than the caps)
+ * has the notice that it is withheld.
  */
-export function composeResult(o: AgentOutput | undefined, style: 'summary' | 'reply' | 'synthesis'): string {
+export function composeResult(o: AgentOutput | undefined, style: 'summary' | 'reply' | 'synthesis', runs: readonly RecapRun[] = []): string {
   if (!o) return NO_RESULT;
   const valid = agentOutputSchema.safeParse(o);
   if (!valid.success) return withheld(zodRefusals('result', valid.error));
-  return style === 'summary' ? formatResult(o) : o.summary;
+  return style === 'summary' ? formatRecap(o, runs) : o.summary;
 }
 
 /** Scans kept by the text's hash: a retried effect, or the ack's comment and activity, scan once. Same text, same rules, same verdict. */
@@ -141,6 +143,17 @@ export class OutputPolicy {
   /** A Linear comment: `body`, or the notice that it is withheld. */
   async comment(body: string): Promise<string> {
     return (await this.refused(() => this.vet(body, 'comment'))) ?? body;
+  }
+
+  /**
+   * Texts published together (an AI review's, ORC-183), each as `comment` publishes it: checked one by one, then one secret
+   * scan for them all. Only when one is refused, each on its own, one after the other, to find it.
+   */
+  async comments(texts: readonly string[]): Promise<string[]> {
+    if ((await this.refused(() => this.vetAll(texts.map((text) => ({ where: 'comment', text }))))) === undefined) return [...texts];
+    const out: string[] = [];
+    for (const s of texts) out.push(await this.comment(s));
+    return out;
   }
 
   /** A Linear activity: as it is, or of the same type with the notice in place of its texts. */

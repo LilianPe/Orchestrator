@@ -1,4 +1,5 @@
-import type { AgentOutput } from './agent-output.js';
+import type { ReviewLens } from '../config/workflow-schema.js';
+import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
 import type { InputKind, InternalEvent, LogicalState, TimerFired } from './types.js';
 
@@ -11,8 +12,11 @@ export type Effect =
   | { kind: 'start_run'; job: string; input?: InputKind; inputText?: string; linearSessionId?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string }
   /** Without linearSessionId: stop the ticket's dev work. With it: stop only the runs of that (question) session. */
   | { kind: 'stop_run'; linearSessionId?: string }
-  /** `output`: the run's validated output (ORC-289), carried to its `post_output`; absent when it submitted none. */
-  | { kind: 'run_verify'; runId: string; job: string; output?: AgentOutput }
+  /**
+   * `output`: the run's validated output (ORC-289), carried to its `post_output`; absent when it submitted none. `head`: a
+   * human's push (ORC-159), the commit checked as the forge holds it, by no run: `runId` is then the check's id (`pushCheckId`).
+   */
+  | { kind: 'run_verify'; runId: string; job: string; output?: AgentOutput; head?: string }
   /**
    * The verified commit out to the forge (ORC-125), by the factory alone, then `publish.done` or `publish.refused`. `output`: for
    * the `post_output` the job's `on_success` writes once it is out. `rewrite`: the commit of a rebase (ORC-146), which may
@@ -33,6 +37,11 @@ export type Effect =
   /** `options`: an elicitation answered by picking one (`select`, ORC-210). */
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string; options?: readonly string[] }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }
+  /**
+   * An AI review lens's findings on the published commit `sha`, kept (ORC-183); `publish`: then every lens's findings on it go
+   * out as one GitHub review with inline comments, and `factory/review`, failed on a blocking one.
+   */
+  | { kind: 'review'; runId: string; lens: ReviewLens; sha: string; findings: readonly Finding[]; publish?: true }
   | { kind: 'link_pr'; url: string }
   /** Compare Linear and GitHub to the factory's state and write what a lost webhook missed to the inbox (ORC-185). */
   | { kind: 'reconcile' }

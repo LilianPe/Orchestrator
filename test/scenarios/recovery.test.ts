@@ -280,7 +280,8 @@ describe('a restart during a run', () => {
     await h.advance(60_001);
     expect(h.runner.requests).toHaveLength(1);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'PR ouverte.' });
+    // The end of a build is its recap (ORC-195): the summary the dead process recorded, then the tests added and the work.
+    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: expect.stringMatching(/^PR ouverte\.\n\n\*\*Tests added\*\*\n_None stated\._\n\n\*\*Work\*\*: /) });
   });
 });
 

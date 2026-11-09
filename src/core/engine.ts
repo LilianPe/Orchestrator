@@ -1,5 +1,5 @@
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import type { JobSpec, Rule, Workflow } from '../config/workflow-schema.js';
+import type { JobSpec, ReviewLens, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
@@ -87,7 +87,8 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
 /** The job's `on_success`, its `run` included (ORC-123: `tests` starts `dev`). */
 function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId: string, output?: AgentOutput): Decision {
   if (job.onSuccess.move) out.effects.push({ kind: 'move', to: job.onSuccess.move });
-  if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
+  // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
+  if (job.onSuccess.post && job.onSuccess.post !== 'review') out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
   if (next) startRun(out, at.event, at.ticket, next, { input: next.input });
   else handOver(out, at, job);
@@ -132,7 +133,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
     // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
-    if (job.onSuccess.post) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
+    if (job.onSuccess.post && job.onSuccess.post !== 'review') out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
   // Incomplete: the questions come first, blocked by a ticket or not; intake runs again after the last answer and comes back here.
@@ -263,6 +264,22 @@ function waitFor(out: Decision, blockers: readonly Blocker[], start: PendingJob)
   out.effects.push({ kind: 'activity', type: 'thought', body: waitingBody(blockers) });
   out.trace.push(`waiting on ${blockers.map((b) => b.identifier).join(', ')}: ${start.job} starts once done`);
   return out;
+}
+
+/**
+ * The end of an AI review lens (ORC-183): its findings kept on the published commit it read (`verifiedSha`, what its
+ * launch cloned), and published with the other lens's by the job whose `on_success` posts the review; then its `on_success`.
+ * A lens that handed back no findings list, or a ticket with no published commit, is blocked: a silent review is no review.
+ */
+function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, lens: ReviewLens, p: EventPayloads['run.finished']): Decision {
+  const findings = p.output?.findings;
+  const sha = at.ticket?.verifiedSha;
+  if (!findings || !sha) {
+    const reason = sha ? `The AI review ${job.name} returned no findings list.` : `The AI review ${job.name} has no published commit to review.`;
+    return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
+  }
+  out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(job.onSuccess.post === 'review' ? { publish: true as const } : {}) });
+  return success(out, at, job, p.runId, p.output);
 }
 
 /**
@@ -1031,6 +1048,85 @@ function publishes(job: JobSpec): boolean {
   return !!job.repoChecks && !job.red;
 }
 
+/** The check of a human's push (ORC-159): no run made the commit, so the check's id names it, and the push's time. */
+const SHA = '[0-9a-f]{4,64}';
+const PUSH_CHECK = new RegExp(`^push-(${SHA})-\\d+$`);
+export const pushCheckId = (sha: string, at: number): string => `push-${sha}-${at}`;
+/** The commit a check of a human's push verifies; undefined for the check of a run. */
+const pushedHead = (runId: string): string | undefined => PUSH_CHECK.exec(runId)?.[1];
+
+/**
+ * The job whose checks a human's push goes through (ORC-159): the first the factory publishes. None on a version whose
+ * agents push themselves (frozen before ORC-125): their own pushes come in as `push.human`, and pause nothing.
+ */
+function pushCheckJob(workflow: Workflow): JobSpec | undefined {
+  return Object.values(workflow.jobs).find((j) => publishes(j) && j.workspace === 'worktree' && j.verifyFailure !== 'block');
+}
+
+/**
+ * A human pushed to the ticket's branch (ORC-159). The agent's work pauses: the run in flight stops, the check or the
+ * publication awaited and the waiting job go with it, and the ticket is blocked on the job the push interrupted, which a
+ * human's reply resumes. `verify` starts again from the pushed commit, as the forge holds it, in a fresh clone; its verdict
+ * is told then (`pushChecked`). A push of the commit `verify` last found green is the factory's own publication: nothing
+ * pauses. Nor does a ticket the factory does not work on (not delegated, delivered, stopped, its PR closed): the rules decide.
+ * A ticket blocked for another reason keeps it, and its push is checked all the same.
+ */
+function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: TicketState | undefined, ticket: TicketState | undefined, workflow: Workflow): Decision | undefined {
+  const { sha, author } = event.payload;
+  if (sha === state?.verifiedSha) {
+    out.trace.push(`push.human: ${sha} is the commit verify last found green, the factory's own publication`);
+    return out;
+  }
+  const job = pushCheckJob(workflow);
+  if (!job) return undefined;
+  // The commit shown to the reviewer is no longer the branch's: no approval from before the push passes a gate (I2).
+  if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
+  if (!ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
+  if (!ticket.blocked || ticket.blockKind === 'human_push') {
+    cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
+    // A push on a paused ticket keeps the job the first one interrupted.
+    const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
+    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
+  } else {
+    // Its block, and the pending job a reply to it resumes, stay: only the run in flight stops.
+    out.trace.push(`push.human: ${author} pushed ${sha.slice(0, 12)}, the ticket stays blocked for its own reason`);
+    out.effects.push({ kind: 'stop_run' });
+  }
+  const runId = pushCheckId(sha, event.at);
+  out.events.push({ type: 'verify.started', runId });
+  out.effects.push({ kind: 'run_verify', runId, job: job.name, head: sha });
+  return out;
+}
+
+const pushed = (sha: string): string => `A human pushed ${sha.slice(0, 12)} to the ticket's branch`;
+
+/**
+ * The verdict of `verify` on a human's push (ORC-159). Green, the pushed commit is the one verified last: what a
+ * publication or a merge may carry. Either way the ticket stays paused and the human hears the verdict: a reply resumes
+ * the interrupted job on top of the push; a commit that fails waits for another push, or for a designated maintainer's
+ * `/refreeze` when it changes a frozen test. A ticket a human relaunched meanwhile, or blocked for another reason, goes on as it is.
+ */
+function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verify.failed' | 'verify.errored'>, head: string, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  if (event.type === 'verify.passed') out.events.push({ type: 'ticket.patched', patch: { verifiedSha: event.payload.sha ?? head } });
+  if (!ticket?.blocked || ticket.blockKind !== 'human_push') {
+    out.trace.push(`${event.type} on the push of ${head.slice(0, 12)}: the ticket ${ticket?.blocked ? 'is blocked for another reason' : 'was relaunched meanwhile'}`);
+    return out;
+  }
+  const at = ticket.blockedJob ? { job: ticket.blockedJob, step: 'verify' } : { step: 'verify' };
+  const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
+  if (event.type === 'verify.errored') {
+    // Still the push's block: a next push replaces it, and its verdict is told.
+    const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run: infrastructure failure.`;
+    return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
+  }
+  if (event.type === 'verify.failed') {
+    const reason = `${pushed(head)}: verify fails on it.`;
+    return block(out, workflow, { kind: 'human_push', ...failedChecks(reason, event.payload.failures), ...at, question: `Push a fix (it is checked again), or have a designated maintainer send /refreeze if it changes a frozen test on purpose; then ${resume}` });
+  }
+  const reason = `${pushed(head)}: verify passed on it, in a fresh clone. The agent's work is paused.`;
+  return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\nReply in this thread to resume the agent on top of it.`, ...at, tried: [`Checked the pushed commit ${head.slice(0, 12)} in a fresh clone of the forge: green.`], question: `Shall I go on? Move the ticket to AI Review to have your commits reviewed, or ${resume}` });
+}
+
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
 function backToReview(out: Decision, reason: string): Decision {
   out.trace.push(`not merged: ${reason}`);
@@ -1058,7 +1154,7 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
   }
   if (!state.reviewSha) {
     // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
-    return backToReview(out, 'I am not merging: no reviewed commit is recorded for this ticket (the factory records one only at the end of its own work, an AI review or a dev run that brings the ticket back to Human Review, and only if the head of the PR is the commit that work ended on; a move back to Human Review after a refusal records none). Move the ticket to AI Review: the AI review brings it back to Human Review on the head of the PR, which becomes the reviewed commit.');
+    return backToReview(out, 'I am not merging: no reviewed commit is recorded for this ticket (the factory records one only at the end of its own work, an AI review or a dev run that brings the ticket back to Human Review, and only if the head of the PR is the commit that work ended on; a move back to Human Review after a refusal records none). Move the ticket to AI Review: the AI review brings it back to Human Review on the head of the PR, which becomes the reviewed commit. Commits pushed by a human first need a reply in this thread, so that the agent takes them in and the factory verifies and publishes them: the AI review reads only what the factory published.');
   }
   if (!mayPublish(state, state.reviewSha, workflow)) {
     return backThroughAiReview(out, event, state, workflow, `I am not merging: the reviewed commit (${state.reviewSha.slice(0, 12)}) has no green verification, the last one is on ${state.verifiedSha?.slice(0, 12) ?? 'no commit'}.`);
@@ -1089,14 +1185,16 @@ function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ti
     out.effects.push({ kind: 'comment', body: refused });
     return out;
   }
-  return event.payload.headMoved ? backThroughAiReview(out, event, ticket, workflow, refused) : backToReview(out, refused);
+  return event.payload.headMoved ? backThroughAiReview(out, event, ticket, workflow, refused, { pushed: true }) : backToReview(out, refused);
 }
 
 /**
  * New commits go through the AI review again, whose `verify` finds them green or not, and which shows the head in Human
- * Review. A blocked ticket (it waits for a human) or a workflow with no AI review goes back to Human Review.
+ * Review. A blocked ticket (it waits for a human) or a workflow with no AI review goes back to Human Review. So does a push
+ * since the review (`pushed`) when the review reads only what the factory published (ORC-183): it can neither take the push
+ * in nor verify it, which the implementer's feedback run does.
  */
-function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, refused: string): Decision {
+function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, refused: string, o: { pushed?: true } = {}): Decision {
   // The rule a human's move from Done to AI Review would apply, read on the ticket as it would then be.
   const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } } as FactoryEvent<'status.changed'>;
   const inAiReview = { ...ticket, logical: 'ai_review' as const };
@@ -1104,11 +1202,15 @@ function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketS
   const run = (workflow.on['status.changed'] ?? []).find((r) => ruleAllowed(r, moved, inAiReview, workflow) && ruleMatches(r, moved, inAiReview, ticket.activeJob))?.run;
   const job = run && workflow.states.ai_review ? workflow.jobs[run] : undefined;
   if (!job || ticket.blocked) return backToReview(out, refused);
+  if (o.pushed && job.lens) return backToReview(out, `${refused} ${PUSH_NOT_REVIEWED}`);
   out.trace.push(`not merged: ${refused}, back to the AI review`);
   out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} The new commits go through the AI review again.` });
   startRun(out, event, ticket, job, { input: job.input });
   return out;
 }
+
+/** A push since the review, which today's AI review never reads (ORC-183): how its commits reach a merge. */
+export const PUSH_NOT_REVIEWED = 'The AI review reads only the commits the factory published, and these were pushed since: reply in this thread so that the agent takes them in and the factory verifies them, then move the ticket to AI Review to have them reviewed.';
 
 const FENCED = 'fenced: ';
 
@@ -1399,6 +1501,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
     }
   }
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored') {
+    const head = pushedHead(event.payload.runId);
+    if (head) return pushChecked(out, event, head, ticket, workflow);
+  }
   switch (event.type) {
     case 'control.pause':
       out.effects.push({ kind: 'set_paused', paused: true });
@@ -1430,6 +1536,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
+        if (job.lens) return reviewEnd(out, { event, ticket, workflow }, job, job.lens, event.payload);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
@@ -1471,13 +1578,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.lost': {
       const { runId, job, output } = event.payload;
       const recent = ticket ? recentCuts(ticket, event.at) : [];
+      const head = pushedHead(runId);
       if (recent.length >= CUT_RELAUNCHES) {
         // Nothing runs it any more: the ticket must not wait for its verdict, or no later start would pass it.
         out.events.push({ type: 'work.cancelled' });
-        return ticket?.blocked ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
+        // The check of a human's push: its block says it is being checked, and would say so for good.
+        const pushCheck = !!head && ticket?.blockKind === 'human_push';
+        return ticket?.blocked && !pushCheck ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
       }
       out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
-      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}) });
+      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}), ...(head ? { head } : {}) });
       return out;
     }
     case 'verify.passed': {
@@ -1510,7 +1620,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.events.push({ type: 'ticket.patched', patch: { owedMove: null } });
         if (!job.onSuccess.move) out.effects.push({ kind: 'move', to: owed });
       }
-      return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
+      success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
+      // What the owed move came with: `dev`'s AI review (ORC-183), started as that job's own end would have, or the ticket
+      // would sit in AI Review with no review.
+      const then = owed && !job.onSuccess.run ? Object.values(workflow.jobs).find((j) => j.onSuccess.move === owed && j.onSuccess.run)?.onSuccess.run : undefined;
+      const next = then ? workflow.jobs[then] : undefined;
+      if (next) startRun(out, event, ticket, next, { input: next.input });
+      return out;
     }
     case 'publish.refused': {
       const reason = `Publication refused: ${event.payload.reason}`;
@@ -1713,6 +1829,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
         out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
       }
+      break;
+    }
+    case 'push.human': {
+      const paused = humanPush(out, event, state, ticket, workflow);
+      if (paused) return paused;
       break;
     }
     case 'pr.merge_refused':

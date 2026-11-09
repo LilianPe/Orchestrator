@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
+import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
-import { prText, PublishRefused, type Publisher } from '../adapters/publisher/types.js';
+import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner, StagnationBounds } from '../adapters/runner/types.js';
 import {
@@ -43,6 +43,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
+import { describePr, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
@@ -53,6 +54,7 @@ import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } fr
 import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
+import { runMeasure } from './measures.js';
 import { openBlockers, pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -77,15 +79,15 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
+import { inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
-import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
@@ -344,6 +346,11 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
 }
 
+/** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
+function checksPermission(err: { status?: number }): string {
+  return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
+}
+
 /** The inbox id of an attempt's result, and its key among the results kept (`deliver`). */
 const endKey = (runId: string): string => `attempt:${runId}:finished`;
 
@@ -362,6 +369,8 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
+/** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
+const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
 /** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
 const blockedOn = (workflow: Workflow, kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, ...(workflow.blockComment ? { job } : {}) });
@@ -694,12 +703,14 @@ export class Orchestrator {
     const rows = await store.listEffects(t.projectId, t.ticketId);
     if (rows.some((r) => (r.effect.kind === 'run_verify' || r.effect.kind === 'publish') && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
-    if (!run) {
+    // A human's push has no run (ORC-159): the effect of its check says under which job, as any check's does.
+    const job = run?.job ?? rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job;
+    if (!job) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
       await this.apply(t, { type: 'work.cancelled' });
       return;
     }
-    const output = await storedOutput(store, runId).catch(() => undefined);
+    const output = run ? await storedOutput(store, runId).catch(() => undefined) : undefined;
     await store.appendInbox({
       ...TRUSTED,
       // By its time: a check run again can be cut again, and the inbox keeps an id once.
@@ -708,7 +719,7 @@ export class Orchestrator {
       at: clock.now(),
       projectId: t.projectId,
       ticketId: t.ticketId,
-      payload: { runId, job: run.job, ...(output ? { output } : {}) },
+      payload: { runId, job, ...(output ? { output } : {}) },
     });
   }
 
@@ -976,7 +987,7 @@ export class Orchestrator {
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
   private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<Verified> {
-    const { sandboxes, runsDir, originUrl } = this.d;
+    const { sandboxes } = this.d;
     // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
     const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
     if (!sandboxes) {
@@ -992,34 +1003,83 @@ export class Orchestrator {
       const blocking = [...paths, ...frozen];
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
     }
-    if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
-    if (!t.branch || !t.worktreePath) throw new Error(`no branch or no worktree for ${t.ticketId}`);
+    // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
+    return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
+  }
+
+  /**
+   * `runCleanVerify` for the ticket under the checks of `job`, in a place of its own under `runsDir/<runId>`: the commit
+   * the agent's worktree holds, or with `head` a human's push, as the forge holds it (ORC-159).
+   */
+  private async cleanCheck(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, over: Pick<CleanVerifyRequest, 'green' | 'head' | 'humanHead'>): Promise<CleanVerifyResult> {
+    const { sandboxes, runsDir, originUrl } = this.d;
+    if (!sandboxes || !runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
+    if (!t.branch || (!over.head && !t.worktreePath)) throw new Error(`no branch or no worktree for ${t.ticketId}`);
     const untrusted = await this.untrustedMark(project, t);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
-    const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
+    const workDir = join(runsDir, runId, `verify-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
     try {
       return await (this.d.cleanVerify ?? runCleanVerify)({
         sandboxes,
-        runId: run.id,
+        runId,
         ticketId: t.ticketId,
         branch: t.branch,
-        worktree: t.worktreePath,
+        worktree: t.worktreePath ?? '',
         originUrl: await originUrl(project),
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
         gitleaks: true,
-        ...(green ? { green } : {}),
+        ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
     } finally {
-      // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
+      // Under the check's dir, purged with it: what the attack left unremovable costs no verdict.
       await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
     }
+  }
+
+  /**
+   * `verify` on a human's push (ORC-159): the pushed commit as the forge holds it, in a fresh clone, under the checks of the
+   * job the factory publishes, the freeze included; never in the agent's worktree, and no run of it. Its verdict keeps the
+   * check's id. Without sandboxes there is no clone to check it in, so no verdict: an infrastructure failure.
+   */
+  private verifyPush(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'run_verify' }>, head: string): void {
+    const job = project.workflow.jobs[c.job];
+    // No longer awaited (a newer push, a stop): a replayed effect checks nothing.
+    if (!job || t.verifyingRunId !== c.runId) return;
+    const check = async () => {
+      if (!this.d.sandboxes) throw new Error(PUSH_NEEDS_SANDBOXES);
+      try {
+        return await this.cleanCheck(project, t, c.runId, job, { head });
+      } finally {
+        // The check's own folder: no run purges it.
+        if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
+      }
+    };
+    this.track(this.submitVerdict(project, t, c.runId, job, check));
+  }
+
+  /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
+  private async submitVerdict(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, check: () => Promise<Verified & { tree?: string }>, output?: AgentOutput): Promise<void> {
+    const base = { ...TRUSTED, at: this.d.clock.now(), projectId: project.id, ticketId: t.ticketId, id: `check:${runId}` };
+    const payload = { runId, job: job.name };
+    let res: Verified & { tree?: string };
+    try {
+      res = await check();
+    } catch (err) {
+      await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
+      return;
+    }
+    await this.submitResult(
+      res.ok
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}) } }
+        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } },
+    );
   }
 
   /**
@@ -1542,6 +1602,7 @@ export class Orchestrator {
         return;
       }
       case 'run_verify': {
+        if (c.head) return this.verifyPush(project, t, c, c.head);
         const run = await store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
@@ -1561,19 +1622,7 @@ export class Orchestrator {
               );
               return;
             }
-            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
-            const payload = { runId: run.id, job: job.name };
-            let res: Verified;
-            try {
-              res = await this.verifyWork(project, t, run, job);
-            } catch (err) {
-              await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
-              return;
-            }
-            const event: FactoryEvent = res.ok
-              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(c.output ? { output: c.output } : {}) } }
-              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
-            await this.submitResult(event);
+            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job), c.output);
           })(),
         );
         return;
@@ -1607,9 +1656,13 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary.
-        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style) }, key);
+        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary, a build's end
+        // its recap with the work of the ticket's attempts (ORC-195).
+        const runs = c.style === 'summary' && c.output ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
+        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style, runs) }, key);
       }
+      case 'review':
+        return this.review(project, t, c, key);
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
         // Seen during the run (the agent opened it), the PR waits for the end of the work: the move to Human Review closes the plan.
@@ -1788,7 +1841,11 @@ export class Orchestrator {
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
         const [mark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
         const untrusted = mark ? { untrusted: mark } : {};
-        const text = await this.policy.pr(prText(t));
+        const facts = { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
+        const described = describePr(c.output, facts);
+        // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
+        const open = t.prNumber !== undefined && t.prState === 'OPEN';
+        const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
@@ -1825,25 +1882,54 @@ export class Orchestrator {
     if (!writer) return;
     const { sha, commands } = c;
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
-    const verify =
-      commands === undefined
-        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` } as const)
-        : commands.length
-          ? ({ conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
-          : ({ conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' } as const);
     const checks = [
-      { name: VERIFY_CHECK, ...verify },
+      { name: VERIFY_CHECK, ...verifySummary(sha, commands) },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
     ] as const;
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>
         writer.upsertCheckRun(project.repoPath, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
-          const hint = err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
+          const hint = checksPermission(err);
           this.log('warn', `check ${name} of ${t.ticketId} not published on ${sha.slice(0, 12)}${hint}: ${err.message}`);
         }),
       ),
     );
+  }
+
+  /**
+   * The `review` effect (ORC-183): a lens's findings kept on the commit it read, in place of what that lens kept there before.
+   * The publishing one then posts every lens's findings on that commit as one GitHub review, each on its line, or listed in its
+   * text when GitHub cannot place one, and `factory/review`, failed on a blocking finding. Every text through the
+   * `OutputPolicy`, a refused one replaced by its notice. Keyed: a replay finds its review by the effect's id, and the check by
+   * the commit's. Any failure throws, and the outbox retries it: its move to Human Review waits behind it, and a dead one blocks the ticket.
+   */
+  private async review(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'review' }>, key: EffectKey): Promise<EffectOutcome | void> {
+    const { store, clock } = this.d;
+    await store.putFindings({ projectId: project.id, ticketId: t.ticketId, sha: c.sha, lens: c.lens, runId: c.runId, at: clock.now(), findings: c.findings });
+    if (!c.publish) return;
+    const writer = this.d.forgeWriter;
+    if (!writer || t.prNumber === undefined) {
+      this.log('warn', `AI review of ${t.ticketId} on ${c.sha.slice(0, 12)} not published: ${writer ? 'the ticket has no PR' : 'this instance has no GitHub App (docs/github.md)'}`);
+      return;
+    }
+    const findings = await store.findingsOf(project.id, t.ticketId, c.sha);
+    const placed = findings.filter(onItsLine);
+    const verdict = reviewVerdict(findings);
+    const [body, summary, ...texts] = await this.policy.comments([reviewBody(c.sha, findings, { inline: true }), `${verdict.summary}.`, ...placed.map(inlineComment)]);
+    const post = (review: { body: string; comments: { path: string; line: number; body: string }[] }) => writer.postReview(project.repoPath, t.prNumber!, { sha: c.sha, ...review, externalId: `review:${key.id}` });
+    const posted = await post({ body: body!, comments: placed.map((f, i) => ({ path: f.file, line: f.line, body: texts[i]! })) }).catch(async (err: unknown) => {
+      if (!(err instanceof ReviewLinesRefused)) throw err;
+      this.log('info', `AI review of ${t.ticketId}: a finding is on a line the PR does not show, all listed in the review's text`);
+      return post({ body: await this.policy.comment(reviewBody(c.sha, findings, { inline: false })), comments: [] });
+    });
+    await writer
+      .upsertCheckRun(project.repoPath, { sha: c.sha, name: REVIEW_CHECK, externalId: `${REVIEW_CHECK}@${c.sha}`, status: 'completed', conclusion: verdict.conclusion, title: verdict.summary, summary: summary! })
+      .catch((err: Error & { status?: number }) => {
+        err.message += checksPermission(err);
+        throw err;
+      });
+    return posted.deduplicated ? { deduplicated: true } : undefined;
   }
 
   /**
@@ -2173,7 +2259,9 @@ export class Orchestrator {
         }
         return undefined;
       }
-      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
+      // An AI review reads the commit the factory published, the one `verify` found green (ORC-183): never the agent's worktree.
+      const reviewed = job.workspace === 'published' ? t.verifiedSha : undefined;
+      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
       // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
@@ -2182,11 +2270,11 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, reviewed };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
-    const { issue, ws, pickup, blockedBy } = head;
+    const { issue, ws, pickup, blockedBy, reviewed } = head;
     // Read again before the first write: the workspace took time.
     let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -2198,7 +2286,7 @@ export class Orchestrator {
     try {
       // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
       // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
-      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
+      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
       const cap = ticketTokenCap(this.d.perTicketTokens, config);
@@ -2212,7 +2300,8 @@ export class Orchestrator {
         setUp = true;
         return await lose(t);
       }
-      if (job.queue === 'dev') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch }));
+      // The ticket's own worktree only: a review's clone is the run's, gone with it.
+      if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch }));
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
       t = await state(this.ticket(project.id, ticketId));
 
@@ -2223,7 +2312,9 @@ export class Orchestrator {
       t = await state(this.ticket(project.id, ticketId));
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
-      const kind = from ? undefined : (opts.input ?? job.input);
+      // An AI review reads the diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
+      // An AI review reads the published commit's diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
+      const kind = from ? undefined : job.lens ? 'diff' : (opts.input ?? job.input);
       // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
       // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
       // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
@@ -2276,7 +2367,7 @@ export class Orchestrator {
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config)));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network)));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
@@ -2290,6 +2381,8 @@ export class Orchestrator {
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {
         input = from.input;
+      } else if (kind === 'diff') {
+        input = { kind, text: ws.diff ?? '' };
       } else if (kind === 'feedback') {
         input = { kind, text: read.length ? formatFeedback(read) : '(no written feedback: read the PR and the Linear thread again)' };
       } else if (kind === 'verify_failures') {
@@ -2310,7 +2403,8 @@ export class Orchestrator {
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,
         input,
-        reviewRounds: wf.limits.reviewRounds,
+        ...(job.lens ? { lens: job.lens } : {}),
+        ...(reviewed ? { commit: reviewed } : {}),
         resumedAfterCut: !!opts.relaunchOf && resume,
       };
       const prompt = buildPrompt(promptInput);
@@ -2391,6 +2485,8 @@ export class Orchestrator {
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
+        // An AI review reads and searches, nothing else: no write tool, no shell (ORC-183).
+        ...(job.lens ? { tools: REVIEW_TOOLS } : {}),
         limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).

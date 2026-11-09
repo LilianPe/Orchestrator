@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { NoCommitsBetween } from '../adapters/forge/types.js';
-import { prText, PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
+import { PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { WORKSPACE_TARGET, type SandboxExecOptions, type SandboxRequest } from '../adapters/sandbox/types.js';
@@ -337,6 +337,25 @@ describe('GitPublisher', () => {
       expect(s.onForge()).toBe(sha);
     });
 
+    it('criterion 2 of ORC-159: work rebased on a human push goes out fast-forward, the human commit under it', async () => {
+      const s = setup();
+      await s.publisher.publish(s.request());
+      // The agent committed meanwhile, unpublished: its branch and the forge's diverge.
+      write(s.repo, 'a.txt', 'two\n');
+      const mine = commit(s.repo);
+      const theirs = humanPush(s);
+      const r = await refusal(s.publisher.publish(s.request({ sha: mine })));
+      expect(r.message).toContain(`git rebase origin/${BRANCH}`);
+      expect(s.onForge()).toBe(theirs);
+      git(s.repo, 'fetch', '-q', 'origin');
+      git(s.repo, 'rebase', '-q', `origin/${BRANCH}`);
+      const rebased = git(s.repo, 'rev-parse', 'HEAD');
+      await s.publisher.publish(s.request({ sha: rebased }));
+      expect(s.onForge()).toBe(rebased);
+      expect(git(s.repo, 'merge-base', '--is-ancestor', theirs, rebased)).toBe('');
+      expect(s.pushes.at(-1)).toContain(`--force-with-lease=refs/heads/${BRANCH}:${theirs}`);
+    });
+
     it('asks git for a lease and never a plain force', async () => {
       const s = setup();
       await s.publisher.publish(s.request());
@@ -593,16 +612,6 @@ describe('GitPublisher, on the repository the agent really has (ORC-317)', () =>
     expect(r.code).toBe('head');
     expect(s.sandboxes.created).toEqual([]);
     expect(s.onForge()).toBe('');
-  });
-});
-
-describe('prText', () => {
-  it("names the ticket, and copies nothing of the agent's: no last message reaches GitHub", () => {
-    const { title, body } = prText({ ticketId: 'ORC-1', title: 'Exporter en CSV' });
-    expect(title).toBe('ORC-1 Exporter en CSV');
-    expect(body).toContain('Ticket: ORC-1');
-    // A closing keyword is a claim about the whole ticket: only ORC-195's composer can make it.
-    expect(body).not.toMatch(/\b(fix(es)?|close[sd]?|resolve[sd]?)\b/i);
   });
 });
 
