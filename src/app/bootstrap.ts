@@ -147,8 +147,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const devSessions = devCapacity(yml?.concurrency, limits?.parallelSessions);
     const scheduler = new Scheduler(store, { dev: devSessions, questions: limits?.questionSessions ?? 2 });
-    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token, the same for the runner and the
-    // proxy (ORC-337): the proxy sets it on their model calls, which hold a placeholder alone. factory.yml's `claude`
+    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token goes to the proxy alone (ORC-337):
+    // it sets it on their model calls, which hold a placeholder; the runner only asks whether there is one. factory.yml's `claude`
     // section is read again at each launch: a change of `active` counts from the next run, without a restart (ORC-215).
     const claudeAccount = claudeAccountReader(o.home, env, log);
     const claudeTokenOf = () => claudeAccount().token;

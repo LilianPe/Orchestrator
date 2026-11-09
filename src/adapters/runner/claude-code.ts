@@ -266,7 +266,7 @@ export class ClaudeCodeRunner implements Runner {
         if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
         // The allowlist of the runner (ORC-211): the run's variables and a placeholder for the account's token, nothing else.
         // Without a token, none: `claude` says it is not logged in, clearer than the proxy's 401.
-        const hasToken = this.o.proxyHasToken ? this.o.proxyHasToken() : !!(chosen ?? process.env[CLAUDE_TOKEN]);
+        const hasToken = this.o.proxyHasToken?.() ?? !!(chosen ?? process.env[CLAUDE_TOKEN]);
         const { PATH: sandboxPath, ...run } = req.env;
         const named = { ...run, ...(hasToken ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
         // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
