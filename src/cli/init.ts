@@ -27,24 +27,32 @@ interface Detected {
   red?: string;
 }
 
-/** npm, or pnpm when its lockfile is there: the scripts `lint`, `typecheck` and `test` the repository has. */
+/**
+ * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has. pnpm
+ * hands a `--` to the script as it is (`vitest run -- x.test.ts` filters nothing, measured on pnpm 10.20): its red
+ * command has none.
+ */
 function detectNode(repo: string): Detected {
   const pkgFile = join(repo, 'package.json');
   if (!existsSync(pkgFile)) return { setup: [], verify: [] };
   const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
-  const pm = existsSync(join(repo, 'pnpm-lock.yaml')) ? 'pnpm' : 'npm';
-  const setup = pm === 'pnpm' ? ['pnpm install --frozen-lockfile'] : existsSync(join(repo, 'package-lock.json')) ? ['npm ci'] : [];
+  const npmLock = existsSync(join(repo, 'package-lock.json'));
+  const pnpm = !npmLock && existsSync(join(repo, 'pnpm-lock.yaml'));
+  const pm = pnpm ? 'pnpm' : 'npm';
+  const setup = pnpm ? ['pnpm install --frozen-lockfile'] : npmLock ? ['npm ci'] : [];
   const verify = ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `${pm} ${s === 'test' ? 'test' : `run ${s}`}`);
-  return { setup, verify, ...(scripts.test ? { red: `${pm} test --` } : {}) };
+  return { setup, verify, ...(scripts.test ? { red: pnpm ? 'pnpm test' : 'npm test --' } : {}) };
 }
 
 /**
- * uv (ORC-172), on its lockfile only: without one, a `uv run` would write it into the worktree. `--frozen` keeps it as
- * it is, where a plain `uv sync` resolves again under the setup's age cap and rewrites it (docs/repository-configuration.md).
+ * uv (ORC-172), on its lockfile only, and every command `--frozen`: `uv run` alone locks again first, and drops a lockfile
+ * made under `exclude-newer` (the setup's age cap, which verify does not set) or one the agent's `pyproject.toml` no
+ * longer matches; without the network, it fails (measured on uv 0.13.7). A plain `uv sync` rewrites it too
+ * (docs/repository-configuration.md).
  */
 function detectPython(repo: string): Detected {
   if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], verify: [] };
-  return { setup: ['uv sync --frozen'], verify: ['uv run ruff check', 'uv run mypy .', 'uv run pytest'], red: 'uv run pytest' };
+  return { setup: ['uv sync --frozen'], verify: ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'], red: 'uv run --frozen pytest' };
 }
 
 /** Both when the repository has both: the red check runs one command, Node's first. */

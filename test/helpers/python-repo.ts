@@ -8,14 +8,16 @@ import { join, relative, sep } from 'node:path';
  */
 export const PYTHON_REPO = join(import.meta.dirname, '../fixtures/python-repo');
 
+/** What a run of uv, pytest, mypy or ruff in the fixture leaves there (`.venv`, `.pytest_cache`, `__pycache__`…): not the repository. */
+const isRunLeftover = (path: string): boolean => relative(PYTHON_REPO, path).split(sep).some((s) => s.startsWith('.') || s === '__pycache__');
+
 /** Its files by repository path (`/`-separated), as the fake workspaces take them. */
 export function pythonRepoFiles(): Record<string, string> {
-  const entries = readdirSync(PYTHON_REPO, { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
-  return Object.fromEntries(entries.map((e) => {
-    const path = join(e.parentPath, e.name);
-    return [relative(PYTHON_REPO, path).split(sep).join('/'), readFileSync(path, 'utf8')];
-  }));
+  const files = readdirSync(PYTHON_REPO, { recursive: true, withFileTypes: true })
+    .map((e) => ({ e, path: join(e.parentPath, e.name) }))
+    .filter(({ e, path }) => e.isFile() && !isRunLeftover(path));
+  return Object.fromEntries(files.map(({ path }) => [relative(PYTHON_REPO, path).split(sep).join('/'), readFileSync(path, 'utf8')]));
 }
 
 /** Copies it into `dir`, an existing directory. */
-export const copyPythonRepo = (dir: string): void => cpSync(PYTHON_REPO, dir, { recursive: true });
+export const copyPythonRepo = (dir: string): void => cpSync(PYTHON_REPO, dir, { recursive: true, filter: (src) => !isRunLeftover(src) });

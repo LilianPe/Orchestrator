@@ -47,10 +47,10 @@ What `init` detects (ORC-172), in this order when a repository has both:
 | Repository | `setup` | `verify` | `jobs.tests.red.command` |
 |---|---|---|---|
 | `package.json` + `package-lock.json` | `npm ci` | `npm run lint`, `npm run typecheck`, `npm test` (the scripts it has) | `npm test --` |
-| `package.json` + `pnpm-lock.yaml` | `pnpm install --frozen-lockfile` | `pnpm run lint`, `pnpm run typecheck`, `pnpm test` (the scripts it has) | `pnpm test --` |
-| `pyproject.toml` + `uv.lock` | `uv sync --frozen` | `uv run ruff check`, `uv run mypy .`, `uv run pytest` | `uv run pytest` |
+| `package.json` + `pnpm-lock.yaml` (and no `package-lock.json`) | `pnpm install --frozen-lockfile` | `pnpm run lint`, `pnpm run typecheck`, `pnpm test` (the scripts it has) | `pnpm test` |
+| `pyproject.toml` + `uv.lock` | `uv sync --frozen` | `uv run --frozen ruff check`, `uv run --frozen mypy .`, `uv run --frozen pytest` | `uv run --frozen pytest` |
 
-A `pyproject.toml` without `uv.lock` gets nothing: a `uv run` would write the lockfile into the worktree, and a plain `uv sync` rewrites it under the setup's age cap ([`repository-configuration.md`](repository-configuration.md)). The red check runs one command: in a repository with both, Node's. `test/fixtures/python-repo/` is a Python repository with no config, on which `uv sync --frozen` and the three commands pass.
+pnpm hands a `--` to the script as it is (`vitest run -- x.test.ts` would filter nothing): its red command has none. Every uv command is `--frozen`: `uv run` alone locks again before it runs, drops a lockfile made under `exclude-newer` (the setup's age cap, which verify does not set) or one the branch's `pyproject.toml` no longer matches, and fails without the network (measured on uv 0.13.7). A `pyproject.toml` without `uv.lock` gets nothing. The red check runs one command: in a repository with both, Node's. `test/fixtures/python-repo/` is a Python repository with no config, on which `uv sync --frozen` and the three commands pass.
 
 ## 2. Key-by-key reference
 

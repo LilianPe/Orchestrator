@@ -125,7 +125,7 @@ on:
     - { when: "state in [todo, dev] && !blocked", run: tests }
 jobs:
   tests:
-    red: { command: "uv run pytest", mode: measure }
+    red: { command: "uv run --frozen pytest", mode: measure }
 `,
     });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Audit summary', description: 'Résumer les scores des audits par identifiant dans un module à part.' });
@@ -139,7 +139,7 @@ jobs:
     const h = python();
     h.checks.failNext(collectionError('app.audit'));
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(h.checks.calls[0]!.commands[0]).toContain(`uv run pytest 'tests/test_audit.py' --junitxml=`);
+    expect(h.checks.calls[0]!.commands[0]).toContain(`uv run --frozen pytest 'tests/test_audit.py' --junitxml=`);
     expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'missing_module' }]);
   });

@@ -67,8 +67,8 @@ describe('factory init', () => {
     copyPythonRepo(repo);
     const wf = await initWorkflow(repo);
     expect(wf.workspace.setup).toEqual(['uv sync --frozen']);
-    expect(wf.jobs.dev!.verify).toEqual(['uv run ruff check', 'uv run mypy .', 'uv run pytest']);
-    expect(wf.jobs.tests!.red?.command).toBe('uv run pytest');
+    expect(wf.jobs.dev!.verify).toEqual(['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest']);
+    expect(wf.jobs.tests!.red?.command).toBe('uv run --frozen pytest');
   });
 
   it('a pyproject.toml without uv.lock proposes nothing: a `uv run` would write a lockfile into the worktree', async () => {
@@ -87,7 +87,7 @@ describe('factory init', () => {
     writeFileSync(join(repo, 'package-lock.json'), '{}');
     const wf = await initWorkflow(repo);
     expect(wf.workspace.setup).toEqual(['npm ci', 'uv sync --frozen']);
-    expect(wf.jobs.dev!.verify).toEqual(['npm test', 'uv run ruff check', 'uv run mypy .', 'uv run pytest']);
+    expect(wf.jobs.dev!.verify).toEqual(['npm test', 'uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest']);
     expect(wf.jobs.tests!.red?.command).toBe('npm test --');
   });
 
@@ -98,14 +98,23 @@ describe('factory init', () => {
     const wf = await initWorkflow(repo);
     expect(wf.workspace.setup).toEqual(['pnpm install --frozen-lockfile']);
     expect(wf.jobs.dev!.verify).toEqual(['pnpm run lint', 'pnpm run typecheck', 'pnpm test']);
-    expect(wf.jobs.tests!.red?.command).toBe('pnpm test --');
+    expect(wf.jobs.tests!.red?.command).toBe('pnpm test');
+  });
+
+  it('a package-lock.json next to a pnpm-lock.yaml stays npm, as before', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    writeFileSync(join(repo, 'package-lock.json'), '{}');
+    writeFileSync(join(repo, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+    const wf = await initWorkflow(repo);
+    expect(wf.workspace.setup).toEqual(['npm ci']);
+    expect(wf.jobs.tests!.red?.command).toBe('npm test --');
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
-    const exec: Exec = async (cmd, args) =>
-      cmd === 'git' && args[0] === 'rev-parse' ? { stdout: `${repo}\n`, stderr: '', code: 0 } : { stdout: '', stderr: '', code: 0 };
+    const exec = gitTop(repo);
     const asked: string[] = [];
     const answers = ['REL', 'cid', 'csecret', '', '  ', 'whsecret', ''];
     const io: InitIO = {
