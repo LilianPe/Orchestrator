@@ -275,6 +275,49 @@ describe('bootstrap', () => {
     await expect(startFactory({ home, log: () => {}, env: {} })).rejects.toThrow(/FACTORY_ALLOW_HOST_RUNS=1/);
   });
 
+  it('takes no ticket on a configuration that would block every one, and says why on /health (ORC-350)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4176, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const startWorker = vi.spyOn(Orchestrator.prototype, 'startWorker');
+    const tick = vi.spyOn(Orchestrator.prototype, 'tick').mockResolvedValue();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const logs: string[] = [];
+    try {
+      // Runs on the host, verify not allowed there, no GitHub App: every verified ticket would be blocked.
+      const app = await startFactory({ home, log: (m) => void logs.push(m), env: { FACTORY_ALLOW_HOST_RUNS: '1' } });
+      try {
+        vi.advanceTimersByTime(120_000);
+        expect(startWorker).not.toHaveBeenCalled();
+        expect(tick).not.toHaveBeenCalled();
+        const res = await fetch('http://127.0.0.1:4176/health');
+        expect(res.status).toBe(503);
+        const body = await res.json();
+        expect(body).toMatchObject({ ok: false, store: 'ok', takingTickets: false });
+        expect(body.configProblems).toContain('verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
+        expect(logs).toContain('Invalid configuration, no ticket is taken until it is fixed and the factory restarted: verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
+      } finally {
+        await app.stop();
+      }
+    } finally {
+      vi.useRealTimers();
+      startWorker.mockRestore();
+      tick.mockRestore();
+    }
+  });
+
+  it('serves /health while it takes tickets (ORC-350)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4175, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
+    try {
+      const res = await fetch('http://127.0.0.1:4175/health');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, store: 'ok', takingTickets: true, configProblems: [], linearConnected: false });
+    } finally {
+      await app.stop();
+    }
+  });
+
   it('protects the API with the UI password on a non-loopback host', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4195, host: '0.0.0.0', relay: { kind: 'none' }, projects: [], limits: {} });
@@ -283,6 +326,9 @@ describe('bootstrap', () => {
       expect((await fetch('http://127.0.0.1:4195/api/state')).status).toBe(401);
       const auth = { authorization: `Basic ${Buffer.from('x:pw').toString('base64')}` };
       expect((await fetch('http://127.0.0.1:4195/api/state', { headers: auth })).status).toBe(200);
+      // The health check and the diagnosis too (ORC-350): what blocks a ticket is the operators'.
+      expect((await fetch('http://127.0.0.1:4195/health')).status).toBe(401);
+      expect((await fetch('http://127.0.0.1:4195/tickets/REL-1/diagnosis')).status).toBe(401);
     } finally {
       await app.stop();
     }

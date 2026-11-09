@@ -51,6 +51,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
+import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
@@ -1333,6 +1334,11 @@ export class Orchestrator {
   async isPaused(): Promise<boolean> {
     const flags = await Promise.all([this.d.store.getMeta('paused'), this.d.store.getMeta(PAUSE_ACCEPTED)]);
     return flags.includes('1');
+  }
+
+  /** The failed inbox rows of this process's worker that hold the ticket (ORC-350), for its diagnosis. */
+  heldRows(ticketId: string): HeldRow[] {
+    return this.worker.held(ticketId);
   }
 
   private account(): string {

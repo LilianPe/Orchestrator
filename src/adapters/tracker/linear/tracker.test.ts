@@ -401,6 +401,24 @@ describe('LinearTracker', () => {
     await expect(new LinearTracker(api, 'app-1').completedIssues('REL', 0, 1)).rejects.toThrow(/links of REL-1/);
   });
 
+  it("sends the live feed's ephemeral activities at low priority: skipped while Linear's rate limit holds, the others retried (ORC-350)", async () => {
+    let calls = 0;
+    const limited = new LinearApi(
+      async () => 'tok',
+      async () => {
+        calls++;
+        return { ok: false, status: 429, headers: new Headers({ 'retry-after': '30' }), json: async () => ({}) };
+      },
+      undefined,
+      { sleep: async () => {} },
+    );
+    const t = new LinearTracker(limited, 'app-1');
+    await expect(t.activity('as-1', { type: 'response', body: 'Done' })).rejects.toMatchObject({ status: 429 });
+    expect(calls).toBe(4);
+    await expect(t.activity('as-1', { type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true })).rejects.toThrow('Linear quota kept for the critical calls');
+    expect(calls).toBe(4);
+  });
+
   it('surfaces GraphQL errors', async () => {
     const { api } = fakeLinear({});
     await expect(api.gql('query Missing { x }')).rejects.toThrow('no handler for Missing');

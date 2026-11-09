@@ -1,7 +1,7 @@
 export type FetchLike = (
   input: string,
-  init: { method: string; headers: Record<string, string>; body: string },
-) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
+) => Promise<{ ok: boolean; status: number; headers?: { get(name: string): string | null }; json(): Promise<unknown> }>;
 
 export interface LinearGqlError {
   message: string;
@@ -20,19 +20,95 @@ export class LinearApiError extends Error {
   }
 }
 
+export interface LinearApiOptions {
+  /** The longest a call may take, its answer read (ORC-350): past it, aborted, a `TimeoutError` (transient, ORC-343). */
+  timeoutMs?: number;
+  /** Tries again after a rate limit, for a critical call; a background one is never tried again. */
+  rateLimitRetries?: number;
+  /** The longest wait before a retry, whatever Linear's reset says. */
+  maxWaitMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+export interface GqlOptions {
+  /**
+   * A call nothing waits for (the live feed of a run, ORC-350): skipped, never retried, while a rate limit is waited out
+   * or once less than a tenth of the hour's requests is left, so that the critical calls keep the quota.
+   */
+  background?: boolean;
+}
+
+const TIMEOUT_MS = 30_000;
+const RATE_LIMIT_RETRIES = 3;
+const MAX_WAIT_MS = 60_000;
+/** The first wait after a rate limit without a reset in its answer, doubled at each retry. */
+const BASE_WAIT_MS = 1_000;
+/** The share of the hour's requests kept for the critical calls. */
+const RESERVE = 0.1;
+
+const isRateLimited = (status: number, errors: LinearGqlError[] | undefined) => status === 429 || !!errors?.some((e) => e.extensions?.code === 'RATELIMITED');
+
 export class LinearApi {
+  private readonly opts: Required<LinearApiOptions>;
+  /** Until when Linear refuses for its rate limit: no background call before. */
+  private limitedUntil = 0;
+  /** The hour's requests, as Linear's last answer counted them. */
+  private quota: { limit: number; remaining: number } | undefined;
+  /** The wait Linear's last answer asked for before a retry, in ms: its `Retry-After`, or the reset of its requests. */
+  private resetIn: number | undefined;
+
   constructor(
     private getToken: () => Promise<string>,
     private fetchImpl: FetchLike = fetch as unknown as FetchLike,
     private endpoint = 'https://api.linear.app/graphql',
-  ) {}
+    opts: LinearApiOptions = {},
+  ) {
+    this.opts = {
+      timeoutMs: TIMEOUT_MS,
+      rateLimitRetries: RATE_LIMIT_RETRIES,
+      maxWaitMs: MAX_WAIT_MS,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now: Date.now,
+      ...opts,
+    };
+  }
 
-  async gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  /**
+   * One GraphQL call, bounded in time (ORC-350). A rate limit (a 429, or Linear's `RATELIMITED` 400) is waited out, until
+   * Linear's reset when it gives one, with a growing delay otherwise, then tried again; past the retries, its error is
+   * the outbox's to retry (ORC-343).
+   */
+  async gql<T>(query: string, variables: Record<string, unknown> = {}, o: GqlOptions = {}): Promise<T> {
+    for (let failure = 1; ; failure++) {
+      if (o.background && this.keptForCritical()) throw new LinearApiError('Linear quota kept for the critical calls: background call skipped');
+      try {
+        const data = await this.once<T>(query, variables);
+        this.limitedUntil = 0;
+        return data;
+      } catch (err) {
+        if (!(err instanceof LinearApiError && err.status !== undefined && isRateLimited(err.status, err.errors))) throw err;
+        const wait = Math.min(this.opts.maxWaitMs, this.resetIn ?? BASE_WAIT_MS * 2 ** (failure - 1));
+        this.limitedUntil = this.opts.now() + wait;
+        if (o.background || failure > this.opts.rateLimitRetries) throw err;
+        await this.opts.sleep(wait);
+      }
+    }
+  }
+
+  private keptForCritical(): boolean {
+    if (this.opts.now() < this.limitedUntil) return true;
+    return this.quota !== undefined && this.quota.remaining < this.quota.limit * RESERVE;
+  }
+
+  private async once<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const res = await this.fetchImpl(this.endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${await this.getToken()}` },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(this.opts.timeoutMs),
     });
+    this.readLimits(res.headers);
     // A 502 from a proxy in front of Linear has an HTML body: its status still tells what failed.
     const json = (await res.json().catch((err: unknown) => {
       if (res.ok) throw err;
@@ -41,5 +117,19 @@ export class LinearApi {
     if (json.errors?.length) throw new LinearApiError(json.errors.map((e) => e.message).join('; '), json.errors, res.status);
     if (!res.ok) throw new LinearApiError(`HTTP ${res.status}`, [], res.status);
     return json.data as T;
+  }
+
+  /** Linear's rate-limit headers: the hour's requests, their reset (epoch ms), or a `Retry-After` in seconds. */
+  private readLimits(headers: { get(name: string): string | null } | undefined): void {
+    const num = (name: string) => {
+      const v = headers?.get(name);
+      return v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v);
+    };
+    const limit = num('x-ratelimit-requests-limit');
+    const remaining = num('x-ratelimit-requests-remaining');
+    if (limit !== undefined && remaining !== undefined) this.quota = { limit, remaining };
+    const retryAfter = num('retry-after');
+    const reset = num('x-ratelimit-requests-reset');
+    this.resetIn = retryAfter !== undefined ? retryAfter * 1000 : reset !== undefined ? Math.max(0, reset - this.opts.now()) : undefined;
   }
 }

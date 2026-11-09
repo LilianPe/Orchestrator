@@ -1,4 +1,5 @@
 import { deadLetteredEvent, hasNotice } from '../core/dead-letter.js';
+import type { HeldRow } from '../core/diagnosis.js';
 import { settledTicket } from '../core/engine.js';
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
@@ -121,6 +122,8 @@ export class Worker {
   private reads = 0;
   /** Failed processings of each row in this process. */
   private failures = new Map<string, number>();
+  /** The last error of each failed row: what its ticket's diagnosis tells (ORC-350). */
+  private errors = new Map<string, string>();
   private retryTimers = new Set<NodeJS.Timeout>();
   /** When each failed row's retry is due: `poll` takes up those past due, as their timer would, on the worker's clock. */
   private retryDue = new Map<string, { at: number; row: StoredEvent }>();
@@ -232,6 +235,27 @@ export class Worker {
 
   private pollInBackground(): void {
     this.poll().catch((err: unknown) => this.d.log('error', `worker: ${(err as Error).message}`));
+  }
+
+  /**
+   * The failed rows that hold a ticket's later rows in this process, of any project (ORC-350): the reason a ticket is
+   * stuck that the store does not hold, its retries kept in memory.
+   */
+  held(ticketId: string): HeldRow[] {
+    return [...this.holders.entries()]
+      .filter(([, row]) => row.ticketId === ticketId)
+      .map(([key, row]) => {
+        const retryAt = this.retryDue.get(row.id)?.at;
+        return {
+          projectId: row.projectId,
+          eventId: row.id,
+          type: row.type,
+          error: this.errors.get(row.id) ?? '',
+          attempts: this.failures.get(row.id) ?? 0,
+          ...(retryAt !== undefined ? { retryAt } : {}),
+          behind: this.behind.get(key)?.size ?? 0,
+        };
+      });
   }
 
   /** Stops polling and the pending retries: a stopped worker takes nothing up by itself. */
@@ -421,6 +445,7 @@ export class Worker {
   private failed(row: StoredEvent, key: string, err: Error): void {
     const n = (this.failures.get(row.id) ?? 0) + 1;
     this.failures.set(row.id, n);
+    this.errors.set(row.id, err.message);
     this.skipped.add(row.id);
     // Only an older row gets here while another holds its key: the hold is now its own.
     const holder = this.holders.get(key);
@@ -500,6 +525,7 @@ export class Worker {
   /** The row's failures are over: if it held its key, the rows behind it are taken up again. */
   private letGo(row: StoredEvent, key: string): void {
     this.failures.delete(row.id);
+    this.errors.delete(row.id);
     this.retryDue.delete(row.id);
     if (this.holders.get(key)?.id !== row.id) return;
     this.holders.delete(key);
