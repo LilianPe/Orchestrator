@@ -12,31 +12,32 @@
 import { createHash } from 'node:crypto';
 import { fingerprint, isFrozenHarness } from '../checks/freeze.js';
 import { sensitiveMatcher } from '../checks/forbidden-paths.js';
-import { normalizePath } from '../checks/test-files.js';
 import type { AuthzAction } from './authz.js';
 
-/** Lowest to highest. */
-export const DIFF_CLASSES = ['normal', 'sensitive', 'verification-config'] as const;
-export type DiffClassName = (typeof DIFF_CLASSES)[number];
+export type DiffClassName = 'normal' | 'sensitive' | 'verification-config';
 
-/** A class, and the paths of the diff that made it so (at most `CLASS_PATHS`): what the block and the reviewer are told. */
+/**
+ * A class, and the paths of the diff that made it so: every one of the verification configuration, which the publication gate
+ * checks; at most `CLASS_PATHS` sensitive ones, which only the reviewer is told.
+ */
 export interface ClassifiedDiff {
   class: DiffClassName;
   paths: string[];
 }
 
 /** The authz actions (ORC-186) a class can be approved by: their roles are the matrix's. */
-export type ApprovalAction = Extract<AuthzAction, 'refreeze' | 'done_merge'>;
+type ApprovalAction = Extract<AuthzAction, 'refreeze' | 'done_merge'>;
 export type Approvers = Readonly<Record<DiffClassName, readonly ApprovalAction[]>>;
 
-const CLASS_PATHS = 20;
+export const CLASS_PATHS = 20;
 
 /** The verification configuration beyond the frozen harness: the factory's and the CI's own configuration, from the root. */
 export function isVerificationConfig(path: string): boolean {
-  // Case ignored, as a case-insensitive checkout reads `.GitHub/Workflows` (`forbiddenPattern`).
-  const p = normalizePath(path).toLowerCase();
-  return isFrozenHarness(path) || p.startsWith('.factory/') || p.startsWith('.github/workflows/');
+  return isFrozenHarness(path) || CONFIG_DIRS(path) !== undefined;
 }
+
+/** Matched as `sensitive_paths`: from the root, case ignored as a case-insensitive checkout reads `.GitHub/Workflows`. */
+const CONFIG_DIRS = sensitiveMatcher(['.factory', '.github/workflows']);
 
 /** The class of a diff by its paths alone: a shared file (`package.json`...) counts whole, as `classifyBranch` refines. */
 export function classifyDiff(paths: readonly string[], sensitivePaths: readonly string[]): ClassifiedDiff {
@@ -45,16 +46,16 @@ export function classifyDiff(paths: readonly string[], sensitivePaths: readonly 
 
 /** The highest class: `config`, the verification configuration among `paths`, else the sensitive ones among them. */
 function classOf(config: readonly string[], paths: readonly string[], sensitivePaths: readonly string[]): ClassifiedDiff {
-  if (config.length) return { class: 'verification-config', paths: config.slice(0, CLASS_PATHS) };
+  if (config.length) return { class: 'verification-config', paths: [...config] };
   const sensitive = sensitiveMatcher(sensitivePaths);
   const touched = paths.filter((p) => sensitive(p) !== undefined);
   return touched.length ? { class: 'sensitive', paths: touched.slice(0, CLASS_PATHS) } : { class: 'normal', paths: [] };
 }
 
-/** How a branch's files read at its fork point and at its head; undefined, a file absent or unreadable there. */
+/** How a branch's files read at its fork point and at its head (`BranchReader`'s); undefined, a file absent or unreadable there. */
 export interface ClassRead {
-  atFork(path: string): Promise<string | undefined>;
-  atHead(path: string): Promise<string | undefined>;
+  showAtFork(path: string): Promise<string | undefined>;
+  showAtHead(path: string): Promise<string | undefined>;
 }
 
 /**
@@ -63,11 +64,13 @@ export interface ClassRead {
  * (`fingerprint`); it still counts for `sensitive_paths`. A file absent or unreadable on either side counts.
  */
 export async function classifyBranch(paths: readonly string[], sensitivePaths: readonly string[], read: ClassRead): Promise<ClassifiedDiff> {
-  const unchanged = new Set<string>();
-  for (const path of paths.filter(isFrozenHarness)) {
-    const [before, after] = await Promise.all([read.atFork(path), read.atHead(path)]);
-    if (before !== undefined && after !== undefined && fingerprint(path, before) === fingerprint(path, after)) unchanged.add(path);
-  }
+  const same = async (path: string) => {
+    const [before, after] = await Promise.all([read.showAtFork(path), read.showAtHead(path)]);
+    return before !== undefined && after !== undefined && fingerprint(path, before) === fingerprint(path, after);
+  };
+  const harness = paths.filter(isFrozenHarness);
+  const flags = await Promise.all(harness.map(same));
+  const unchanged = new Set(harness.filter((_, i) => flags[i]));
   // Left out of the verification configuration only: such a file may still be one of `sensitive_paths`.
   return classOf(paths.filter((p) => isVerificationConfig(p) && !unchanged.has(p)), paths, sensitivePaths);
 }

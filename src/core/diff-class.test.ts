@@ -28,9 +28,11 @@ describe('classifyDiff (ORC-198)', () => {
     expect(classifyDiff(['src/auth/login.ts', 'vitest.config.ts'], sensitive)).toEqual({ class: 'verification-config', paths: ['vitest.config.ts'] });
   });
 
-  it('names at most 20 paths', () => {
+  it('names at most 20 sensitive paths, but every path of the verification configuration, which the gate checks', () => {
     const paths = Array.from({ length: 30 }, (_, i) => `src/auth/f${i}.ts`);
     expect(classifyDiff(paths, sensitive).paths).toHaveLength(20);
+    const configs = Array.from({ length: 30 }, (_, i) => `pkg${i}/vitest.config.ts`);
+    expect(classifyDiff(configs, []).paths).toHaveLength(30);
   });
 
   it('reads a GitHub path outside workflows as no verification configuration (the forbidden paths refuse it anyway)', () => {
@@ -42,7 +44,7 @@ describe('classifyDiff (ORC-198)', () => {
 
 describe('classifyBranch (ORC-198)', () => {
   const pkg = (scripts: Record<string, string>, deps: Record<string, string>) => JSON.stringify({ scripts, dependencies: deps });
-  const files = (fork: Record<string, string>, head: Record<string, string>) => ({ atFork: async (p: string) => fork[p], atHead: async (p: string) => head[p] });
+  const files = (fork: Record<string, string>, head: Record<string, string>) => ({ showAtFork: async (p: string) => fork[p], showAtHead: async (p: string) => head[p] });
 
   it('leaves out a shared file whose test part did not change, as the freeze does: a dependency bump is normal', async () => {
     const read = files({ 'package.json': pkg({ test: 'vitest' }, { a: '1' }) }, { 'package.json': pkg({ test: 'vitest' }, { a: '2' }) });
@@ -65,7 +67,7 @@ describe('classifyBranch (ORC-198)', () => {
   });
 
   it('reads nothing for a path that is no harness', async () => {
-    const read = { atFork: async () => { throw new Error('read'); }, atHead: async () => { throw new Error('read'); } };
+    const read = { showAtFork: async () => { throw new Error('read'); }, showAtHead: async () => { throw new Error('read'); } };
     expect(await classifyBranch(['src/a.ts', '.github/workflows/ci.yml'], [], read)).toEqual({ class: 'verification-config', paths: ['.github/workflows/ci.yml'] });
   });
 });

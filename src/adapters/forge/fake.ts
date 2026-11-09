@@ -110,10 +110,10 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   async setExclusiveLabel(_repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
     this.answer();
     const now = this.labelsOf(number);
-    const next = [...now.filter((l) => l === label || !group.includes(l)), ...(now.includes(label) ? [] : [label])];
-    if (next.length === now.length && next.every((l) => now.includes(l))) return;
+    const others = now.filter((l) => !group.includes(l));
+    if (now.includes(label) && others.length === now.length - 1) return;
     this.labelWrites++;
-    this.prLabels.set(number, next);
+    this.prLabels.set(number, [...others, label]);
   }
 
   /** Where the factory's git goes: a local repository in a test. */

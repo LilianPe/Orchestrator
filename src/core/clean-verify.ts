@@ -193,7 +193,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
-    const diffClass = await classOfBranch(gitReader(git, BASE, from, sha), config);
+    // Only a verdict that passes carries it: a branch refused already is not read again.
+    const diffClass = failures.length ? undefined : await classOfBranch(gitReader(git, BASE, from, sha), config);
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config));
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
@@ -207,7 +208,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     let flaky: FlakyTest[] = [];
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
-      ok: !failures.length, failures, sha, tree, commands, diffClass,
+      ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
       ...(flaky.length ? { flaky } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
@@ -654,7 +655,7 @@ export const untrustedCheck = (mark: UntrustedMark, config: RepoConfig): Untrust
 
 /** The class of a branch's diff (ORC-198), read as the path rules read it, under the default branch's `sensitive_paths`. */
 export async function classOfBranch(reader: BranchReader, config: RepoConfig): Promise<ClassifiedDiff> {
-  return classifyBranch((await reader.changed()).map((c) => c.path), config.sensitivePaths, { atFork: (p) => reader.showAtFork(p), atHead: (p) => reader.showAtHead(p) });
+  return classifyBranch((await reader.changed()).map((c) => c.path), config.sensitivePaths, reader);
 }
 
 /**

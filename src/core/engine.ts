@@ -8,7 +8,7 @@ import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
-import { needsRefreeze, type ClassifiedDiff } from './diff-class.js';
+import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -519,11 +519,17 @@ function unapprovedConfig(ticket: TicketState | undefined, diffClass: Classified
   return needsRefreeze(diffClass.class, factoryDefault.approvers) && !(frozen?.refrozenBy && diffClass.paths.every((p) => p in frozen.files));
 }
 
+/** The block of a refused publication: no job of its own, what relaunches it is a job that writes (`owedMove`), the rule's. */
+function publicationBlock(reason: string, job: string, relaunch = 'Reply in this thread to relaunch.'): Block {
+  return { kind: 'other', reason, body: `${reason}
+${relaunch}`, step: 'publish', tried: [`Publication of the commit of ${job}.`] };
+}
+
 /** The block of a diff of the verification configuration held before publication (ORC-198): a refused publication, its relaunch the same. */
 function configGate(diffClass: ClassifiedDiff, job: string): Block {
-  const reason = `Publication held: this diff changes the verification configuration (${diffClass.paths.map(mdCode).join(', ')}). A designated maintainer reviews it and sends ${REFREEZE}, which freezes it as it is.`;
-  return { kind: 'other', reason, body: `${reason}
-Then reply in this thread to relaunch.`, step: 'publish', tried: [`Publication of the commit of ${job}.`] };
+  const named = diffClass.paths.slice(0, CLASS_PATHS).map(mdCode).join(', ') + (diffClass.paths.length > CLASS_PATHS ? `, and ${diffClass.paths.length - CLASS_PATHS} more` : '');
+  const reason = `Publication held: this diff changes the verification configuration (${named}). A designated maintainer reviews it and sends ${REFREEZE}, which freezes it as it is.`;
+  return publicationBlock(reason, job, 'Then reply in this thread to relaunch.');
 }
 
 /**
@@ -1997,8 +2003,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'publish.refused': {
       const reason = `Publication refused: ${event.payload.reason}`;
-      // No job of its own: what relaunches it is a job that writes (`owedMove`), the rule's.
-      return ticket?.blocked ? out : block(out, workflow, { kind: 'other', reason, body: `${reason}\nReply in this thread to relaunch.`, step: 'publish', tried: [`Publication of the commit of ${event.payload.job}.`] });
+      return ticket?.blocked ? out : block(out, workflow, publicationBlock(reason, event.payload.job));
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;

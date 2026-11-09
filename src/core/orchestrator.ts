@@ -1190,7 +1190,8 @@ export class Orchestrator {
     const untrusted = await this.untrustedMark(project, t);
     const config = parseRepoConfig(await reader.baseConfig());
     // The class of the diff (ORC-198), read as the clone's.
-    return { failures: await checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, config)), diffClass: await classOfBranch(reader, config) };
+    const [failures, diffClass] = await Promise.all([checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, config)), classOfBranch(reader, config)]);
+    return { failures, diffClass };
   }
 
   /**
