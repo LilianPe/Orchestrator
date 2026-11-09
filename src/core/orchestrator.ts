@@ -630,8 +630,7 @@ export class Orchestrator {
     await this.destroyDeadSandboxes(new Set(tickets.filter(isTakenOver).map((t) => takeOverKey(t.projectId, t.ticketId))));
     const settled = new Set<string>();
     const checked = new Set<string>();
-    // A result set aside (ORC-321) is out of the inbox and still the result: its repair decides it, never a check or an end made up here.
-    // Its repair in the inbox carries it; the inbox read first, a row set aside meanwhile is found among the open dead letters.
+    // A repair in the inbox carries its result; the inbox read first, a row set aside meanwhile is found among the open dead letters.
     const pending = (await store.pendingInbox(Number.MAX_SAFE_INTEGER)).map(deadLetteredEvent);
     const setAside = (await store.deadLetters()).filter((d) => d.status === 'open').map((d) => d.event);
     for (const row of [...pending, ...setAside]) {

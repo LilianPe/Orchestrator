@@ -668,17 +668,12 @@ describe('a result set aside before a restart', () => {
     return runId;
   }
 
-  it('a verdict set aside: the check is not run again, the ticket waits blocked for its repair', async () => {
+  it('a verdict set aside: the check is not run again, the ticket waits blocked for its repair, restarted again or not', async () => {
     const h = createHarness({ preset: testPreset() });
     const runId = await verdictSetAside(h);
     expect(h.checks.calls).toHaveLength(1);
     expect(await h.ticket()).toMatchObject({ verifyingRunId: runId, blocked: true, blockKind: 'dead_letter', blockedEvent: `check:${runId}` });
     expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.lost')).toEqual([]);
-  });
-
-  it('a second restart before the repair runs nothing either', async () => {
-    const h = createHarness({ preset: testPreset() });
-    await verdictSetAside(h);
     await h.restart({ mode: 'brutal' });
     expect(h.checks.calls).toHaveLength(1);
   });
@@ -704,40 +699,47 @@ describe('a result set aside before a restart', () => {
     expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'verify.lost')).toEqual([]);
   });
 
-  it('the end of a run set aside while its record still says running: the attempt gone, no loss is made up for it', async () => {
-    const h = createHarness({ sandboxed: true });
+  /** A run held, its `run.finished` or `run.lost` set aside, its record ended as `status` says (still running without it): the id of the row set aside. */
+  async function runResultSetAside(h: H, type: 'run.finished' | 'run.lost', status?: 'success' | 'failure'): Promise<{ runId: string; eventId: string }> {
     const runId = await heldRun(h);
     const run = (await h.store.getRun(runId))!;
-    await setAside(h, { ...TRUSTED, id: `attempt:${runId}:finished`, type: 'run.finished', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId, job: run.job, outcome: 'success', costUsd: 0, turns: 1, lastText: 'done' } });
+    if (status) await h.store.putRun({ ...run, status, endedAt: h.clock.now() }, run.leaseToken ?? 0);
+    const base = { ...TRUSTED, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1' };
+    const row: FactoryEvent =
+      type === 'run.finished'
+        ? { ...base, id: `attempt:${runId}:finished`, type, payload: { runId, job: run.job, outcome: 'success', costUsd: 0, turns: 1, lastText: 'done' } }
+        : { ...base, id: `attempt:${runId}:lost`, type, payload: { runId, job: run.job, cause: 'restart' } };
+    await setAside(h, row);
+    return { runId, eventId: row.id };
+  }
+
+  /** Nothing launched again nor made up: the ticket still holds the run, blocked by the row set aside until its repair. */
+  async function waitsForRepair(h: H, runId: string, eventId: string): Promise<void> {
+    expect(h.runner.requests).toHaveLength(1);
+    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: true, blockKind: 'dead_letter', blockedEvent: eventId });
+    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'run.finished' || e.type === 'run.lost')).toEqual([]);
+  }
+
+  it('the end of a run set aside while its record still says running: the attempt gone, no loss is made up for it', async () => {
+    const h = createHarness({ sandboxed: true });
+    const { runId, eventId } = await runResultSetAside(h, 'run.finished');
     await lose(h, runId);
     await h.restart({ mode: 'brutal' });
-    expect(h.runner.requests).toHaveLength(1);
-    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: true, blockKind: 'dead_letter', blockedEvent: `attempt:${runId}:finished` });
-    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'run.lost')).toEqual([]);
+    await waitsForRepair(h, runId, eventId);
   });
 
   it('the end of a run set aside: its step is not started again', async () => {
     const h = createHarness();
-    const runId = await heldRun(h);
-    const run = (await h.store.getRun(runId))!;
-    await h.store.putRun({ ...run, status: 'success', endedAt: h.clock.now() }, run.leaseToken ?? 0);
-    await setAside(h, { ...TRUSTED, id: `attempt:${runId}:finished`, type: 'run.finished', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId, job: run.job, outcome: 'success', costUsd: 0, turns: 1, lastText: 'done' } });
+    const { runId, eventId } = await runResultSetAside(h, 'run.finished', 'success');
     await h.restart({ mode: 'brutal' });
-    expect(h.runner.requests).toHaveLength(1);
-    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: true, blockKind: 'dead_letter', blockedEvent: `attempt:${runId}:finished` });
-    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'run.finished' || e.type === 'run.lost')).toEqual([]);
+    await waitsForRepair(h, runId, eventId);
   });
 
   it('the loss of a run set aside: no end is made up for it at the next start, its repair decides', async () => {
     const h = createHarness();
-    const runId = await heldRun(h);
-    const run = (await h.store.getRun(runId))!;
-    await h.store.putRun({ ...run, status: 'failure', endedAt: h.clock.now() }, run.leaseToken ?? 0);
-    await setAside(h, { ...TRUSTED, id: `attempt:${runId}:lost`, type: 'run.lost', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { runId, job: run.job, cause: 'restart' } });
+    const { runId, eventId } = await runResultSetAside(h, 'run.lost', 'failure');
     await h.restart({ mode: 'brutal' });
-    expect(h.runner.requests).toHaveLength(1);
-    expect(await h.ticket()).toMatchObject({ activeRunId: runId, blocked: true, blockKind: 'dead_letter', blockedEvent: `attempt:${runId}:lost` });
-    expect((await h.store.recentEvents(50, 'REL-1')).filter((e) => e.type === 'run.finished' || e.type === 'run.lost')).toEqual([]);
+    await waitsForRepair(h, runId, eventId);
   });
 });
 
