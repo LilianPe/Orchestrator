@@ -25,8 +25,8 @@ export const factoryDefault: Preset = {
   // A conflict with the default branch (ORC-146): the rebase step, on the counter of the review and CI loop.
   conflict: { goto: 'rebase', counter: 'review_ci' },
   steps: [
-    { id: 'intake', type: 'agent_step', writes: 'nothing', model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
-    { id: 'clarify', type: 'agent_step', writes: 'nothing', model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },
+    { id: 'intake', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
+    { id: 'clarify', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },
     { id: 'spec_draft', type: 'agent_step', writes: 'spec', model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
     { id: 'spec_check', type: 'spec_check', network: 'none', next: 'spec_review', onFailure: { goto: 'spec_draft', counter: 'spec_check' } },
     { id: 'spec_review', type: 'human_gate', gate: 'spec', next: 'tests', onFailure: { goto: 'spec_draft', counter: 'spec_review' } },
