@@ -165,6 +165,7 @@ interface Service {
 
 /** L3 of the MVP doc: one container per attempt, driven by the engine's CLI. */
 export class ContainerSandboxProvider implements SandboxProvider {
+  readonly services = CONTAINER_SERVICES;
   private readonly run: Exec;
   private readonly podman: boolean;
   /**
@@ -184,7 +185,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     const { minLevel, browser, services } = req.requirements;
     if (minLevel !== 'L3') throw new Error(`container sandbox: isolation ${minLevel} not available (L3 only)`);
     if (browser) throw new Error('container sandbox: no browser');
-    const unknown = services.filter((s) => !CONTAINER_SERVICES.includes(s));
+    const unknown = services.filter((s) => !this.services.includes(s));
     if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
     const mounts = [{ host: req.workspacePath, target: WORKSPACE_TARGET, readOnly: false }, ...req.mounts].map(mountArg);
     const key = req.servicesOf ?? req.runId;

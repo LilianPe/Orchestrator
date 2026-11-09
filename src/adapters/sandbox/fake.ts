@@ -2,6 +2,8 @@ import type { ExecResult } from '../exec.js';
 import type { Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SpawnCommand } from './types.js';
 
 export class FakeSandboxProvider implements SandboxProvider {
+  /** The container backend's (ORC-309); a test sets fewer to have a service refused (ORC-282). */
+  services: readonly string[] = ['postgres'];
   created: SandboxRequest[] = [];
   destroyed: string[] = [];
   execs: { id: string; argv: string[]; opts?: SandboxExecOptions }[] = [];
@@ -10,19 +12,21 @@ export class FakeSandboxProvider implements SandboxProvider {
   /** Keyed by run, like a container labelled with its attempt id: a replayed create finds it. */
   private live = new Map<string, Sandbox>();
   /** The services (ORC-309) by the key they serve (`servicesOf`), as their own containers: alive until their owner or they are destroyed. */
-  private services = new Map<string, string>();
+  private serving = new Map<string, string>();
   private made = 0;
   private madeServices = 0;
 
   async create(req: SandboxRequest): Promise<Sandbox> {
+    const unknown = req.requirements.services.filter((s) => !this.services.includes(s));
+    if (unknown.length) throw new Error(`fake sandbox: no services (${unknown.join(', ')})`);
     this.created.push(req);
     const existing = this.live.get(req.runId);
     if (existing) return { ...existing };
     const sandbox: Sandbox = { id: `sbx-${++this.made}`, network: req.network, level: 'L3' };
     if (req.requirements.services.length) {
       const key = req.servicesOf ?? req.runId;
-      if (!this.services.has(key)) this.services.set(key, `svc-${++this.madeServices}`);
-      sandbox.services = this.services.get(key)!;
+      if (!this.serving.has(key)) this.serving.set(key, `svc-${++this.madeServices}`);
+      sandbox.services = this.serving.get(key)!;
     }
     this.live.set(req.runId, sandbox);
     return { ...sandbox };
@@ -52,7 +56,7 @@ export class FakeSandboxProvider implements SandboxProvider {
   async list(): Promise<{ runId: string; sandbox: Sandbox }[]> {
     return [
       ...[...this.live].map(([runId, s]) => ({ runId, sandbox: { ...s } })),
-      ...[...this.services].map(([runId, id]) => ({ runId, sandbox: { id, network: 'none' as const, level: 'L3' as const } })),
+      ...[...this.serving].map(([runId, id]) => ({ runId, sandbox: { id, network: 'none' as const, level: 'L3' as const } })),
     ];
   }
 
@@ -73,13 +77,13 @@ export class FakeSandboxProvider implements SandboxProvider {
 
   /** The ids of the live services (ORC-309). */
   activeServices(): string[] {
-    return [...this.services.values()];
+    return [...this.serving.values()];
   }
 
   private dropServices(which: (key: string, id: string) => boolean): void {
-    for (const [key, svc] of this.services) {
+    for (const [key, svc] of this.serving) {
       if (!which(key, svc)) continue;
-      this.services.delete(key);
+      this.serving.delete(key);
       this.destroyed.push(svc);
     }
   }

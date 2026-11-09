@@ -27,7 +27,12 @@ export class SandboxRouter implements SandboxProvider {
   /** In memory only: after a daemon restart, `list` and `findByAttempt` fill it again from the backends. */
   private owner = new Map<string, SandboxBackend>();
 
-  constructor(private readonly backends: readonly SandboxBackend[]) {}
+  /** Those of any backend (ORC-282): a request naming another is refused, whatever else it asks. */
+  readonly services: readonly string[];
+
+  constructor(private readonly backends: readonly SandboxBackend[]) {
+    this.services = [...new Set(backends.flatMap((b) => b.capabilities.services))];
+  }
 
   async create(req: SandboxRequest): Promise<Sandbox> {
     // A replayed create can land after a restart, or after the backend list changed: the run's sandbox wins.

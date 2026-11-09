@@ -399,6 +399,13 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
+/** A launch refused for the repository's `services` this factory does not provide (ORC-282): said in the ticket's session. */
+function servicesUnavailable(missing: readonly string[], sandboxed: boolean): string {
+  const [which, it] = missing.length === 1 ? [`The service ${missing[0]} is`, 'it'] : [`The services ${missing.join(', ')} are`, 'them'];
+  const why = sandboxed ? `no sandbox backend of this factory provides ${it}` : 'this factory runs without sandboxes (FACTORY_CONTAINER_CLI), which provide none';
+  return `${which} not available: .factory/config.yml declares ${it} under \`services\`, and ${why}. No run starts without ${it}: take ${it} out of \`services\` or give the factory a backend that provides ${it}, then reply here.`;
+}
+
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
 const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
@@ -2516,6 +2523,9 @@ export class Orchestrator {
       // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
       // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
+      // Provided, or no run starts (ORC-282): never a setup nor an agent in an environment poorer than the repository declares.
+      const unprovided = config.services.filter((s) => !this.d.sandboxes?.services.includes(s));
+      if (unprovided.length) throw new Error(servicesUnavailable(unprovided, !!this.d.sandboxes));
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
       const cap = ticketTokenCap(this.d.perTicketTokens, config);

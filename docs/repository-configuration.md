@@ -38,7 +38,7 @@ network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (def
 | `commands` | `name: command` | `{}` | The repository's checks (`lint`, `typecheck`, `test`…), run by `verify` in file order, at network level `none`. Empty: the workflow's `jobs.<job>.verify`, until ORC-177. |
 | `env` | list of names | `[]` | Variables the runner receives: `setup`, agent, red check, and `verify`. See [Variables and secrets](#variables-and-secrets). |
 | `setup_secrets` | list of names | `[]` | Secrets that only `setup` receives, sealed before the agent starts. |
-| `services` | list | `[]` | Services the factory starts next to each attempt: `postgres` only (see [Services](#services)). Another name refuses the launch. |
+| `services` | list | `[]` | Services the factory starts next to each attempt: `postgres` only, with sandboxes (see [Services](#services)). Another name, or any on a daemon without sandboxes, refuses the launch. |
 | `sensitive_paths` | list of globs | `[]` | Globs from the root (`infra`, `src/auth*`, `**/migrations/**`, `src/**/*.sql`), dotfiles included and case ignored; a pattern that names a directory protects everything under it. What a branch changes in them once an untrusted run worked on it is refused by `verify` and the publication. A trusted branch may change them ([workflow](workflow.md#lifecycle-events-not-configurable)). |
 | `budgets.per_ticket_tokens` | integer > 0 | none | Token cap for the ticket's code runs (questions do not count): past it, the ticket is blocked before its next code run (ORC-340), kind `budget` (ORC-216). It can only lower the cap of `factory.yml`; `factory validate` refuses the preset when its worst case exceeds the lower of the two. |
 | `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Maximum diff size excluding tests; can only be tightened. |
@@ -82,7 +82,8 @@ The `setup` receives **no secrets** when its branch has commits beyond the defau
 - **No route.** Postgres runs in a network of its own, without route (`--network none`), as its image's user, without capabilities, under the same limits as the attempt's container, its data in memory. The attempt's containers join its loopback, which has no route either: nothing out, and no other attempt reaches it.
 - **Its secrets.** With `setup_secrets`, the database is dumped (`pg_dumpall`) once the `setup`'s container is gone, and searched for their values, in the spellings `sealSecrets` knows. A value found there blocks the ticket, naming the secret, never its value, and no agent starts. A secret transformed (hashed, encrypted, in a `bytea`) is not recognized, as on the disk.
 - **Gone with the attempt**: with its container, when the attempt ends, when its `setup` fails, and at the daemon's next start for an attempt that did not survive it.
-- The red check of a `tests` step and the visual proof get no database (see the known gaps in [`ports/sandbox-provider.md`](ports/sandbox-provider.md#known-gaps)).
+- **Provided, or refused (ORC-282).** A service no sandbox backend of the factory provides (any but `postgres`), or any service on a daemon without sandboxes (`FACTORY_CONTAINER_CLI` unset), refuses the launch before the `setup`: no sandbox, no run, and the ticket is blocked with a message that names the service. Never a run in an environment poorer than the one declared.
+- The red check of a `tests` step gets no database. The visual proof gets none either, so it takes no capture: a required proof is unavailable, naming the services (see the known gaps in [`ports/sandbox-provider.md`](ports/sandbox-provider.md#known-gaps)).
 
 ## What a configuration cannot do
 

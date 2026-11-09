@@ -55,6 +55,11 @@ describe('SandboxRouter', () => {
     expect(await router.exec('svc-1', ['pg_dumpall'])).toEqual(EXEC_PROBE.result);
   });
 
+  it('provides the services of its backends, each once (ORC-282)', () => {
+    const router = new SandboxRouter([backend('weak'), backend('pg', { ...L3, services: ['postgres'] }), backend('both', { ...L3, services: ['redis', 'postgres'] })]);
+    expect(router.services).toEqual(['postgres', 'redis']);
+  });
+
   it('refuses instead of falling back to a weaker backend, naming what is missing', async () => {
     const weak = backend('weak');
     const router = new SandboxRouter([weak]);

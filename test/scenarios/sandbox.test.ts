@@ -515,6 +515,39 @@ describe('a disposable sandbox per attempt', () => {
   });
 });
 
+/** ORC-282: a service the repository declares is provided, or no run starts: never a poorer environment than declared. */
+describe('a service nobody provides', () => {
+  const declares = (services: string) => async () => parseRepoConfig(`services: [${services}]\n`);
+
+  /** Blocked at the launch, nothing opened nor run, the ticket told which service is missing. */
+  async function refused(h: ReturnType<typeof createHarness>, service: string) {
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(h.sandboxes.created).toEqual([]);
+    expect(h.checks.calls).toEqual([]);
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: true });
+    expect(t.activeRunId).toBeUndefined();
+    expect(h.tracker.comments('REL-1').at(-1)).toContain(`The service ${service} is not available`);
+  }
+
+  it('no backend provides it: no sandbox, not even for the setup, and the ticket is blocked naming it', async () => {
+    await refused(createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig: declares('postgres, redis') }), 'redis');
+  });
+
+  it('without sandboxes, none is provided: no setup on the host, no run, the ticket blocked naming it', async () => {
+    await refused(createHarness({ projectYaml: SETUP, repoConfig: declares('postgres') }), 'postgres');
+  });
+
+  it('without services, the run starts as before', async () => {
+    const h = createHarness({ projectYaml: SETUP, repoConfig: async () => parseRepoConfig('services: []\n') });
+    await delegate(h);
+    expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
+    expect(h.runner.requests).toHaveLength(1);
+  });
+});
+
 /** ORC-217: the ticket's Claude session lives in its session dir; a review or a question starts afresh. */
 describe('the ticket session across attempts', () => {
   type H = ReturnType<typeof createHarness>;

@@ -257,6 +257,8 @@ async function planVisual(
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!v.start) proof.unavailable = 'no command starts the application (`workspace.preview`)';
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
+  // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
+  else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;
   else return { proof, shooting: { ...v, shooter: v.shooter, start: v.start } };
   return { proof };
 }
