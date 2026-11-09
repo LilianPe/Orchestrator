@@ -482,7 +482,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
     const ciBound = wf.limits.ciFixAttempts;
-    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated'];
+    // A human event that starts work, blocked or not (ORC-184), the repair of one included: `factory run repair` is an operator's.
+    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
