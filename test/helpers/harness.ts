@@ -30,14 +30,16 @@ import type { TestPreset } from './test-preset.js';
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
 /**
- * The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read.
+ * The standard pack (or `pack`, a copy a test changed: ORC-236) with `projectYaml` on top, as a project's workflow.yml; the
+ * temporary file is removed once read.
  * Without `aiReview`, `dev`'s end goes straight to Human Review, as before ORC-183, instead of starting the AI review's two
  * lenses, and `fix-ci`'s end starts no review either (ORC-184): what the scenarios of the other steps, the properties and the
  * recorded journals run on, their runs and moves counted without the review's. The review's own scenarios
- * (`test/scenarios/review.test.ts`) and the review loop's property run the pack as it ships.
+ * (`test/scenarios/review.test.ts`), the review loop's property and the golden replay run the pack as it ships.
  */
-export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean } = {}): Workflow {
-  const wf = projectYaml ? withProjectFile(projectYaml) : loadWorkflow({ packDir });
+export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean; pack?: string } = {}): Workflow {
+  const pack = o.pack ?? packDir;
+  const wf = projectYaml ? withProjectFile(projectYaml, pack) : loadWorkflow({ packDir: pack });
   if (o.aiReview) return wf;
   // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before.
   for (const job of Object.values(wf.jobs)) {
@@ -47,12 +49,12 @@ export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean }
   return wf;
 }
 
-function withProjectFile(projectYaml: string): Workflow {
+function withProjectFile(projectYaml: string, pack: string): Workflow {
   const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
   try {
     const projectFile = join(dir, 'workflow.yml');
     writeFileSync(projectFile, projectYaml);
-    return loadWorkflow({ packDir, projectFile });
+    return loadWorkflow({ packDir: pack, projectFile });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -244,10 +246,13 @@ export function createHarness(
     outputPolicy?: OrchestratorDeps['outputPolicy'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
+    /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
+    packDir?: string;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
-  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview });
+  const pack = opts.packDir ?? packDir;
+  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview, pack });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
@@ -283,7 +288,8 @@ export function createHarness(
       hostChecks: opts.hostChecks ?? true,
       originUrl: async () => '/origin',
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
-      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
+      // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.
+      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
     };
@@ -293,18 +299,20 @@ export function createHarness(
   // The fake build does what its skill says: it ends on a `submit_result` (ORC-136), on the store of the living process.
   runner.submit = (runId, output) => saveAgentOutput(life.store, runId, output);
   let n = 0;
+  // The bus of the process alive now, which a dashboard reads (ORC-301): each life has its own, as a process does.
+  let bus: EventBus;
   const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Orchestrator({
     store,
     clock,
     bus: (() => {
-      const bus = new EventBus();
+      bus = new EventBus();
       bus.subscribe((m) => void (m.kind === 'log' && logs.push({ level: m.level, message: m.message })));
       return bus;
     })(),
     scheduler: new Scheduler(store, { dev: devCapacity(opts.concurrency, workflow.limits.parallelSessions), questions: workflow.limits.questionSessions }),
     ...outside,
     projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}` }))],
-    packDir,
+    packDir: pack,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
@@ -389,6 +397,9 @@ export function createHarness(
     send, advance, restart, another, project,
     get orch() {
       return orch;
+    },
+    get bus() {
+      return bus;
     },
     /** The store of the process alive now; a brutal restart leaves the dead one's frozen. */
     get store() {

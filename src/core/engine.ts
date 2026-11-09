@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, CLARIFY_EXPIRED, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, NO_ASSESSMENT, PAUSED, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -54,6 +54,24 @@ const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.deleg
  */
 export function historyTaint(events: readonly FactoryEvent[]): Taint {
   return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
+}
+
+/**
+ * The Linear messages whose text `ingestedConversation` gives. A command is control, not knowledge; a review is GitHub's,
+ * untrusted whoever wrote it (ORC-160), so never given.
+ */
+const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
+
+/**
+ * What `learn` after a merge is given of the ticket's conversation, in place of reading the PR itself (ORC-361): the Linear
+ * messages the factory ingested, in their order, as it would hand them to an agent (`keepMessage`, `forAgent`). Only trusted
+ * ones, never one the matrix refused (`refused`, the ids of those events): untrusted content is never read as knowledge,
+ * whatever `historyTaint` lets through. What the forge holds that was never ingested (a comment on the PR's conversation, any
+ * review with GitHub webhooks off) is not in the journal, so not here either.
+ */
+export function ingestedConversation(events: readonly FactoryEvent[], refused: ReadonlySet<string> = new Set()): FeedbackItem[] {
+  const given = events.filter((e): e is HumanMessage => e.taint !== 'untrusted' && CONVERSATION.has(e.type) && !refused.has(e.id));
+  return forAgent(given.map((e) => messageItem(e, 'session'))).filter((i) => i.body.trim());
 }
 
 /** A review without a word (an approval, most often): it brings nothing a run reads. */
@@ -117,9 +135,9 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 }
 
 /**
- * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. The risk never goes down
- * (I4) and the visual proof only hardens to `required`. A ticket not complete enough, by intake's judgement or by the
- * deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
+ * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. Within a run the risk
+ * never goes down (I4) and the visual proof only hardens to `required`; a new run starts from neither (`newRun`). A
+ * ticket not complete enough, by intake's judgement or by the deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
  * Progress meanwhile. A complete one « blocked by » a ticket not done waits for it (ORC-363).
  */
 function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
@@ -771,9 +789,14 @@ const commandText = (event: FactoryEvent<'command'>): string => `${event.payload
 
 /** Records a human message: it waits in humanInbox for the next run that consumes it (I6), its taint with it (I12). */
 function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread'): void {
+  out.events.push({ type: 'feedback.appended', item: messageItem(event, source) });
+}
+
+/** A human message as an agent is handed it: kept in humanInbox (`keepMessage`), or given to `learn` (`ingestedConversation`). */
+function messageItem(event: HumanMessage, source: 'session' | 'thread'): FeedbackItem {
   const { author, kind } = event.payload;
   const body = event.type === 'command' && kind ? commandText(event) : event.payload.body;
-  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
+  return { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) };
 }
 
 /**
@@ -857,6 +880,8 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
 
 /** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
 export const AUTHZ_REFUSED = 'authz: refused ';
+/** The trace of a decision the authorization matrix refused (ORC-186): its refusal line, else undefined. */
+export const authzRefusal = (trace: readonly string[]): string | undefined => trace.find((t) => t.startsWith(AUTHZ_REFUSED));
 
 /**
  * Checks the matrix on the event's signed actor and the roles journaled with it (ORC-186). A refusal is
@@ -871,6 +896,8 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
   const verdict = allowed({ action, channel }, event.actor, ticket, matrix, event.roles);
   if (verdict.ok) return true;
   out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
+  // The dashboard is no Linear thread (ORC-301): its refusal is only traced, and logged, which its log shows.
+  if (channel === 'dashboard') return false;
   const body = refusalMessage(action, matrix, verdict.reason);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
@@ -1093,6 +1120,85 @@ function publishes(job: JobSpec): boolean {
   return !!job.repoChecks && !job.red;
 }
 
+/** The check of a human's push (ORC-159): no run made the commit, so the check's id names it, and the push's time. */
+const SHA = '[0-9a-f]{4,64}';
+const PUSH_CHECK = new RegExp(`^push-(${SHA})-\\d+$`);
+export const pushCheckId = (sha: string, at: number): string => `push-${sha}-${at}`;
+/** The commit a check of a human's push verifies; undefined for the check of a run. */
+const pushedHead = (runId: string): string | undefined => PUSH_CHECK.exec(runId)?.[1];
+
+/**
+ * The job whose checks a human's push goes through (ORC-159): the first the factory publishes. None on a version whose
+ * agents push themselves (frozen before ORC-125): their own pushes come in as `push.human`, and pause nothing.
+ */
+function pushCheckJob(workflow: Workflow): JobSpec | undefined {
+  return Object.values(workflow.jobs).find((j) => publishes(j) && j.workspace === 'worktree' && j.verifyFailure !== 'block');
+}
+
+/**
+ * A human pushed to the ticket's branch (ORC-159). The agent's work pauses: the run in flight stops, the check or the
+ * publication awaited and the waiting job go with it, and the ticket is blocked on the job the push interrupted, which a
+ * human's reply resumes. `verify` starts again from the pushed commit, as the forge holds it, in a fresh clone; its verdict
+ * is told then (`pushChecked`). A push of the commit `verify` last found green is the factory's own publication: nothing
+ * pauses. Nor does a ticket the factory does not work on (not delegated, delivered, stopped, its PR closed): the rules decide.
+ * A ticket blocked for another reason keeps it, and its push is checked all the same.
+ */
+function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: TicketState | undefined, ticket: TicketState | undefined, workflow: Workflow): Decision | undefined {
+  const { sha, author } = event.payload;
+  if (sha === state?.verifiedSha) {
+    out.trace.push(`push.human: ${sha} is the commit verify last found green, the factory's own publication`);
+    return out;
+  }
+  const job = pushCheckJob(workflow);
+  if (!job) return undefined;
+  // The commit shown to the reviewer is no longer the branch's: no approval from before the push passes a gate (I2).
+  if (state?.reviewSha) out.events.push({ type: 'ticket.patched', patch: { reviewSha: null } });
+  if (!ticket?.delegated || settledTicket(ticket) || ticket.prState === 'CLOSED' || !PUSH_CHECK.test(pushCheckId(sha, event.at))) return undefined;
+  if (!ticket.blocked || ticket.blockKind === 'human_push') {
+    cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
+    // A push on a paused ticket keeps the job the first one interrupted.
+    const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
+    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
+  } else {
+    // Its block, and the pending job a reply to it resumes, stay: only the run in flight stops.
+    out.trace.push(`push.human: ${author} pushed ${sha.slice(0, 12)}, the ticket stays blocked for its own reason`);
+    out.effects.push({ kind: 'stop_run' });
+  }
+  const runId = pushCheckId(sha, event.at);
+  out.events.push({ type: 'verify.started', runId });
+  out.effects.push({ kind: 'run_verify', runId, job: job.name, head: sha });
+  return out;
+}
+
+const pushed = (sha: string): string => `A human pushed ${sha.slice(0, 12)} to the ticket's branch`;
+
+/**
+ * The verdict of `verify` on a human's push (ORC-159). Green, the pushed commit is the one verified last: what a
+ * publication or a merge may carry. Either way the ticket stays paused and the human hears the verdict: a reply resumes
+ * the interrupted job on top of the push; a commit that fails waits for another push, or for a designated maintainer's
+ * `/refreeze` when it changes a frozen test. A ticket a human relaunched meanwhile, or blocked for another reason, goes on as it is.
+ */
+function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verify.failed' | 'verify.errored'>, head: string, ticket: TicketState | undefined, workflow: Workflow): Decision {
+  if (event.type === 'verify.passed') out.events.push({ type: 'ticket.patched', patch: { verifiedSha: event.payload.sha ?? head } });
+  if (!ticket?.blocked || ticket.blockKind !== 'human_push') {
+    out.trace.push(`${event.type} on the push of ${head.slice(0, 12)}: the ticket ${ticket?.blocked ? 'is blocked for another reason' : 'was relaunched meanwhile'}`);
+    return out;
+  }
+  const at = ticket.blockedJob ? { job: ticket.blockedJob, step: 'verify' } : { step: 'verify' };
+  const resume = 'reply to resume the agent: it rebases its work on top of your commits, and never pushes over them.';
+  if (event.type === 'verify.errored') {
+    // Still the push's block: a next push replaces it, and its verdict is told.
+    const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run: infrastructure failure.`;
+    return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
+  }
+  if (event.type === 'verify.failed') {
+    const reason = `${pushed(head)}: verify fails on it.`;
+    return block(out, workflow, { kind: 'human_push', ...failedChecks(reason, event.payload.failures), ...at, question: `Push a fix (it is checked again), or have a designated maintainer send /refreeze if it changes a frozen test on purpose; then ${resume}` });
+  }
+  const reason = `${pushed(head)}: verify passed on it, in a fresh clone. The agent's work is paused.`;
+  return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\nReply in this thread to resume the agent on top of it.`, ...at, tried: [`Checked the pushed commit ${head.slice(0, 12)} in a fresh clone of the forge: green.`], question: `Shall I go on? Move the ticket to AI Review to have your commits reviewed, or ${resume}` });
+}
+
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
 function backToReview(out: Decision, reason: string): Decision {
   out.trace.push(`not merged: ${reason}`);
@@ -1209,7 +1315,7 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
 /** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
-  return ticket.blocked && ticket.blockKind === 'stopped' ? 'stopped' : undefined;
+  return ticket.blocked && causeOf(ticket.blockKind) === 'stopped' ? 'stopped' : undefined;
 }
 
 /**
@@ -1318,10 +1424,22 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
+  if (event.type === 'ticket.delegated') newRun(out, state, workflow);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
   if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
   return out;
+}
+
+/**
+ * The boundary of a run (ORC-365): a delegation whose decision starts a dev run starts a new run, which takes its risk and
+ * its visual proof from its own assessment, not from the last run's (I4): they are cleared (`null`) until it assesses.
+ * A delegation that starts nothing (refused, a run active, a blocked ticket, one waiting on its blockers) leaves the run
+ * as it is; a ticket never assessed has nothing to clear, and patches nothing.
+ */
+function newRun(out: Decision, state: TicketState | undefined, workflow: Workflow): void {
+  const starts = out.effects.some((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
+  if ((state?.risk || state?.visualProof) && starts) out.events.push({ type: 'ticket.patched', patch: { risk: null, visualProof: null } });
 }
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */
@@ -1455,6 +1573,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.events.push({ type: 'ticket.patched', patch: { initiatorId: event.actor } });
     }
   }
+  if (event.type === 'verify.passed' || event.type === 'verify.failed' || event.type === 'verify.errored') {
+    const head = pushedHead(event.payload.runId);
+    if (head) return pushChecked(out, event, head, ticket, workflow);
+  }
   switch (event.type) {
     case 'control.pause':
       out.effects.push({ kind: 'set_paused', paused: true });
@@ -1462,8 +1584,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.resume':
       out.effects.push({ kind: 'set_paused', paused: false });
       return out;
-    case 'control.stop':
-      return stop(out, workflow);
+    case 'control.stop': {
+      const { runId, pause } = event.payload;
+      if (!authorize(out, event, ticket, pause ? 'pause_run' : 'stop_run', 'dashboard', matrix)) return out;
+      // Aimed at a run (the dashboard's inspection, ORC-301): once it has ended, another may be at work, which this stops not.
+      if (runId && ticket?.activeRunId !== runId) {
+        out.trace.push(`control.stop: run ${runId} is no longer the ticket's, nothing stopped`);
+        return out;
+      }
+      return pause ? stop(out, workflow, PAUSED, `Paused from the dashboard. ${relaunch(workflow)}`, 'paused') : stop(out, workflow);
+    }
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];
@@ -1531,13 +1661,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.lost': {
       const { runId, job, output } = event.payload;
       const recent = ticket ? recentCuts(ticket, event.at) : [];
+      const head = pushedHead(runId);
       if (recent.length >= CUT_RELAUNCHES) {
         // Nothing runs it any more: the ticket must not wait for its verdict, or no later start would pass it.
         out.events.push({ type: 'work.cancelled' });
-        return ticket?.blocked ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
+        // The check of a human's push: its block says it is being checked, and would say so for good.
+        const pushCheck = !!head && ticket?.blockKind === 'human_push';
+        return ticket?.blocked && !pushCheck ? out : blockOnCuts(out, workflow, job, checkOf(workflow, job));
       }
       out.events.push({ type: 'ticket.patched', patch: { cutRelaunches: [...recent, event.at] } });
-      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}) });
+      out.effects.push({ kind: 'run_verify', runId, job, ...(output ? { output } : {}), ...(head ? { head } : {}) });
       return out;
     }
     case 'verify.passed': {
@@ -1779,6 +1912,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
         out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
       }
+      break;
+    }
+    case 'push.human': {
+      const paused = humanPush(out, event, state, ticket, workflow);
+      if (paused) return paused;
       break;
     }
     case 'pr.merge_refused':

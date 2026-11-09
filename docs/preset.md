@@ -122,8 +122,10 @@ Before the ticket's first run (no Claude session yet), the factory runs the dete
 At its end, `decide` records the assessment in the ticket's state:
 
 - `size`, the last assessment's;
-- `risk`, the higher of the ticket's and the proposed one: the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`). Nothing resets it yet, a later run of the ticket included;
-- `visualProof: required` when the ticket speaks of a screen; never lifted: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+- `risk`, the higher of the ticket's and the proposed one: within a run, the risk never goes down (I4, property in `test/properties/decide.prop.test.ts`);
+- `visualProof: required` when the ticket speaks of a screen; never lifted within a run: the model cannot make visual proof `not_applicable`. Deciding it from the real diff is `verify`'s (ORC-176).
+
+A new run starts again from its own level (ORC-365). A delegation whose decision starts a run, on a ticket already assessed, marks the run's boundary: `risk` and `visualProof` go to `null`, a run not yet assessed, so the new run's intake sets them from what it proposes. A delegation that starts nothing (refused by the matrix, made while a run is active, on a blocked ticket, or one waiting on its blockers) leaves the run as it is. A ticket from before ORC-365 has no boundary marked: it stays in its run and decides as before.
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
@@ -254,7 +256,7 @@ After `red`, the factory freezes what judges the agent: the tests the `tests` st
 
 **`/refreeze`.** The only way out of the freeze: a designated maintainer (ORC-186's matrix) mentions the agent in the ticket with `/refreeze`, or replies `/refreeze` in its session. Before the decision, the factory reads the freeze at the branch's local head, without `fetch` (the already-frozen files and the harness), and journals it with the command; if accepted, it replaces the old one and the reply in the ticket gives the commit; the next verification starts from it. If refused (another role, unsigned actor, or no role resolved), the command is journaled (`authz: refused refreeze …`) and answered in the ticket, and the freeze does not move. Refreezing relaunches nothing: a Blocked ticket is relaunched as usual. On a ticket without a freeze, `/refreeze` does not create one: the reply says there is nothing to refreeze.
 
-**Not yet**: the check published on the PR (ORC-273); the worktree's uncommitted files are not read: a test left uncommitted is not frozen, but since ORC-151, with sandboxes, the `verify` commands do not see them either: they and the freeze read the same commit, in a fresh clone; a commit pushed outside the factory's worktree is only seen once pulled (ORC-159); a trunk change brought in by a `merge` or a `rebase` counts as a change since the freeze, and requires a `/refreeze`; only setups and fixtures named like the harness are frozen, an existing `test/setup.ts` is frozen only if the step changed it; `/refreeze` from a PR comment; the `freezes` table separate from the journal; the scan for disabled tests outside frozen files remains that of `anti-triche` (ORC-158).
+**Not yet**: the check published on the PR (ORC-273); the worktree's uncommitted files are not read: a test left uncommitted is not frozen, but since ORC-151, with sandboxes, the `verify` commands do not see them either: they and the freeze read the same commit, in a fresh clone; a trunk change brought in by a `merge` or a `rebase` counts as a change since the freeze, and requires a `/refreeze`; only setups and fixtures named like the harness are frozen, an existing `test/setup.ts` is frozen only if the step changed it; `/refreeze` from a PR comment; the `freezes` table separate from the journal; the scan for disabled tests outside frozen files remains that of `anti-triche` (ORC-158).
 
 ## The `factory/anti-triche` check (ORC-158, ORC-342)
 
@@ -276,7 +278,7 @@ Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`
 | A red CI comes into the inbox and the engine starts the step that handles it | ORC-134, ORC-270, ORC-184 | `github-webhook.test.ts`, « criterion 5 » (both); the mandatory « CI red 3 times »: `workflow.test.ts`, « CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run… » |
 | An AI review with a blocking finding starts the fix, on the same counter as red CI | ORC-184 | `review.test.ts`, « the review → fix loop (ORC-184) » |
 | A conflict with the default branch comes into the inbox and the engine starts the step that handles it | inbox: ORC-134; the step: ORC-146 (in progress) | inbox only: `github-webhook.test.ts`, « writes reviews and conflicts to the inbox without reacting to them yet » |
-| A human push on the branch starts again from `verify` | ORC-159 (not delivered) | none yet: the push only enters the inbox |
+| A human push on the branch starts again from `verify` | ORC-159 | `human-push.test.ts`, « criteria 1 and 2… », « criterion 3… », « criterion 4… »; `engine-push.test.ts`; `clean-verify.test.ts`, « a human's push on the agent's branch »; `publish.test.ts`, « criterion 2 of ORC-159… » |
 | A spec changed during the run starts again from `spec_review` | ORC-212 (not delivered) | none yet |
 | A PR closed by a human cancels the run | ORC-134 | `github-webhook.test.ts`, « criterion 4: a factory PR closed by a human without merge cancels the run » |
 | A cancelled ticket cancels the run | ORC-170 (its cancel) | `cancel.test.ts`, « ticket cancelled by a human (ORC-170) » |

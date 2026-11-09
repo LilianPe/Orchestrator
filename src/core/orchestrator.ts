@@ -18,7 +18,7 @@ import {
   type SandboxMount,
   type SandboxProvider,
 } from '../adapters/sandbox/types.js';
-import { ActivityRelay } from '../adapters/tracker/activity-relay.js';
+import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
@@ -51,7 +51,7 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { runMeasure } from './measures.js';
@@ -73,13 +73,12 @@ import {
   type QueueName,
   type FactoryEvent,
   type RunOutcome,
-  type Taint,
   type TicketState,
   type VerifyFailure,
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
@@ -371,6 +370,8 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
+/** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
+const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
 /** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
 const blockedOn = (workflow: Workflow, kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, ...(workflow.blockComment ? { job } : {}) });
@@ -703,12 +704,14 @@ export class Orchestrator {
     const rows = await store.listEffects(t.projectId, t.ticketId);
     if (rows.some((r) => (r.effect.kind === 'run_verify' || r.effect.kind === 'publish') && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
-    if (!run) {
+    // A human's push has no run (ORC-159): the effect of its check says under which job, as any check's does.
+    const job = run?.job ?? rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job;
+    if (!job) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
       await this.apply(t, { type: 'work.cancelled' });
       return;
     }
-    const output = await storedOutput(store, runId).catch(() => undefined);
+    const output = run ? await storedOutput(store, runId).catch(() => undefined) : undefined;
     await store.appendInbox({
       ...TRUSTED,
       // By its time: a check run again can be cut again, and the inbox keeps an id once.
@@ -717,7 +720,7 @@ export class Orchestrator {
       at: clock.now(),
       projectId: t.projectId,
       ticketId: t.ticketId,
-      payload: { runId, job: run.job, ...(output ? { output } : {}) },
+      payload: { runId, job, ...(output ? { output } : {}) },
     });
   }
 
@@ -985,7 +988,7 @@ export class Orchestrator {
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
   private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<Verified> {
-    const { sandboxes, runsDir, originUrl } = this.d;
+    const { sandboxes } = this.d;
     // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
     const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
     if (!sandboxes) {
@@ -1001,34 +1004,83 @@ export class Orchestrator {
       const blocking = [...paths, ...frozen];
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
     }
-    if (!runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
-    if (!t.branch || !t.worktreePath) throw new Error(`no branch or no worktree for ${t.ticketId}`);
+    // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
+    return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
+  }
+
+  /**
+   * `runCleanVerify` for the ticket under the checks of `job`, in a place of its own under `runsDir/<runId>`: the commit
+   * the agent's worktree holds, or with `head` a human's push, as the forge holds it (ORC-159).
+   */
+  private async cleanCheck(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, over: Pick<CleanVerifyRequest, 'green' | 'head' | 'humanHead'>): Promise<CleanVerifyResult> {
+    const { sandboxes, runsDir, originUrl } = this.d;
+    if (!sandboxes || !runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
+    if (!t.branch || (!over.head && !t.worktreePath)) throw new Error(`no branch or no worktree for ${t.ticketId}`);
     const untrusted = await this.untrustedMark(project, t);
     // A place the engine mounts from, new for each check: one cut can leave its own behind.
-    const workDir = join(runsDir, run.id, `verify-${randomUUID()}`);
+    const workDir = join(runsDir, runId, `verify-${randomUUID()}`);
     mkdirSync(workDir, { recursive: true });
     try {
       return await (this.d.cleanVerify ?? runCleanVerify)({
         sandboxes,
-        runId: run.id,
+        runId,
         ticketId: t.ticketId,
         branch: t.branch,
-        worktree: t.worktreePath,
+        worktree: t.worktreePath ?? '',
         originUrl: await originUrl(project),
         workDir,
         setup: project.workflow.workspace.setup,
         commands: job.verify,
         gitleaks: true,
-        ...(green ? { green } : {}),
+        ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
     } finally {
-      // Under the run's dir, purged with it: what the attack left unremovable costs no verdict.
+      // Under the check's dir, purged with it: what the attack left unremovable costs no verdict.
       await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
     }
+  }
+
+  /**
+   * `verify` on a human's push (ORC-159): the pushed commit as the forge holds it, in a fresh clone, under the checks of the
+   * job the factory publishes, the freeze included; never in the agent's worktree, and no run of it. Its verdict keeps the
+   * check's id. Without sandboxes there is no clone to check it in, so no verdict: an infrastructure failure.
+   */
+  private verifyPush(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'run_verify' }>, head: string): void {
+    const job = project.workflow.jobs[c.job];
+    // No longer awaited (a newer push, a stop): a replayed effect checks nothing.
+    if (!job || t.verifyingRunId !== c.runId) return;
+    const check = async () => {
+      if (!this.d.sandboxes) throw new Error(PUSH_NEEDS_SANDBOXES);
+      try {
+        return await this.cleanCheck(project, t, c.runId, job, { head });
+      } finally {
+        // The check's own folder: no run purges it.
+        if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
+      }
+    };
+    this.track(this.submitVerdict(project, t, c.runId, job, check));
+  }
+
+  /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
+  private async submitVerdict(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, check: () => Promise<Verified & { tree?: string }>, output?: AgentOutput): Promise<void> {
+    const base = { ...TRUSTED, at: this.d.clock.now(), projectId: project.id, ticketId: t.ticketId, id: `check:${runId}` };
+    const payload = { runId, job: job.name };
+    let res: Verified & { tree?: string };
+    try {
+      res = await check();
+    } catch (err) {
+      await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
+      return;
+    }
+    await this.submitResult(
+      res.ok
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}) } }
+        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } },
+    );
   }
 
   /**
@@ -1053,10 +1105,14 @@ export class Orchestrator {
     return since === null || since === undefined ? undefined : { since, humanPushes: t.humanPushes ?? [] };
   }
 
-  /** The taint of the ticket's journal, as a run reading the ticket and its PR takes it in (`historyTaint`, ORC-349). */
-  private async historyOf(project: ProjectRuntime, t: TicketState): Promise<Taint> {
-    // Only an untrusted event can taint it: the others are not upcast.
-    return historyTaint((await this.d.store.ticketJournal(project.id, t.ticketId)).filter((j) => j.event.taint === 'untrusted').map((j) => upcast(j.event)));
+  /**
+   * The ticket's journal, as a knowledge job reads the ticket: its taint (`historyTaint`, ORC-349) and its conversation
+   * (`ingestedConversation`, ORC-361), with the events whose decision the authorization matrix refused.
+   */
+  private async journalOf(project: ProjectRuntime, t: TicketState): Promise<{ events: FactoryEvent[]; refused: Set<string> }> {
+    const entries = await this.d.store.ticketJournal(project.id, t.ticketId);
+    const refused = new Set(entries.filter((j) => authzRefusal(j.decision?.trace ?? [])).map((j) => j.event.id));
+    return { events: entries.map((j) => upcast(j.event)), refused };
   }
 
   /** The one-time read of `untrustedMark`, for a ticket the mark has not seen; the ticket as it is otherwise. */
@@ -1551,6 +1607,7 @@ export class Orchestrator {
         return;
       }
       case 'run_verify': {
+        if (c.head) return this.verifyPush(project, t, c, c.head);
         const run = await store.getRun(c.runId);
         const job = project.workflow.jobs[c.job];
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
@@ -1570,19 +1627,7 @@ export class Orchestrator {
               );
               return;
             }
-            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
-            const payload = { runId: run.id, job: job.name };
-            let res: Verified;
-            try {
-              res = await this.verifyWork(project, t, run, job);
-            } catch (err) {
-              await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
-              return;
-            }
-            const event: FactoryEvent = res.ok
-              ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(c.output ? { output: c.output } : {}) } }
-              : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } };
-            await this.submitResult(event);
+            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job), c.output);
           })(),
         );
         return;
@@ -2313,7 +2358,8 @@ export class Orchestrator {
       const readsTicket = !fedUntrusted && (resume || knowledge);
       const seen = readsTicket ? await state(this.readUntrusted(project, t)) : t;
       const marked = typeof seen.untrustedSince === 'string';
-      const history = readsTicket && (marked || (knowledge && (await state(this.historyOf(project, t))) === 'untrusted'));
+      const journal = readsTicket && knowledge && !marked ? await state(this.journalOf(project, t)) : undefined;
+      const history = readsTicket && (marked || (!!journal && historyTaint(journal.events) === 'untrusted'));
       const sensitivePaths = fedUntrusted ?? (history ? SENSITIVE_PATHS : undefined);
       if (sensitivePaths && knowledge) {
         // As decide refuses it (I12), for what it could not see: untrusted content read at the launch.
@@ -2380,6 +2426,9 @@ export class Orchestrator {
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,
         input,
+        // A knowledge job without an input (`learn` after a merge) is given what the factory ingested of the ticket, and reads
+        // nothing else of the forge but the merged diff (ORC-361): a comment never ingested carries no taint.
+        conversation: journal && !input ? ingestedConversation(journal.events, journal.refused) : undefined,
         ...(job.lens ? { lens: job.lens } : {}),
         ...(reviewed ? { commit: reviewed } : {}),
         resumedAfterCut: !!opts.relaunchOf && resume,
@@ -2471,6 +2520,8 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
+          // Read by the pack's PreToolUse hook: a knowledge run reads of the forge only its ticket's merged diff (ORC-361).
+          ...(knowledge ? { FACTORY_KNOWLEDGE_RUN: '1', FACTORY_PR_URL: t.prUrl ?? '' } : {}),
           ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,
@@ -2548,7 +2599,11 @@ export class Orchestrator {
         // Its result given, a process that lingers is not silent: its end comes, whatever it writes until then.
         if (held && ev.kind === 'result') held.silentMs = Infinity;
         bus.publish({ kind: 'run', runId: run.id, ticketId: run.ticketId, ev });
-        relay.push(ev);
+        const activity = composedActivity(ev, step);
+        if (activity) {
+          bus.publish({ kind: 'activity', projectId: run.projectId, runId: run.id, ticketId: run.ticketId, activity, at: clock.now() });
+          relay.pushActivity(activity);
+        }
       }
       this.liveRuns.delete(run.id);
       if (!this.held.has(run.id)) return;

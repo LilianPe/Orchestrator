@@ -127,6 +127,12 @@ describe('attempt labels', () => {
     expect(promptTemplate(P)).not.toContain('REL-1');
   });
 
+  it("keeps learn's conversation out of the template: its messages are the ticket's, not what the job asks (ORC-361)", () => {
+    const said = (body: string) => ({ ...P, conversation: [{ author: 'Lilian', body, at: 1, source: 'session' as const }] });
+    expect(promptTemplate(said('garde le séparateur'))).toBe(promptTemplate(said('autre chose')));
+    expect(promptTemplate(said('garde le séparateur'))).not.toContain('garde le séparateur');
+  });
+
   it('changes the skills fingerprint when a skill file changes, and the config one when a hook or the settings change', async () => {
     const dir = tempPack();
     const skills = await skillsFingerprint(dir);

@@ -14,6 +14,7 @@ export const CAUSE_LABELS: Record<BlockCause, string> = {
   repo_config: 'Invalid repository configuration',
   dead_letter: 'Event set aside',
   pr_closed: 'PR closed without merge',
+  human_push: 'Human push on the branch',
   stopped: STOPPED,
   other: 'Other cause',
 };
@@ -30,6 +31,9 @@ export function formatDuration(ms: number): string {
 
 /** `1 turn`, `2 turns`. */
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** The time of a line of the log or of a run's feed. */
+export const clockTime = (at: number): string => new Date(at).toLocaleTimeString('en-US');
 
 export function formatTokens(n: number): string {
   if (n < 1_000) return String(n);

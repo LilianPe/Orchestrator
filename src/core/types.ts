@@ -27,8 +27,8 @@ export type ClarifyAnswer = Pick<FeedbackItem, 'author' | 'authorId' | 'at'> & {
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
-/** The higher of two risks: a proposal never lowers the run's (I4). */
-export const higherRisk = (held: Risk | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
+/** The higher of two risks: a proposal never lowers the run's (I4). A risk cleared by a new run (`null`, ORC-365) is none. */
+export const higherRisk = (held: Risk | null | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
 
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
 
@@ -337,7 +337,11 @@ export interface EventPayloads {
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
   'control.resume': Record<string, never>;
-  'control.stop': Record<string, never>;
+  /**
+   * `runId`: the run the dashboard's inspection stops (ORC-301), nothing once it has ended; absent, the ticket's work
+   * (the CLI, a row journaled before). `pause`: a pause of that run, a stop that says so.
+   */
+  'control.stop': { runId?: string; pause?: true };
   /** An outbox effect carried out (ORC-150). */
   'effect.done': EffectResultPayload;
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */
@@ -411,7 +415,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewBlocking' | 'contested'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -492,8 +496,11 @@ export interface TicketState {
   prUrl?: string;
   prChecks?: 'pending' | 'pass' | 'fail' | 'none';
   prState?: 'OPEN' | 'MERGED' | 'CLOSED';
-  /** The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148). */
-  reviewSha?: string;
+  /**
+   * The commit shown to the human reviewer, recorded at the move to Human Review: the only one a Done merges (ORC-148).
+   * `null` once a human pushed since (ORC-159): no approval from before the push passes a gate (I2).
+   */
+  reviewSha?: string | null;
   /** The status the factory itself moved the ticket to, while no human moved it since: its late webhook is an echo (ORC-148). */
   recordedStatus?: LogicalState;
   worktreePath?: string;
@@ -515,6 +522,11 @@ export interface TicketState {
   untrustedSince?: string | null;
   /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
   humanPushes?: { before?: string; after: string }[];
+  /**
+   * The last commit a human pushed to the branch that no publication of the factory carries yet (ORC-159): every check
+   * refuses a commit without it. `null` once a publication carried it, or the branch went back to the commit verified last.
+   */
+  humanHead?: string | null;
   pendingJob?: PendingJob;
   verifyAttempts: number;
   /** Unverified reds in blocking mode since the last verified one, bounded by the job's `red.attempts` (ORC-123). Absent before it. */
@@ -586,8 +598,11 @@ export interface TicketState {
   updatedAt: number;
   /** The size `intake` estimated (ORC-206), its last assessment. Absent until one. */
   size?: TicketSize;
-  /** The risk of the run (ORC-206): the highest any step proposed, never lowered (I4). Absent until `intake` assessed it. */
-  risk?: Risk;
+  /**
+   * The risk of the run (ORC-206): the highest any step of it proposed, never lowered within it (I4). Absent until `intake`
+   * assessed it. A delegation that starts a new run clears it (`null`, ORC-365): the new run's intake sets it from its own level.
+   */
+  risk?: Risk | null;
   /**
    * The `clarify` questions waiting for their answers (ORC-210): asked by the guard after `job` (intake) at `at`, the first
    * `answered` of them answered, in order. Not a block: the ticket waits, and whatever moves it on ends the wait (`reduce`).
@@ -596,8 +611,11 @@ export interface TicketState {
   clarify?: { job: string; questions: ClarifyQuestion[]; at: number; answered: number } | null;
   /** The answers accepted to the `clarify` questions (ORC-210): decisions of the ticket, given to its runs and kept with the freeze. */
   decisions?: ClarifyAnswer[];
-  /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
-  visualProof?: 'required';
+  /**
+   * Visual proof planned for the ticket (ORC-206): within a run, `intake` can only harden it to `required`, never lift it;
+   * a new run plans its own, cleared (`null`) like `risk` (ORC-365). Absent or `null`: undecided until `verify` (ORC-176).
+   */
+  visualProof?: 'required' | null;
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }
