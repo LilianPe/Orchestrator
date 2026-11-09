@@ -1729,6 +1729,10 @@
             "risks": [],
             "untested": [],
             "review_hints": []
+          },
+          "diffClass": {
+            "class": "normal",
+            "paths": []
           }
         }
       },

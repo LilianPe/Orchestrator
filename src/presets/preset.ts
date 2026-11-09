@@ -1,4 +1,5 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
+import type { Approvers } from '../core/diff-class.js';
 import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
 import { checkBudgets, type BudgetCaps } from './budget.js';
@@ -24,6 +25,11 @@ export interface Preset {
    * step, on the same counter, and no agent at work on another step resolves it.
    */
   conflict: FailureEdge;
+  /**
+   * Who approves a diff of each class (ORC-198): the authz actions (ORC-186) its approval takes, whose roles are the matrix's.
+   * Every class takes a human's `done_merge`: the factory never merges on its own.
+   */
+  approvers: Approvers;
 }
 
 export interface FailureEdge {
@@ -100,6 +106,9 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   if (!isPositiveInt(preset.silentRun.minutes)) violations.push('silentRun: minutes must be a positive integer');
   checkEdge('redCi', preset.redCi);
   checkEdge('conflict', preset.conflict);
+  for (const [cls, actions] of Object.entries(preset.approvers)) {
+    if (!actions.includes('done_merge')) violations.push(`approvers of ${cls}: a human done_merge is required, the factory never merges on its own`);
+  }
 
   for (const s of preset.steps) {
     const where = `step ${s.id}`;

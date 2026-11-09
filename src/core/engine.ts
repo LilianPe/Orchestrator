@@ -1,4 +1,5 @@
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
+import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
@@ -7,7 +8,9 @@ import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
+import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
+import { factoryDefault } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
@@ -463,6 +466,29 @@ export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec)
 }
 
 /**
+ * A diff of the verification configuration (ORC-198) whose class asks a designated maintainer's `/refreeze`, with a path the
+ * freeze of a `/refreeze` does not hold: publication waits. Once refrozen, `factory/tests-gelés` holds those files as approved.
+ */
+function unapprovedConfig(ticket: TicketState | undefined, diffClass: ClassifiedDiff): boolean {
+  const frozen = ticket?.frozenTests;
+  // Each path in a maintainer's freeze, where the check holds it; one outside (`.factory/**`, a workflow) was never approved.
+  return needsRefreeze(diffClass.class, factoryDefault.approvers) && !(frozen?.refrozenBy && diffClass.paths.every((p) => p in frozen.files));
+}
+
+/** The block of a refused publication: no job of its own, what relaunches it is a job that writes (`owedMove`), the rule's. */
+function publicationBlock(reason: string, job: string, relaunch = 'Reply in this thread to relaunch.'): Block {
+  return { kind: 'other', reason, body: `${reason}
+${relaunch}`, step: 'publish', tried: [`Publication of the commit of ${job}.`] };
+}
+
+/** The block of a diff of the verification configuration held before publication (ORC-198): a refused publication, its relaunch the same. */
+function configGate(diffClass: ClassifiedDiff, job: string): Block {
+  const named = diffClass.paths.slice(0, CLASS_PATHS).map(mdCode).join(', ') + (diffClass.paths.length > CLASS_PATHS ? `, and ${diffClass.paths.length - CLASS_PATHS} more` : '');
+  const reason = `Publication held: this diff changes the verification configuration (${named}). A designated maintainer reviews it and sends ${REFREEZE}, which freezes it as it is.`;
+  return publicationBlock(reason, job, 'Then reply in this thread to relaunch.');
+}
+
+/**
  * `/refreeze` (ORC-131): the freeze read at the branch's head before the decision replaces the old one, for a designated
  * maintainer only (ORC-186). Checked even on an event without resolved roles: a freeze never opens by default.
  */
@@ -477,7 +503,8 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   }
   const count = Object.keys(frozen.files).length;
   out.trace.push(`refreeze by ${event.actor}: ${count} files frozen at ${frozen.sha}`);
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...frozen, ...frozenDecisions(ticket), ...frozenCriteria(ticket) } } });
+  // Who refroze (ORC-198): the approval a diff of the verification configuration waits for before publication.
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...frozen, ...frozenDecisions(ticket), ...frozenCriteria(ticket), refrozenBy: event.actor! } } });
   answer(`Refrozen: ${count} files, as of commit ${frozen.sha.slice(0, 12)}. The next verification starts from this freeze.`);
   return out;
 }
@@ -1895,12 +1922,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!job) return out;
       // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
       const toPublish = publishes(job) ? event.payload.sha : undefined;
-      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
+      // The class verify read of this commit; a commit found green again keeps the one read of it before (ORC-198).
+      const diffClass = event.payload.diffClass ?? (event.payload.sha && event.payload.sha === ticket?.verifiedSha ? ticket.diffClass : undefined);
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(event.payload.sha && diffClass !== ticket?.diffClass ? { diffClass: diffClass ?? null } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
       const pending = ticket?.pendingJob;
       if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
+      if (toPublish && diffClass && unapprovedConfig(ticket, diffClass)) return ticket?.blocked ? out : block(out, workflow, configGate(diffClass, job.name));
       if (toPublish) {
         const { runId, output, commands, visualProof } = event.payload;
         out.events.push({ type: 'verify.started', runId });
@@ -1930,8 +1960,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'publish.refused': {
       const reason = `Publication refused: ${event.payload.reason}`;
-      // No job of its own: what relaunches it is a job that writes (`owedMove`), the rule's.
-      return ticket?.blocked ? out : block(out, workflow, { kind: 'other', reason, body: `${reason}\nReply in this thread to relaunch.`, step: 'publish', tried: [`Publication of the commit of ${event.payload.job}.`] });
+      return ticket?.blocked ? out : block(out, workflow, publicationBlock(reason, event.payload.job));
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;

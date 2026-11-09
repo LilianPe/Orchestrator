@@ -190,6 +190,9 @@ const isCheckRunRef = (r: unknown): r is Pick<CheckRunDto, 'id' | 'external_id'>
 
 const isCreated = (r: unknown): r is { id: number } => isRecord(r) && typeof r.id === 'number';
 
+/** A page of an issue's labels, as `setExclusiveLabel` reads it: each one's name. */
+const isLabels = (v: unknown): v is { name: string }[] => Array.isArray(v) && v.every((l) => isRecord(l) && typeof l.name === 'string');
+
 /** A page of a PR's reviews, as `postReview` reads it: each one's id and text (null for a review without one). */
 const isReviews = (v: unknown): v is { id: number; body: string | null }[] =>
   Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.id === 'number' && (r.body === null || typeof r.body === 'string'));
@@ -608,6 +611,27 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 422 && req.comments.length) throw new ReviewLinesRefused(err.message);
       throw err;
+    }
+  }
+
+  /** Its labels read first, every page: a label of the group in place, alone, writes nothing; one already gone (404) is no failure. */
+  async setExclusiveLabel(repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const path = `${repoApi(repo)}/issues/${number}/labels`;
+    const names: string[] = [];
+    for (let page = 1; ; page++) {
+      if (page > MAX_PAGES + 1) throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} labels, never read as complete`);
+      const list = await this.read('GET', `${path}?${new URLSearchParams({ per_page: '100', page: String(page) })}`, token, isLabels, 'a list of labels');
+      names.push(...list.map((l) => l.name));
+      if (list.length < 100) break;
+    }
+    // Added first: a failure between the two leaves a label of the group, never none.
+    if (!names.includes(label)) await this.call('POST', path, token, { labels: [label] });
+    for (const other of names.filter((n) => n !== label && group.includes(n))) {
+      await this.call('DELETE', `${path}/${encodeURIComponent(other)}`, token).catch((err: unknown) => {
+        if (!(err instanceof GitHubApiError && err.status === 404)) throw err;
+      });
     }
   }
 
