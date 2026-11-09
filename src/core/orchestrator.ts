@@ -93,7 +93,8 @@ import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type Fr
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
-import { captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import { changelogEntry, deliveredBody, mergedWork, type MergedPr } from './changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
@@ -1132,7 +1133,7 @@ export class Orchestrator {
       files.map(async ({ capture, png }) => {
         const path = join(dir, `${capture.sha256}.png`);
         await writeFile(path, png);
-        await this.d.store.putArtifact({ id: `visual:${runId}:${capture.side}:${capture.width}`, ticketId: t.ticketId, attemptId: runId, kind: 'visual-proof', path, sha256: capture.sha256, createdAt });
+        await this.d.store.putArtifact({ id: captureArtifactId(runId, capture), ticketId: t.ticketId, attemptId: runId, kind: 'visual-proof', path, sha256: capture.sha256, createdAt });
       }),
     );
   }
@@ -1775,6 +1776,8 @@ export class Orchestrator {
         return this.publishBundle(project, t, c, key);
       case 'close_take_over':
         return this.closeTakeOver(project.id, ticketId);
+      case 'after_merge':
+        return this.afterMerge(project, t, c, key);
       case 'cleanup':
         await this.d.workspaces.cleanup(project.id, ticketId);
         await this.apply(await this.ticket(project.id, ticketId), { type: 'workspace.released' });
@@ -1802,6 +1805,18 @@ export class Orchestrator {
     if (c.plan) await this.openPlan(t, c.linearSessionId);
     // Already made only if nothing was written here.
     return outcomes.length > 0 && outcomes.every((o) => o?.deduplicated) ? outcomes[0] : undefined;
+  }
+
+  /**
+   * The `after_merge` step (ORC-197). The changelog entry first, which needs nothing of Linear: appended once by the effect's key, never
+   * changed. Then the requester, the issue's creator, mentioned in the ticket's session with the merged PR's link. A replay finds both.
+   */
+  private async afterMerge(project: ProjectRuntime, t: TicketState, c: MergedPr, key: EffectKey): Promise<EffectOutcome | void> {
+    const events = (await this.d.store.ticketJournal(project.id, t.ticketId)).map((j) => upcast(j.event));
+    const appended = await this.d.store.appendChangelog(changelogEntry(key.id, t, c, mergedWork(events)));
+    const { creator } = await this.d.tracker.getIssue(t.ticketId);
+    const told = await this.activityOnce(await this.sessionFor(t), { type: 'response', body: deliveredBody(creator, c) }, key);
+    return !appended && told?.deduplicated ? told : undefined;
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */

@@ -1199,6 +1199,10 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
   if (rule.do === 'stop') stop(out, workflow);
+  if (rule.do === 'after_merge' && event.type === 'pr.merged') {
+    const { number, url, mergedAt, headSha, mergeSha } = event.payload;
+    out.effects.push({ kind: 'after_merge', number, url, at: mergedAt ?? event.at, ...(headSha ? { headSha } : {}), ...(mergeSha ? { mergeSha } : {}) }, { kind: 'cleanup' });
+  }
   if (rule.do === 'cleanup') out.effects.push({ kind: 'cleanup' });
   if (rule.do === 'propose_delegate') {
     out.effects.push({

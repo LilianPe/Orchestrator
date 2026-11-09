@@ -313,6 +313,10 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ...period, total: blocks.length, causes: blockPareto(blocks.map((b) => b.kind)) });
   }));
 
+  // The changelog (ORC-197), read-only: what the merged PRs delivered over a period, the last 7 days by default, the most recent first.
+  // Only the after_merge step appends to it.
+  app.get('/api/changelog', overPeriod(async (c, period) => c.json({ ...period, entries: await d.store.changelog(period.since, period.until) })));
+
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
   app.get('/api/events', (c) =>
