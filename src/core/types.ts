@@ -640,9 +640,9 @@ export interface TicketState {
   /**
    * The questions the answer agent could not answer (ORC-182), by its run, for the agent that implements: handed to its next
    * launch of the ticket session (`handedTo`, a relaunch of that attempt takes them again), answered at that run's end in the
-   * thread they were asked in. `null` once all are answered; absent on a ticket that never relayed one.
+   * thread they were asked in. Absent when none waits.
    */
-  relayed?: RelayedQuestion[] | null;
+  relayed?: RelayedQuestion[];
   priority: number;
   costUsd: number;
   updatedAt: number;

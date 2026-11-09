@@ -120,7 +120,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return { ...t, relayed: [...(t.relayed ?? []), e.question] };
     case 'relay.done': {
       const left = (t.relayed ?? []).filter((r) => r.handedTo !== e.runId);
-      return { ...t, relayed: left.length ? left : null };
+      return { ...t, relayed: left.length ? left : undefined };
     }
     case 'feedback.appended':
       return { ...t, humanInbox: withinBound([...t.humanInbox, e.item]) };

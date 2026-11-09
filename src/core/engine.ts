@@ -813,6 +813,15 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   return out;
 }
 
+/** A run, its check or a job waiting to start: the work whose end is the ticket's next step boundary. */
+const workInFlight = (t: TicketState): boolean => !!(t.activeRunId || t.verifyingRunId || t.pendingJob);
+
+/**
+ * The answer agent (ORC-182): a job of the questions queue on a clone of the trunk, read-only. The orchestrator gives its
+ * session the answerer's role, and only its `relay` reaches the agent that implements.
+ */
+export const isAnswerer = (job: JobSpec): boolean => job.queue === 'questions' && job.workspace === 'trunk-readonly';
+
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
 export function isQuestionSession(ticket: TicketState | undefined, sessionId: string | undefined): boolean {
   if (!ticket || !sessionId) return false;
@@ -962,7 +971,7 @@ function messageItem(event: HumanMessage, source: 'session' | 'thread', as?: { b
 function heldInbox(ticket: TicketState | undefined): string | undefined {
   // The block first: a pending job a dead settle left on a blocked ticket is no work in flight (ORC-339).
   if (ticket?.blocked) return 'held by the block';
-  if (ticket?.activeRunId || ticket?.verifyingRunId || ticket?.pendingJob) return 'held for the end of the work in flight';
+  if (ticket && workInFlight(ticket)) return 'held for the end of the work in flight';
   return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over';
 }
 
@@ -1057,7 +1066,7 @@ function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticke
   out.trace.push(`relay: the question of ${runId} waits for the agent that implements`);
   out.events.push({ type: 'relay.added', question: { runId, at: event.at } });
   // The run at work does not get it: the next launch of the ticket session does, which may be far off when nothing runs.
-  const when = ticket.activeRunId || ticket.verifyingRunId || ticket.pendingJob ? 'at the end of its current step' : 'when its next step starts (nothing runs on this ticket now)';
+  const when = workInFlight(ticket) ? 'at the end of its current step' : 'when its next step starts (nothing runs on this ticket now)';
   out.effects.push({ kind: 'activity', type: 'response', body: `The transcript and the code do not answer this: I am asking the agent that implements ${when}, and will relay its answer here.`, runId });
   return out;
 }
@@ -1919,7 +1928,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         const review = ticket?.reviewBlocking;
         if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
         // The answer agent's only: `learn` and `remember` share its queue, and no human question waits on them.
-        if (job.queue === 'questions' && job.workspace === 'trunk-readonly' && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket);
+        if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });

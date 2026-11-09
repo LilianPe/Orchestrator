@@ -100,7 +100,7 @@ describe('the answer agent (ORC-182)', () => {
     expect(next.prompt).toContain('## Questions relayed from humans');
     expect(next.prompt).toContain(`[${asked}] pourquoi pas du XLSX ?`);
     expect(h.tracker.activities('ls-1')).toContainEqual({ type: 'response', body: 'The agent that implements answers: Le ticket demande du CSV.' });
-    expect((await h.ticket()).relayed).toBeNull();
+    expect((await h.ticket()).relayed).toBeUndefined();
   });
 
   it('criterion 5: someone without a role that may answer clarify gets no answer agent', async () => {

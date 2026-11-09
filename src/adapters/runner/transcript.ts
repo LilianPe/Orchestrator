@@ -5,8 +5,14 @@ import type { Store } from '../../store/types.js';
 /** How long a run transcript is kept (ORC-132): the daemon purges older ones. */
 export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Bytes of a transcript's end `transcriptTail` reads: a long session's tail, never the whole file on a launch. */
-export const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+/**
+ * Bytes of a transcript's end `transcriptTail` reads: a long session's tail, never the whole file on a launch. About ten times
+ * what the answer agent keeps of it (`TRANSCRIPT_MAX`), for the tool results among the lines, which it drops.
+ */
+export const TRANSCRIPT_TAIL_BYTES = 128 * 1024;
+
+/** A run's transcript file; the run id kept to its safe characters, never a path. */
+export const transcriptPath = (dir: string, runId: string): string => join(dir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`);
 
 /**
  * The whole lines of the last `bytes` of a run's transcript (ORC-182): the line the cut falls in is dropped, a multibyte
@@ -15,7 +21,7 @@ export const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
 export function transcriptTail(dir: string, runId: string, bytes = TRANSCRIPT_TAIL_BYTES): string[] | undefined {
   let fd: number;
   try {
-    fd = openSync(join(dir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`), 'r');
+    fd = openSync(transcriptPath(dir, runId), 'r');
   } catch {
     return undefined;
   }

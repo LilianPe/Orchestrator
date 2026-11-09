@@ -458,6 +458,6 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     t = reduce(t, { type: 'relay.done', runId: 'r1' })!;
     expect(t.relayed).toEqual([handed('q2')]);
     t = reduce(reduce(t, { type: 'relay.handed', runIds: ['q2'], to: 'r2' })!, { type: 'relay.done', runId: 'r2' })!;
-    expect(t.relayed).toBeNull();
+    expect(t.relayed).toBeUndefined();
   });
 });

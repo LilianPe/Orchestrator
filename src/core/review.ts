@@ -20,9 +20,9 @@ export const DIFF_MAX = 60_000;
 
 /**
  * The diff, or past `max` the changed files (`stat`, read only then, cut at `max`); `undefined`, a diff whose reading stopped past the cap.
- * `past`: what the reader does past the cap; a clone that holds none of the changes (the answer agent's trunk) says so (ORC-182).
+ * `past`: what its reader does past the cap; a clone that holds none of the changes (the answer agent's trunk) says so (ORC-182).
  */
-export async function capDiff(diff: string | undefined, stat: () => Promise<string>, max = DIFF_MAX, past = 'read the changed files in the clone'): Promise<string> {
+export async function capDiff(diff: string | undefined, stat: () => Promise<string>, { max = DIFF_MAX, past = 'read the changed files in the clone' } = {}): Promise<string> {
   if (diff !== undefined && !diff.trim()) return '(no change against the trunk)';
   if (diff !== undefined && diff.length <= max) return diff;
   const files = await stat();

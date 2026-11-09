@@ -53,7 +53,7 @@ import type { Effect } from './decision.js';
 import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
+import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, isAnswerer, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork } from './intake-checks.js';
@@ -364,7 +364,7 @@ export function logicalFromName(states: Workflow['states'], name: string): Logic
 function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (ticketSession) return 'implementer';
   if (job.queue === 'dev') return 'reviewer';
-  return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
+  return isAnswerer(job) ? 'answerer' : undefined;
 }
 
 /** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
@@ -2555,7 +2555,7 @@ export class Orchestrator {
       const relayed = ticketSession && t.relayed?.length ? await state(this.relayedQuestions(t.relayed)) : [];
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
       const consumes = kind === 'feedback' || stepInbox.length > 0;
-      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, [...(consumes ? [...read, ...t.humanInbox] : read), ...relayed]);
+      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read) ?? (relayed.some((q) => q.untrusted) ? SENSITIVE_PATHS : undefined);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
       // session, what its earlier attempts read, which the branch's mark keeps (ORC-338); a knowledge job, whatever its
       // input, the ticket and its PR (`gh`, `/agent/issue`), so their whole history too. The mark read here serves below.
@@ -2646,7 +2646,7 @@ export class Orchestrator {
         ...(reviewed ? { commit: reviewed } : {}),
         resumedAfterCut: !!opts.relaunchOf && resume,
         ...(runContext ? { run: runContext } : {}),
-        ...(relayed.length ? { relayed: relayed.map((q) => ({ id: q.id, question: q.body })) } : {}),
+        ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
       const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
@@ -2768,17 +2768,10 @@ export class Orchestrator {
     }
   }
 
-  /** Each relayed question as the answer agent's run recorded it (ORC-182): its input is the question, its taint the question's. */
-  private async relayedQuestions(relayed: readonly RelayedQuestion[]): Promise<(FeedbackItem & { id: string })[]> {
+  /** Each relayed question as the answer agent's run recorded it (ORC-182): its input is the question, its mark the question's. */
+  private async relayedQuestions(relayed: readonly RelayedQuestion[]): Promise<{ id: string; question: string; untrusted: boolean }[]> {
     const runs = await Promise.all(relayed.map((r) => this.d.store.getRun(r.runId)));
-    return relayed.map((r, i) => ({
-      id: r.runId,
-      author: 'relayed',
-      body: runs[i]?.input?.text ?? '(the question is no longer recorded)',
-      at: r.at,
-      source: 'thread' as const,
-      taint: runs[i]?.sensitivePaths ? ('untrusted' as const) : ('trusted' as const),
-    }));
+    return relayed.map((r, i) => ({ id: r.runId, question: runs[i]?.input?.text ?? '(the question is no longer recorded)', untrusted: !!runs[i]?.sensitivePaths }));
   }
 
   /**
@@ -2792,13 +2785,16 @@ export class Orchestrator {
         this.log('warn', `answer of ${t.ticketId}: ${what} not read: ${err.message}`);
         return undefined;
       });
-    const lastImplementer = async () =>
-      (await this.d.store.ticketRuns(project.id, t.ticketId)).filter((r) => r.sessionRole === 'implementer').sort((a, b) => a.startedAt - b.startedAt).at(-1)?.id;
-    const [at, diff] = await Promise.all([
-      this.d.transcriptsDir ? quiet('the runs', lastImplementer()) : undefined,
+    const dir = this.d.transcriptsDir;
+    // Ordered by their start: the last implementer's is the session at work, or the one that worked last.
+    const lastTranscript = async (from: string) => {
+      const run = (await this.d.store.ticketRuns(project.id, t.ticketId)).findLast((r) => r.sessionRole === 'implementer');
+      return run && transcriptTail(from, run.id);
+    };
+    const [lines, diff] = await Promise.all([
+      dir ? quiet('the transcript', lastTranscript(dir)) : undefined,
       t.worktreePath ? quiet('the diff', this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath)).then((d) => d ?? '(the diff could not be read)') : undefined,
     ]);
-    const lines = at ? transcriptTail(this.d.transcriptsDir!, at) : undefined;
     const transcript = lines && formatTranscript(lines);
     const linked = formatLinked(blockers);
     return { state: formatRunState(t), ...(diff ? { diff } : {}), ...(transcript ? { transcript } : {}), ...(linked ? { linked } : {}) };

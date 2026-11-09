@@ -147,7 +147,7 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
 async function trunkDiff(git: CloneGit, trunk: string, head: string, past?: string): Promise<string> {
   const range = `${trunk}...${head}`;
   const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
-  return capDiff(diff, () => git.raw('diff', '--name-only', range), DIFF_MAX, past);
+  return capDiff(diff, () => git.raw('diff', '--name-only', range), { past });
 }
 
 export class GitWorkspaces implements WorkspaceManager {
@@ -283,8 +283,8 @@ export class GitWorkspaces implements WorkspaceManager {
   }
 
   async ticketDiff(repoPath: string, path: string): Promise<string | undefined> {
-    const at = await this.worktreeGit(repoPath, path);
-    return at && trunkDiff(at.git, await originHead(this.exec, repoPath), at.head, 'only the changed files are named here, and the clone is the trunk, which holds none of these changes');
+    const [at, trunk] = await Promise.all([this.worktreeGit(repoPath, path), originHead(this.exec, repoPath)]);
+    return at && trunkDiff(at.git, trunk, at.head, 'only the changed files are named here, and the clone is the trunk, which holds none of these changes');
   }
 
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {
