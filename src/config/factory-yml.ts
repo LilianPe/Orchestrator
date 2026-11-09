@@ -54,13 +54,13 @@ export interface ClaudeAccount {
  * The Claude account runs use (ORC-215): `claude.active` of `<home>/factory.yml` with its token, else the daemon's
  * `CLAUDE_CODE_OAUTH_TOKEN`. The file is read at each call and its `claude` section parsed again when the text changed:
  * a change of `active` counts from the next launch, without a restart. The first read throws as the daemon's start does;
- * a later file whose section does not parse keeps the last account, logged once for that text.
+ * later, a section that does not parse, or a file gone (an editor saving it), keeps the last account, logged once per fault.
  */
 export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = process.env, log: (m: string) => void = () => {}): () => ClaudeAccount {
   const file = join(home, 'factory.yml');
   const read = () => (existsSync(file) ? readFileSync(file, 'utf8') : undefined);
   const resolve = (text: string | undefined): ClaudeAccount => {
-    const claude = text === undefined ? undefined : section(text, 'claude');
+    const claude = text === undefined ? undefined : topLevelKey(text, 'claude');
     const yml = claude === undefined ? undefined : parseFactoryYml(stringify({ claude }), env);
     const chosen = activeClaudeToken(yml);
     if (chosen) return { name: yml!.claude!.active, token: chosen };
@@ -69,21 +69,27 @@ export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = proce
   };
   let text = read();
   let current = resolve(text);
+  let fault: string | undefined;
   return () => {
     try {
       const next = read();
-      if (next === text) return current;
-      text = next;
-      current = resolve(next);
+      if (next === undefined && text !== undefined) throw new Error('the file is gone');
+      if (next !== text) {
+        text = next;
+        current = resolve(next);
+      }
+      fault = undefined;
     } catch (err) {
-      log(`Warning: factory.yml: the Claude account is not read again, ${current.name ?? 'default'} stays active: ${(err as Error).message}`);
+      const message = (err as Error).message;
+      if (message !== fault) log(`Warning: factory.yml: the Claude account is not read again, ${current.name ?? 'default'} stays active: ${message}`);
+      fault = message;
     }
     return current;
   };
 }
 
 /** The value of a top-level key of the file, undefined when absent or null. Unreadable YAML is a FactoryYmlError. */
-function section(text: string, key: string): unknown {
+function topLevelKey(text: string, key: string): unknown {
   let raw: unknown;
   try {
     raw = parse(text);
@@ -146,7 +152,7 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
 export function loadFactoryBudgets(home: string): FactoryYml['budgets'] {
   const file = join(home, 'factory.yml');
   if (!existsSync(file)) return undefined;
-  const budgets = section(readFileSync(file, 'utf8'), 'budgets');
+  const budgets = topLevelKey(readFileSync(file, 'utf8'), 'budgets');
   return budgets === undefined ? undefined : parseFactoryYml(stringify({ budgets })).budgets;
 }
 
