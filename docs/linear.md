@@ -84,7 +84,7 @@ Its cadence is a **timer in the database** (ORC-185): each project's pseudo-tick
 | `/status`, `/stop` as a reply in a session | The ticket's state read from the projection, without a model; the stop, like the stop button. |
 | `/approve`, `/changes <comment>`, `/reject` as a reply in the ticket's session | The spec gate, when the repository runs `spec_draft` (ORC-212, [preset](preset.md#spec_draft-spec_check-and-the-spec_review-gate-orc-212)): approves the published version, asks for a new one, or rejects it. Validators only, never the run's initiator. |
 | Move from *Human Review* to *In Progress* | `dev-feedback` run (feedback from the PR and the thread). |
-| Move to *AI Review* | `review` run (AI review loop), then back to *Human Review* for human review. |
+| Move to *AI Review* | The AI review of the published commit again (two read-only lenses, findings on the PR, ORC-183), then back to *Human Review*. `dev`'s end starts it by itself. |
 | `@relais <question>` in a comment | Read-only answer (`ask`), including on a non-delegated ticket. |
 | `@relais retiens <fait>` | PR in the knowledge repository (`remember`). |
 | `@relais fais-le` | Reminds that the ticket must be delegated. |

@@ -24,6 +24,27 @@ export const intakeAssessmentSchema = z
   .strict()
   .refine((a) => a.complete || a.missing.length > 0, { path: ['missing'], message: 'at least one question when the ticket is not complete' });
 
+/** How a review lens weighs a finding (ORC-183): only a `blocking` one fails `factory/review`. */
+export const FINDING_SEVERITIES = ['blocking', 'minor', 'out_of_scope'] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+
+/**
+ * A finding of a review lens (ORC-183), on a line of the commit it read. `fact`: the id of the Claim Ledger fact it violates,
+ * once the reviewers get the facts of the diff's paths as a checklist (ORC-254), to measure their misses (ORC-229).
+ */
+export const findingSchema = z
+  .object({
+    file: item.min(1),
+    line: z.number().int().positive(),
+    severity: z.enum(FINDING_SEVERITIES),
+    explanation: z.string().min(1).max(OUTPUT_LIMITS.field),
+    suggestion: z.string().max(OUTPUT_LIMITS.field),
+    fact: item.min(1).optional(),
+  })
+  .strict();
+
+export type Finding = z.infer<typeof findingSchema>;
+
 /**
  * The three conflicts with the default branch the rebase step leaves to a human (ORC-146): the two sides contradict each
  * other, two migrations change the same schema, or the resolution goes beyond the ticket's scope.
@@ -61,6 +82,8 @@ export const agentOutputSchema = z
     intake: intakeAssessmentSchema.optional(),
     /** The `spec_draft` step's spec (ORC-212): `spec_check` judges it, the factory publishes it. */
     spec: specSchema.optional(),
+    /** A review lens's findings (ORC-183), an empty list when it found nothing: the factory publishes them, never its summary alone. */
+    findings: z.array(findingSchema).max(OUTPUT_LIMITS.findings).optional(),
   })
   .strict()
   .superRefine((o, ctx) => {

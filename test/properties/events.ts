@@ -31,8 +31,8 @@ export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
 const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'ask', 'learn', 'remember', 'unknown'] as const;
-const DEV_JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review'] as const;
+const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
+const DEV_JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'review', 'review-security'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 /** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
 const FREEZES: readonly FrozenTests[] = [

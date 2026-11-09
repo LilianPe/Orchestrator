@@ -21,6 +21,8 @@ on:
     - { when: "state in [todo, dev] && !blocked", run: dev }
   status.changed:
     - { from: human_review, to: dev, run: dev-feedback }
+    # The review starts once `dev` is published (its `on_success`). A human's move to AI Review reviews the published commit
+    # again: how a commit published by `dev-feedback` gets a review, until ORC-184 chains it after every fix.
     - { to: ai_review, run: review }
   session.prompted:
     - { when: "blocked", run: dev-feedback, debounce: 0s }
@@ -73,7 +75,8 @@ jobs:
     # The repository's commands and the checks of the diff, in a fresh clone (ORC-151): every job that writes code.
     repo_checks: true
     on_start: { move: dev }
-    on_success: { move: human_review, post: summary }
+    # Published, then the AI review (ORC-183), whose end shows the PR in Human Review.
+    on_success: { move: ai_review, post: summary, run: review }
   # The `spec_draft` step of factory/default (ORC-212): writes the spec through `submit_result`, nothing in the
   # worktree. Its end is `spec_check`, then the spec is published and waits for a validator's `/approve`
   # (`spec_review`), which starts `tests`. Off until a rule runs it (intake's `on_success: { run: spec }`).
@@ -124,17 +127,23 @@ jobs:
     pickup: false
     on_start: {}
     on_success: {}
+  # The `review` step of factory/default (ORC-183): two read-only lenses on Opus, each in a fresh session, on a fresh clone
+  # of the published commit, with the Read, Grep and Glob tools only, at network claude-api. Each hands back its findings
+  # through `submit_result`; the second publishes both, as a GitHub review and the `factory/review` check.
   review:
     step: review
     queue: dev
     model: opus
-    workspace: worktree
+    workspace: published
     session: new
     skill: "factory:review"
-    # It brings a push into its worktree: that commit needs its own green `verify`, and the review does not fix it.
-    repo_checks: true
-    verify_failure: block
-    on_success: { move: human_review, post: synthesis }
+    lens: correctness
+    structured_output: true
+    on_success: { run: review-security }
+  review-security:
+    extends: review
+    lens: security
+    on_success: { move: human_review, post: review }
   ask:
     queue: questions
     model: sonnet

@@ -241,13 +241,13 @@ export function stepPolicy(config: RepoConfig, step: NetworkLevel = 'limited'): 
 }
 
 /**
- * An agent run's policy (ORC-209 C): the repository's level, the Claude API kept for a repository at `none`, as
- * the MVP doc says of a step that calls the agent: without it, no run can start.
- * ponytail: every agent run at the repository's level; the step's own level (`stepPolicy(config, step)`, the
- * preset's `review` at `claude-api`) applies once the review needs no network (ORC-322).
+ * An agent run's policy (ORC-209 C): its step's level narrowed by the repository's, the Claude API kept for a repository at
+ * `none`, as the MVP doc says of a step that calls the agent: without it, no run can start. The preset's `review` runs at
+ * `claude-api` (ORC-183): it reads a clone the factory made and has no tool that reaches anything else. A job out of the
+ * preset (`ask`, `learn`) has no step, and runs at the repository's level.
  */
-export function agentPolicy(config: RepoConfig): EgressPolicy {
-  const p = stepPolicy(config);
+export function agentPolicy(config: RepoConfig, step?: NetworkLevel): EgressPolicy {
+  const p = stepPolicy(config, step);
   return p.level === 'none' ? { level: 'claude-api', allow: [] } : p;
 }
 

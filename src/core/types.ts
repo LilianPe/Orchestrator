@@ -72,7 +72,8 @@ export type Stagnation =
   | { kind: 'silent'; silentMs: number };
 
 /** `spec_check`: what the factory's check of a spec found wrong, with the refused draft (ORC-212). */
-export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'spec_check';
+/** `diff`: the published commit's diff an AI review reads (ORC-183). */
+export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'spec_check' | 'diff';
 export type QueueName = 'dev' | 'questions';
 
 /** What a human message asks for (ORC-180), classified at its arrival and journaled with it. */

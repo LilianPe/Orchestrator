@@ -8,20 +8,18 @@ const issue = { identifier: 'REL-12', title: 'Export CSV', description: 'Exporte
 
 describe('buildPrompt', () => {
   it('builds a dev prompt with branch', () => {
-    expect(buildPrompt({ skill: 'factory:dev', issue, branch: 'factory/rel-12-export-csv', reviewRounds: 5 })).toBe(
+    expect(buildPrompt({ skill: 'factory:dev', issue, branch: 'factory/rel-12-export-csv' })).toBe(
       '/factory:dev\n\n## Ticket REL-12 — Export CSV\nURL: https://linear.app/x/REL-12\nBranch: factory/rel-12-export-csv\n\nExporter les audits.\n',
     );
   });
 
-  it('adds review rounds, context and input sections', () => {
+  it('adds context and input sections', () => {
     const out = buildPrompt({
-      skill: 'factory:review',
+      skill: 'factory:feedback',
       issue: { ...issue, description: '' },
       promptContext: '<issue>…</issue>',
       input: { kind: 'feedback', text: '- **L** : x' },
-      reviewRounds: 4,
     });
-    expect(out).toContain('Max review rounds: 4');
     expect(out).toContain('(no description)');
     expect(out).toContain('## Linear context\n<issue>…</issue>');
     expect(out).toContain('## Feedback to address\n- **L** : x');
@@ -35,8 +33,15 @@ describe('buildPrompt', () => {
   });
 
   it('renders the PR url after the branch line', () => {
-    const out = buildPrompt({ skill: 'factory:review', issue, branch: 'b', prUrl: 'https://github.com/o/r/pull/3', reviewRounds: 2 });
-    expect(out).toContain('Branch: b\nPR: https://github.com/o/r/pull/3\nMax review rounds: 2');
+    const out = buildPrompt({ skill: 'factory:dev', issue, branch: 'b', prUrl: 'https://github.com/o/r/pull/3' });
+    expect(out).toContain('Branch: b\nPR: https://github.com/o/r/pull/3\n');
+  });
+
+  it('gives an AI review its lens, the published commit and the diff, and no review rounds: it fixes nothing (ORC-183)', () => {
+    const out = buildPrompt({ skill: 'factory:review', issue, prUrl: 'https://github.com/o/r/pull/3', lens: 'security', commit: 'abc123', input: { kind: 'diff', text: 'diff --git a/x b/x' } });
+    expect(out).toContain('PR: https://github.com/o/r/pull/3\nLens: security\nCommit: abc123\n');
+    expect(out).toContain('## Diff to review\ndiff --git a/x b/x');
+    expect(out).not.toContain('review rounds');
   });
 });
 
@@ -106,12 +111,12 @@ describe('repository conventions (ORC-284)', () => {
   });
 
   it('injects them as data the factory outranks, after the ticket', () => {
-    const out = buildPrompt({ skill: 'factory:dev', issue, conventions: '### CLAUDE.md\nnpm test', input: { kind: 'thread', text: 'go' }, reviewRounds: 1 });
+    const out = buildPrompt({ skill: 'factory:dev', issue, conventions: '### CLAUDE.md\nnpm test', input: { kind: 'thread', text: 'go' } });
     expect(out).toContain('## Repository conventions (data)');
     expect(out).toContain('the factory wins');
     expect(out).toContain('<repo-conventions>\n### CLAUDE.md\nnpm test\n</repo-conventions>');
     expect(out.indexOf('Exporter les audits.')).toBeLessThan(out.indexOf('## Repository conventions'));
-    expect(buildPrompt({ skill: 'factory:dev', issue, reviewRounds: 1 })).not.toContain('Conventions');
+    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('Conventions');
   });
 });
 
