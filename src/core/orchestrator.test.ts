@@ -435,7 +435,9 @@ describe('Orchestrator', () => {
       await orch.accept(delegated());
       await orch.drained();
       expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
-      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ key: 'REL-1:usage.reset', kind: 'usage.reset', payload: { job: 'dev', account: 'default' }, fireAt: 1_000_000 }]);
+      // The cut step waits in line as a relaunch of the cut run, held by the account's limit (ORC-357): no timer of its own.
+      expect(await store.listQueue()).toMatchObject([{ ticketId: 'REL-1', job: 'dev', relaunchOf: runner.requests[0]!.runId }]);
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toEqual([]);
     });
 
     it('a run that spends what the ticket had left is blocked, kind budget, with the standard comment (ORC-216)', async () => {
@@ -472,43 +474,75 @@ describe('Orchestrator', () => {
       s.runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
       await s.orch.accept(delegated());
       await s.orch.drained();
-      const reset = (): FactoryEvent => ({ ...TRUSTED, id: 'timer:REL-1:usage.reset:1000000', type: 'timer.fired', at: 1_000_000, projectId: 'p', ticketId: 'REL-1', payload: { kind: 'usage.reset', payload: { job: 'dev', runId: s.runner.requests[0]!.runId } } });
+      /** The reset passed: the tick drains the queues. */
+      const reset = async () => {
+        s.clock.set(1_000_000);
+        await s.orch.tick();
+        await s.orch.drained();
+      };
       return { ...s, reset };
     }
 
     it('the limit is the account: no launch of any ticket until the reset, then the cut step first, as a relaunch of what it read', async () => {
-      const { store, runner, orch, clock, reset } = await cutByTheLimit();
+      const { store, runner, orch, reset } = await cutByTheLimit();
       const cut = runner.requests[0]!;
       await orch.accept({ ...TRUSTED, id: 'e2', type: 'ticket.delegated', at: 2_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
       await orch.drained();
       await orch.tick();
       expect(runner.requests).toHaveLength(1);
-      expect((await store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-2']);
-      clock.set(1_000_000);
-      await orch.accept(reset());
-      await orch.drained();
+      expect((await store.listQueue()).map((q) => q.ticketId)).toEqual(['REL-1', 'REL-2']);
+      await reset();
       await orch.tick();
       await orch.drained();
-      const relaunch = runner.requests[1]!;
+      // Both start once the hold is lifted, in parallel slots: found by their ticket, not by the order the runner got them.
+      const after = runner.requests.slice(1);
+      const tickets = await Promise.all(after.map(async (r) => (await store.getRun(r.runId))!.ticketId));
+      expect(tickets.toSorted()).toEqual(['REL-1', 'REL-2']);
+      const relaunch = after[tickets.indexOf('REL-1')]!;
       expect(await store.getRun(relaunch.runId)).toMatchObject({ ticketId: 'REL-1', job: 'dev' });
       // The implementer's session, taken up: a relaunch of the cut run, not a step from scratch.
       expect(relaunch).toMatchObject({ claudeSessionId: cut.claudeSessionId, resume: true });
-      expect((await store.getRun(runner.requests[2]!.runId))!.ticketId).toBe('REL-2');
     });
 
     it("holds the ticket's next steps behind the cut one: they wait for it, never start in its place", async () => {
-      const { store, runner, orch, clock, reset } = await cutByTheLimit();
+      const { store, runner, orch, reset } = await cutByTheLimit();
       await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, pendingJob: { job: 'dev-feedback' } });
-      clock.set(1_000_000);
-      // A result settles the ticket: settle would start the pending job, which waits behind the cut step.
-      await orch.accept({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 1_000_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
+      // A result settles the ticket: settle starts the pending job, which the limit puts in line behind the cut step.
+      await orch.accept({ ...TRUSTED, id: 'v1', type: 'verify.passed', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { runId: 'old', job: 'dev' } });
       await orch.drained();
       expect(runner.requests).toHaveLength(1);
-      expect((await store.getTicket('p', 'REL-1'))!.pendingJob).toMatchObject({ job: 'dev-feedback' });
-      await orch.accept(reset());
-      await orch.drained();
+      expect((await store.listQueue()).map((q) => q.job)).toEqual(['dev', 'dev-feedback']);
+      await reset();
       // The cut step again, then, once it ended, the step that waited behind it.
       expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
+    });
+
+    it('a step deferred behind the cut one is kept, and follows its relaunch (ORC-357)', async () => {
+      const { store, tracker, runner, orch, clock } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 }, hold: true });
+      await orch.accept(delegated());
+      await orch.drained();
+      // A reply came in while it ran: its start waits behind the run.
+      await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, pendingJob: { job: 'dev-feedback' } });
+      runner.release(runner.requests[0]!.runId);
+      await orch.drained();
+      expect((await store.listQueue()).map((q) => [q.job, q.relaunchOf])).toEqual([['dev', runner.requests[0]!.runId], ['dev-feedback', undefined]]);
+      clock.set(1_000_000);
+      await orch.tick();
+      await orch.drained();
+      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
+    });
+
+    it('an operator who lowers the recorded hold lifts it (ORC-357)', async () => {
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(await orch.usageLimitedUntil()).toBe(1_000_000);
+      await store.setMeta('usage-limited-until:default', '0');
+      expect(await orch.usageLimitedUntil()).toBeUndefined();
     });
 
     it("a reset already past waits 5 minutes at least; the hold is the active account's, logged and shown", async () => {
@@ -541,21 +575,63 @@ describe('Orchestrator', () => {
       runner.release(runId);
       await orch.drained();
       expect(await orch.usageLimitedUntil()).toBeUndefined();
-      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ kind: 'usage.reset', payload: { account: 'acc-1' } }]);
       account = 'acc-1';
       expect(await orch.usageLimitedUntil()).toBe(1_000_000);
     });
 
-    it('a store that fails to record the hold never holds back the result: the step still waits for its reset', async () => {
-      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
+    it('a store that fails to record the hold never holds back the result, nor loses the hold: no launch until the reset (ORC-357)', async () => {
+      const { store, tracker, runner, orch, clock } = setup({ onUsageLimit: 'wait' });
       tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      tracker.addIssue({ identifier: 'REL-2', title: 'B' });
       const setMeta = store.setMeta.bind(store);
       vi.spyOn(store, 'setMeta').mockImplementation(async (key, value) => (key.startsWith('usage-limited-until') ? Promise.reject(new Error('disk full')) : setMeta(key, value)));
       runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
       await orch.accept(delegated());
       await orch.drained();
-      expect(await store.getTicket('p', 'REL-1')).toMatchObject({ blocked: false, usageWait: { job: 'dev' } });
-      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toHaveLength(1);
+      expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
+      expect(await orch.usageLimitedUntil()).toBe(1_000_000);
+      await orch.accept({ ...TRUSTED, id: 'e2', type: 'ticket.delegated', at: 2_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+      await orch.drained();
+      await orch.tick();
+      // Neither the cut step nor another ticket hits the limit again before its reset.
+      expect(runner.requests).toHaveLength(1);
+      clock.set(1_000_000);
+      await orch.tick();
+      await orch.drained();
+      expect(runner.requests.length).toBeGreaterThan(1);
+    });
+
+    it('a cut recover() finds after a long stop is not held 5 more minutes: its step starts again at once (ORC-357)', async () => {
+      const { store, tracker, runner, orch, clock } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      await orch.accept(delegated());
+      await orch.drained();
+      const done = (await store.runsByStatus('success'))[0]!;
+      // A run cut by the limit until 500 000, recorded; the daemon died before sending its result.
+      await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, logical: 'dev', activeRunId: 'r-cut', activeJob: 'dev', blocked: false });
+      await store.putRun({ ...done, id: 'r-cut', token: 't-cut', job: 'dev', status: 'failure', endedAt: 400_000, usageLimit: { resetAt: 500_000 } });
+      clock.set(10_000_000);
+      const before = runner.requests.length;
+      await orch.recover();
+      await orch.replayInbox();
+      await orch.drained();
+      expect(await orch.usageLimitedUntil()).toBeUndefined();
+      expect(runner.requests).toHaveLength(before + 1);
+      expect(await store.getRun(runner.requests.at(-1)!.runId)).toMatchObject({ ticketId: 'REL-1', job: 'dev' });
+    });
+
+    it('a drain reads the hold once, not at each item it hands out (ORC-357)', async () => {
+      const { store, tracker, runner, orch, scheduler } = setup({ onUsageLimit: 'wait' });
+      for (const id of ['REL-1', 'REL-2', 'REL-3']) {
+        tracker.addIssue({ identifier: id, title: id });
+        // Held: no end, no settle and its drains.
+        runner.enqueue({ hold: true });
+        await scheduler.enqueue({ projectId: 'p', ticketId: id, job: 'ask', queue: 'questions', priority: 0, enqueuedAt: 1 });
+      }
+      const getMeta = vi.spyOn(store, 'getMeta');
+      await orch.tick();
+      await orch.drained();
+      expect(getMeta.mock.calls.filter(([key]) => key.startsWith('usage-limited-until'))).toHaveLength(1);
     });
 
     it('a budget block says in its state line the same figure as its reason: code runs only', async () => {
