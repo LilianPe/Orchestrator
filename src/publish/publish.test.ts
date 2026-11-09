@@ -337,6 +337,25 @@ describe('GitPublisher', () => {
       expect(s.onForge()).toBe(sha);
     });
 
+    it('criterion 2 of ORC-159: work rebased on a human push goes out fast-forward, the human commit under it', async () => {
+      const s = setup();
+      await s.publisher.publish(s.request());
+      // The agent committed meanwhile, unpublished: its branch and the forge's diverge.
+      write(s.repo, 'a.txt', 'two\n');
+      const mine = commit(s.repo);
+      const theirs = humanPush(s);
+      const r = await refusal(s.publisher.publish(s.request({ sha: mine })));
+      expect(r.message).toContain(`git rebase origin/${BRANCH}`);
+      expect(s.onForge()).toBe(theirs);
+      git(s.repo, 'fetch', '-q', 'origin');
+      git(s.repo, 'rebase', '-q', `origin/${BRANCH}`);
+      const rebased = git(s.repo, 'rev-parse', 'HEAD');
+      await s.publisher.publish(s.request({ sha: rebased }));
+      expect(s.onForge()).toBe(rebased);
+      expect(git(s.repo, 'merge-base', '--is-ancestor', theirs, rebased)).toBe('');
+      expect(s.pushes.at(-1)).toContain(`--force-with-lease=refs/heads/${BRANCH}:${theirs}`);
+    });
+
     it('asks git for a lease and never a plain force', async () => {
       const s = setup();
       await s.publisher.publish(s.request());
