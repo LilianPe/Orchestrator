@@ -55,8 +55,11 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'ticket.undelegated':
       return { ...t, delegated: false };
     case 'push.human':
-      // What a human pushed is theirs (ORC-338): the newest pushes are kept, once each.
-      return { ...t, humanPushes: [...(t.humanPushes ?? []).filter((p) => p.after !== e.payload.sha), { ...(e.payload.before ? { before: e.payload.before } : {}), after: e.payload.sha }].slice(-MAX_HUMAN_PUSHES) };
+      // The commit `verify` last found green is the factory's own publication, not a human's (ORC-159): it carries
+      // whatever a human pushed before, and a branch put back on it by a human holds nothing of theirs to carry.
+      if (e.payload.sha === t.verifiedSha) return t.humanHead ? { ...t, humanHead: null } : t;
+      // What a human pushed is theirs (ORC-338): the newest pushes are kept, once each. Every check now asks for it (ORC-159).
+      return { ...t, humanHead: e.payload.sha, humanPushes: [...(t.humanPushes ?? []).filter((p) => p.after !== e.payload.sha), { ...(e.payload.before ? { before: e.payload.before } : {}), after: e.payload.sha }].slice(-MAX_HUMAN_PUSHES) };
     case 'session.mentioned':
     case 'command': {
       const id = e.payload.linearSessionId;
@@ -88,10 +91,14 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     }
     case 'run.lost':
       return t.activeRunId === e.payload.runId ? { ...t, activeRunId: undefined, activeJob: undefined, ...ended(t, true) } : t;
+    case 'publish.done':
+      // Out on the forge, after a check that asked for the human's last push: the branch carries it from now on (ORC-159).
+      // A rebase of the trunk (ORC-146) then rewrites it as the factory's own history.
+      if (e.payload.runId !== t.verifyingRunId) return t;
+      return { ...t, verifyingRunId: undefined, ...(t.humanHead ? { humanHead: null } : {}) };
     case 'verify.passed':
     case 'verify.failed':
     case 'verify.errored':
-    case 'publish.done':
     case 'publish.refused':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
     case 'pr.merged':
