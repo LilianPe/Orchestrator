@@ -3,7 +3,7 @@ import { request } from 'node:http';
 import type { Socket } from 'node:net';
 import { Readable } from 'node:stream';
 import { connect as tlsConnect, type TLSSocket } from 'node:tls';
-import { HttpPackageRegistry, type PackageRegistry } from '../checks/registry.js';
+import { HttpPackageRegistry, type RegistryOpener } from '../checks/registry.js';
 import type { Egress } from './proxy-service.js';
 
 /** Statuses a `Response` holds no body for. */
@@ -13,8 +13,8 @@ const NULL_BODY = new Set([204, 205, 304]);
  * The package registries `verify` asks (`factory/dependances`, ORC-371), from the daemon through the egress proxy: a run of
  * its own, `id`, at `limited`, whose rules let reads of the registries' hosts through and journal them; closed by `close`.
  */
-export function registriesViaEgress(egress: Pick<Egress, 'open' | 'close' | 'caCertPem'>) {
-  return async (id: string): Promise<{ registry: PackageRegistry; close: () => Promise<void> }> => {
+export function registriesViaEgress(egress: Pick<Egress, 'open' | 'close' | 'caCertPem'>): RegistryOpener {
+  return async (id) => {
     const close = () => egress.close(id);
     // An `open` the proxy made but whose answer was lost: closed all the same.
     const socket = await egress.open(id, { level: 'limited', allow: [] }).catch(async (err: unknown) => {
@@ -39,7 +39,7 @@ export function egressFetch(socketPath: string, ca: string): typeof fetch {
     const tls = await tunnel(socketPath, target, url.hostname, ca, signal);
     return new Promise<Response>((ok, ko) => {
       const headers = { ...Object.fromEntries(new Headers(init.headers)), host: url.host, connection: 'close' };
-      const req = request({ createConnection: () => tls, method: init.method ?? 'GET', path: url.pathname + url.search, headers, ...(signal ? { signal } : {}) }, (res) => {
+      const req = request({ createConnection: () => tls, method: init.method ?? 'GET', path: url.pathname + url.search, headers, signal }, (res) => {
         res.once('close', () => tls.destroy());
         const status = res.statusCode ?? 0;
         // A status without a body: drained, so the response ends and its tunnel with it.
@@ -63,7 +63,7 @@ export function egressFetch(socketPath: string, ca: string): typeof fetch {
 /** The proxy's tunnel to `target`, and TLS on it: a refusal of the proxy rejects with its status. */
 async function tunnel(socketPath: string, target: string, servername: string, ca: string, signal: AbortSignal | undefined): Promise<TLSSocket> {
   signal?.throwIfAborted();
-  const req = request({ socketPath, method: 'CONNECT', path: target, headers: { host: target }, ...(signal ? { signal } : {}) });
+  const req = request({ socketPath, method: 'CONNECT', path: target, headers: { host: target }, signal });
   req.end();
   // The signal aborts the request, whose error `once` rejects with.
   const [res, socket] = (await once(req, 'connect')) as [{ statusCode?: number }, Socket];

@@ -12,7 +12,7 @@ import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import type { PackageRegistry } from '../checks/registry.js';
+import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
 import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
@@ -68,9 +68,6 @@ export interface CleanVerifyRequest {
   deadlineMs?: number;
   exec?: Exec;
 }
-
-/** The package registries of `factory/dependances`, opened for the check `id` and closed after it: through the egress proxy (ORC-371). */
-export type RegistryOpener = (id: string) => Promise<{ registry: PackageRegistry; close: () => Promise<void> }>;
 
 export interface VisualRequest {
   /** The ticket asked for it at `intake` (ORC-206). */
@@ -194,7 +191,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config));
-    const manifests = await changedManifests(git, from, sha);
+    const manifests = failures.length ? [] : await changedManifests(git, from, sha);
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
     const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];

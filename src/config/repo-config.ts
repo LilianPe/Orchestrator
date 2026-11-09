@@ -2,7 +2,7 @@ import { parse } from 'yaml';
 import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
-import type { AllowList } from '../checks/deps.js';
+import { isPackageName, type AllowList } from '../checks/deps.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 
@@ -156,10 +156,10 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   const featureFlags = read('feature_flags', z.strictObject({ provider: z.string().min(1) }), '`{ provider }` expected');
   const network = networkOf(r['network'], violations);
   const dependencies = read('dependencies', z.strictObject({ allow: z.strictObject({ npm: strings.optional(), pypi: strings.optional() }) }), '`{ allow: { npm, pypi } }` expected', 'lists of exact package names under `npm` and `pypi` expected');
-  for (const [ecosystem, names] of Object.entries(dependencies?.allow ?? {})) {
-    // A pattern would be a rule of its own, which the MVP doc does not have (ORC-165).
-    names?.forEach((name, i) => {
-      if (/[*?[\]{}!\s]/.test(name)) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is not an exact package name; patterns are refused`);
+  for (const ecosystem of ['npm', 'pypi'] as const) {
+    // A pattern would be a rule of its own, which the MVP doc does not have (ORC-165); a name that is none would match nothing.
+    dependencies?.allow[ecosystem]?.forEach((name, i) => {
+      if (!isPackageName(ecosystem, name)) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is not an exact package name; patterns are refused`);
     });
   }
   let maxDiff = resolveMaxDiff();

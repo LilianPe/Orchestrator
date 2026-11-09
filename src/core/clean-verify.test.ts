@@ -11,11 +11,12 @@ import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxProvider, SandboxRequest } from '../adapters/sandbox/types.js';
 import { FakePackageRegistry } from '../checks/fake-registry.js';
+import type { RegistryOpener } from '../checks/registry.js';
 import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
-import { runCleanVerify, verifyCommand, type CleanVerifyRequest, type RegistryOpener } from './clean-verify.js';
+import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
 
 const BRANCH = 'factory/orc-1-x';
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -71,12 +72,13 @@ class LocalSandboxes extends FakeSandboxProvider {
 
 /** The registries `factory/dependances` reaches (ORC-371): each opening and closing recorded. */
 function registries(registry: FakePackageRegistry) {
-  const r = { opened: [] as string[], closed: [] as string[], open: undefined as unknown as RegistryOpener };
-  r.open = async (id) => {
-    r.opened.push(id);
-    return { registry, close: async () => void r.closed.push(id) };
+  const opened: string[] = [];
+  const closed: string[] = [];
+  const open: RegistryOpener = async (id) => {
+    opened.push(id);
+    return { registry, close: async () => void closed.push(id) };
   };
-  return r;
+  return { opened, closed, open };
 }
 
 const identity = (repo: string) => {

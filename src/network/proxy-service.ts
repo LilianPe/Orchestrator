@@ -88,8 +88,7 @@ export interface EgressClientOptions {
  */
 export class EgressClient implements Egress {
   private readonly opened = new Set<string>();
-  private ca?: string;
-  private caPem?: string;
+  private ca?: { path: string; pem: string };
   private watch?: Promise<ClientRequest>;
 
   constructor(
@@ -98,14 +97,17 @@ export class EgressClient implements Egress {
   ) {}
 
   get caCertPath(): string {
-    if (!this.ca) throw new Error('egress: no run opened yet, so no CA');
-    return this.ca;
+    return this.openedCa().path;
   }
 
   /** Read by the proxy, which mounts the CA's folder: this service does not (ORC-371). */
   get caCertPem(): string {
-    if (!this.caPem) throw new Error('egress: no run opened yet, so no CA');
-    return this.caPem;
+    return this.openedCa().pem;
+  }
+
+  private openedCa(): { path: string; pem: string } {
+    if (!this.ca) throw new Error('egress: no run opened yet, so no CA');
+    return this.ca;
   }
 
   isOpen(runId: string): boolean {
@@ -121,8 +123,7 @@ export class EgressClient implements Egress {
     await this.watching();
     const claudeToken = this.o.claudeToken?.();
     const { socket, ca, caPem } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string; caPem: string };
-    this.ca = ca;
-    this.caPem = caPem;
+    this.ca = { path: ca, pem: caPem };
     this.opened.add(runId);
     return socket;
   }
