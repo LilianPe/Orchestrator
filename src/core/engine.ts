@@ -9,7 +9,7 @@ import { blockFacts, type BlockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
-import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
+import { asksForChange, awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
@@ -89,8 +89,7 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  */
 function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec): void {
   const { event, ticket, workflow } = at;
-  // As `heldInbox` reads it: not on a block, not behind work in flight.
-  if (job.queue !== 'dev' || !ticket?.delegated || ticket.blocked || workInFlight(ticket)) return;
+  if (job.queue !== 'dev' || !ticket?.delegated || heldWork(ticket)) return;
   const feedback = awaitsAgent(ticket.humanInbox);
   if (!feedback && !relayWaits(out, ticket)) return;
   // A move owed by an earlier job is made by this end too (`publish.done`).
@@ -117,10 +116,9 @@ function replyJob(event: FactoryEvent, ticket: TicketState, workflow: Workflow):
   return rule?.run ? workflow.jobs[rule.run] : undefined;
 }
 
-/** A relayed question no run of this decision answers (ORC-374): the end of the run it was handed to answers it (`relayAnswers`). */
+/** A relayed question this decision leaves on the ticket (ORC-374): the end of the run it was handed to answers it (`relayAnswers`). */
 function relayWaits(out: Decision, ticket: TicketState): boolean {
-  const done = new Set(out.events.flatMap((e) => (e.type === 'relay.done' ? [e.runId] : [])));
-  return (ticket.relayed ?? []).some((r) => !r.handedTo || !done.has(r.handedTo));
+  return !!out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), ticket)?.relayed?.length;
 }
 
 /**
@@ -982,10 +980,14 @@ function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'th
  * behind: its end is their step boundary. A block that came since waits for a reply: the messages before it answer nothing.
  */
 function heldInbox(ticket: TicketState | undefined): string | undefined {
+  return heldWork(ticket) ?? (awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over');
+}
+
+/** Why the agent that implements is not resumed now, whatever waits for it: its block, or the end of the work in flight. */
+function heldWork(ticket: TicketState | undefined): string | undefined {
   // The block first: a pending job a dead settle left on a blocked ticket is no work in flight (ORC-339).
   if (ticket?.blocked) return 'held by the block';
-  if (ticket && workInFlight(ticket)) return 'held for the end of the work in flight';
-  return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over';
+  return ticket && workInFlight(ticket) ? 'held for the end of the work in flight' : undefined;
 }
 
 /** A review that asks for something (ORC-190): with words, and not an approval. */
@@ -1091,7 +1093,7 @@ function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticke
   const busy = workInFlight(ticket);
   const next = busy ? undefined : replyJob(event, ticket, workflow);
   const now = !!next && !heldByWait(ticket, next);
-  if (now) resume(out, event, ticket, workflow, next, awaitsAgent(ticket.humanInbox.filter((i) => i.kind !== 'question')));
+  if (now) resume(out, event, ticket, workflow, next, asksForChange(ticket.humanInbox));
   const when = now ? 'now' : busy ? 'at the end of its current step' : 'when its next step starts (nothing runs on this ticket now)';
   tell(`The transcript and the code do not answer this: I am asking the agent that implements ${when}, and will relay its answer here.`);
   return out;
@@ -1102,10 +1104,9 @@ function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticke
  * relayed leave, each human told in the thread of the question. The run stopped with them then answers none (`relayAnswers`).
  * Work cancelled to go on (a stop, a pause, a spec changed, a check lost) keeps them for the launch that resumes it.
  */
-function dropRelayed(out: Decision, state: TicketState | undefined, event: FactoryEvent): void {
-  if (!state?.relayed?.length) return;
-  if (event.type !== 'pr.merged' && event.type !== 'ticket.undelegated' && !(event.type === 'status.changed' && event.payload.cancelled)) return;
-  for (const r of state.relayed) out.effects.push({ kind: 'activity', type: 'response', body: RELAY_DROPPED, runId: r.runId });
+function dropRelayed(out: Decision, ticket: TicketState | undefined): void {
+  if (!ticket?.relayed?.length) return;
+  for (const r of ticket.relayed) out.effects.push({ kind: 'activity', type: 'response', body: RELAY_DROPPED, runId: r.runId });
   out.events.push({ type: 'relay.dropped' });
 }
 
@@ -1738,7 +1739,6 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     out.effects.push(blockedLabelChange(true, false)!);
   }
   if (event.type === 'ticket.delegated') newRun(out, state, workflow);
-  dropRelayed(out, state, event);
   endTakeOver(out, state, event);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
@@ -1866,7 +1866,9 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.trace.push('status.changed: ticket cancelled, not delegated: nothing to stop');
       return out;
     }
-    return cancelWork(out, 'status.changed: ticket cancelled, work cancelled');
+    cancelWork(out, 'status.changed: ticket cancelled, work cancelled');
+    dropRelayed(out, ticket);
+    return out;
   }
   // The late webhook of the factory's own move decides nothing (ORC-148: the move to AI Review after a push must not
   // start a second review).
@@ -2231,6 +2233,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
       // Before the rule's effects, so its cleanup comes after the stop.
       cancelWork(out, 'built-in pr.merged: work cancelled');
+      dropRelayed(out, ticket);
       // And its block lifted: the learn run of a version frozen before ORC-193 lifted it through its rule, which decides as it did.
       if (ticket?.blocked && !Object.values(workflow.jobs).some((j) => j.workspace === 'knowledge')) unblock(out, event, ticket);
       break;
@@ -2254,6 +2257,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // already ended, by that stop when the reconciliation sent one first.
       if (isUnrouted(ticket)) out.events.push(...END_OF_WAIT);
       else if (state?.delegated && !state.blocked) cancelWork(out, 'built-in ticket.undelegated: work cancelled');
+      // Blocked too: nobody implements it any more.
+      dropRelayed(out, ticket);
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
