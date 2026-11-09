@@ -23,6 +23,8 @@ export interface ForgeSubject {
   checksDown?: string;
   /** The branch of an open PR whose checks include one in a state the forge does not know, the others green; absent, the case is skipped. */
   unknownBucket?: string;
+  /** The names of the checks on `unknownBucket` in a state the forge does not know; absent, the case naming them is skipped. */
+  unknownChecks?: string[];
 }
 
 export function describeForgeContract(name: string, make: () => ForgeSubject | Promise<ForgeSubject>, options?: ContractOptions): void {
@@ -41,6 +43,8 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       expect(['OPEN', 'MERGED', 'CLOSED']).toContain(pr!.state);
       expect(['pending', 'pass', 'fail', 'none']).toContain(pr!.checks);
       expect(pr!.failedChecks.length > 0).toBe(pr!.checks === 'fail');
+      // Absent when no check is in a state the forge does not know, never an empty list.
+      expect(pr!.unknownChecks?.length).not.toBe(0);
     });
 
     it('findPr is a read: asking twice gives the same answer', async (ctx) => {
@@ -104,6 +108,16 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       expect(pr).toMatchObject({ branch: s.unknownBucket, state: 'OPEN' });
       expect(['pending', 'fail']).toContain(pr!.checks);
       expect(pr!.failedChecks.length > 0).toBe(pr!.checks === 'fail');
+    });
+
+    it('findPr names each check whose state it does not know', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'unknownBucket', 'unknownChecks');
+      const pr = await resolved(s.forge.findPr(s.repoPath, s.unknownBucket));
+      expect([...(pr!.unknownChecks ?? [])].sort()).toEqual([...s.unknownChecks].sort());
+      // A snapshot the caller may mutate, as `failedChecks`.
+      const before = structuredClone(pr);
+      pr!.unknownChecks?.push('mutated-by-caller');
+      expect(await s.forge.findPr(s.repoPath, s.unknownBucket)).toEqual(before);
     });
 
   });

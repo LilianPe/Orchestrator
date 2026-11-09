@@ -47,6 +47,7 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
   noChecks: 'factory/rel-3-z',
   checksDown: 'factory/rel-4-w',
   unknownBucket: 'factory/rel-5-v',
+  unknownChecks: ['deploy', 'docs'],
 }));
 
 describe('aggregateChecks', () => {

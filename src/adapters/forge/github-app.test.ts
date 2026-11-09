@@ -162,6 +162,7 @@ describeForgeContract('GitHubAppForge (scripted fetch)', () => ({
   noChecks: 'factory/rel-3-z',
   checksDown: 'factory/rel-4-w',
   unknownBucket: 'factory/rel-5-v',
+  unknownChecks: ['deploy', 'docs'],
 }));
 
 describe('createAppJwt', () => {
@@ -286,6 +287,17 @@ describe('GitHubAppForge.findPr', () => {
     },
     { name: 'no checks', runs: [], statuses: [], checks: 'none', failedChecks: [] },
     {
+      name: 'checks in a state it does not know, named (ORC-304)',
+      runs: [
+        { name: 'lint', status: 'completed', conclusion: 'success' },
+        { name: 'deploy', status: 'completed', conclusion: null },
+      ],
+      statuses: [{ context: 'docs', state: 'mystery' }, { context: 'legacy-ci', state: 'pending' }],
+      checks: 'pending',
+      failedChecks: [],
+      unknownChecks: ['deploy', 'docs'],
+    },
+    {
       name: "the factory's own checks alone: no CI (ORC-151)",
       runs: [
         { name: 'factory/verify', status: 'completed', conclusion: 'success' },
@@ -295,7 +307,7 @@ describe('GitHubAppForge.findPr', () => {
       checks: 'none',
       failedChecks: [],
     },
-  ])('maps $name', async ({ runs, statuses, checks, failedChecks }) => {
+  ])('maps $name', async ({ runs, statuses, checks, failedChecks, unknownChecks }) => {
     const { forge } = makeForge([
       installationRoute(),
       tokenRoute(42),
@@ -310,6 +322,7 @@ describe('GitHubAppForge.findPr', () => {
       headSha: 'abc123',
       checks,
       failedChecks,
+      unknownChecks,
     });
   });
 

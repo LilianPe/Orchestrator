@@ -450,6 +450,14 @@ describeForgeContract(
   { violates: [UNKNOWN_BUCKET] },
 );
 
+const UNKNOWN_NAMED = 'findPr names each check whose state it does not know';
+
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as pending without naming it',
+  forgeThat({ ...withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'pending' })), unknownChecks: ['deploy'] }),
+  { violates: [UNKNOWN_NAMED] },
+);
+
 const NO_PR = 'findPr answers undefined for a branch without a PR';
 
 describeForgeContract(
