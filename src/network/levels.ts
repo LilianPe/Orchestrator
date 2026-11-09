@@ -62,9 +62,14 @@ export const CLAUDE_BETAS: ReadonlySet<string> = new Set([
 export const CLAUDE_BODY_MAX = 16 * 1024 * 1024;
 
 /**
- * Model calls held at once, from their first byte until they are sent on, per run and in all (ORC-337): memory held
- * at worst, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`. A run gets its share alone, so four runs at least are served
- * side by side. Past it, a 429, which Claude Code retries.
+ * Model calls held at once, from their first byte until they are sent on, per run and in all (ORC-337). A run gets
+ * its share alone, so four runs at least are served side by side. Past it, a 429, which Claude Code retries.
+ * Memory at worst, to size the proxy's container by: the calls held, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`, plus
+ * the one being checked (`claudeBody`: joined, decoded, parsed, serialised again, encoded), one at a time since the
+ * check is synchronous. Measured at `CLAUDE_BODY_MAX` (ORC-356): a call of text, 5 times its size; one character
+ * outside Latin-1 makes both strings two bytes a character, 8 times; a body of millions of empty objects, which the
+ * checks let through, 26 times of heap and 40 of RSS. At 16 MiB: ~210 MiB for Claude Code's calls, ~750 MiB under a
+ * hostile sandbox, over the process's own.
  */
 export const CLAUDE_READS_PER_RUN = 2;
 export const CLAUDE_READS_MAX = 8;
@@ -244,7 +249,7 @@ export function stepPolicy(config: RepoConfig, step: NetworkLevel = 'limited'): 
  * An agent run's policy (ORC-209 C): its step's level narrowed by the repository's, the Claude API kept for a repository at
  * `none`, as the MVP doc says of a step that calls the agent: without it, no run can start. The preset's `review` runs at
  * `claude-api` (ORC-183): it reads a clone the factory made and has no tool that reaches anything else. A job out of the
- * preset (`ask`, `learn`) has no step, and runs at the repository's level.
+ * preset (`ask`) has no step, and runs at the repository's level.
  */
 export function agentPolicy(config: RepoConfig, step?: NetworkLevel): EgressPolicy {
   const p = stepPolicy(config, step);

@@ -111,6 +111,11 @@ describe('the security log of a run (ORC-296)', () => {
     expect(refusalSummary(log)).not.toContain(big);
   });
 
+  it('still reads a forge-read refusal the hook wrote before ORC-193: a genuine line, not a forged one', () => {
+    const log = readSecurityLog(RUN, files(undefined, [refusalLine({ rule: 'forge-read' })]));
+    expect(log).toMatchObject({ refusals: [{ rule: 'forge-read' }], skipped: { refusals: 0 } });
+  });
+
   it('knows every rule of the pack hook', () => {
     const hook = readFileSync(HOOK, 'utf8');
     const returned = new Set([...hook.matchAll(/return '([a-z-]+)'/g)].map((m) => m[1]));

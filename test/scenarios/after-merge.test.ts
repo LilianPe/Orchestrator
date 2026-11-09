@@ -114,7 +114,7 @@ describe('the after_merge step (ORC-197)', () => {
     expect(entry!.id).toBe(`pr:REL-1:${entry!.prNumber}:merged`);
   });
 
-  it('a mention Linear refuses holds back neither the entry, nor the cleanup and learn behind it: logged, the step done', async () => {
+  it('a mention Linear refuses holds back neither the entry, nor the cleanup behind it: logged, the step done', async () => {
     const h = delivered(taken());
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const { prNumber, prUrl } = await h.ticket();
@@ -123,7 +123,8 @@ describe('the after_merge step (ORC-197)', () => {
     await h.send('pr.merged', { number: prNumber!, url: prUrl!, branch: 'factory/rel-1-restyle-the-button' });
     expect(await entries(h)).toHaveLength(1);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
-    expect(h.runner.requests.at(-1)!.prompt.startsWith('/factory:learn\n')).toBe(true);
+    // No learn behind it: the memory in writing sleeps (ORC-193).
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).not.toContain('/factory:learn');
     expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'done' });
   });
 
