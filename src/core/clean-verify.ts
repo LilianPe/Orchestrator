@@ -229,6 +229,9 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     }
     if (failures.length || !runs) return verdict();
 
+    // As the commit declares them, which the launch did not read: provided, or refused before any of its code runs (ORC-282).
+    const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
+    if (unprovided.length) throw new Error(servicesUnavailable(unprovided, true));
     // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
     const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
     await setUp('verify', cloneDir, config.services);
@@ -260,6 +263,13 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     );
   }
 };
+
+/** A launch or a check refused for the repository's `services` this factory does not provide (ORC-282): said on the ticket. */
+export function servicesUnavailable(missing: readonly string[], sandboxed: boolean): string {
+  const [which, it] = missing.length === 1 ? [`The service ${missing[0]} is`, 'it'] : [`The services ${missing.join(', ')} are`, 'them'];
+  const why = sandboxed ? `no sandbox backend of this factory provides ${it}` : 'this factory runs without sandboxes (FACTORY_CONTAINER_CLI), which provide none';
+  return `${which} not available: .factory/config.yml declares ${it} under \`services\`, and ${why}. Nothing runs without ${it}: take ${it} out of \`services\` or give the factory a backend that provides ${it}, then reply here.`;
+}
 
 export const BASE = 'refs/factory/base';
 
@@ -312,6 +322,8 @@ async function planVisual(
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!v.start) proof.unavailable = 'no command starts the application (`workspace.preview`)';
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
+  // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
+  else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;
   else return { proof, shooting: { ...v, shooter: v.shooter, start: v.start } };
   return { proof };
 }

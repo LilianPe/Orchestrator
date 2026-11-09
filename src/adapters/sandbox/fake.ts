@@ -2,6 +2,8 @@ import type { ExecResult } from '../exec.js';
 import type { Sandbox, SandboxExecOptions, SandboxProvider, SandboxRequest, SpawnCommand } from './types.js';
 
 export class FakeSandboxProvider implements SandboxProvider {
+  /** The services it starts, the container backend's (ORC-309); a test sets fewer to have one refused (ORC-282). */
+  provides: readonly string[] = ['postgres'];
   created: SandboxRequest[] = [];
   destroyed: string[] = [];
   execs: { id: string; argv: string[]; opts?: SandboxExecOptions }[] = [];
@@ -14,7 +16,13 @@ export class FakeSandboxProvider implements SandboxProvider {
   private made = 0;
   private madeServices = 0;
 
+  unprovided(services: readonly string[]): string[] {
+    return services.filter((s) => !this.provides.includes(s));
+  }
+
   async create(req: SandboxRequest): Promise<Sandbox> {
+    const unknown = this.unprovided(req.requirements.services);
+    if (unknown.length) throw new Error(`fake sandbox: no services (${unknown.join(', ')})`);
     this.created.push(req);
     const existing = this.live.get(req.runId);
     if (existing) return { ...existing };
