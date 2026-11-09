@@ -6,7 +6,7 @@ import type { RunRequest } from './types.js';
 
 const req = (runId: string): RunRequest => ({
   runId, cwd: '/w', prompt: 'p', claudeSessionId: 's', resume: false, model: 'sonnet',
-  pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 10, durationMs: 1000, usd: 1 }, env: {},
+  pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 10, durationMs: 1000 }, env: {},
 });
 
 const scripts: Record<AgentScript, FakeScript> = {

@@ -112,7 +112,7 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
         pluginDir: '/factory/pack',
         settingsPath: '/factory/pack/settings.json',
         readOnly: false,
-        limits: { turns: 1, durationMs: 60_000, usd: 0 },
+        limits: { turns: 1, durationMs: 60_000 },
         env: runEnv,
         sandboxId: sbx.id,
       }).done;

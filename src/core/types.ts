@@ -63,6 +63,9 @@ export function addTokens(a: TokenUsage, b: TokenUsage): TokenUsage {
  * and a replay judges the same. `loop`: the same Bash command, the same normalized failure (`failure`, its hash) and the
  * same content of the worktree (`tree`), `count` times. `silent`: nothing written on its stream for `silentMs`.
  */
+/** The budget an attempt spent (ORC-216): its tokens (`budgets.per_step_tokens`, or what the ticket had left) or its turns (`max_turns`). */
+export type OverBudget = 'tokens' | 'turns';
+
 export type Stagnation =
   | { kind: 'loop'; command: string; failure: string; tree: string; count: number }
   | { kind: 'silent'; silentMs: number };
@@ -297,6 +300,8 @@ export interface EventPayloads {
     blockedBy?: Blocker[];
     /** The usage limit of `account` stopped it and the factory waits on it (`on_usage_limit: wait`, ORC-340): resumed at `resetAt`. */
     usageLimit?: { resetAt: number; account?: string };
+    /** The cap of its budget that stopped it (ORC-216), with `outcome: limit`. Absent on rows written before it, and for its duration cap. */
+    overBudget?: OverBudget;
   };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the
