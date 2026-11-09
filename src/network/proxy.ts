@@ -388,7 +388,8 @@ export class EgressProxy {
     served.add(req.socket);
     const method = req.method ?? 'GET';
     const path = req.url ?? '/';
-    const v = check(t.host, allowRequest(run.policy, t.host, method, path));
+    // A path alone: an absolute URL would go upstream as is, its authority naming a host other than the one checked (ORC-219).
+    const v = path.startsWith('/') ? check(t.host, allowRequest(run.policy, t.host, method, path)) : { ok: false as const, reason: 'request target refused: not a path' };
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
     this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) =>
       this.guarded(run, res, method, t.host, path, sent, () => {
