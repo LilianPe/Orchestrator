@@ -71,6 +71,10 @@ export interface CommandRun {
   tests: FlakyTest[];
   /** Failing tests past `MAX_RERUNS`: not rerun, nor recorded. */
   notRerun: number;
+  /** Failing tests that count, left past `MAX_BASE_RERUNS`: not rerun on the base. */
+  notOnBase?: number;
+  /** Its exit run without its failing tests, all indicative: only 0 spares it. */
+  withoutIndicative?: number | null;
 }
 
 const tail = (s: string): string => (s.length > OUTPUT_MAX ? s.slice(-OUTPUT_MAX) : s);
@@ -139,29 +143,66 @@ export function readTests(report: string | undefined): ReadTest[] | undefined {
   }
 }
 
-/** The repository's command on one test: its file and its name (a pattern) for vitest and jest, whose file is one too; its node id for pytest. */
-export function rerunLine(command: string, runner: Runner, test: { id: string; file: string; name: string }): string {
-  if (runner === 'pytest') return `${command} ${quote(test.id)}`;
-  return `${command} ${quote(runner === 'jest' ? escape(test.file) : test.file)} -t ${quote(escape(test.name))}`;
+/** Each test's file, once. */
+const filesOf = (tests: readonly { file: string }[]): string[] => [...new Set(tests.map((t) => t.file))];
+
+/**
+ * The repository's command on `tests`, in one run: their node ids for pytest; their files and a pattern of their names for
+ * vitest and jest, whose files are patterns too for jest.
+ */
+export function rerunLine(command: string, runner: Runner, tests: readonly { id: string; file: string; name: string }[]): string {
+  if (runner === 'pytest') return `${command} ${tests.map((t) => quote(t.id)).join(' ')}`;
+  const files = filesOf(tests).map((f) => quote(runner === 'jest' ? escape(f) : f));
+  return `${command} ${files.join(' ')} -t ${quote(tests.map((t) => escape(t.name)).join('|'))}`;
+}
+
+/**
+ * The repository's command without `tests`: pytest's `--deselect`, a pattern that no full name ending in theirs matches for
+ * vitest and jest (their full name may start with the file's).
+ */
+export function withoutLine(command: string, runner: Runner, tests: readonly { id: string; name: string }[]): string {
+  if (runner === 'pytest') return `${command} ${tests.map((t) => `--deselect ${quote(t.id)}`).join(' ')}`;
+  return `${command} -t ${quote(`^(?!(?:.* )?(?:${tests.map((t) => escape(t.name)).join('|')})$)`)}`;
 }
 
 /** What a run says of test `id`: its outcome there, absent when its report does not name it. */
 function attemptOf(on: TestAttempt['on'], attempt: number, run: TestRun, id: string): TestAttempt {
   const found = readTests(run.report)?.find((t) => t.id === id);
-  return { on, attempt, outcome: found?.status ?? 'absent', durationMs: run.ms, output: tail(found ? found.message : run.output) };
+  return { on, attempt, outcome: found?.status ?? 'absent', durationMs: found?.durationMs ?? run.ms, output: tail(found ? found.message : run.output) };
+}
+
+/** What decides whether a failing test counts: the repository's known flaky tests, and the ticket's freeze. */
+export interface Standing {
+  known: readonly KnownFlaky[];
+  frozen?: FrozenTests;
 }
 
 /**
- * `command`, then each test its report names as failing rerun once on the commit, up to `MAX_RERUNS`. Undefined when it
- * passed. Without a runner, an exit without a code (its cap) or a report that names no failing test, nothing is rerun.
+ * Whether `t` counts: a known flaky test does not, nor a frozen one whose entry a human made cover frozen tests. A frozen
+ * path also matches a file a runner named from a sub-root (pytest's rootdir).
  */
-export async function runAndRerun(command: string, runner: Runner | undefined, run: Run): Promise<CommandRun | undefined> {
+function standing(t: { test: string; file: string }, at: Standing): 'counts' | 'indicative' | 'frozen' {
+  const entry = at.known.find((k) => k.test === t.test);
+  if (!entry) return 'counts';
+  const frozen = at.frozen && Object.keys(at.frozen.files).some((f) => f === t.file || f.endsWith(`/${t.file}`));
+  return frozen && !entry.coversFrozen ? 'frozen' : 'indicative';
+}
+
+/**
+ * `command`, then the tests its report names as failing rerun once on the commit, together, up to `MAX_RERUNS`. Undefined
+ * when it passed. Without a runner, an exit without a code (its cap) or a report that names no failing test, nothing is
+ * rerun. When every failing test is indicative, the command runs once more without them (`withoutIndicative`): the report
+ * is the agent's code's, and an exit can have a cause no test carries; only a pass then spares the command.
+ */
+export async function runAndRerun(command: string, runner: Runner | undefined, run: Run, at: Standing): Promise<CommandRun | undefined> {
   const first = await run(command, runner);
   if (first.exitCode === 0) return undefined;
   const failed = runner && first.exitCode !== null ? (readTests(first.report)?.filter((t) => t.status === 'failed') ?? []) : [];
   const res: CommandRun = { command, ...(runner ? { runner } : {}), exitCode: first.exitCode, output: first.output, tests: [], notRerun: Math.max(0, failed.length - MAX_RERUNS) };
-  for (const t of failed.slice(0, MAX_RERUNS)) {
-    const again = await run(rerunLine(command, runner!, t), runner);
+  const rerun = failed.slice(0, MAX_RERUNS);
+  if (!rerun.length) return res;
+  const again = await run(rerunLine(command, runner!, rerun), runner);
+  for (const t of rerun) {
     res.tests.push({
       command, test: t.id, file: t.file, name: t.name,
       attempts: [
@@ -170,21 +211,32 @@ export async function runAndRerun(command: string, runner: Runner | undefined, r
       ],
     });
   }
+  if (!res.notRerun && res.tests.every((t) => standing(t, at) === 'indicative')) {
+    res.withoutIndicative = (await run(withoutLine(command, runner!, rerun), runner)).exitCode;
+  }
   return res;
 }
 
-/** The failing tests of `runs` rerun on the base commit by `run`, in their order, up to `max`: how many were left. */
-export async function rerunOnBase(runs: readonly CommandRun[], run: Run, max = MAX_BASE_RERUNS): Promise<number> {
-  const tests = runs.flatMap((r) => r.tests.map((t) => ({ t, runner: r.runner! })));
-  for (const { t, runner } of tests.slice(0, max)) t.attempts.push(attemptOf('base', 1, await run(rerunLine(t.command, runner, { id: t.test, file: t.file, name: t.name }), runner), t.test));
-  return Math.max(0, tests.length - max);
-}
+/** The failing tests of `runs` that count, those a base rerun can say something of. */
+const counted = (runs: readonly CommandRun[], at: Standing) => runs.flatMap((r) => r.tests.filter((t) => standing(t, at) !== 'indicative').map((t) => ({ r, t })));
 
-/** Whether `t` counts: a known flaky test does not, nor a frozen one whose entry a human made cover frozen tests. */
-function standing(t: FlakyTest, known: readonly KnownFlaky[], frozen: FrozenTests | undefined): 'counts' | 'indicative' | 'frozen' {
-  const entry = known.find((k) => k.test === t.test);
-  if (!entry) return 'counts';
-  return frozen && Object.hasOwn(frozen.files, t.file) && !entry.coversFrozen ? 'frozen' : 'indicative';
+/** Whether a failing test that counts is left for the base commit. */
+export const needsBase = (runs: readonly CommandRun[], at: Standing): boolean => counted(runs, at).length > 0;
+
+/**
+ * The failing tests of `runs` that count rerun on the base commit by `run`, in their order, up to `max`: those of a command
+ * together. Each command says how many of its own were left (`notOnBase`).
+ */
+export async function rerunOnBase(runs: readonly CommandRun[], run: Run, at: Standing, max = MAX_BASE_RERUNS): Promise<void> {
+  const all = counted(runs, at);
+  const chosen = all.slice(0, max);
+  for (const r of runs) {
+    const tests = chosen.filter((c) => c.r === r).map((c) => c.t);
+    r.notOnBase = all.filter((c) => c.r === r).length - tests.length;
+    if (!tests.length) continue;
+    const onBase = await run(rerunLine(r.command, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner);
+    for (const t of tests) t.attempts.push(attemptOf('base', 1, onBase, t.test));
+  }
 }
 
 /** What the reruns of a counted test found, for the agent: not caused by its work, or flaky. */
@@ -197,10 +249,10 @@ function found(t: FlakyTest): string {
 }
 
 /**
- * The verdict on the failed commands: a command whose failing tests are all indicative is no failure; the others say,
- * under their output, what the reruns found of each test. `notOnBase`: failing tests not rerun on the base commit.
+ * The verdict on the failed commands: a command whose failing tests are all indicative, and which passed without them, is
+ * no failure; the others say, under their output, what the reruns found of each test.
  */
-export function settle(runs: readonly CommandRun[], at: { known: readonly KnownFlaky[]; frozen?: FrozenTests; notOnBase: number }): { failures: VerifyFailure[]; flaky: FlakyTest[] } {
+export function settle(runs: readonly CommandRun[], at: Standing): { failures: VerifyFailure[]; flaky: FlakyTest[] } {
   const failures: VerifyFailure[] = [];
   const flaky: FlakyTest[] = [];
   for (const run of runs) {
@@ -209,16 +261,19 @@ export function settle(runs: readonly CommandRun[], at: { known: readonly KnownF
       failures.push({ ...failure, output: run.output });
       continue;
     }
+    let spared = run.withoutIndicative === 0;
     const lines = run.tests.map((t) => {
-      const s = standing(t, at.known, at.frozen);
+      const s = standing(t, at);
+      if (s !== 'indicative') spared = false;
       flaky.push(s === 'indicative' ? { ...t, indicative: true } : t);
       const said = s === 'indicative' ? 'known flaky in this repository, indicative: it does not count' : s === 'frozen' ? 'known flaky, but frozen for this ticket: it counts until a human decides otherwise' : found(t);
-      return { s, line: `- \`${t.test}\`: ${said}` };
+      return `- \`${t.test}\`: ${said}`;
     });
-    if (lines.every((l) => l.s === 'indicative') && !run.notRerun) continue;
-    if (run.notRerun) lines.push({ s: 'counts', line: `${run.notRerun} more failing tests were not rerun (at most ${MAX_RERUNS}).` });
-    if (at.notOnBase) lines.push({ s: 'counts', line: `${at.notOnBase} failing tests were not rerun on the base commit (at most ${MAX_BASE_RERUNS}).` });
-    failures.push({ ...failure, output: `${run.output}\n\nThe failing tests, rerun by the factory:\n${lines.map((l) => l.line).join('\n')}` });
+    if (spared) continue;
+    if (run.withoutIndicative !== undefined && run.withoutIndicative !== 0) lines.push('Without its known flaky tests, the command still fails: something else failed it.');
+    if (run.notRerun) lines.push(`${run.notRerun} more failing tests were not rerun (at most ${MAX_RERUNS}).`);
+    if (run.notOnBase) lines.push(`${run.notOnBase} failing tests were not rerun on the base commit (at most ${MAX_BASE_RERUNS} in all).`);
+    failures.push({ ...failure, output: `${run.output}\n\nThe failing tests, rerun by the factory:\n${lines.join('\n')}` });
   }
   return { failures, flaky };
 }

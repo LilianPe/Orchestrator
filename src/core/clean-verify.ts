@@ -8,7 +8,7 @@ import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type San
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
 import { parseDiff, type DiffFile } from '../checks/diff.js';
 import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
-import { rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run } from '../checks/flaky.js';
+import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
@@ -148,7 +148,7 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout, and Semgrep on the files the diff adds
  *    lines to (ORC-333), with the factory's rules and the base's, read at step 3;
  * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted; each failing test their
- *    runner's report names rerun once there, and a few on the base, set up in a sandbox of its own (ORC-164, `rerunTests`);
+ *    runner's report names rerun once there, and a few on the base, set up in a sandbox of its own (ORC-164, `runAndRerun`, `rerunOnBase`);
  * 6. the visual proof (ORC-176), when it is required and the commands passed: the application started and shot by the
  *    factory's browser, after on the commit and before on the base, each in a sandbox of its own at network `none`. The
  *    base is checked out from the clone's objects at step 3, before any code of the agent has run in it.
@@ -231,18 +231,18 @@ export const runCleanVerify: CleanVerifier = async (req) => {
 
     await setUp('verify', cloneDir);
     const ran: CommandRun[] = [];
+    const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
-        const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env));
+        const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
         if (failed) ran.push(failed);
       }
     });
-    let notOnBase = 0;
-    if (onBase && ran.some((r) => r.tests.length)) {
+    if (onBase && needsBase(ran, standing)) {
       await setUp('verify-base', beforeDir);
-      await inBox('verify-base', beforeDir, [], async (id) => void (notOnBase = await rerunOnBase(ran, reportRun(sandboxes, id, env))));
+      await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing));
     }
-    const settled = settle(ran, { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}), notOnBase });
+    const settled = settle(ran, standing);
     failures.push(...settled.failures);
     flaky = settled.flaky;
     if (!shooting || failures.length) return verdict();
@@ -262,6 +262,8 @@ export const BASE = 'refs/factory/base';
 
 /** What a report may weigh on its way to the daemon: past it, it is cut, unreadable, and nothing is rerun. */
 const MAX_REPORT_BYTES = 16 * 1024 * 1024;
+/** What its read may take: the agent's code, still running, could have put a pipe in its place, which a regular-file test refuses. */
+const REPORT_READ_S = 60;
 
 /**
  * Runs a line in sandbox `id` as a command of `verify` (`verifyCommand`), its exit 124 the cap's, whose failure stays the
@@ -275,7 +277,7 @@ function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): R
     const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(runner ? `f=${f}\n${line} ${REPORT_FLAGS[runner]}` : line), { env });
     const run = { exitCode: code === 124 ? null : code, output: stdout + stderr, ms: Date.now() - started };
     if (!runner) return run;
-    const report = await sandboxes.exec(id, ['bash', '--norc', '-c', `head -c ${MAX_REPORT_BYTES} ${f} 2>/dev/null; rm -f ${f}`], { env });
+    const report = await sandboxes.exec(id, ['bash', '--norc', '-c', `[ -f ${f} ] && timeout ${REPORT_READ_S} head -c ${MAX_REPORT_BYTES} ${f}; rm -f ${f}`], { env });
     return report.stdout ? { ...run, report: report.stdout } : run;
   };
 }

@@ -972,7 +972,7 @@ const side = fs.existsSync('a.txt') ? 'head' : 'base';
 const results = [];
 for (const [name, seq] of Object.entries(${JSON.stringify(plan)}[side])) {
   if (t >= 0 && !new RegExp(args[t + 1]).test(name)) continue;
-  const count = ${JSON.stringify(state)} + '/' + side + '-' + name.replace(/\W/g, '_');
+  const count = ${JSON.stringify(state)} + '/' + side + '-' + name.replace(/[^A-Za-z0-9]/g, '_');
   const n = fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0;
   fs.writeFileSync(count, String(n + 1));
   const status = seq[Math.min(n, seq.length - 1)];
