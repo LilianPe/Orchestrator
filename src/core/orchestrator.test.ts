@@ -322,6 +322,22 @@ describe('Orchestrator', () => {
     expect((await store.getTicket('p', 'REL-1'))!.blocked).toBe(false);
   });
 
+  it('recover() takes up a check under the job its effect names, not the run\'s: the relay job\'s commit is the reply rule\'s (ORC-375)', async () => {
+    const { store, tracker, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await orch.accept(delegated());
+    await orch.drained();
+    const t = (await store.getTicket('p', 'REL-1'))!;
+    const run = (await store.runsByStatus('success'))[0]!;
+    const checked = (await store.listEffects('p', 'REL-1')).map((r) => r.effect).find((e) => e.kind === 'run_verify' && e.runId === run.id);
+    expect(checked).toMatchObject({ job: run.job });
+    await store.putRun({ ...run, job: 'answer-relayed' });
+    t.verifyingRunId = run.id;
+    await store.putTicket(t);
+    await orch.recover();
+    expect((await store.pendingInbox(10)).find((e) => e.id.startsWith(`check:${run.id}:lost`))).toMatchObject({ type: 'verify.lost', payload: { runId: run.id, job: run.job } });
+  });
+
   // Was: blocked. Nothing says what to check: the wait ends, and the ticket is not held for a verdict that cannot come.
   it('recover() drops a check that names a run never written', async () => {
     const { store, tracker, orch } = setup();

@@ -8,6 +8,8 @@ import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, typ
 import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+/** `workflow` as a version frozen before ORC-375 holds it: no relay job, the reply rule's job answers a relayed question. */
+const { relayJob: _relayJob, ...beforeOrc375 } = workflow;
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], patch: Partial<FactoryEvent> = {}): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', ...patch, payload } as FactoryEvent;
@@ -331,16 +333,23 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     expect(relays(out)).toEqual([{ type: 'relay.added', question: { runId: 'q1', at: 5000 } }]);
   });
 
-  it('starts the reply rule\'s job when nothing runs, a question and not a round of human review (ORC-374)', () => {
+  it('starts the workflow\'s relay job when nothing runs, a question and not a round of human review (ORC-374, ORC-375)', () => {
     // At its bound of rounds, still: the relay answers a question, it is no review.
     const out = decide(ticket({ logical: 'human_review', humanReviewRounds: workflow.limits.humanReviewRounds }), asked(), workflow);
     expect(relays(out)).toEqual([{ type: 'relay.added', question: { runId: 'q1', at: 5000 } }]);
-    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed', input: 'feedback' })]);
     expect(activities(out)).toEqual([expect.objectContaining({ runId: 'q1', body: expect.stringContaining('I am asking the agent that implements now') })]);
     expect(out.events.map((e) => e.type)).not.toContain('ticket.patched');
     expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
-    // In In Progress with no step at work, the rule there.
-    expect(decide(ticket(), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    // In In Progress with no step at work, the same job, where a reply starts one.
+    expect(decide(ticket(), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
+  });
+
+  it('a version frozen before ORC-375, with no relay job, starts the reply rule\'s job as it did (ORC-374)', () => {
+    const out = decide(ticket({ logical: 'human_review', humanReviewRounds: workflow.limits.humanReviewRounds }), asked(), beforeOrc375);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
+    expect(out.events.map((e) => e.type)).not.toContain('ticket.patched');
+    expect(decide(ticket(), asked(), beforeOrc375).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
   });
 
   it('a human change request waiting beside it makes the start a round of human review: that job reads it (ORC-190)', () => {
@@ -350,8 +359,8 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     const past = decide(ticket({ logical: 'human_review', humanInbox: feedback, humanReviewRounds: bound }), asked(), workflow);
     expect(past.events.map((e) => e.type)).toContain('ticket.blocked');
     expect(past.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
-    // A question of the session alone, the one relayed maybe, is no change request.
-    expect(decide(ticket({ logical: 'human_review', humanInbox: [feedback[1]!], humanReviewRounds: bound }), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human' })]);
+    // A question of the session alone, the one relayed maybe, is no change request: the relay job answers it (ORC-375).
+    expect(decide(ticket({ logical: 'human_review', humanInbox: [feedback[1]!], humanReviewRounds: bound }), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
   });
 
   it('with no reply rule to start, or waiting on its blockers, keeps it for the launch still to come (ORC-363)', () => {
@@ -424,8 +433,47 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     const passed = ev('verify.passed', { runId: 'r1', job: 'review' });
     const t = ticket({ logical: 'ai_review', verifyingRunId: 'r1', relayed: [handed('q1')], humanReviewRounds: workflow.limits.humanReviewRounds });
     const out = decide(t, passed, frozen);
-    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed', input: 'feedback' })]);
     expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
+    // Frozen before ORC-375: the reply rule's job, as it was.
+    const { relayJob: _r, ...older } = frozen;
+    expect(decide(t, passed, older).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
+  });
+
+  describe('the end of the relay job (ORC-375)', () => {
+    const sha = 'a'.repeat(40);
+    const answered = { ...output, answers: [{ question: 'q1', answer: 'Le ticket demande du CSV.' }] };
+    const end = (head?: string) => ev('run.finished', { runId: 'r1', job: 'answer-relayed', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: answered, ...(head ? { head } : {}) });
+    const inReviewAnswering = (patch: Partial<TicketState> = {}) =>
+      ticket({ logical: 'human_review', activeRunId: 'r1', activeJob: 'answer-relayed', verifiedSha: sha, relayed: [handed('q1', 'r1')], ...patch });
+
+    it('with no commit: the answer is relayed, and nothing moves, posts, checks or reviews (criterion 1)', () => {
+      for (const head of [sha, undefined]) {
+        const out = decide(inReviewAnswering(), end(head), workflow);
+        expect(activities(out), String(head)).toEqual([expect.objectContaining({ runId: 'q1', body: 'The agent that implements answers: Le ticket demande du CSV.' })]);
+        expect(out.effects.map((e) => e.kind), String(head)).toEqual(['activity']);
+        expect(out.events.map((e) => e.type), String(head)).toEqual(['relay.done']);
+      }
+    });
+
+    it('with a commit: the reply rule\'s path, its checks, then its publication, move and review', () => {
+      const t = inReviewAnswering();
+      const out = decide(t, end('b'.repeat(40)), workflow);
+      expect(out.events).toContainEqual({ type: 'verify.started', runId: 'r1' });
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'run_verify', runId: 'r1', job: 'fix-human' }));
+      expect(out.effects.filter((e) => e.kind === 'move' || e.kind === 'post_output' || e.kind === 'start_run')).toEqual([]);
+      // Not a round of human review: a question started it.
+      expect(out.events.filter((e) => e.type === 'ticket.patched')).toEqual([]);
+      let after = reduce(t, end('b'.repeat(40)));
+      for (const e of out.events) after = reduce(after, e);
+      const published = decide({ ...after!, owedMove: 'ai_review' }, ev('publish.done', { runId: 'r1', job: 'fix-human', sha: 'b'.repeat(40) }), workflow);
+      expect(published.effects.filter((e) => e.kind === 'move' || e.kind === 'start_run')).toEqual([{ kind: 'move', to: 'ai_review' }, expect.objectContaining({ job: 'review' })]);
+    });
+
+    it('in a state where no reply starts a job any more, a commit still goes through the relay job\'s own end', () => {
+      const out = decide(inReviewAnswering({ logical: 'ai_review' }), end('b'.repeat(40)), workflow);
+      expect(out.effects.filter((e) => e.kind === 'run_verify')).toEqual([]);
+    });
   });
 
   it('the end of the step the questions were handed to starts nothing for them: they are answered', () => {
@@ -436,7 +484,7 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
     // One relayed since that launch is still to ask.
     const later = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, quick);
-    expect(later.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    expect(later.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
   });
 
   describe('the questions still relayed when the work ends (ORC-374)', () => {

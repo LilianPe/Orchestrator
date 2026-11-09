@@ -787,8 +787,9 @@ export class Orchestrator {
     const rows = await store.listEffects(t.projectId, t.ticketId);
     if (rows.some((r) => (r.effect.kind === 'run_verify' || r.effect.kind === 'publish') && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
-    // A human's push has no run (ORC-159): the effect of its check says under which job, as any check's does.
-    const job = run?.job ?? rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job;
+    // The effect of its check says under which job, as any check's does: a human's push has no run (ORC-159), and the
+    // commit of the relay job is checked under the reply rule's (ORC-375).
+    const job = rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job ?? run?.job;
     if (!job) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
       await this.apply(t, { type: 'work.cancelled' });
@@ -3189,7 +3190,19 @@ export class Orchestrator {
         ...(run.blockedBy ? { blockedBy: run.blockedBy } : {}),
         ...(usageLimit ? { usageLimit } : {}),
         ...(result.overBudget ? { overBudget: result.overBudget } : {}),
+        ...(await this.answerHead(run)),
       },
     };
+  }
+
+  /**
+   * The commit the worktree of the workflow's relay job holds at its end (ORC-375): the engine sends a commit the answer
+   * wrote the reply rule's way. Nothing for any other job, nor when it cannot be read: the answer then stays light.
+   */
+  private async answerHead(run: RunRecord): Promise<{ head?: string }> {
+    const project = await this.runtimeFor(run.projectId, run.ticketId);
+    if (!project?.workflow.relayJob || project.workflow.relayJob !== run.job) return {};
+    const head = await this.d.workspaces.head(run.cwd).catch(() => undefined);
+    return head ? { head } : {};
   }
 }

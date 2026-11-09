@@ -50,6 +50,9 @@ on:
   # entry with the captures `verify` took, then the cleanup. It starts no run: the memory in writing sleeps (ORC-193).
   pr.merged:
     - { move: done, do: after_merge }
+# A question the answer agent relays, with no human feedback waiting beside it, starts this job rather than the reply rule's
+# (ORC-375): an answer is no round of human review, and reviews nothing again unless it committed.
+relay_job: answer-relayed
 jobs:
   # The `intake` step of factory/default (ORC-206): reads the ticket and the code, returns size, risk, completeness and
   # screen through `submit_result`. Its end is the guard before In Progress: a complete ticket starts `dev`, an
@@ -138,6 +141,14 @@ jobs:
     extends: dev-feedback
     counter: human_review
     on_success: { move: ai_review, post: reply, run: review }
+  # The answer to questions relayed to the agent that implements (ORC-375, `relay_job`): the ticket's session in its worktree,
+  # started at once when nothing runs, where a reply would start the job of its rule. An answer, no round: it moves, posts
+  # and reviews nothing, and runs no check. Its commit, if it writes one, goes the way of the reply rule's job instead:
+  # `verify`, `publish`, then that job's `on_success` (`fix-human` in Human Review: the AI review again).
+  answer-relayed:
+    extends: dev-feedback
+    repo_checks: false
+    on_success: {}
   # The `rebase` step of factory/default (ORC-146): rebases the ticket's branch on the default branch in its sandbox, or
   # stops on the three conflicts a human decides (`submit_result` with `reason: conflict`). Its commit goes through `verify`,
   # then the factory publishes it over the head it published itself. It moves nothing and posts nothing.
