@@ -92,6 +92,23 @@ describe('GitWorkspaces', () => {
     expect(await ws.head(join(root, 'nowhere'))).toBeUndefined();
   });
 
+  it("gives a ticket's diff against the trunk, its commits only, for the answer agent (ORC-182)", async () => {
+    const { repo, root } = fixtureRepo();
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    expect(await ws.ticketDiff(repo, w.path)).toBe('(no change against the trunk)');
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    writeFileSync(join(w.path, 'export.ts'), 'export const SEPARATOR = ";";\n');
+    git(w.path, 'add', '.');
+    git(w.path, 'commit', '-m', 'export');
+    writeFileSync(join(w.path, 'draft.ts'), 'not committed\n');
+    const diff = (await ws.ticketDiff(repo, w.path))!;
+    expect(diff).toContain('+export const SEPARATOR = ";";');
+    expect(diff).not.toContain('draft.ts');
+    expect(await ws.ticketDiff(repo, join(root, 'nowhere'))).toBeUndefined();
+  });
+
   it('lists what the commits since a base changed, reads paths at the base and the head, and the uncommitted files (ORC-123)', async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });

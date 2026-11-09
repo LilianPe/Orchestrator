@@ -316,3 +316,82 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
   });
 });
 
+describe('the relay of a question the answer agent cannot answer (ORC-182)', () => {
+  const output = { status: 'done' as const, summary: 'Je ne trouve pas.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+  const asked = (patch: Record<string, unknown> = {}, job = 'ask') =>
+    ev('run.finished', { runId: 'q1', job, outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { ...output, relay: true }, ...patch }, { at: 5000 });
+  const relays = (d: ReturnType<typeof decide>) => d.events.filter((e) => e.type === 'relay.added' || e.type === 'relay.done');
+  const activities = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'activity');
+  const handed = (runId: string, to?: string) => ({ runId, at: 1, ...(to ? { handedTo: to } : {}) });
+
+  it('posts its answer, tells the human the question goes to the agent that implements, and adds it to the run inbox', () => {
+    const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), asked(), workflow);
+    expect(out.effects.map((e) => e.kind)).toEqual(['post_output', 'activity']);
+    expect(activities(out)).toEqual([{ kind: 'activity', type: 'response', body: expect.stringContaining('at the end of its current step'), runId: 'q1' }]);
+    expect(relays(out)).toEqual([{ type: 'relay.added', question: { runId: 'q1', at: 5000 } }]);
+  });
+
+  it('says so when nothing runs: the question waits for the next step, not the end of this one', () => {
+    const out = decide(ticket({ logical: 'human_review' }), asked(), workflow);
+    expect(activities(out)).toEqual([expect.objectContaining({ body: expect.stringContaining('when its next step starts (nothing runs on this ticket now)') })]);
+    expect(relays(out)).toHaveLength(1);
+  });
+
+  it('relays nothing for a ticket no agent implements: not delegated, or delivered', () => {
+    for (const t of [ticket({ delegated: false }), ticket({ prState: 'MERGED', logical: 'done' })]) {
+      const out = decide(t, asked(), workflow);
+      expect(relays(out)).toEqual([]);
+      expect(activities(out)).toEqual([expect.objectContaining({ type: 'response', body: expect.stringContaining('No agent implements this ticket') })]);
+    }
+  });
+
+  it('an answer without relay, one that did not finish, or a relay from another job of the queue relays nothing', () => {
+    const t = ticket({ activeRunId: 'r1' });
+    expect(relays(decide(t, asked({ output }), workflow))).toEqual([]);
+    expect(relays(decide(t, asked({ outcome: 'failure' }), workflow))).toEqual([]);
+    // A questions job that is not the answer agent: no human question waits on it.
+    const other = { ...workflow, jobs: { ...workflow.jobs, other: { ...workflow.jobs['ask']!, name: 'other', workspace: 'worktree' as const } } };
+    const out = decide(t, asked({}, 'other'), other);
+    expect(relays(out)).toEqual([]);
+    expect(activities(out)).toEqual([]);
+  });
+
+  it("relays the implementer's answer to each question it was handed, where it was asked, then they leave the run inbox", () => {
+    const t = ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2', 'r1'), handed('q3')] });
+    const end = ev('run.finished', { runId: 'r1', job: 'dev-feedback', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { ...output, answers: [{ question: 'q1', answer: 'Le ticket demande du CSV.' }] } });
+    const out = decide(t, end, workflow);
+    expect(activities(out)).toEqual([
+      { kind: 'activity', type: 'response', body: 'The agent that implements answers: Le ticket demande du CSV.', runId: 'q1' },
+      { kind: 'activity', type: 'response', body: expect.stringContaining('without answering your question'), runId: 'q2' },
+    ]);
+    expect(relays(out)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
+  });
+
+  it('a stopped or failed step answers none of its questions: the humans are told, the questions leave', () => {
+    const t = ticket({ activeRunId: 'r1', activeJob: 'dev', relayed: [handed('q1', 'r1')] });
+    for (const outcome of ['stopped', 'failure'] as const) {
+      const out = decide(t, ev('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 0, turns: 1, lastText: '' }), workflow);
+      expect(activities(out), outcome).toContainEqual(expect.objectContaining({ runId: 'q1', body: expect.stringContaining('without answering your question') }));
+      expect(relays(out), outcome).toEqual([{ type: 'relay.done', runId: 'r1' }]);
+    }
+  });
+
+  it('a step cut by the usage limit keeps its questions for its relaunch, or the next launch of the session', () => {
+    const t = ticket({ activeRunId: 'r1', activeJob: 'dev', relayed: [handed('q1', 'r1')] });
+    const out = decide(t, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '', usageLimit: { resetAt: 9000 } }), workflow);
+    expect(relays(out)).toEqual([]);
+    expect(activities(out).filter((a) => a.runId === 'q1')).toEqual([]);
+  });
+
+  it('reduce adds, hands and removes them by run, whatever else came in meanwhile', () => {
+    let t: TicketState = ticket();
+    t = reduce(t, { type: 'relay.added', question: handed('q1') })!;
+    t = reduce(t, { type: 'relay.handed', runIds: ['q1'], to: 'r1' })!;
+    t = reduce(t, { type: 'relay.added', question: handed('q2') })!;
+    expect(t.relayed).toEqual([handed('q1', 'r1'), handed('q2')]);
+    t = reduce(t, { type: 'relay.done', runId: 'r1' })!;
+    expect(t.relayed).toEqual([handed('q2')]);
+    t = reduce(reduce(t, { type: 'relay.handed', runIds: ['q2'], to: 'r2' })!, { type: 'relay.done', runId: 'r2' })!;
+    expect(t.relayed).toBeUndefined();
+  });
+});

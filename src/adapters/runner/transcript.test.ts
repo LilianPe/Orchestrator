@@ -5,7 +5,18 @@ import { describe, expect, it } from 'vitest';
 import { drain } from '../../../test/contracts/agent-runtime.contract.js';
 import { ClaudeCodeRunner } from './claude-code.js';
 import type { TicketState } from '../../core/types.js';
-import { MASK, maskTranscriptLine, purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets } from './transcript.js';
+import { MASK, maskTranscriptLine, purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets, transcriptTail } from './transcript.js';
+
+describe('transcriptTail (ORC-182)', () => {
+  it('reads the whole lines of the end of a transcript only, none without a file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-tail-'));
+    writeFileSync(join(dir, 'run-1.jsonl'), '{"a":1}\n{"b":"é2"}\n{"c":3}\n');
+    expect(transcriptTail(dir, 'run-1')).toEqual(['{"a":1}', '{"b":"é2"}', '{"c":3}']);
+    // The cut falls inside the second line: it is dropped, never given half.
+    expect(transcriptTail(dir, 'run-1', 12)).toEqual(['{"c":3}']);
+    expect(transcriptTail(dir, 'nope')).toBeUndefined();
+  });
+});
 
 const DAY = 24 * 60 * 60 * 1000;
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);

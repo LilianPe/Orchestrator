@@ -217,7 +217,7 @@ describe('the human inbox (ORC-180)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
     await h.send('session.prompted', { ...instruction('pourquoi ce choix ?'), kind: 'question' });
     expect(h.runner.requests).toHaveLength(2);
-    expect(h.runner.requests[1]).toMatchObject({ readOnly: true });
+    expect(h.runner.requests[1]).toMatchObject({ tools: ['Read', 'Grep', 'Glob'] });
     expect(h.runner.requests[1]!.prompt.startsWith('/factory:ask\n')).toBe(true);
     expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Parce que.' });
     expect((await h.store.getRun(running))!.status).toBe('running');

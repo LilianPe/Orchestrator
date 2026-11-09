@@ -129,7 +129,7 @@ export class GhCliForge implements Forge, RepoPermissions {
         if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
         throw execFailure('gh', args, r);
       }
-      summary = summarizeChecks(parseChecks(args, r).filter((c) => !isFactoryCheck(c.name)));
+      summary = summarizeChecks(parseChecks(args, r).filter((c) => !isFactoryCheck(c)));
     }
     return {
       number: pr.number,

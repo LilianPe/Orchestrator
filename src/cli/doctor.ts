@@ -9,17 +9,21 @@ import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
+import { branchName, FACTORY_BRANCHES } from '../core/naming.js';
 
-const FACTORY_BRANCH = /^factory\//;
-/** Representative factory branch names: enough to decide whether a filter can reach the factory space. */
-const FACTORY_PROBES = [
-  'factory/x',
-  'factory/REL-1',
-  'factory/0',
-  'factory/a-b',
-  'factory/a-foo',
-  'factory/foo-bar',
-];
+/**
+ * Branches as the factory names them (`branchName`, ORC-353): a team key for every initial (one with a digit too), numbers
+ * of every length, titles that start and end with a letter or a digit, the longest slug and the empty title's. Enough to
+ * decide whether a filter reaches the factory's branches, or leaves every one of them out; a sample all the same, not
+ * every branch (docs/github.md).
+ */
+const PROBE_TITLES = ['', 'Fix the login', '2026 : Été', 'x'.repeat(60), 'a-b c', 'Upgrade to v2', '42'];
+let probes: string[] | undefined;
+/** Built once, on first use: the CLI imports doctor for every command. */
+const factoryProbes = (): string[] =>
+  (probes ??= [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'].flatMap((key, i) =>
+    PROBE_TITLES.map((title, j) => branchName(`${key}-${[1, 42, 353, 70000][(i + j) % 4]}`, title)),
+  ));
 
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
@@ -37,8 +41,12 @@ export interface WorkflowReport {
   path: string;
   triggers: string[];
   secrets: boolean;
+  /** The jobs whose GITHUB_TOKEN can write (ORC-353), with their rights: the token is a secret by what it can do. */
+  githubToken: { job: string; rights: string }[];
+  /** Whether a trigger can run the workflow on a branch the factory names (ORC-353). */
+  factoryBranches: boolean;
   environments: { name: string; requiredReviewers: boolean }[];
-  /** True when every job that can see secrets is attached to a protected environment. */
+  /** True when every job that can see a secret or a writable GITHUB_TOKEN is attached to a protected environment. */
   protected: boolean;
   verdict: 'accepted' | 'refused';
   reasons: string[];
@@ -58,6 +66,10 @@ interface ParsedWorkflow {
   hasSecrets: boolean;
   /** Jobs that can see a secret; every job when a workflow-level value references one. */
   secretJobs: string[];
+  /** Jobs whose GITHUB_TOKEN can write, by job, with their rights. */
+  tokenWrites: Map<string, string>;
+  /** Jobs that can see a secret or a writable GITHUB_TOKEN, in the workflow's order. */
+  sensitiveJobs: string[];
 }
 
 type ParseResult = { ok: true; workflow: ParsedWorkflow } | { ok: false; reason: string };
@@ -129,36 +141,58 @@ function parseOn(value: unknown): Map<string, TriggerFilters> | string {
 
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
-/** Detects `secrets.X`, `secrets[X]`, and any expression that mentions the `secrets` context. */
-function textReferencesSecrets(text: string): boolean {
-  if (/\bsecrets\s*[.[]/i.test(text)) return true;
-  for (const match of text.matchAll(EXPRESSION)) {
-    if (/\bsecrets\b/i.test(match[1] ?? '')) return true;
+/**
+ * The `secrets` context in an expression: `secrets.X`, `secrets['X']`, or the whole context (`toJSON(secrets)`); never a
+ * property of another one (`inputs.secrets`).
+ */
+const SECRETS_CONTEXT = /(?<![\w.-])secrets\b(?:\s*\.\s*([A-Za-z_][\w-]*)|\s*\[\s*(['"])([^'"]*)\2\s*\])?/gi;
+
+/** Whether an expression reads a repository secret: `secrets.GITHUB_TOKEN` is the token, judged by its rights (ORC-353). */
+function expressionReadsSecret(expression: string): boolean {
+  for (const match of expression.matchAll(SECRETS_CONTEXT)) {
+    const name = match[1] ?? match[3];
+    if (name?.toUpperCase() !== 'GITHUB_TOKEN') return true;
   }
   return false;
 }
 
-/** Scans every value and key of a subtree; a `secrets:` key means indirect secrets (reusable workflow). */
-function scanForSecrets(value: unknown): boolean {
-  if (typeof value === 'string') return textReferencesSecrets(value);
-  if (Array.isArray(value)) return value.some((item) => scanForSecrets(item));
+/** The expressions of a value: each `${{ … }}`, and an `if:` whole, which GitHub reads as one without them. */
+function expressionsOf(text: string, key?: string): string[] {
+  const inline = [...text.matchAll(EXPRESSION)].map((match) => match[1] ?? '');
+  return key === 'if' && inline.length === 0 ? [text] : inline;
+}
+
+/** Whether a subtree reads a repository secret (ORC-353): in its expressions only, never in a shell text that names one. */
+function readsSecrets(value: unknown, key?: string): boolean {
+  if (typeof value === 'string') return expressionsOf(value, key).some(expressionReadsSecret);
+  if (Array.isArray(value)) return value.some((item) => readsSecrets(item));
   if (!isRecord(value)) return false;
-  for (const [key, child] of Object.entries(value)) {
-    if (key === 'secrets' || textReferencesSecrets(key)) return true;
-    if (scanForSecrets(child)) return true;
-  }
-  return false;
+  return Object.entries(value).some(([childKey, child]) => expressionsOf(childKey).some(expressionReadsSecret) || readsSecrets(child, childKey));
 }
 
-/** Same scan, but skips the `jobs` subtree: workflow-level secrets are inherited by every job. */
-function scanOutsideJobs(root: Record<string, unknown>): boolean {
-  for (const [key, child] of Object.entries(root)) {
-    if (key === 'jobs') continue;
-    if (key === 'secrets' || textReferencesSecrets(key)) return true;
-    if (scanForSecrets(child)) return true;
+/** A job that calls a reusable workflow with `secrets: inherit` hands it every secret, which doctor does not read. */
+const jobReadsSecrets = (job: Record<string, unknown>): boolean => (job['uses'] !== undefined && job['secrets'] === 'inherit') || readsSecrets(job);
+
+const PERMISSION_LEVELS = new Set(['read', 'write', 'none']);
+
+/**
+ * The write rights a `permissions:` value gives the GITHUB_TOKEN (ORC-353): `read-all` and `{}` none, `write-all` all of
+ * them, a map the scopes it sets to `write`. `undefined` for a value doctor cannot read.
+ */
+function writeRights(value: unknown): string | undefined {
+  if (value === 'read-all') return '';
+  if (value === 'write-all') return 'write-all';
+  if (!isRecord(value)) return undefined;
+  const scopes: string[] = [];
+  for (const [scope, level] of Object.entries(value)) {
+    if (typeof level !== 'string' || !PERMISSION_LEVELS.has(level)) return undefined;
+    if (level === 'write') scopes.push(scope);
   }
-  return false;
+  return scopes.length > 0 ? `write: ${scopes.join(', ')}` : '';
 }
+
+/** Without `permissions:`, the token has the repository's default rights, which the App cannot read: perhaps write. */
+const REPOSITORY_DEFAULT = 'repository default';
 
 function parseWorkflow(content: string): ParseResult {
   let documents;
@@ -187,12 +221,19 @@ function parseWorkflow(content: string): ParseResult {
   const rawJobs = root['jobs'];
   if (!isRecord(rawJobs)) return { ok: false, reason: 'missing or invalid `jobs` section' };
 
+  const workflowRights = root['permissions'] === undefined ? REPOSITORY_DEFAULT : writeRights(root['permissions']);
+  if (workflowRights === undefined) return { ok: false, reason: 'ambiguous `permissions` of the workflow' };
+
   const jobs = new Map<string, Record<string, unknown>>();
   const jobEnvironments = new Map<string, string>();
   const environmentNames: string[] = [];
+  const tokenWrites = new Map<string, string>();
   for (const [jobId, rawJob] of Object.entries(rawJobs)) {
     if (!isRecord(rawJob)) return { ok: false, reason: `job \`${jobId}\` invalide` };
     jobs.set(jobId, rawJob);
+    const rights = rawJob['permissions'] === undefined ? workflowRights : writeRights(rawJob['permissions']);
+    if (rights === undefined) return { ok: false, reason: `ambiguous \`permissions\` for the job \`${jobId}\`` };
+    if (rights) tokenWrites.set(jobId, rights);
     const environment = rawJob['environment'];
     if (environment !== undefined) {
       let name: string | undefined;
@@ -204,11 +245,9 @@ function parseWorkflow(content: string): ParseResult {
     }
   }
 
-  const rootSecrets = scanOutsideJobs(root);
-  const secretJobs: string[] = [];
-  for (const [jobId, job] of jobs) {
-    if (rootSecrets || scanForSecrets(job)) secretJobs.push(jobId);
-  }
+  // Workflow-level values (its `env`, `defaults`) are inherited by every job.
+  const rootSecrets = Object.entries(root).some(([key, child]) => key !== 'jobs' && readsSecrets(child, key));
+  const secretJobs = [...jobs].filter(([, job]) => rootSecrets || jobReadsSecrets(job)).map(([jobId]) => jobId);
 
   return {
     ok: true,
@@ -218,6 +257,9 @@ function parseWorkflow(content: string): ParseResult {
       environmentNames,
       hasSecrets: rootSecrets || secretJobs.length > 0,
       secretJobs,
+      tokenWrites,
+      // A writable GITHUB_TOKEN is a secret by what it can do on the repository (ORC-353): it pushes, tags, releases.
+      sensitiveJobs: [...jobs.keys()].filter((jobId) => secretJobs.includes(jobId) || tokenWrites.has(jobId)),
     },
   };
 }
@@ -254,19 +296,26 @@ function globToRegExp(glob: string): RegExp {
 }
 
 function canMatchFactory(pattern: string): boolean {
-  if (FACTORY_BRANCH.test(pattern)) return true;
+  // A pattern of the factory's own space may name a team key no probe has: it reaches, fail closed.
+  if (pattern.startsWith(FACTORY_BRANCHES)) return true;
   try {
     const regexp = globToRegExp(pattern);
-    return FACTORY_PROBES.some((probe) => regexp.test(probe));
+    return factoryProbes().some((probe) => regexp.test(probe));
   } catch {
     // Unreadable glob: fail closed, the workflow may reach a factory branch.
     return true;
   }
 }
 
-/** `factory/**`, `factory/*` and `**` exclude every factory branch when used as a negation. */
+/** A pattern that matches every factory branch: as a negation, it excludes them all. */
 function coversAllFactoryBranches(pattern: string): boolean {
-  return pattern === '**' || pattern === 'factory/**' || pattern === 'factory/*';
+  try {
+    const regexp = globToRegExp(pattern);
+    return factoryProbes().every((probe) => regexp.test(probe));
+  } catch {
+    // Unreadable glob: fail closed, it is not read as excluding the factory's branches.
+    return false;
+  }
 }
 
 function branchesReachFactory(patterns: string[]): boolean {
@@ -345,6 +394,8 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
       path: source.path,
       triggers: [],
       secrets: false,
+      githubToken: [],
+      factoryBranches: false,
       environments: [],
       protected: false,
       verdict: 'refused',
@@ -358,25 +409,23 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     requiredReviewers: environments.get(name)?.requiredReviewers === true,
   }));
   const exposure = exposureReasons(workflow.triggers);
-  const unprotectedJobs = workflow.secretJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
-  const protectedWorkflow =
-    workflow.hasSecrets &&
-    workflow.secretJobs.length > 0 &&
-    workflow.secretJobs.every((jobId) => protectedByEnvironment(jobId, workflow, environments));
+  const { sensitiveJobs } = workflow;
+  const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
+  const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
 
   const reasons: string[] = [];
   let verdict: WorkflowReport['verdict'] = 'accepted';
-  if (!workflow.hasSecrets) {
-    reasons.push('no secret referenced');
+  if (!what) {
+    reasons.push('no secret referenced, a read-only GITHUB_TOKEN');
   } else if (exposure.length === 0) {
-    reasons.push("secrets referenced only on triggers that do not reach the factory's branches");
-  } else if (workflow.secretJobs.length === 0) {
+    reasons.push(`${what} only on triggers that do not reach the factory's branches`);
+  } else if (sensitiveJobs.length === 0) {
     reasons.push('workflow without jobs: no secret can be exposed');
   } else if (unprotectedJobs.length === 0) {
-    reasons.push(`secrets limited to jobs under a protected environment (${[...new Set(workflow.environmentNames)].join(', ')})`);
+    reasons.push(`${what} limited to jobs under a protected environment (${[...new Set(workflow.environmentNames)].join(', ')})`);
   } else {
     verdict = 'refused';
-    reasons.push(`secrets exposed on the factory's branches (${exposure.join('; ')}) without human approval`);
+    reasons.push(`${what} exposed on the factory's branches (${exposure.join('; ')}) without human approval`);
     const withoutEnvironment = unprotectedJobs.filter((jobId) => !workflow.jobEnvironments.has(jobId));
     const withUnprotectedEnvironment = unprotectedJobs.filter((jobId) => workflow.jobEnvironments.has(jobId));
     if (withoutEnvironment.length > 0) reasons.push(`job(s) without an environment: ${withoutEnvironment.join(', ')}`);
@@ -384,14 +433,19 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     for (const name of workflow.environmentNames) {
       if (!environments.has(name)) reasons.push(`environment \`${name}\` not found in the GitHub API`);
     }
+    if (unprotectedJobs.some((jobId) => workflow.tokenWrites.get(jobId) === REPOSITORY_DEFAULT)) {
+      reasons.push("declare `permissions:` (read rights, such as `contents: read`) in the workflow or the job: the App cannot read the repository's default rights for the GITHUB_TOKEN");
+    }
   }
 
   return {
     path: source.path,
     triggers,
     secrets: workflow.hasSecrets,
+    githubToken: [...workflow.tokenWrites].map(([job, rights]) => ({ job, rights })),
+    factoryBranches: exposure.length > 0,
     environments: environmentReport,
-    protected: protectedWorkflow,
+    protected: sensitiveJobs.length > 0 && unprotectedJobs.length === 0,
     verdict,
     reasons,
   };
@@ -432,7 +486,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
       for (const report of reports) {
         out(report.path);
         out(`  triggers: ${report.triggers.length > 0 ? report.triggers.join(', ') : 'unknown'}`);
+        out(`  factory branches: ${report.factoryBranches ? 'reached' : 'not reached'}`);
         out(`  secrets: ${report.secrets ? 'yes' : 'no'}`);
+        out(`  GITHUB_TOKEN: ${report.githubToken.length > 0 ? report.githubToken.map((token) => `${token.job} (${token.rights})`).join(', ') : 'read only'}`);
         out(
           `  environments: ${
             report.environments.length > 0
@@ -449,8 +505,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? "Result: accepted — no workflow can expose a secret to the factory's branches."
-        : `Result: refused — ${refused} workflow(s) of ${reports.length} can expose secrets to the factory's branches.`,
+        ? "Result: accepted — no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
+        : `Result: refused — ${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches.`,
     );
   }
   return accepted ? 0 : 1;

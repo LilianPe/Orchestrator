@@ -803,6 +803,15 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   return out;
 }
 
+/** A run, its check or a job waiting to start: the work whose end is the ticket's next step boundary. */
+const workInFlight = (t: TicketState): boolean => !!(t.activeRunId || t.verifyingRunId || t.pendingJob);
+
+/**
+ * The answer agent (ORC-182): a job of the questions queue on a clone of the trunk, read-only. The orchestrator gives its
+ * session the answerer's role, and only its `relay` reaches the agent that implements.
+ */
+export const isAnswerer = (job: JobSpec): boolean => job.queue === 'questions' && job.workspace === 'trunk-readonly';
+
 /** A Linear session that carries questions (read-only answers), not the ticket's dev conversation. */
 export function isQuestionSession(ticket: TicketState | undefined, sessionId: string | undefined): boolean {
   if (!ticket || !sessionId) return false;
@@ -950,7 +959,7 @@ function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'th
 function heldInbox(ticket: TicketState | undefined): string | undefined {
   // The block first: a pending job a dead settle left on a blocked ticket is no work in flight (ORC-339).
   if (ticket?.blocked) return 'held by the block';
-  if (ticket?.activeRunId || ticket?.verifyingRunId || ticket?.pendingJob) return 'held for the end of the work in flight';
+  if (ticket && workInFlight(ticket)) return 'held for the end of the work in flight';
   return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over';
 }
 
@@ -1029,6 +1038,42 @@ function stopQuestion(out: Decision, sessionId: string): Decision {
   out.trace.push('built-in session.stopped (question session)');
   out.effects.push({ kind: 'stop_run', linearSessionId: sessionId }, { kind: 'activity', type: 'response', body: 'Stopped.', linearSessionId: sessionId });
   return out;
+}
+
+/**
+ * A question the answer agent could not answer from what it read (ORC-182): into the run inbox, for the agent that implements
+ * at its next step boundary (`Orchestrator.launch`), the human told so where they asked. The agents never speak to each other:
+ * the engine routes. A ticket no agent implements, not delegated or delivered, has nobody to ask.
+ */
+function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticket: TicketState | undefined): Decision {
+  const { runId } = event.payload;
+  if (!ticket?.delegated || settledTicket(ticket) === 'delivered') {
+    out.effects.push({ kind: 'activity', type: 'response', body: RELAY_NOBODY, runId });
+    return out;
+  }
+  out.trace.push(`relay: the question of ${runId} waits for the agent that implements`);
+  out.events.push({ type: 'relay.added', question: { runId, at: event.at } });
+  // The run at work does not get it: the next launch of the ticket session does, which may be far off when nothing runs.
+  const when = workInFlight(ticket) ? 'at the end of its current step' : 'when its next step starts (nothing runs on this ticket now)';
+  out.effects.push({ kind: 'activity', type: 'response', body: `The transcript and the code do not answer this: I am asking the agent that implements ${when}, and will relay its answer here.`, runId });
+  return out;
+}
+
+const RELAY_NOBODY = 'No agent implements this ticket: there is nobody to ask what the transcript and the code do not answer.';
+const RELAY_UNANSWERED = 'The agent that implements ended its step without answering your question. Ask it again here if it still matters.';
+
+/**
+ * The end of a run the relayed questions were handed to (ORC-182): each answer in the thread of its question, then they leave
+ * the run inbox. Not a run cut by the usage limit: its relaunch, or the next launch of the session, takes them again.
+ */
+function relayAnswers(out: Decision, ticket: TicketState | undefined, p: EventPayloads['run.finished']): void {
+  const handed = (ticket?.relayed ?? []).filter((r) => r.handedTo === p.runId);
+  if (!handed.length || (p.outcome !== 'success' && p.usageLimit)) return;
+  for (const r of handed) {
+    const answer = p.output?.answers?.find((a) => a.question === r.runId)?.answer;
+    out.effects.push({ kind: 'activity', type: 'response', body: answer ? `The agent that implements answers: ${answer}` : RELAY_UNANSWERED, runId: r.runId });
+  }
+  out.events.push({ type: 'relay.done', runId: p.runId });
 }
 
 /** The read-only answer to a question, in its session. */
@@ -1848,6 +1893,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const job = workflow.jobs[jobName];
       // An attempt that ended gives the lease's relaunch back (ORC-220): only two in a row block.
       if (ticket?.leaseRelaunches && job?.queue === 'dev') out.events.push({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+      // Whatever its outcome, the run's end answers the questions relayed to it, or says they got no answer (ORC-182).
+      relayAnswers(out, ticket, event.payload);
       if (!job || event.payload.outcome === 'stopped') return out;
       // A run that succeeded is kept, whatever the stream said of the limit on the way.
       const limited = event.payload.outcome !== 'success' ? event.payload.usageLimit : undefined;
@@ -1870,6 +1917,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         // The findings the fix of the review loop contests stay open: the next review's lenses read them (ORC-184).
         const review = ticket?.reviewBlocking;
         if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
+        // The answer agent's only: no human question waits on another job of its queue.
+        if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });

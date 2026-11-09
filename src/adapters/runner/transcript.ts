@@ -1,9 +1,41 @@
-import { readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readdirSync, readSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Store } from '../../store/types.js';
 
 /** How long a run transcript is kept (ORC-132): the daemon purges older ones. */
 export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Bytes of a transcript's end `transcriptTail` reads: a long session's tail, never the whole file on a launch. About ten times
+ * what the answer agent keeps of it (`TRANSCRIPT_MAX`), for the tool results among the lines, which it drops.
+ */
+export const TRANSCRIPT_TAIL_BYTES = 128 * 1024;
+
+/** A run's transcript file; the run id kept to its safe characters, never a path. */
+export const transcriptPath = (dir: string, runId: string): string => join(dir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`);
+
+/**
+ * The whole lines of the last `bytes` of a run's transcript (ORC-182): the line the cut falls in is dropped, a multibyte
+ * character it splits with it. Undefined without a file.
+ */
+export function transcriptTail(dir: string, runId: string, bytes = TRANSCRIPT_TAIL_BYTES): string[] | undefined {
+  let fd: number;
+  try {
+    fd = openSync(transcriptPath(dir, runId), 'r');
+  } catch {
+    return undefined;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - bytes);
+    const buf = Buffer.alloc(size - start);
+    const n = readSync(fd, buf, 0, buf.length, start);
+    const lines = buf.subarray(0, n).toString('utf8').split('\n');
+    return (start > 0 ? lines.slice(1) : lines).filter(Boolean);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** What replaces a secret in a transcript; plain text, so a JSON line stays valid. */
 export const MASK = '[masked]';

@@ -93,6 +93,20 @@ describe('what the fix of the review loop did with each finding (ORC-184)', () =
   });
 });
 
+describe('the relay of a question through the run inbox (ORC-182)', () => {
+  it("takes the answer agent's relay, on a done status only", () => {
+    expect(parseAgentOutput({ ...done, relay: true }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, status: 'blocked', question: 'Q ?', relay: true })).toEqual({ ok: false, error: expect.stringContaining('relay') });
+  });
+
+  it("takes the implementer's answers to the relayed questions, each question once", () => {
+    expect(parseAgentOutput({ ...done, answers: [{ question: 'run-1', answer: 'Parce que le ticket le demande.' }] }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, answers: [{ question: 'run-1', answer: '' }] })).toEqual({ ok: false, error: expect.stringContaining('answers.0.answer') });
+    const twice = [{ question: 'run-1', answer: 'a' }, { question: 'run-1', answer: 'b' }];
+    expect(parseAgentOutput({ ...done, answers: twice })).toEqual({ ok: false, error: expect.stringContaining('answers') });
+  });
+});
+
 describe('attemptOutcome', () => {
   const blocked = (reason?: 'needs_input' | 'spec_impossible'): AgentOutput => ({ ...done, status: 'blocked', question: '?', ...(reason ? { reason } : {}) });
   it.each([

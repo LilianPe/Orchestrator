@@ -67,7 +67,7 @@ describe('a disposable sandbox per attempt', () => {
     };
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Une question' });
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' }, 'REL-2');
-    expect(h.runner.requests.at(-1)).toMatchObject({ readOnly: true });
+    expect(h.runner.requests.at(-1)).toMatchObject({ tools: ['Read', 'Grep', 'Glob'] });
     expect(releasedAtDestroy).toEqual([[]]);
     expect(h.workspaces.released).toEqual([`/tmp/factory-fake/p/_trunk/${h.runner.requests.at(-1)!.runId}`]);
   });
@@ -126,6 +126,34 @@ describe('a disposable sandbox per attempt', () => {
     expect(seen).toMatchObject([{ commands: ['npm test'], worktree: '/tmp/factory-fake/p/REL-1', runId: h.runner.requests[0]!.runId }]);
     expect(h.checks.calls).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it("verify's sandbox takes a slot of the queue: with one slot, another ticket waits for its end (ORC-353)", async () => {
+    let entered!: () => void;
+    const inVerify = new Promise<void>((resolve) => (entered = resolve));
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const h = createHarness({
+      sandboxed: true,
+      concurrency: 1,
+      projectYaml: VERIFIED,
+      cleanVerify: async () => {
+        entered();
+        await gate;
+        return { ok: true, failures: [], sha: 'abc', tree: 'tree' };
+      },
+    });
+    const first = delegate(h);
+    await inVerify;
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    const second = h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    // REL-2 is in line behind the check, not started beside it.
+    const runsOf = (id: string) => h.runner.requests.filter((r) => r.prompt.includes(id));
+    await vi.waitFor(async () => expect(runsOf('REL-2').length > 0 || (await h.store.listQueue()).some((q) => q.ticketId === 'REL-2')).toBe(true), { timeout: 10_000 });
+    expect(runsOf('REL-2')).toEqual([]);
+    open();
+    await Promise.all([first, second]);
+    expect(runsOf('REL-2')).not.toEqual([]);
   });
 
   it("verify gets the project's known flaky tests, and its verdict journals the tests it reran with their causes (ORC-164)", async () => {
