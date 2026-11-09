@@ -83,6 +83,7 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
+import type { RegistryOpener } from '../checks/registry.js';
 import { checkBranchPaths, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
@@ -206,6 +207,8 @@ export interface OrchestratorDeps {
   hostChecks?: boolean;
   /** `verify` with sandboxes (ORC-151); a test replaces it. */
   cleanVerify?: CleanVerifier;
+  /** The package registries `verify` asks (`factory/dependances`, ORC-371), through the egress proxy. */
+  registries?: RegistryOpener;
   projects: ProjectRuntime[];
   packDir: string;
   /** `--settings` file for runs; defaults to <packDir>/settings.json. */
@@ -1097,6 +1100,7 @@ export class Orchestrator {
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
+        ...(this.d.registries ? { registries: this.d.registries } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
