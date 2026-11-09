@@ -1857,6 +1857,18 @@ export class Orchestrator {
     );
   }
 
+  /** What the lenses of a round read of the contested findings (ORC-184), resolved on the commit they were found on, kept for the round. */
+  private async contestedText(projectId: string, ticketId: string, contested: NonNullable<TicketState['contested']>): Promise<string | undefined> {
+    const { store } = this.d;
+    const id = JSON.stringify(contested);
+    const kept = await store.getMeta(contestedKey(projectId, ticketId));
+    const was = kept ? (JSON.parse(kept) as { id: string; text: string }) : undefined;
+    if (was?.id === id) return was.text || undefined;
+    const text = contestedInput(await store.findingsOf(projectId, ticketId, contested.sha), contested.items);
+    await store.setMeta(contestedKey(projectId, ticketId), JSON.stringify({ id, text: text ?? '' }));
+    return text;
+  }
+
   /**
    * The `review` effect (ORC-183): a lens's findings kept on the commit it read, in place of what that lens kept there before.
    * The publishing one then posts every lens's findings on that commit as one GitHub review, each on its line, or listed in its
@@ -1864,18 +1876,6 @@ export class Orchestrator {
    * `OutputPolicy`, a refused one replaced by its notice. Keyed: a replay finds its review by the effect's id, and the check by
    * the commit's. Any failure throws, and the outbox retries it: its move to Human Review waits behind it, and a dead one blocks the ticket.
    */
-  /** What the lenses of a round read of the contested findings (ORC-184), resolved on the commit they were found on, kept for the round. */
-  private async contestedText(projectId: string, ticketId: string, contested: NonNullable<TicketState['contested']>): Promise<string | undefined> {
-    const { store } = this.d;
-    const id = JSON.stringify(contested);
-    const kept = await store.getMeta(contestedKey(projectId, ticketId));
-    const was = kept ? (JSON.parse(kept) as { id: string; text: string | null }) : undefined;
-    if (was?.id === id) return was.text ?? undefined;
-    const text = contestedInput(await store.findingsOf(projectId, ticketId, contested.sha), contested.items);
-    await store.setMeta(contestedKey(projectId, ticketId), JSON.stringify({ id, text: text ?? null }));
-    return text;
-  }
-
   private async review(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'review' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const { store, clock } = this.d;
     await store.putFindings({ projectId: project.id, ticketId: t.ticketId, sha: c.sha, lens: c.lens, runId: c.runId, at: clock.now(), findings: c.findings });

@@ -34,9 +34,12 @@ const LABEL: Record<FindingSeverity, string> = { blocking: 'Blocking', minor: 'M
 /** The one definition of a blocking finding: what fails `factory/review` (ORC-183) and starts the fix of the review loop (ORC-184). */
 export const isBlocking = (f: Pick<Finding, 'severity'>): boolean => f.severity === 'blocking';
 
+/** The blocking findings of a commit, every lens's count added (ORC-184). */
+export const blockingTotal = (counts: Partial<Record<ReviewLens, number>>): number => Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0);
+
 export function reviewVerdict(findings: readonly Pick<Finding, 'severity'>[]): { conclusion: 'success' | 'failure'; summary: string } {
   const count = (s: FindingSeverity) => findings.filter((f) => f.severity === s).length;
-  const blocking = findings.filter(isBlocking).length;
+  const blocking = count('blocking');
   return {
     conclusion: blocking ? 'failure' : 'success',
     summary: `${blocking} blocking finding${blocking === 1 ? '' : 's'}, ${count('minor')} minor, ${count('out_of_scope')} out of scope`,
@@ -51,13 +54,14 @@ export const onItsLine = (f: Pick<Finding, 'severity'>): boolean => f.severity !
 
 /** A finding as a comment on its line. */
 export function inlineComment(f: ReviewFinding): string {
-  return [
-    `**${LABEL[f.severity]}** · ${f.lens} lens`,
-    f.explanation,
-    ...(f.suggestion ? [`**Suggestion**: ${f.suggestion}`] : []),
-    ...(f.fact ? [`Violates fact \`${f.fact}\`.`] : []),
-  ].join('\n\n');
+  return [`**${LABEL[f.severity]}** · ${f.lens} lens`, ...findingBody(f)].join('\n\n');
 }
+
+/** What a finding says, whoever reads it: the PR, the fix of the review loop, the next lens (ORC-184). */
+const findingBody = (f: Finding): string[] => [f.explanation, ...(f.suggestion ? [`**Suggestion**: ${f.suggestion}`] : []), ...(f.fact ? [`Violates fact \`${f.fact}\`.`] : [])];
+
+/** Where a finding is, as the texts around the findings name it. */
+const placeOf = (f: Pick<Finding, 'file' | 'line'>): string => `\`${f.file}:${f.line}\``;
 
 /** How long a listed finding's explanation may run when the full list would not fit in one text. */
 const SHORT = 200;
@@ -74,17 +78,16 @@ export function reviewBody(sha: string, findings: readonly ReviewFinding[], o: {
   const inline = o.inline ? findings.filter(onItsLine) : [];
   const listed = o.inline ? findings.filter((f) => !onItsLine(f)) : findings;
   const parts = [head, ...(inline.length ? ['Each blocking or minor finding is a comment on its line.'] : [])];
-  const place = (f: ReviewFinding) => `\`${f.file}:${f.line}\``;
   const forms = [
-    (f: ReviewFinding) => `${place(f)}\n${inlineComment(f)}`,
-    (f: ReviewFinding) => `${place(f)} **${LABEL[f.severity]}** · ${f.lens} lens: ${f.explanation.length > SHORT ? `${f.explanation.slice(0, SHORT)}…` : f.explanation}`,
-    (f: ReviewFinding) => `${place(f)} **${LABEL[f.severity]}** · ${f.lens} lens`,
+    (f: ReviewFinding) => `${placeOf(f)}\n${inlineComment(f)}`,
+    (f: ReviewFinding) => `${placeOf(f)} **${LABEL[f.severity]}** · ${f.lens} lens: ${f.explanation.length > SHORT ? `${f.explanation.slice(0, SHORT)}…` : f.explanation}`,
+    (f: ReviewFinding) => `${placeOf(f)} **${LABEL[f.severity]}** · ${f.lens} lens`,
   ];
   for (const form of forms) {
     const text = [...parts, ...listed.map(form)].join('\n\n');
     if (text.length <= OUTPUT_LIMITS.text) return text;
   }
-  return [...parts, `${listed.length} findings, too many to list here: ${listed.slice(0, 50).map(place).join(', ')}`].join('\n\n');
+  return [...parts, `${listed.length} findings, too many to list here: ${listed.slice(0, 50).map(placeOf).join(', ')}`].join('\n\n');
 }
 
 /** A blocking finding as the fix of the review loop is given it (ORC-184): `id`, its lens and its rank among that lens's blocking ones on the commit. */
@@ -102,8 +105,7 @@ export function blockingFindings(findings: readonly ReviewFinding[]): BlockingFi
     });
 }
 
-const findingText = (f: BlockingFinding): string =>
-  [`### ${f.id} · \`${f.file}:${f.line}\``, f.explanation, ...(f.suggestion ? [`**Suggestion**: ${f.suggestion}`] : [])].join('\n');
+const findingText = (f: BlockingFinding): string => [`### ${f.id} · ${placeOf(f)}`, ...findingBody(f)].join('\n');
 
 /**
  * The input of the fix of the review loop (ORC-184): the blocking findings of the review, one by one under their ids, and how

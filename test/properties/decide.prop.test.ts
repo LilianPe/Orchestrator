@@ -5,6 +5,7 @@ import { effectiveEvent } from '../../src/core/dead-letter.js';
 import type { Role } from '../../src/core/authz.js';
 import type { Effect } from '../../src/core/decision.js';
 import { AUTHZ_REFUSED, decide, isFenced, mayCheck, mayPublish, SENSITIVE_PATHS } from '../../src/core/engine.js';
+import { blockingTotal } from '../../src/core/review.js';
 import { reduce } from '../../src/core/reduce.js';
 import {
   higherRisk,
@@ -19,7 +20,7 @@ import {
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../../src/store/types.js';
-import { DEBOUNCE, DEV_SESSION, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
+import { BLOCKING, DEBOUNCE, DEV_SESSION, handedBack, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
 import { decided, effects, fold, isDevStart, isFactoryEvent, launches, params, readsFeedback, readsHistory, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
@@ -385,8 +386,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
      * and blocks the ticket. A green CI is no reset: the review would loop for good between its fix and the CI. The count is
      * the model's, kept from the decisions; the ticket's `ciFixAttempts` must agree with it after every step.
      */
-    const LOOP_JOBS: Readonly<Record<string, string>> = { 'pr.checks_failed': 'fix-ci', 'pr.conflicted': 'rebase', 'review-security': 'fix-review' };
-    const loopJob = (e: FactoryEvent): string | undefined => LOOP_JOBS[e.type === 'run.finished' ? e.payload.job : e.type];
+    const BY_EVENT: Partial<Record<EventType, string>> = { 'pr.checks_failed': 'fix-ci', 'pr.conflicted': 'rebase' };
+    // The lens that publishes the review: its end starts the fix of the review loop.
+    const BY_LENS: Partial<Record<string, string>> = { 'review-security': 'fix-review' };
+    const loopJob = (e: FactoryEvent): string | undefined => (e.type === 'run.finished' ? BY_LENS[e.payload.job] : BY_EVENT[e.type]);
     const redCiBounded = (r: Run, bound: number): void => {
       let fixes = 0;
       for (const step of decided(r)) {
@@ -405,7 +408,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         const types = step.decision.events.map((e) => e.type);
         if (step.event.type === 'run.finished') {
           // The review that publishes with a blocking finding standing, past the bound: published, and the ticket blocked.
-          const found = step.decision.effects.some((e) => e.kind === 'review' && e.publish) && (step.after?.reviewBlocking?.count ?? 0) > 0;
+          const found = step.decision.effects.some((e) => e.kind === 'review' && e.publish) && blockingTotal(step.after?.reviewBlocking?.counts ?? {}) > 0;
           if (found) expect(types, 'a review past the bound blocks').toContain('ticket.blocked');
           continue;
         }
@@ -463,8 +466,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     // Found by the review loop (ORC-184): a red CI, then a green one, then two reviews that find; with the count reset by the
     // green CI, the second review would start a third run of the loop.
     const reviewRound = (n: number): Entry[] => [
-      sh({ type: 'run.started', runId: `rv${n}`, job: 'review-security', queue: 'dev', claudeSessionId: 'claude-r' }),
-      ext('run.finished', { runId: `rv${n}`, job: 'review-security', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini', attempt: 'succeeded', output: { status: 'done', summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings: [{ file: 'src/a.ts', line: 1, severity: 'blocking', explanation: 'casse', suggestion: '' }] } }),
+      runStarted('review-security', `rv${n}`),
+      ext('run.finished', { runId: `rv${n}`, job: 'review-security', outcome: 'success', costUsd: 0.5, turns: 3, lastText: 'fini', ...handedBack({ findings: [BLOCKING] }) }),
     ];
     const reviewCounterexample = seq(
       ...delegated(),

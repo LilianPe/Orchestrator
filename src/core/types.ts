@@ -79,7 +79,7 @@ export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures
 export type QueueName = 'dev' | 'questions';
 
 /** A finding of the AI review the fix contests (ORC-184): its id in the fix's input (`correctness-1`), and why it does not apply. */
-export type ContestedFinding = { finding: string; justification: string };
+export type ContestedFinding = NonNullable<AgentOutput['contested']>[number];
 
 /** What a human message asks for (ORC-180), classified at its arrival and journaled with it. */
 export type MessageKind = 'question' | 'instruction' | 'command';
@@ -541,10 +541,10 @@ export interface TicketState {
    */
   ciFixAttempts: number;
   /**
-   * The blocking findings the AI review lenses kept on the published commit `sha` (ORC-184): the first lens's, then both once
-   * the lens that publishes ends; `lens`, the one that wrote it. Absent on a ticket never reviewed since ORC-184.
+   * The blocking findings each AI review lens kept on the published commit `sha` (ORC-184), counted by lens: the lens that
+   * publishes reads their sum. Absent on a ticket never reviewed since ORC-184.
    */
-  reviewBlocking?: { sha: string; lens: ReviewLens; count: number };
+  reviewBlocking?: { sha: string; counts: Partial<Record<ReviewLens, number>> };
   /**
    * The findings of the review on `sha` the fix of the review loop contested, with its justification (ORC-184): they stay open,
    * and the next review's lenses read them. `null` once that review has published; absent when none was contested.

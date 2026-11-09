@@ -10,7 +10,8 @@ const WORKTREE = '/tmp/factory-fake/p/REL-1';
 /** The commit `verify` finds green in the ticket's worktree, which the factory publishes. */
 const SHA = 'c0ffee'.padEnd(40, '0');
 
-const lens = (summary: string, findings: Finding[]): AgentOutput => ({ status: 'done', summary, tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings });
+const output = (summary: string, more: Partial<AgentOutput> = {}): AgentOutput => ({ status: 'done', summary, tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...more });
+const lens = (summary: string, findings: Finding[]): AgentOutput => output(summary, { findings });
 
 /** REL-1 delegated, built and published; then the two lenses answer with these findings, or none. A blocking one starts the fix of the review loop (ORC-184), held there. */
 async function published(h: Harness, findings: { correctness?: Finding[]; security?: Finding[] } = {}, diff?: string): Promise<void> {
@@ -156,7 +157,7 @@ describe('the AI review (ORC-183)', () => {
 
 describe('the review → fix loop (ORC-184)', () => {
   const SHA2 = 'f1x'.padEnd(40, '1');
-  const fix = (summary: string, more: Partial<AgentOutput> = {}): AgentOutput => ({ status: 'done', summary, tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...more });
+  const fix = output;
   const fixes = (h: Harness) => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:feedback'));
   const thread = { author: 'octo', body: 'Why write the header here?', at: 0, source: 'review' as const };
 

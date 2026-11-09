@@ -11,7 +11,7 @@ import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
-import { isBlocking } from './review.js';
+import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { higherRisk, type Blocker, type ClarifyQuestion, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
@@ -288,13 +288,11 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const publishes = job.onSuccess.post === 'review';
   out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(publishes ? { publish: true as const } : {}) });
   if (!Object.values(workflow.jobs).some((j) => j.onBlocking)) return success(out, at, job, p.runId, p.output);
-  // The first lens's count, then both lenses' once the one that publishes ends: it runs second, on the same commit. Never a
-  // count it wrote itself, on a commit reviewed again.
-  const kept = ticket?.reviewBlocking;
-  const earlier = publishes && kept?.sha === sha && kept.lens !== lens ? kept.count : 0;
-  const blocking = earlier + findings.filter(isBlocking).length;
+  // Each lens's count on the commit, the lens that publishes reading their sum.
+  const counts = { ...(ticket?.reviewBlocking?.sha === sha ? ticket.reviewBlocking.counts : {}), [lens]: findings.filter(isBlocking).length };
   // What the fix contested of the previous round, its lenses have read now: the findings standing are this review's.
-  out.events.push({ type: 'ticket.patched', patch: { reviewBlocking: { sha, lens, count: blocking }, ...(publishes && ticket?.contested ? { contested: null } : {}) } });
+  out.events.push({ type: 'ticket.patched', patch: { reviewBlocking: { sha, counts }, ...(publishes && ticket?.contested ? { contested: null } : {}) } });
+  const blocking = publishes ? blockingTotal(counts) : 0;
   const fix = job.onBlocking && workflow.jobs[job.onBlocking.run];
   if (!fix || !blocking) return success(out, at, job, p.runId, p.output);
   if (refusal(at.event, ticket, fix)) {

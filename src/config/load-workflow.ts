@@ -194,8 +194,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   for (const j of Object.values(jobs)) {
     if (j.onSuccess.run && !jobs[j.onSuccess.run]) throw new WorkflowError(`jobs.${j.name}.on_success.run: unknown job "${j.onSuccess.run}"`);
-    const fix = j.onBlocking && jobs[j.onBlocking.run];
-    if (j.onBlocking && (!fix || fix.input !== 'findings')) throw new WorkflowError(`jobs.${j.name}.on_blocking.run: "${j.onBlocking.run}" must be a job that reads the findings (input: findings)`);
+    if (j.onBlocking && jobs[j.onBlocking.run]?.input !== 'findings') throw new WorkflowError(`jobs.${j.name}.on_blocking.run: "${j.onBlocking.run}" must be a job that reads the findings (input: findings)`);
   }
 
   const on: Partial<Record<EventType, Rule[]>> = {};

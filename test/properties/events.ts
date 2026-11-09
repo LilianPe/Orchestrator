@@ -330,8 +330,8 @@ const redCi: fc.Arbitrary<DraftEntry[]> = fc
   ]);
 
 /** What a lens or the fix of the review loop hands back (ORC-184): a blocking finding or none; a finding contested or none. */
-const BLOCKING = { file: 'src/a.ts', line: 1, severity: 'blocking' as const, explanation: 'casse', suggestion: '' };
-const handedBack = (more: object) => ({ output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...more }, attempt: 'succeeded' as const });
+export const BLOCKING = { file: 'src/a.ts', line: 1, severity: 'blocking' as const, explanation: 'casse', suggestion: '' };
+export const handedBack = (more: object) => ({ output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...more }, attempt: 'succeeded' as const });
 
 /**
  * Rounds of the AI review loop (ORC-184), walked to the bound of the review and CI loop or past it: the fix of the review
