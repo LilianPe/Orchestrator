@@ -3,20 +3,19 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd } from '../adapters/exec.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
-import { LinearApi } from '../adapters/tracker/linear/api.js';
-import { TokenManager } from '../adapters/tracker/linear/oauth.js';
-import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { startFactory } from '../app/bootstrap.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError, loadFactoryBudgets, loadFactoryYml } from '../config/factory-yml.js';
-import { homePaths, linearSettings, loadInstance, factoryHome, saveLinearTokens } from '../config/instance.js';
+import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
 import { openStore } from '../store/open.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { runBaselineCommand } from './baseline.js';
 import { runStatusCommand, runStopCommand } from './control.js';
 import { runInit } from './init.js';
+import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
 import { runFlakyCommand } from './flaky.js';
 import { formatPlan, planRows } from './plan.js';
@@ -36,7 +35,8 @@ const USAGE = `Usage: factory <command>
   stop <ID>          stop a ticket's run
   replay <journal>... replay exported journals (bit-for-bit regression, --what-if <workflow.yml>, --export <ID>)
   run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
-  flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative`;
+  flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
+  baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub`;
 
 /** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
 function uiAuth(): Record<string, string> {
@@ -49,6 +49,8 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
   // Its own options, on the store alone.
   if (process.argv[2] === 'flaky') return runFlakyCommand(factoryHome(), process.argv.slice(3));
+  // Its own options; Linear, GitHub and the store, no running instance needed.
+  if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // The repository's file and the budgets of factory.yml (ORC-216), its secrets left unresolved: no running instance needed.
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => ({ budgets: loadFactoryBudgets(factoryHome()) }) });
   const { positionals, values } = parseArgs({
@@ -91,25 +93,18 @@ async function main(): Promise<number> {
       return 0;
     }
     case 'plan': {
-      let linear;
+      let tracker;
       try {
-        linear = linearSettings(home, loadFactoryYml(home));
+        tracker = cliLinearTracker(home, loadFactoryYml(home));
       } catch (err) {
         if (!(err instanceof FactoryYmlError)) throw err;
         console.log(`${err.message}\n(plan reads the Linear credentials from factory.yml: run it with the daemon's environment.)`);
         return 1;
       }
-      if (!linear?.accessToken || !linear.appUserId) {
-        console.log('Linear not connected: run `factory up`, then connect Linear.');
+      if (typeof tracker === 'string') {
+        console.log(tracker);
         return 1;
       }
-      const tm = new TokenManager({
-        clientId: linear.clientId,
-        clientSecret: linear.clientSecret,
-        load: () => ({ accessToken: linear.accessToken!, refreshToken: linear.refreshToken, expiresAt: linear.expiresAt }),
-        save: (t) => saveLinearTokens(home, t),
-      });
-      const tracker = new LinearTracker(new LinearApi(() => tm.get()), linear.appUserId);
       const packDir = join(repoRoot(), 'packs/standard');
       const projects = cfg.projects.map((p) => {
         const f = join(p.repoPath, '.factory/workflow.yml');
