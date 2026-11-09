@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GitHubAppApi } from '../../src/adapters/forge/github-app-api.js';
 import { runDoctor } from '../../src/cli/doctor.js';
-import { appForge, appOptions, gh, GITHUB_ENV, missing, titled, tokenOf } from './github-live.js';
+import { appOptions, gate, gh, GITHUB_ENV, LiveForge, REPO } from './github-live.js';
 
 /**
  * Isolation n° 12: a factory PR sees no CI secret (ORC-219, against ORC-135). The test repository holds a secret its CI
@@ -14,17 +14,20 @@ import { appForge, appOptions, gh, GITHUB_ENV, missing, titled, tokenOf } from '
  * factory opens a real draft PR from a `factory/` branch: the canary's runs wait for the reviewer, none ran with the secret.
  * The PR is closed and its branch deleted after; the waiting runs are cancelled if the App may, rejected by hand otherwise.
  */
-const REPO = process.env['FACTORY_ISO_GH_REPO']?.trim() ?? '';
 const CANARY = '.github/workflows/iso-canary.yml';
 const ENVIRONMENT = 'iso-canary';
 
-describe.skipIf(missing(...GITHUB_ENV).length > 0)(titled('isolation 12: a factory PR sees no CI secret', [...GITHUB_ENV]), () => {
+const { skip, title } = gate('isolation 12: a factory PR sees no CI secret', GITHUB_ENV);
+
+describe.skipIf(skip)(title, () => {
+  let forge: LiveForge;
   let token = '';
   let branch = '';
   let pr: number | undefined;
 
   beforeAll(async () => {
-    token = tokenOf(await appForge().gitAccess(REPO));
+    forge = new LiveForge(appOptions());
+    token = await forge.token(REPO);
   }, 120_000);
 
   afterAll(async () => {
@@ -44,7 +47,6 @@ describe.skipIf(missing(...GITHUB_ENV).length > 0)(titled('isolation 12: a facto
   }, 120_000);
 
   it("a factory PR's CI does not run the job that reads the secret: it waits for the reviewer", async () => {
-    const forge = appForge();
     const { body: repo } = await gh(`/repos/${REPO}`, token);
     const base = repo.default_branch as string;
     const { body: head } = await gh(`/repos/${REPO}/commits/${base}`, token);
@@ -55,16 +57,17 @@ describe.skipIf(missing(...GITHUB_ENV).length > 0)(titled('isolation 12: a facto
     expect((await gh(`/repos/${REPO}/git/refs`, token, { method: 'POST', body: { ref: `refs/heads/${branch}`, sha: commit.body.sha } })).status).toBe(201);
     pr = (await forge.ensurePr(REPO, { branch, base, title: 'iso-12: a factory PR', body: 'Isolation test n° 12 (ORC-219): closed by the test.', draft: true })).number;
 
-    // The canary's runs on that head, once each has left the queue.
-    type Run = { id: number; path: string; status: string };
+    // The canary's runs on that head, the PR's own among them, once each is waiting or done.
+    type Run = { id: number; path: string; event: string; status: string };
     let runs: Run[] = [];
     for (let i = 0; i < 60; i++) {
       const listed = await gh(`/repos/${REPO}/actions/runs?head_sha=${commit.body.sha}`, token);
+      expect(listed.status, 'the runs are unreadable: the App needs Actions: read').toBe(200);
       runs = (listed.body.workflow_runs as Run[]).filter((r) => r.path === CANARY || r.path.startsWith(`${CANARY}@`));
-      if (runs.length && runs.every((r) => !['queued', 'requested', 'pending'].includes(r.status))) break;
+      if (runs.some((r) => r.event === 'pull_request') && runs.every((r) => ['waiting', 'completed'].includes(r.status))) break;
       await new Promise((r) => setTimeout(r, 5000));
     }
-    expect(runs.length, `no run of ${CANARY} on the factory's PR after 5 minutes`).toBeGreaterThan(0);
+    expect(runs.map((r) => r.event), `no run of ${CANARY} for the factory's PR after 5 minutes`).toContain('pull_request');
     try {
       for (const run of runs) {
         expect(run.status, `run ${run.id}`).toBe('waiting');

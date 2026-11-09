@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { agentPolicy } from '../../src/network/levels.js';
 import { AGENT_API, egressRunnable, http1, useEgress } from './egress.js';
@@ -14,7 +15,7 @@ import { cli } from './helpers.js';
 const repo = parseRepoConfig('network: { level: custom, allow: [docs.example.org] }\n');
 
 describe.skipIf(!egressRunnable)(`isolation 5: around the proxy and the step's level (${cli})`, () => {
-  const egress = useEgress('iso5', { standIn: {} });
+  const egress = useEgress('iso5');
   let custom: Awaited<ReturnType<typeof egress.open>>;
   let narrowed: Awaited<ReturnType<typeof egress.open>>;
   let none: Awaited<ReturnType<typeof egress.open>>;
@@ -35,9 +36,9 @@ describe.skipIf(!egressRunnable)(`isolation 5: around the proxy and the step's l
   it('a tool that ignores the proxy, or is pointed at another one, has no way out', async () => {
     const before = egress.seen.length;
     const unset = 'env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy -u NODE_USE_ENV_PROXY';
-    expect(await custom.sh(`cd /work && ${unset} node egress-probe.mjs fetch https://registry.npmjs.org/`)).toMatchObject({ out: expect.stringMatching(/^ERR /) as string });
+    expect(await custom.sh(`cd ${WORKSPACE_TARGET} && ${unset} node egress-probe.mjs fetch https://registry.npmjs.org/`)).toMatchObject({ out: expect.stringMatching(/^ERR /) as string });
     for (const proxy of ['http://10.0.2.2:3128', 'http://host.docker.internal:3128', 'http://169.254.169.254:3128']) {
-      expect(await custom.sh(`cd /work && HTTPS_PROXY=${proxy} https_proxy=${proxy} node egress-probe.mjs fetch https://registry.npmjs.org/`), proxy).toMatchObject({ out: expect.stringMatching(/^ERR /) as string });
+      expect(await custom.sh(`cd ${WORKSPACE_TARGET} && HTTPS_PROXY=${proxy} https_proxy=${proxy} node egress-probe.mjs fetch https://registry.npmjs.org/`), proxy).toMatchObject({ out: expect.stringMatching(/^ERR /) as string });
     }
     expect(egress.seen.length).toBe(before);
     // The control: the same fetch, through the proxy.

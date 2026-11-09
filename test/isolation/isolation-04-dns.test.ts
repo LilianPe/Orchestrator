@@ -12,7 +12,7 @@ const SECRET = '736563726574636f64656f667468657265706f';
 const exfil = `${SECRET}.exfil.example`;
 
 describe.skipIf(!egressRunnable)(`isolation 4: exfiltration by DNS (${cli})`, () => {
-  const egress = useEgress('iso4', { standIn: {} });
+  const egress = useEgress('iso4');
   let box: Awaited<ReturnType<typeof egress.open>>;
 
   beforeAll(async () => {

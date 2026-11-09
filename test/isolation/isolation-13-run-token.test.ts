@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAppJwt } from '../../src/adapters/forge/github-app.js';
 import type { GitAccess } from '../../src/adapters/forge/types.js';
-import { appForge, appOptions, gh, GITHUB_ENV, missing, titled, tokenOf } from './github-live.js';
+import { appOptions, gate, gh, GITHUB_ENV, LiveForge, REPO } from './github-live.js';
 
 /**
  * Isolation n° 13: a run's token opens its run's repository alone (ORC-219, against ORC-124). The real App gives the
@@ -13,18 +13,17 @@ import { appForge, appOptions, gh, GITHUB_ENV, missing, titled, tokenOf } from '
  * nothing else of the same installation, by the API or by git. `FACTORY_ISO_GH_OTHER_REPO` must be a private repository
  * the App is installed on with the same installation: checked first, so that a refusal proves something.
  */
-const NAMES = [...GITHUB_ENV, 'FACTORY_ISO_GH_OTHER_REPO'];
-const REPO = process.env['FACTORY_ISO_GH_REPO']?.trim() ?? '';
+const { skip, title } = gate("isolation 13: a run's token opens its repository alone", [...GITHUB_ENV, 'FACTORY_ISO_GH_OTHER_REPO']);
 const OTHER = process.env['FACTORY_ISO_GH_OTHER_REPO']?.trim() ?? '';
 
-describe.skipIf(missing(...NAMES).length > 0)(titled("isolation 13: a run's token opens its repository alone", NAMES), () => {
+describe.skipIf(skip)(title, () => {
   let access: GitAccess;
   let token = '';
   let local = '';
-  /** git with the factory's access to the run's repository, as it pushes: its exit code. */
+  /** git with the factory's access to the run's repository, as it pushes, and no credential or rewrite of the machine's: its exit code. */
   const git = (...args: string[]) => {
     try {
-      execFileSync('git', args, { cwd: local, env: { ...process.env, ...access.env, GIT_TERMINAL_PROMPT: '0' }, stdio: 'ignore', timeout: 60_000 });
+      execFileSync('git', args, { cwd: local, env: { ...process.env, ...access.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'ignore', timeout: 60_000 });
       return 0;
     } catch (err) {
       return (err as { status?: number }).status ?? 1;
@@ -34,14 +33,16 @@ describe.skipIf(missing(...NAMES).length > 0)(titled("isolation 13: a run's toke
 
   beforeAll(async () => {
     // The other repository proves something only if the installation holds it, and if a token is needed to read it.
-    const jwt = createAppJwt(appOptions().appId, appOptions().privateKey);
+    const options = appOptions();
+    const jwt = createAppJwt(options.appId, options.privateKey);
     const [mine, other] = await Promise.all([gh(`/repos/${REPO}/installation`, jwt), gh(`/repos/${OTHER}/installation`, jwt)]);
     expect(mine.status, `the App is not installed on ${REPO}`).toBe(200);
     expect(other.status, `the App is not installed on ${OTHER}`).toBe(200);
     expect(other.body.id, `${OTHER} must be in the same installation as ${REPO}`).toBe(mine.body.id);
     expect((await gh(`/repos/${OTHER}`, undefined)).status, `${OTHER} must be private: a public repository reads with any token`).toBe(404);
-    access = await appForge().gitAccess(REPO);
-    token = tokenOf(access);
+    const forge = new LiveForge(options);
+    access = await forge.gitAccess(REPO);
+    token = await forge.token(REPO);
     local = mkdtempSync(join(tmpdir(), 'factory-iso13-'));
     execFileSync('git', ['init', '-q'], { cwd: local });
     execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'iso-13'], { cwd: local });

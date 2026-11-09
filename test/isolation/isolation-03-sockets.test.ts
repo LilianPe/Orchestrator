@@ -1,4 +1,4 @@
-import { connect, createServer, type Server } from 'node:net';
+import { connect, createServer, isIP, type Server } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NetworkLevel } from '../../src/adapters/sandbox/types.js';
 import { AGENT_API, egressRunnable, useEgress } from './egress.js';
@@ -11,7 +11,9 @@ import { cli } from './helpers.js';
  * host, answers through the same proxy.
  */
 const levels: NetworkLevel[] = ['limited', 'full'];
-const METADATA = ['169.254.169.254', '169.254.170.2', '100.100.100.200', '[fd00:ec2::254]'];
+const METADATA = ['169.254.169.254', '169.254.170.2', '100.100.100.200', 'fd00:ec2::254'];
+/** An address as a URL or a CONNECT writes it. */
+const authority = (ip: string) => (isIP(ip) === 6 ? `[${ip}]` : ip);
 
 describe.skipIf(!egressRunnable)(`isolation 3: sockets and metadata addresses (${cli})`, () => {
   const egress = useEgress('iso3');
@@ -40,7 +42,7 @@ describe.skipIf(!egressRunnable)(`isolation 3: sockets and metadata addresses ($
 
   it.each(levels)('%s: no TCP or UDP socket of its own, to the internet, a metadata service or the host', async (level) => {
     const b = boxes[level];
-    for (const ip of ['1.1.1.1', '2606:4700:4700::1111', ...METADATA.map((m) => m.replace(/[[\]]/g, ''))]) {
+    for (const ip of ['1.1.1.1', '2606:4700:4700::1111', ...METADATA]) {
       expect(await b.probe('tcp', ip, '80'), ip).toMatch(/^ERR /);
       expect(await b.probe('udp', ip, '53'), ip).toMatch(/^ERR /);
     }
@@ -49,8 +51,11 @@ describe.skipIf(!egressRunnable)(`isolation 3: sockets and metadata addresses ($
 
   it.each(levels)("%s: no socket of the host's, the abstract ones included; no socket file but its proxy's", async (level) => {
     const b = boxes[level];
-    // The control: from the host, the socket answers.
+    // The control: from the host, the socket answers, its hit counted before the sandbox's try.
+    const control = hostHits.length;
     await new Promise<void>((ok, ko) => connect(`\0${abstract}`, ok).on('error', ko));
+    for (let i = 0; i < 50 && hostHits.length === control; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(hostHits.length).toBe(control + 1);
     const before = hostHits.length;
     expect(await b.probe('unix', `@${abstract}`)).toMatch(/^ERR /);
     expect(await b.sh(`find / \\( -path /proc -o -path /sys \\) -prune -o -type s -print 2>/dev/null`)).toMatchObject({ out: '/run/factory/egress/egress.sock' });
@@ -64,10 +69,10 @@ describe.skipIf(!egressRunnable)(`isolation 3: sockets and metadata addresses ($
     // The control: the proxy relays the agent API, to the stand-in on this host's loopback.
     expect(await b.probe('fetch', `${AGENT_API}/agent/mcp`, 'POST', '{}')).toMatch(/^200 /);
     const hits = egress.agentHits.length;
-    for (const m of METADATA) expect(await b.probe('fetch', `http://${m}/latest/meta-data/`), m).not.toMatch(/^200 /);
+    for (const m of METADATA) expect(await b.probe('fetch', `http://${authority(m)}/latest/meta-data/`), m).not.toMatch(/^200 /);
     const spellings = [
-      ...METADATA.map((m) => `${m}:80`),
-      ...METADATA.map((m) => `${m}:443`),
+      ...METADATA.map((m) => `${authority(m)}:80`),
+      ...METADATA.map((m) => `${authority(m)}:443`),
       // 169.254.169.254 in octal, hex, decimal and IPv4-mapped: the resolver reads the first three as the address.
       '0251.0376.0251.0376:80', '0xa9fea9fe:80', '2852039166:80', '[::ffff:169.254.169.254]:80', '[::ffff:a9fe:a9fe]:443',
       // This host, by every name, on the agent API's real port: only its sandbox name may lead there.
@@ -78,6 +83,6 @@ describe.skipIf(!egressRunnable)(`isolation 3: sockets and metadata addresses ($
     // Every refusal is journaled, and nothing went out but the agent API.
     const journal = await b.journal();
     expect(journal.filter((e) => e.ok && e.host !== 'host.docker.internal')).toEqual([]);
-    for (const m of METADATA) expect(journal, m).toContainEqual(expect.objectContaining({ host: m.replace(/[[\]]/g, ''), ok: false }));
+    for (const m of METADATA) expect(journal, m).toContainEqual(expect.objectContaining({ host: m, ok: false }));
   });
 });
