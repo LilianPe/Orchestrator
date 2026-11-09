@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { describePr, FACTS_ROOM, formatRecap } from '../publish/describe.js';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Store } from '../store/types.js';
+import { formatSpec, item, list, SPEC_FRAME, specSchema } from './spec.js';
 import { RISKS, TICKET_SIZES, type RunOutcome } from './types.js';
 
 /** A question `clarify` asks (ORC-210): its options are the hypotheses the agent sees, a free answer always possible. */
@@ -22,10 +23,6 @@ export const intakeAssessmentSchema = z
   })
   .strict()
   .refine((a) => a.complete || a.missing.length > 0, { path: ['missing'], message: 'at least one question when the ticket is not complete' });
-
-/** An entry of a list `submit_result` holds, and the list: capped as what the factory publishes of them (ORC-214). */
-const item = z.string().max(OUTPUT_LIMITS.item);
-const list = z.array(item).max(OUTPUT_LIMITS.items);
 
 /** How a review lens weighs a finding (ORC-183): only a `blocking` one fails `factory/review`. */
 export const FINDING_SEVERITIES = ['blocking', 'minor', 'out_of_scope'] as const;
@@ -93,6 +90,8 @@ export const agentOutputSchema = z
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
     /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
     intake: intakeAssessmentSchema.optional(),
+    /** The `spec_draft` step's spec (ORC-212): `spec_check` judges it, the factory publishes it. */
+    spec: specSchema.optional(),
     /** A review lens's findings (ORC-183), an empty list when it found nothing: the factory publishes them, never its summary alone. */
     findings: z.array(findingSchema).max(OUTPUT_LIMITS.findings).optional(),
     /** The fix of the review loop (ORC-184): each finding fixed, with the one commit that fixes it. */
@@ -132,7 +131,8 @@ export function parseAgentOutput(raw: unknown): { ok: true; output: AgentOutput 
 
 /**
  * Fields each under their cap can still add up past what the factory publishes of them (ORC-214, ORC-195): the recap past a
- * comment's cap, the PR description past a body's less `FACTS_ROOM`, the room the factory's own facts take. Checked when the agent
+ * comment's cap, the PR description past a body's less `FACTS_ROOM`, the room the factory's own facts take, the spec past its
+ * message's less `SPEC_FRAME` (ORC-212). Checked when the agent
  * submits, so it shortens them within its run; never on a stored result, which was valid when it was written.
  */
 function publishedSizeIssues(o: AgentOutput): string[] {
@@ -142,6 +142,8 @@ function publishedSizeIssues(o: AgentOutput): string[] {
   const pr = describePr(o, { ticketId: '', title: '', sha: '' }).body.length;
   const room = OUTPUT_LIMITS.text - FACTS_ROOM;
   if (pr > room) issues.push(`summary: the fields together make a PR description of ${pr} characters, more than ${room}: shorten them`);
+  const spec = o.spec && formatSpec(o.spec).length;
+  if (spec && spec > OUTPUT_LIMITS.text - SPEC_FRAME) issues.push(`spec: the spec makes a message of ${spec} characters, more than ${OUTPUT_LIMITS.text - SPEC_FRAME}: shorten it`);
   return issues;
 }
 

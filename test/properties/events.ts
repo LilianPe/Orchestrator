@@ -1,6 +1,7 @@
 import fc from 'fast-check';
 import { REFREEZE, type FrozenTests } from '../../src/checks/freeze.js';
 import type { Role } from '../../src/core/authz.js';
+import { APPROVE, CHANGES, REJECT, type Spec } from '../../src/core/spec.js';
 import {
   LOGICAL_STATES,
   RISKS,
@@ -30,8 +31,8 @@ export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
 const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-const JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
-const DEV_JOBS = ['intake', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security'] as const;
+const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
+const DEV_JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 /** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
 const FREEZES: readonly FrozenTests[] = [
@@ -39,6 +40,9 @@ const FREEZES: readonly FrozenTests[] = [
   { sha: 'bbb', files: { 'a.test.ts': '2', 'b.test.ts': '1' } },
 ];
 const frozen = fc.constantFrom(undefined, ...FREEZES);
+/** A spec that passes `spec_check`, and one without criterion (ORC-212). */
+const SPEC: Spec = { goal: 'g', out_of_scope: [], criteria: ['Given x, when y, then z.'], files: [], architecture: 'None.', risks: [], assumed: [] };
+const SPECS: readonly Spec[] = [SPEC, { ...SPEC, criteria: [] }];
 
 export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell'; event: ShellEvent };
 
@@ -116,7 +120,7 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
   'label.changed': fc.record({ label: fc.constantFrom('agent:stop', 'bug'), change: fc.constantFrom('added' as const, 'removed' as const) }),
   'push.human': fc.record({ branch: fc.constant('agent/rel-1'), sha: fc.constantFrom('aaa', 'bbb'), author }),
   command: fc
-    .record({ name: fc.constantFrom('retiens', 'fais-le', 'autre', REFREEZE), body, linearSessionId: session, author, issue, frozen })
+    .record({ name: fc.constantFrom('retiens', 'fais-le', 'autre', REFREEZE, APPROVE, CHANGES, REJECT), body, linearSessionId: session, author, issue, frozen })
     .map(({ frozen: f, ...c }) => (f && c.name === REFREEZE ? { ...c, frozen: f } : c)),
   'pr.opened': pr,
   'pr.checks_passed': pr,
@@ -174,6 +178,8 @@ const PAYLOADS: { [K in EventType]: fc.Arbitrary<EventPayloads[K]> } = {
                 ? { output: { status: 'blocked' as const, summary: 's', question: 'pourquoi ?', ...(attempt === 'spec_impossible' ? { reason: attempt } : {}), tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] } }
                 : {}),
               ...(attempt === 'succeeded' && intake ? { output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], intake } } : {}),
+              // A spec run's spec, passing `spec_check` or not (ORC-212).
+              ...(attempt === 'succeeded' && p.job === 'spec' ? { output: { status: 'done' as const, summary: 's', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], spec: SPECS[p.costUsd ? 0 : 1]! } } : {}),
               ...(p.job === 'intake' && pickup ? { pickup } : {}),
               // A « blocked by » ticket not done at its launch (ORC-363): the ticket waits, and `blockers.done` resumes it.
               ...(p.job === 'intake' && blocked ? { blockedBy: [{ identifier: 'REL-2', stateName: 'In Progress' }] } : {}),
@@ -216,6 +222,7 @@ export const ACTORS: Readonly<Record<string, readonly Role[]>> = {
   'u-member': ['team_member'],
   'u-out': ['repo_writer'],
   'u-lead': ['team_member', 'maintainer'],
+  'u-val': ['team_member', 'validator'],
 };
 /** Events a human sends through Linear: the orchestrator may resolve roles for them (`mayCheck`). */
 const HUMAN: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed']);

@@ -83,7 +83,7 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 | `publish` refused | `dev-feedback`: it writes, goes through `verify` then `publish` again, and the owed move follows (`owedMove`) |
 | dead-letter, dead effect, `stop` | `dev-feedback`, these blocks have no step of their own |
 
-**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the human gates (`spec_review`, `human_review`): this needs an engine that executes the steps (ORC-177). `clarify`, `spec_draft`, `spec_check`, `spec_review` and `after_merge` do not have a job yet; `intake` has one, which a repository turns on ([below](#intake-step-and-the-guard-before-in-progress-orc-206)). A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the `human_review` gate: this needs an engine that executes the steps (ORC-177). `clarify` and `after_merge` do not have a job yet; `intake` and `spec_draft` have one, which a repository turns on ([intake](#intake-step-and-the-guard-before-in-progress-orc-206), [spec](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)); `spec_check` and `spec_review` are decided at its end and on the gate's commands. A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
 
 ## `rebase` step (ORC-146)
 
@@ -164,6 +164,46 @@ A timer only acts on the round that armed it (`at`): a round answered, asked aga
 **Decisions.** Each accepted answer, signed (I12), is recorded on the ticket (`decisions`: question, answer, author, time). Every later run of the dev queue but intake (which reads them as its feedback) gets them in its prompt (« Decisions », as data), so the `tests` step writes them as tests; the freeze after `red` and `/refreeze` hold the ticket's decisions as they are then (`frozenTests.decisions`). Nothing clears them yet: a ticket delegated again keeps them.
 
 **Not yet**: resuming intake's Claude session (`--resume`) after the answer: `intake` runs in a session of its own, not the ticket's (ORC-217, ORC-254), so it starts afresh with the answers; the `Questions` step of the session plan stays canceled (ORC-171); a `knowledge.candidate` event per answer (ORC-258); not asking again what was already decided (ORC-254).
+
+## `spec_draft`, `spec_check` and the `spec_review` gate (ORC-212)
+
+The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
+
+| Section | What it holds |
+| -- | -- |
+| `goal` | what the ticket delivers |
+| `out_of_scope` | what it does not do |
+| `criteria` | the acceptance criteria, each a testable example (« Given …, when …, then … »), at least one |
+| `properties` | optional « for any input » properties, each with its `statement`, input `domain` and `target` (frozen as property tests by ORC-261) |
+| `files` | the files the change touches |
+| `architecture` | its impact on the architecture |
+| `risks` | what could go wrong |
+| `assumed` | what is taken as correct without checking it: present even empty |
+| `decisions` | the `clarify` answers it applies, by their question (ORC-210) |
+
+Every section is optional to the schema: a missing one is `spec_check`'s verdict, not a refused result. Their sizes are capped like the rest of `submit_result` (ORC-214), the spec as published included.
+
+**`spec_check`**, deterministic, at the end of the job: every section present (an empty list counts), at least one criterion and none empty, each property with its statement, domain and target, and each decision `clarify` recorded on the ticket carried in `decisions` with the answer given (read once `TicketState.decisions` exists, ORC-210). A spec that fails goes back to the job once (counter `spec_check`, `limits.specCheckReturns`), in a session of its own, with what is wrong and the refused draft (« Spec refused by spec_check »); the next failure blocks the ticket on the job, step `spec_check`, cause « failed ». A spec that passes resets the count.
+
+**Publication.** A spec that passes is a new version of the ticket's spec (`TicketState.spec`: its job, its number, its content, when), without approval. The factory posts it in the ticket's Linear session, through the `OutputPolicy` like every text it publishes: « Spec published (risk: medium). 3 acceptance criteria → tests. », the sections in a fixed order, then the commands. The ticket does not move (it stays in Todo, the spec in its session, until ORC-139 decides on a « Spec » status) and is not blocked: it waits for the review.
+
+**`spec_review`**, a human gate always at the MVP. Three commands, replied in the ticket's session (a reply, not only after a mention: `webhook.ts` reads them as commands, never as feedback), all three reserved for the project's designated validators and never the run's initiator (matrix row `validate_spec`, ORC-186), checked even on an event without resolved roles. Refused, the command is traced (`authz: refused validate_spec …`) and answered in the session; sent anywhere else (a mention, another session), it is refused as not through this channel; written as a plain comment on the ticket, it is not read (a comment is read only as the reply to a block).
+
+| Command | Effect |
+| -- | -- |
+| `/approve` (or `/approve <version>`, which must be the version waiting) | records who approved the version and when (`spec.approval`), then starts the job after the spec (`on_success.run`: `tests` in the pack) |
+| `/changes <comment>` | the comment goes into `humanInbox` as an instruction (ORC-180), and the job drafts the next version from it and its last one (« Spec under review »), in a session of its own, never the ticket's; a version is never approved by an earlier approval. Until it is published (`spec.drafting`, a start still in the queue included), nothing is approved, changed or rejected. 3 rounds since the last approval (counter `spec_review`, `limits.specChanges`): the 4th blocks the ticket on the job, step `spec_review`, cause « limit » |
+| `/reject` | blocks the ticket on the job, step `spec_review`, cause « stopped »: a reply drafts again |
+
+A command with no spec waiting (none yet, a ticket blocked or undelegated), on a version already approved, or while a new version is being drafted, is answered and changes nothing. A human's reply to a block on the job gives the return and the rounds back.
+
+**The spec changed during the run.** A `/changes` on the approved version: the work on it stops (`work.cancelled`, `stop_run`, a start still in the queue included), the approval goes, and the job drafts the next version, which goes through `spec_check` and waits for a new `/approve`: the run starts again from the review.
+
+**After approval.** Every later step of the ticket's dev queue reads the approved spec in its prompt (« Approved spec »): `tests` writes its criteria as the acceptance tests, the build works within it. The freeze after `red` (ORC-131) keeps the approved criteria with the frozen tests (`frozenTests.criteria`); like its files, a later freeze adds the criteria of a version approved since to those already frozen, and the tests of a changed criterion stay frozen until `/refreeze`, which keeps the criteria approved then. A new delegation clears the ticket's spec: the work starts afresh. A redraft reads its last version (« Spec under review »).
+
+`spec` is off in the pack: a repository turns it on by running it after `intake` (`jobs.intake.on_success: { run: spec }`) or at delegation.
+
+**Not yet**: the « Spec » status or the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); the properties frozen as tests (ORC-261); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
 
 ## `review` step (ORC-183)
 
