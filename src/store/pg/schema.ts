@@ -333,7 +333,6 @@ export const egressRequests = pgTable(
     host: text('host').notNull(),
     port: integer('port'),
     ok: boolean('ok').notNull(),
-    reason: text('reason'),
     up: bigint('up', { mode: 'number' }).notNull(),
     down: bigint('down', { mode: 'number' }).notNull(),
   },

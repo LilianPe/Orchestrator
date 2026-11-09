@@ -894,7 +894,7 @@ export class PgStore implements AsyncStore {
       for (let i = 0; i < log.egress.length; i += 1000) {
         await tx.insert(schema.egressRequests).values(
           log.egress.slice(i, i + 1000).map((e, k) => ({
-            runId: log.runId, n: i + k, at: new Date(e.at), method: e.method, host: e.host, port: e.port ?? null, ok: e.ok, reason: e.reason ?? null, up: e.up, down: e.down,
+            runId: log.runId, n: i + k, at: new Date(e.at), method: e.method, host: e.host, port: e.port ?? null, ok: e.ok, up: e.up, down: e.down,
           })),
         );
       }
@@ -910,8 +910,8 @@ export class PgStore implements AsyncStore {
       this.db.execute<{ project_id: string; ticket_id: string; at: string | number; skipped_egress: number; skipped_refusals: number }>(sql`
         select project_id, ticket_id, round(extract(epoch from read_at) * 1000) as at, skipped_egress, skipped_refusals from security_logs where run_id = ${runId}
       `),
-      this.db.execute<{ at: string | number; method: string; host: string; port: number | null; ok: boolean; reason: string | null; up: string | number; down: string | number }>(sql`
-        select round(extract(epoch from at) * 1000) as at, method, host, port, ok, reason, up, down from egress_requests where run_id = ${runId} order by n
+      this.db.execute<{ at: string | number; method: string; host: string; port: number | null; ok: boolean; up: string | number; down: string | number }>(sql`
+        select round(extract(epoch from at) * 1000) as at, method, host, port, ok, up, down from egress_requests where run_id = ${runId} order by n
       `),
       this.db.execute<{ at: string | number; tool: string; rule: string }>(sql`
         select round(extract(epoch from at) * 1000) as at, tool, rule from refusals where run_id = ${runId} order by n
@@ -926,7 +926,7 @@ export class PgStore implements AsyncStore {
       at: Number(h.at),
       egress: egress.rows.map((e) => ({
         at: Number(e.at), method: e.method, host: e.host, ...(e.port === null ? {} : { port: e.port }),
-        ok: e.ok, ...(e.reason === null ? {} : { reason: e.reason }), up: Number(e.up), down: Number(e.down),
+        ok: e.ok, up: Number(e.up), down: Number(e.down),
       })),
       refusals: refusals.rows.map((r) => ({ at: Number(r.at), tool: r.tool, rule: r.rule })),
       skipped: { egress: h.skipped_egress, refusals: h.skipped_refusals },

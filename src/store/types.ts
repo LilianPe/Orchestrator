@@ -321,14 +321,13 @@ export interface MeasureFacts {
   acks: Record<string, number>;
 }
 
-/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms; never its path, which can hold a secret. */
+/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms; never its path nor the proxy's reason, which names it: it can hold a secret. */
 export interface EgressRecord {
   at: number;
   method: string;
   host: string;
   port?: number;
   ok: boolean;
-  reason?: string;
   up: number;
   down: number;
 }
@@ -362,7 +361,7 @@ export function keptSecurityLog(log: SecurityLog): SecurityLog {
     projectId: log.projectId,
     ticketId: log.ticketId,
     at: log.at,
-    egress: log.egress.map(({ at, method, host, port, ok, reason, up, down }) => ({ at, method, host, ...(port === undefined ? {} : { port }), ok, ...(reason === undefined ? {} : { reason }), up, down })),
+    egress: log.egress.map(({ at, method, host, port, ok, up, down }) => ({ at, method, host, ...(port === undefined ? {} : { port }), ok, up, down })),
     refusals: log.refusals.map(({ at, tool, rule }) => ({ at, tool, rule })),
     skipped: { egress: log.skipped.egress, refusals: log.skipped.refusals },
   };

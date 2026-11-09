@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -31,25 +31,36 @@ describe('SqliteStore', () => {
     expect(plan("SELECT 1 FROM outbox WHERE event_id = ? AND status IN ('pending', 'running')", 'e1')).toContain('outbox_event');
   });
 
-  it('drops the commands and request paths a security log of an older file kept, when it opens (ORC-296)', async () => {
+  it("drops the commands, request paths and proxy's reasons a security log of an older file kept, once, when it opens (ORC-296)", async () => {
     const path = join(mkdtempSync(join(tmpdir(), 'factory-sqlite-')), 'relais.db');
     const old = new SqliteStore(path);
     const kept = {
       runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5,
-      egress: [{ at: 1, method: 'GET', host: 'api.example', path: '/bot1:s3cret/send', ok: true, up: 0, down: 0 }],
+      egress: [{ at: 1, method: 'POST', host: 'api.example', path: '/bot1:s3cret/send', ok: false, reason: 'POST api.example/bot1:s3cret/send refused', up: 0, down: 0 }],
       refusals: [{ at: 2, tool: 'Bash', rule: 'push', command: 'git push https://x:s3cret@github.com/o/r' }],
       skipped: { egress: 0, refusals: 0 },
     };
-    (old as unknown as { db: DatabaseSync }).db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r1', JSON.stringify(kept));
+    const oldDb = (old as unknown as { db: DatabaseSync }).db;
+    oldDb.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r1', JSON.stringify(kept));
+    // A row no one can read: it neither stops the store from opening nor stays.
+    oldDb.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r2', '{"command":"s3cret');
+    oldDb.prepare("DELETE FROM meta WHERE key = 'security-log-kept'").run();
     await old.close();
     const s = new SqliteStore(path);
-    const raw = (s as unknown as { db: DatabaseSync }).db.prepare('SELECT data FROM security_logs').all() as { data: string }[];
+    const db = (s as unknown as { db: DatabaseSync }).db;
+    const raw = db.prepare('SELECT data FROM security_logs').all() as { data: string }[];
     expect(raw.map((r) => r.data).join()).not.toContain('s3cret');
+    expect(readFileSync(path, 'latin1')).not.toContain('s3cret');
     expect(await s.securityLog('r1')).toEqual({
       ...kept,
-      egress: [{ at: 1, method: 'GET', host: 'api.example', ok: true, up: 0, down: 0 }],
+      egress: [{ at: 1, method: 'POST', host: 'api.example', ok: false, up: 0, down: 0 }],
       refusals: [{ at: 2, tool: 'Bash', rule: 'push' }],
     });
+    // Once: a row written afterwards, as only an older daemon would, is not read again at the next opening.
+    db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r3', JSON.stringify({ ...kept, runId: 'r3' }));
     await s.close();
+    const again = new SqliteStore(path);
+    expect(JSON.stringify(await again.securityLog('r3'))).toContain('s3cret');
+    await again.close();
   });
 });

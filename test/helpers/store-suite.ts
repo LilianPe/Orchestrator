@@ -277,10 +277,10 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {
     const s = await store();
-    const egress = (at: number, host: string, ok = true) => ({ at, method: 'GET', host, ok, ...(ok ? {} : { reason: 'refused' }), up: 1, down: 2 });
+    const egress = (at: number, host: string, ok = true) => ({ at, method: 'GET', host, ok, up: 1, down: 2 });
     const log: SecurityLog = {
       runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 500,
-      egress: [egress(100, 'b.example'), egress(110, 'a.example', false), { at: 120, method: 'CONNECT', host: 'a.example', port: 22, ok: false, reason: 'port', up: 0, down: 0 }, egress(130, 'b.example')],
+      egress: [egress(100, 'b.example'), egress(110, 'a.example', false), { at: 120, method: 'CONNECT', host: 'a.example', port: 22, ok: false, up: 0, down: 0 }, egress(130, 'b.example')],
       refusals: [{ at: 140, tool: 'Bash', rule: 'push-trunk' }],
       skipped: { egress: 1, refusals: 2 },
     };
@@ -307,11 +307,11 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.securityStats(115, 205)).toEqual({ hosts: [{ host: 'a.example', requests: 1, refused: 1 }, { host: 'b.example', requests: 1, refused: 0 }], rules: [{ rule: 'force-push', refusals: 1 }, { rule: 'push-trunk', refusals: 1 }] });
   });
 
-  it('keeps no command nor request path in a security log, even one handed them: the rule and the host only (ORC-296)', async () => {
+  it("keeps no command, request path nor proxy's reason in a security log, even one handed them: the rule and the host only (ORC-296)", async () => {
     const s = await store();
     const log = {
       runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 500,
-      egress: [{ at: 100, method: 'GET', host: 'api.example', path: '/bot1:s3cret/send', ok: false, reason: 'host not allowed', up: 0, down: 0 }],
+      egress: [{ at: 100, method: 'POST', host: 'api.example', path: '/bot1:s3cret/send', ok: false, reason: 'POST api.example/bot1:s3cret/send refused', up: 0, down: 0 }],
       refusals: [{ at: 140, tool: 'Bash', rule: 'push', command: 'git push https://x:ghp_s3cret@github.com/o/r' }],
       skipped: { egress: 0, refusals: 0 },
     };
@@ -319,7 +319,7 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     const kept = await s.securityLog('r1');
     expect(kept).toEqual({
       ...log,
-      egress: [{ at: 100, method: 'GET', host: 'api.example', ok: false, reason: 'host not allowed', up: 0, down: 0 }],
+      egress: [{ at: 100, method: 'POST', host: 'api.example', ok: false, up: 0, down: 0 }],
       refusals: [{ at: 140, tool: 'Bash', rule: 'push' }],
     });
     expect(JSON.stringify(kept)).not.toContain('s3cret');

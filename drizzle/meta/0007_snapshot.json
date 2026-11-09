@@ -1,5 +1,5 @@
 {
-  "id": "e79afb5e-0ed2-4e31-b385-1c6337ccbdd6",
+  "id": "adc20a9b-d22e-4157-807e-ae3c24bfd97f",
   "prevId": "175fafe6-7e70-455c-a187-6f6689a139ae",
   "version": "7",
   "dialect": "postgresql",
@@ -561,12 +561,6 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "up": {
           "name": "up",

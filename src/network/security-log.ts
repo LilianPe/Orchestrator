@@ -30,19 +30,17 @@ const egressLine = z.object({
   method: text(32),
   host: text(300),
   port: z.number().int().min(0).max(65_535).optional(),
-  path: text(4096).optional(),
+  // Its path, and the reason the proxy gave, which names it, are not read: they can hold a secret.
   ok: z.boolean(),
-  reason: text(1000).optional(),
   up: bytes,
   down: bytes,
 });
 
-/** A line names its command, or the path of a refused read, as the hook writes it: checked, never kept (it can hold a secret). */
+/** The command a line names, or the path of a refused read, is not read: it can hold a secret. */
 const refusalLine = (ticketId: string) =>
   z.object({
     at,
     tool: z.enum(['Bash', 'WebSearch', 'Read']),
-    command: z.string().refine((s) => !s.includes('\0')),
     rule: z.enum(REFUSAL_RULES),
     // The hook writes the run's FACTORY_TICKET: another ticket is a forged line.
     ticket: z.literal(ticketId),

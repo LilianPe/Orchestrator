@@ -157,10 +157,29 @@ export class SqliteStore implements Store {
       const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
       if (!columns.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
-    // A security log an older daemon wrote kept the commands and request paths (ORC-296): they can hold a secret.
-    const older = this.db.prepare(`SELECT run_id, data FROM security_logs WHERE data LIKE '%"command"%' OR data LIKE '%"path"%'`).all() as { run_id: string; data: string }[];
-    const rewrite = this.db.prepare('UPDATE security_logs SET data = ? WHERE run_id = ?');
-    for (const r of older) rewrite.run(JSON.stringify(keptSecurityLog(JSON.parse(r.data) as SecurityLog)), r.run_id);
+    this.forgetSecrets();
+  }
+
+  /**
+   * The security logs an older daemon wrote kept the commands, request paths and proxy's reasons (ORC-296): they can
+   * hold a secret. Rewritten once, a row no one can read deleted, their old bytes overwritten in the file and the WAL.
+   */
+  private forgetSecrets(): void {
+    if (this.db.prepare("SELECT 1 FROM meta WHERE key = 'security-log-kept'").get()) return;
+    this.db.exec('PRAGMA secure_delete = ON');
+    this.atomically(() => {
+      const rewrite = this.db.prepare('UPDATE security_logs SET data = ? WHERE run_id = ?');
+      for (const r of this.db.prepare('SELECT run_id, data FROM security_logs').all() as { run_id: string; data: string }[]) {
+        try {
+          rewrite.run(JSON.stringify(keptSecurityLog(JSON.parse(r.data) as SecurityLog)), r.run_id);
+        } catch {
+          this.db.prepare('DELETE FROM security_logs WHERE run_id = ?').run(r.run_id);
+        }
+      }
+      this.db.prepare("INSERT INTO meta (key, value) VALUES ('security-log-kept', '1')").run();
+    });
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    this.db.exec('PRAGMA secure_delete = OFF');
   }
 
   /** Runs `f` in one transaction (`node:sqlite` is synchronous: nothing interleaves with it). */
