@@ -587,3 +587,72 @@ describe('a failure of its own git (ORC-125)', () => {
 });
 
 });
+
+describe("a human's push on the agent's branch (ORC-159)", () => {
+  /** The agent's branch published on the forge, then a human's commit pushed on top of it from another clone. */
+  function pushedByHuman(over: Partial<CleanVerifyRequest> = {}, files: Record<string, string> = { 'h.txt': 'human\n' }) {
+    const s = setup(over);
+    git(s.repo, 'push', '-q', 'origin', BRANCH);
+    const human = join(s.base, 'human');
+    git(s.base, 'clone', '-q', '--branch', BRANCH, s.origin, human);
+    identity(human);
+    for (const [path, content] of Object.entries(files)) write(human, path, content);
+    commit(human, 'a human fixes it');
+    git(human, 'push', '-q', 'origin', BRANCH);
+    return { ...s, human, pushed: git(human, 'rev-parse', 'HEAD') };
+  }
+
+  it('criterion 1: checks the pushed commit as the forge holds it, in a fresh clone, without reading the worktree', async () => {
+    const { repo, sandboxes, req, pushed } = pushedByHuman({ commands: ['grep human h.txt'] });
+    const res = await runCleanVerify({ ...req, head: pushed });
+    expect(res).toMatchObject({ ok: true, failures: [], sha: pushed });
+    // The worktree is still on the agent's commit, and no sandbox made a bundle of it.
+    expect(git(repo, 'rev-parse', BRANCH)).not.toBe(pushed);
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-bundle');
+    const box = sandboxes.created.find((c) => c.runId === 'r1-verify')!;
+    expect(box).toMatchObject({ network: 'none', mounts: [] });
+    expect(box.workspacePath).not.toBe(repo);
+    expect(sandboxes.ran.map((r) => r.command)).toEqual(['grep human h.txt']);
+  });
+
+  it('the clone the commands run in records no remote: the forge URL and its credentials stay out of it', async () => {
+    const { req, pushed } = pushedByHuman({ commands: ['test -z "$(git config --get-regexp ^remote[.])"'] });
+    expect(await runCleanVerify({ ...req, head: pushed })).toMatchObject({ ok: true, failures: [] });
+  });
+
+  it('a pushed commit no longer on the branch (a history rewritten since) gives no verdict', async () => {
+    const { req } = pushedByHuman({ commands: [] });
+    await expect(runCleanVerify({ ...req, head: 'b'.repeat(40) })).rejects.toThrow('is no longer on the forge');
+  });
+
+  it('criterion 3: a human commit that changes a frozen test fails factory/tests-gelés', async () => {
+    const { req, pushed } = pushedByHuman({ commands: [], frozen: { sha: 's', files: { 'a.txt': sha256('committed\n') } } }, { 'a.txt': 'changed by a human\n' });
+    const res = await runCleanVerify({ ...req, head: pushed });
+    expect(res.failures).toEqual([expect.objectContaining({ command: 'factory/tests-gelés', output: expect.stringContaining('a.txt') })]);
+  });
+
+  describe('criterion 2: the work published after a push carries it', () => {
+    it('a commit of the agent that does not carry the push fails factory/commits-humains before anything runs', async () => {
+      const { sandboxes, req, pushed } = pushedByHuman();
+      const res = await runCleanVerify({ ...req, humanHead: pushed });
+      expect(res.ok).toBe(false);
+      expect(res.failures).toEqual([{ command: 'factory/commits-humains', exitCode: 1, output: expect.stringContaining(`git rebase origin/${BRANCH}`) }]);
+      expect(sandboxes.ran).toEqual([]);
+    });
+
+    it('nor is a commit found green before the push taken as it is', async () => {
+      const { repo, req, pushed } = pushedByHuman();
+      const res = await runCleanVerify({ ...req, humanHead: pushed, green: git(repo, 'rev-parse', BRANCH) });
+      expect(res.failures.map((f) => f.command)).toEqual(['factory/commits-humains']);
+    });
+
+    it('the agent rebased on top of the push: checked as any commit', async () => {
+      const { repo, req, pushed } = pushedByHuman({ commands: ['grep human h.txt', 'grep agent b.txt'] });
+      git(repo, 'fetch', '-q', 'origin');
+      git(repo, 'rebase', '-q', `origin/${BRANCH}`);
+      write(repo, 'b.txt', 'agent\n');
+      commit(repo, 'the agent goes on');
+      expect(await runCleanVerify({ ...req, humanHead: pushed })).toMatchObject({ ok: true, failures: [] });
+    });
+  });
+});
