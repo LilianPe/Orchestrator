@@ -114,8 +114,8 @@ jobs:
         run: |
           f="docker/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            || { rm -f "$f"; echo "::error::downloading gitleaks ${GITLEAKS_VERSION} from GitHub's releases failed after 6 attempts"; exit 1; }
-          echo "${GITLEAKS_SHA256}  $f" | sha256sum -c - || { rm -f "$f"; echo "::error::the gitleaks archive does not have its pinned sha256"; exit 1; }
+            || { echo "::error::downloading gitleaks ${GITLEAKS_VERSION} from GitHub's releases failed, retries included"; exit 1; }
+          echo "${GITLEAKS_SHA256}  $f" | sha256sum -c -
       - if: steps.gitleaks.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
