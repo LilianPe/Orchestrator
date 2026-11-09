@@ -91,7 +91,7 @@ describe('runAndRerun', () => {
     const res = await runAndRerun('npx vitest run', 'vitest', run);
     expect(run.lines).toEqual(['npx vitest run', `npx vitest run 'src/a.test.ts' -t 'cart total'`, `npx vitest run 'src/a.test.ts' -t 'cart empty'`]);
     expect(res).toMatchObject({ command: 'npx vitest run', exitCode: 1, output: 'whole run' });
-    expect(res.tests).toEqual([
+    expect(res!.tests).toEqual([
       {
         command: 'npx vitest run', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total',
         attempts: [

@@ -126,6 +126,26 @@ describe('a disposable sandbox per attempt', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   });
 
+  it("verify gets the project's known flaky tests, and its verdict journals the tests it reran with their causes (ORC-164)", async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const flaky = [{ command: 'npm test', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total', attempts: [{ on: 'head' as const, attempt: 1, outcome: 'failed' as const, output: 'boom' }], indicative: true as const }];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: 'abc', tree: 'tree', flaky };
+      },
+    });
+    const known = { projectId: 'p', test: 'src/a.test.ts > cart total', coversFrozen: false, reason: 'load', addedBy: 'armand', addedAt: 1 };
+    await h.store.putKnownFlakyTest(known);
+    await h.store.putKnownFlakyTest({ ...known, projectId: 'other', test: 'elsewhere' });
+    await delegate(h);
+    expect(seen[0]!.knownFlaky).toEqual([known]);
+    const [passed] = (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'verify.passed');
+    expect(passed!.payload).toMatchObject({ flaky });
+  });
+
   it('verify holds the branch to the repository sensitive paths once an untrusted run worked on it, a later trusted run included (ORC-338)', async () => {
     const seen: CleanVerifyRequest[] = [];
     const h = createHarness({

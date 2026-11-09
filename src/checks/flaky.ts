@@ -176,7 +176,7 @@ export async function runAndRerun(command: string, runner: Runner | undefined, r
 /** The failing tests of `runs` rerun on the base commit by `run`, in their order, up to `max`: how many were left. */
 export async function rerunOnBase(runs: readonly CommandRun[], run: Run, max = MAX_BASE_RERUNS): Promise<number> {
   const tests = runs.flatMap((r) => r.tests.map((t) => ({ t, runner: r.runner! })));
-  for (const { t, runner } of tests.slice(0, max)) t.attempts.push(attemptOf('base', 1, await run(rerunLine(t.command, runner, t), runner), t.test));
+  for (const { t, runner } of tests.slice(0, max)) t.attempts.push(attemptOf('base', 1, await run(rerunLine(t.command, runner, { id: t.test, file: t.file, name: t.name }), runner), t.test));
   return Math.max(0, tests.length - max);
 }
 
