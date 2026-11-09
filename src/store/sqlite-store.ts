@@ -918,8 +918,16 @@ export class SqliteStore implements Store {
   }
 
   async pendingDeliveries(): Promise<{ key: string; value: string }[]> {
-    const rows = this.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'delivery:%' ORDER BY rowid").all() as { key: string; value: string }[];
-    return rows.map((r) => ({ key: r.key.slice('delivery:'.length), value: r.value }));
+    return this.deliveriesUnder('delivery:');
+  }
+
+  async asideDeliveries(): Promise<{ key: string; value: string }[]> {
+    return this.deliveriesUnder('delivery-aside:');
+  }
+
+  private deliveriesUnder(prefix: string): { key: string; value: string }[] {
+    const rows = this.db.prepare('SELECT key, value FROM meta WHERE key LIKE ? ORDER BY rowid').all(`${prefix}%`) as { key: string; value: string }[];
+    return rows.map((r) => ({ key: r.key.slice(prefix.length), value: r.value }));
   }
 
   async deleteDelivery(key: string): Promise<void> {
@@ -929,11 +937,6 @@ export class SqliteStore implements Store {
   async asideDelivery(key: string): Promise<void> {
     this.db.prepare('INSERT OR REPLACE INTO meta (key, value) SELECT ?, value FROM meta WHERE key = ?').run(`delivery-aside:${key}`, `delivery:${key}`);
     this.db.prepare('DELETE FROM meta WHERE key = ?').run(`delivery:${key}`);
-  }
-
-  async asideDeliveries(): Promise<{ key: string; value: string }[]> {
-    const rows = this.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'delivery-aside:%' ORDER BY rowid").all() as { key: string; value: string }[];
-    return rows.map((r) => ({ key: r.key.slice('delivery-aside:'.length), value: r.value }));
   }
 
   async close(): Promise<void> {

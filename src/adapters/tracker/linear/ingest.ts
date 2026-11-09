@@ -255,14 +255,16 @@ export function createLinearIngest(d: IngestDeps) {
     if (d.classify && d.deliveries && (mayCarryMessage(body) || written.has(issue))) {
       // Kept by its kind as well: a reply and the comment Linear writes for it share `key`, and neither may drop the other.
       const row = `${body.type}:${key}`;
+      // Read before this request's own `deliver` counts: another request keeps or delivers the row. Read after the
+      // store answers, its delivery could have written and removed the row meanwhile, and the value returned be stale.
+      const busy = active.has(row);
       // The value kept already, if any: undefined when this request kept it.
       const before = d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery));
       void deliver(row, { delivery: { raw, at }, body }, { kept: before.then((v) => v === undefined, () => false) });
       try {
-        // Kept already and no longer being delivered here: delivered again, timed at its first arrival.
-        // This request's own `deliver` counts once: another keeps or delivers it when the count is above that.
+        // Kept already and delivered by no one here: delivered again, timed at its first arrival.
         const value = await before;
-        if (value !== undefined && (active.get(row) ?? 0) <= 1) {
+        if (value !== undefined && !busy) {
           const read = await readOrAside(row, value);
           if (read) void deliver(row, read);
         }

@@ -929,9 +929,8 @@ describe('ingest', () => {
         { store, accept: async (e) => void (kinds[e.ticketId!] = (e.payload as { kind?: string }).kind) },
       );
       await ingest.resume();
-      await new Promise((r) => setTimeout(r, 50));
       // Four slots taken, the fifth waits for one.
-      expect(asked).toHaveLength(4);
+      await vi.waitFor(() => expect(asked).toHaveLength(4));
       ingest.close();
       answer();
       await ingest.settled();
@@ -949,6 +948,29 @@ describe('ingest', () => {
       expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
       await ingest.settled();
       expect(events).toMatchObject([{ id: 'linear:activity:a1', at: 4000, payload: { kind: 'question' } }]);
+    });
+
+    it('a redelivery whose first delivery ends while the store answers is not delivered again from the stale value (ORC-355)', async () => {
+      const inner = new SqliteStore(':memory:');
+      let calls = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const store = Object.assign(Object.create(inner) as SqliteStore, {
+        receiveDelivery: async (key: string, value: string) => {
+          const kept = await inner.receiveDelivery(key, value);
+          if (++calls === 2) await gate;
+          return kept;
+        },
+      });
+      const { send, ingest, accepted } = setup(slow(30), { store });
+      expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
+      const again = send(reply('a1', 'corrige'));
+      // The first delivery writes its event and removes its row before the store answers the redelivery.
+      await vi.waitFor(async () => expect(await inner.pendingDeliveries()).toEqual([]));
+      release();
+      expect(await again).toEqual({ status: 200 });
+      await ingest.settled();
+      expect(accepted).toEqual(['REL-1 session.prompted']);
     });
 
     it('a later webhook of the issue never overtakes one whose row is still being kept', async () => {
