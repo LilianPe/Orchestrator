@@ -1285,8 +1285,9 @@ export class Orchestrator {
     return p;
   }
 
+  /** Paused by `set_paused`, or by a pause accepted whose effect has not run yet (ORC-335): its lane and a ticket's go side by side. */
   async isPaused(): Promise<boolean> {
-    return (await this.d.store.getMeta('paused')) === '1';
+    return (await this.d.store.getMeta('paused')) === '1' || (await this.d.store.pauseAccepted());
   }
 
   private account(): string {

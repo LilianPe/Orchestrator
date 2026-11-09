@@ -479,6 +479,11 @@ export interface Store {
   appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean>;
   /** Whether the inbox already holds an event with this id, processed or not (ORC-336: a redelivered webhook). */
   inboxHas(id: string): Promise<boolean>;
+  /**
+   * Whether the last `control.pause` or `control.resume` the inbox holds, processed or not, is a pause (ORC-335): accepted,
+   * it holds the starts before its `set_paused` has run, as a ticket's lane may launch one before the instance's decides it.
+   */
+  pauseAccepted(): Promise<boolean>;
   /** Inbox events not processed yet, oldest first, except the ids in `exclude`. */
   pendingInbox(limit: number, exclude?: readonly string[]): Promise<StoredEvent[]>;
   /** Marks an inbox event processed: `pendingInbox` no longer returns it. */

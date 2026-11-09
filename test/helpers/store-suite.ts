@@ -206,6 +206,19 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.inboxHas('e2')).toBe(false);
   });
 
+  it('tells whether the last pause or resume accepted is a pause, processed or not (ORC-335)', async () => {
+    const s = await store();
+    const control = (id: string, type: 'control.pause' | 'control.resume') => ({ id, type, at: 10, projectId: '*', payload: {} }) as FactoryEvent;
+    expect(await s.pauseAccepted()).toBe(false);
+    await s.appendInbox(control('g1', 'control.pause'));
+    await s.appendInbox(delegatedEvent('e1'));
+    expect(await s.pauseAccepted()).toBe(true);
+    await s.markInboxProcessed('g1');
+    expect(await s.pauseAccepted()).toBe(true);
+    await s.appendInbox(control('g2', 'control.resume'));
+    expect(await s.pauseAccepted()).toBe(false);
+  });
+
   it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {
     const s = await store();
     expect(await s.pendingDeliveries()).toEqual([]);

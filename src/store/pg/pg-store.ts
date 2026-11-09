@@ -291,6 +291,15 @@ export class PgStore implements AsyncStore {
     return result.rows.length > 0;
   }
 
+  async pauseAccepted(): Promise<boolean> {
+    const result = await this.db.execute<{ type: string }>(sql`
+      select type from inbox where type in ('control.pause', 'control.resume')
+      order by received_at desc, id desc
+      limit 1
+    `);
+    return result.rows[0]?.type === 'control.pause';
+  }
+
   async pendingInbox(limit: number, exclude: readonly string[] = []): Promise<StoredEvent[]> {
     const result = await this.db.execute<{ payload: StoredEvent }>(sql`
       select payload from inbox
