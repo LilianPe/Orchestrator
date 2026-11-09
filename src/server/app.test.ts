@@ -114,7 +114,7 @@ describe('server', () => {
       await store.putTicket({ ...newTicketState('p', 'REL-3', 'Bloqué', 'dev', 1), blocked: true, blockReason: 'The run dev failed.' });
       await store.recordEvent({ ...TRUSTED, id: 'e1', type: 'run.finished', at: 2, projectId: 'p', ticketId: 'REL-2', payload: { runId: 'r2', job: 'dev', outcome: 'success', costUsd: 0, turns: 1, lastText: '' } });
 
-      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures', '/api/runs/r1', '/api/runs/r2']) {
+      for (const path of ['/api/state', '/api/flow', '/api/events/recent', '/api/measures', '/api/overview', '/api/runs/r1', '/api/runs/r2']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(200);
         expect(await res.text(), path).not.toContain(TOKEN);
@@ -201,6 +201,53 @@ describe('server', () => {
     it('asks for the password, as the other routes of the interface', async () => {
       const { app } = await setup({ uiPassword: 'secret' });
       expect((await app.request('/api/measures')).status).toBe(401);
+    });
+  });
+
+  describe('the overview (ORC-299)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    it('serves the tickets merged in the period, their lead time, tokens and first try, and the delays of the human messages', async () => {
+      const { app, store } = await setup();
+      await store.putRun({ ...(await store.getRun('r1'))!, status: 'success', startedAt: 2, endedAt: 4, tokens: { input: 100, output: 50, cacheRead: 0, cacheCreation: 0 } });
+      const delegated: FactoryEvent = { ...TRUSTED, id: 'd', type: 'ticket.delegated', at: 1, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } };
+      await store.appendInbox(delegated);
+      await store.recordEvent(delegated);
+      await store.markAcked('d', 3);
+      await store.recordEvent({ ...TRUSTED, id: 'm', type: 'pr.merged', at: 7, projectId: 'p', ticketId: 'REL-1', payload: { number: 1, url: 'u', branch: 'b' } });
+      const res = await app.request('/api/overview?since=0&until=100');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        since: 0, until: 100, unmeasured: 0, delivered: 1, medianLeadTimeMs: 6, tokensPerMerged: { mean: 150, leftOut: 0 },
+        firstTry: { yes: 1, of: 1 }, messages: { count: 1, medianSignOfLifeMs: 2 }, baseline: null,
+      });
+    });
+
+    it('reads the last 90 days by default, and only the tickets updated since the period began: the others cannot have changed in it', async () => {
+      const clock = new FakeClock(100 * DAY);
+      const { app, store } = await setup({ clock });
+      await store.putTicket(newTicketState('p', 'REL-1', 'Export', 'done', 10 * DAY - 1));
+      await store.putTicket(newTicketState('p', 'REL-2', 'Import', 'done', 50 * DAY));
+      const read = vi.spyOn(store, 'measureFacts');
+      const body = await (await app.request('/api/overview')).json();
+      expect(body).toMatchObject({ since: 10 * DAY, until: 100 * DAY });
+      expect(read.mock.calls.map((c) => c[1])).toEqual(['REL-2']);
+    });
+
+    it('counts a ticket whose measures cannot be read as unmeasured, and logs it', async () => {
+      const { app, store, bus } = await setup();
+      const logs: string[] = [];
+      bus.subscribe((m) => {
+        if (m.kind === 'log') logs.push(m.message);
+      });
+      vi.spyOn(store, 'measureFacts').mockRejectedValue(new Error('journal illisible'));
+      expect(await (await app.request('/api/overview?since=0&until=100')).json()).toMatchObject({ unmeasured: 1, delivered: 0 });
+      expect(logs).toEqual([expect.stringContaining('journal illisible')]);
+    });
+
+    it('refuses a period that is not one, and asks for the password as the other routes of the interface', async () => {
+      expect((await (await setup()).app.request('/api/overview?since=100&until=10')).status).toBe(400);
+      expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/overview')).status).toBe(401);
     });
   });
 

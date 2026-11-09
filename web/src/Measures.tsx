@@ -1,20 +1,6 @@
 import { CAUSE_LABELS, formatDuration, formatTokens, plural, PrLink, tokensCell, totalTokens } from './Flow.js';
 import type { MeasuredTicketView, RunMeasureView, TicketMeasuresView } from './types.js';
 
-/** The measures the MVP doc asks for that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
-export const NO_SOURCE = [
-  { label: 'Share of the usage limit', ticket: 'ORC-216', why: 'no limit in tokens yet' },
-  { label: 'Minutes of human review', ticket: 'ORC-190', why: 'a review says when it was posted, not when it began' },
-  { label: 'Baseline over 90 days', ticket: 'ORC-230', why: 'nothing to compare the overview with yet' },
-] as const;
-
-function median(values: number[]): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
-}
-
 /** Where a run's detail is (ORC-298): `#run/<id>`. */
 export const runHash = (runId: string): string => `#run/${encodeURIComponent(runId)}`;
 export function runIdOf(hash: string): string | undefined {
@@ -47,58 +33,7 @@ export const reviewRoundsCell = (r: TicketMeasuresView['reviewRounds']): string 
 export const costCell = (m: TicketMeasuresView | null) =>
   tokensCell({ measured: m !== null, tokens: m?.tokens ?? null, attemptsWithoutTokens: m?.attemptsWithoutTokens ?? 0, costUsd: m?.costUsd ?? 0 });
 
-export interface Overview {
-  /** Merged tickets. */
-  delivered: number;
-  medianLeadTimeMs: number | null;
-  /** Mean tokens of the merged tickets that reported some; `leftOut` merged tickets reported none. */
-  tokensPerMerged: { mean: number | null; leftOut: number };
-  /** Merged tickets ready at the first try, of the merged ones. */
-  firstTry: { yes: number; of: number };
-  /** Over the human messages of the tickets: the unanswered ones left out of the answer. */
-  medianSignOfLifeMs: number | null;
-  medianAnswerMs: number | null;
-  /** Tickets whose measures could not be read: left out of all the above. */
-  unmeasured: number;
-}
-
-/** The reduced overview of the tickets served (ORC-223): only what their measures say, never a zero for a missing one. */
-export function overview(tickets: MeasuredTicketView[]): Overview {
-  const measured = tickets.flatMap((t) => (t.measures ? [t.measures] : []));
-  const merged = measured.filter((m) => m.mergedAt !== null);
-  const withTokens = merged.flatMap((m) => (m.tokens ? [totalTokens(m.tokens)] : []));
-  const messages = measured.flatMap((m) => m.messages);
-  return {
-    delivered: merged.length,
-    medianLeadTimeMs: median(merged.flatMap((m) => (m.leadTimeMs === null ? [] : [m.leadTimeMs]))),
-    tokensPerMerged: { mean: withTokens.length ? withTokens.reduce((a, b) => a + b, 0) / withTokens.length : null, leftOut: merged.length - withTokens.length },
-    firstTry: { yes: merged.filter((m) => m.firstTry === true).length, of: merged.length },
-    medianSignOfLifeMs: median(messages.flatMap((m) => (m.signOfLifeMs === null ? [] : [m.signOfLifeMs]))),
-    medianAnswerMs: median(messages.flatMap((m) => (m.answerMs === null ? [] : [m.answerMs]))),
-    unmeasured: tickets.length - measured.length,
-  };
-}
-
-const orDash = (v: number | null, format: (n: number) => string) => (v === null ? '—' : format(v));
 const key = (t: MeasuredTicketView) => `${t.projectId}/${t.ticketId}`;
-
-function OverviewTiles({ o }: { o: Overview }) {
-  const tiles = [
-    ['Delivered', String(o.delivered)],
-    ['Median lead time', orDash(o.medianLeadTimeMs, formatDuration)],
-    ['Tokens per merged ticket', `${orDash(o.tokensPerMerged.mean, (n) => formatTokens(Math.round(n)))}${o.tokensPerMerged.leftOut ? ` (${o.tokensPerMerged.leftOut} without)` : ''}`],
-    ['Ready at the first try', o.firstTry.of ? `${o.firstTry.yes} / ${o.firstTry.of}` : '—'],
-    ['Median first sign of life', orDash(o.medianSignOfLifeMs, formatDuration)],
-    ['Median answer', orDash(o.medianAnswerMs, formatDuration)],
-  ];
-  return (
-    <dl className="tiles">
-      {tiles.map(([label, value]) => (
-        <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
-      ))}
-    </dl>
-  );
-}
 
 function Attempts({ ticket, now }: { ticket: MeasuredTicketView; now: number }) {
   const m = ticket.measures;
@@ -149,18 +84,14 @@ function MeasuredCells({ m, logical, now }: { m: TicketMeasuresView; logical: st
   );
 }
 
-/** The measures page (ORC-223): the overview, then each ticket's cost, duration and review rounds, then the attempts of the one selected. */
+/** The measures page (ORC-223): each ticket's cost, duration and review rounds, then the attempts of the one selected. */
 export function Measures({ tickets, now, selected, onSelect }: { tickets: MeasuredTicketView[]; now: number; selected?: string; onSelect: (key: string) => void }) {
   const open = tickets.find((t) => key(t) === selected);
   return (
     <div className="measures">
       <section>
-        <h2>Overview</h2>
-        <OverviewTiles o={overview(tickets)} />
-        <p className="note">Over the {plural(tickets.length, 'ticket')} served, the most recently updated. Computed by the factory from its journal and run records, never from what an agent wrote.</p>
-      </section>
-      <section>
         <h2>Tickets</h2>
+        <p className="note">The {plural(tickets.length, 'ticket')} most recently updated. The figures over all the tickets of a period are on the <a href="#overview">Overview</a>.</p>
         {tickets.length ? (
           <table>
             <thead>
@@ -185,12 +116,6 @@ export function Measures({ tickets, now, selected, onSelect }: { tickets: Measur
         </p>
       </section>
       {open && <Attempts ticket={open} now={now} />}
-      <section>
-        <h2>No source yet</h2>
-        <ul className="no-source">
-          {NO_SOURCE.map((n) => <li key={n.ticket}><strong>{n.label}</strong>: {n.why} ({n.ticket}).</li>)}
-        </ul>
-      </section>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { costCell, Measures, NO_SOURCE, overview, reviewRoundsCell, runDuration, ticketDuration } from './Measures.js';
+import { costCell, Measures, reviewRoundsCell, runDuration, ticketDuration } from './Measures.js';
 import type { MeasuredTicketView, RunMeasureView, TicketMeasuresView } from './types.js';
 
 const tokens = { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 };
@@ -43,37 +43,6 @@ describe('the cells of the measures (ORC-223)', () => {
   });
 });
 
-describe('overview (ORC-223)', () => {
-  const merged = (id: string, leadTimeMs: number, firstTry: boolean, t = tokens) =>
-    ticket(id, measures({ mergedAt: leadTimeMs, leadTimeMs, firstTry, tokens: t }), { logical: 'done' });
-
-  it('counts the merged tickets, their median lead time, tokens per merged ticket and how many were ready at the first try', () => {
-    const o = overview([
-      merged('A', 60_000, true),
-      merged('B', 120_000, false, { input: 0, output: 0, cacheRead: 0, cacheCreation: 3_000 }),
-      merged('C', 600_000, true),
-      ticket('D', measures()),
-    ]);
-    expect(o).toMatchObject({ delivered: 3, medianLeadTimeMs: 120_000, firstTry: { yes: 2, of: 3 }, tokensPerMerged: { mean: (37_000 * 2 + 3_000) / 3, leftOut: 0 } });
-  });
-
-  it('leaves out of the tokens a merged ticket with none reported, and says how many; reads nothing from a ticket it could not measure', () => {
-    const o = overview([merged('A', 60_000, true), ticket('B', measures({ mergedAt: 1, leadTimeMs: 1, firstTry: true, tokens: null }), { logical: 'done' }), ticket('X', null)]);
-    expect(o).toMatchObject({ delivered: 2, tokensPerMerged: { mean: 37_000, leftOut: 1 }, unmeasured: 1 });
-  });
-
-  it('is empty without a merged ticket, never a zero that reads as a measure', () => {
-    expect(overview([ticket('D', measures())])).toMatchObject({ delivered: 0, medianLeadTimeMs: null, firstTry: { yes: 0, of: 0 }, tokensPerMerged: { mean: null, leftOut: 0 } });
-  });
-
-  it('takes the median delays to the first sign of life and to the answer over the human messages, unanswered ones left out', () => {
-    const msg = (signOfLifeMs: number | null, answerMs: number | null) => ({ eventId: 'e', type: 'session.mentioned', kind: 'question', at: 0, signOfLifeMs, answerMs });
-    const o = overview([ticket('A', measures({ messages: [msg(2_000, 60_000), msg(4_000, null)] })), ticket('B', measures({ messages: [msg(30_000, 120_000)] }))]);
-    expect(o).toMatchObject({ medianSignOfLifeMs: 4_000, medianAnswerMs: 90_000 });
-    expect(overview([ticket('A', measures())])).toMatchObject({ medianSignOfLifeMs: null, medianAnswerMs: null });
-  });
-});
-
 describe('Measures (ORC-223)', () => {
   const page = (tickets: MeasuredTicketView[], selected?: string) =>
     renderToStaticMarkup(createElement(Measures, { tickets, now: 100_000, selected, onSelect: () => undefined }));
@@ -86,13 +55,8 @@ describe('Measures (ORC-223)', () => {
     expect(html).toContain('1 min 40 s so far');
   });
 
-  it('says plainly which measures have no source yet, and the ticket that brings each', () => {
-    const html = page([]);
-    for (const { label, ticket: id } of NO_SOURCE) {
-      expect(html).toContain(label);
-      expect(html).toContain(id);
-    }
-    expect(NO_SOURCE.map((n) => n.ticket)).toEqual(expect.arrayContaining(['ORC-216', 'ORC-190', 'ORC-230']));
+  it('sends to the Overview for the figures over all the tickets, which the factory computes (ORC-299)', () => {
+    expect(page([])).toContain('href="#overview"');
   });
 
   it("shows the selected ticket's attempts, each with its step, role, duration, tokens and turns", () => {
