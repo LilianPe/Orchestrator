@@ -10,6 +10,7 @@ Relais is tested without real services: a **harness** mounts the orchestrator (i
 - Properties of `decide`: `test/properties/` (fast-check).
 - Replay of recorded journals: `test/replay/` (ORC-174).
 - Golden tickets: `test/golden/` (ORC-236).
+- A Python repository with no config: `test/fixtures/python-repo/` (`test/helpers/python-repo.ts`, ORC-172), its `uv.lock` a real one; `init`'s detection, the red check and `runCleanVerify`'s freeze and anti-cheat run on it.
 - Fault injection: `test/scenarios/faults.test.ts`; `kill -9` chaos: `test/chaos/` (ORC-163).
 
 While working, run only the tests for the files you touched: `npx vitest run test/scenarios/harness.test.ts`.
