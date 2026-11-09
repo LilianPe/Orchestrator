@@ -66,10 +66,10 @@ export const CLAUDE_BODY_MAX = 16 * 1024 * 1024;
  * its share alone, so four runs at least are served side by side. Past it, a 429, which Claude Code retries.
  * Memory at worst, to size the proxy's container by: the calls held, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`, plus
  * the one being checked (`claudeBody`: joined, decoded, parsed, serialised again, encoded), one at a time since the
- * check is synchronous. Measured at `CLAUDE_BODY_MAX` (ORC-356): a call of text, 5 times its size; one character
- * outside Latin-1 makes both strings two bytes a character, 8 times; a body of millions of empty objects, which the
- * checks let through, 26 times of heap and 40 of RSS. At 16 MiB: ~210 MiB for Claude Code's calls, ~750 MiB under a
- * hostile sandbox, over the process's own.
+ * check is synchronous. Measured at `CLAUDE_BODY_MAX` (ORC-356, ORC-373): a call of text, 4 to 5 times its size; one
+ * character outside Latin-1 makes both strings two bytes a character, 8 times; a hostile call at `CLAUDE_BODY_VALUES`,
+ * objects of one key each, a new key in each, and a text with such a character, 13 times. At 16 MiB: ~260 MiB for
+ * Claude Code's calls, ~330 MiB under a hostile sandbox, over the process's own.
  */
 export const CLAUDE_READS_PER_RUN = 2;
 export const CLAUDE_READS_MAX = 8;
@@ -83,6 +83,15 @@ export const CLAUDE_READ_MS = 30_000;
  * opus, its tools' schemas and a tool call included).
  */
 export const CLAUDE_BODY_DEPTH = 64;
+
+/**
+ * How many values a model call may hold (ORC-373), counted on the raw bytes before anything parses them as the
+ * brackets and the commas outside strings: a list or an object, and each member past its first. A parse costs per
+ * value, not per byte: 16 MiB of empty objects took 41 times their size. Claude Code's conversations hold one value
+ * per 160 to 460 bytes (measured on long sessions' messages), ~100 000 at the cap; the bound, one per 32 bytes there,
+ * is five times that.
+ */
+export const CLAUDE_BODY_VALUES = 512 * 1024;
 
 /**
  * Tools run by the client, Claude Code: its own (no `type`, or `custom`), and the Anthropic-defined ones the
@@ -106,11 +115,13 @@ function numberProblem(raw: Buffer, start: number, end: number): string | undefi
 }
 
 /**
- * One linear pass over the raw bytes, before any parse (ORC-337): nesting past `CLAUDE_BODY_DEPTH`, or a number a
- * double cannot hold. A string is skipped to its closing quote, one not escaped by an odd run of backslashes.
+ * One linear pass over the raw bytes, before any parse (ORC-337): nesting past `CLAUDE_BODY_DEPTH`, more than
+ * `CLAUDE_BODY_VALUES` values (ORC-373), or a number a double cannot hold. A string is skipped to its closing quote, one
+ * not escaped by an odd run of backslashes.
  */
 function rawProblem(raw: Buffer): string | undefined {
   let depth = 0;
+  let values = 0;
   let number = -1;
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i]!;
@@ -133,8 +144,11 @@ function rawProblem(raw: Buffer): string | undefined {
       }
       if (close < 0) return undefined; // unterminated: the parse refuses it
       i = close;
-    } else if ((c === 0x5b || c === 0x7b) && ++depth > CLAUDE_BODY_DEPTH) return `nested deeper than ${CLAUDE_BODY_DEPTH}`;
-    else if (c === 0x5d || c === 0x7d) depth--;
+    } else if (c === 0x5d || c === 0x7d) depth--;
+    else if (c === 0x5b || c === 0x7b || c === 0x2c) {
+      if (++values > CLAUDE_BODY_VALUES) return `more than ${CLAUDE_BODY_VALUES} values`;
+      if (c !== 0x2c && ++depth > CLAUDE_BODY_DEPTH) return `nested deeper than ${CLAUDE_BODY_DEPTH}`;
+    }
   }
   return number >= 0 ? numberProblem(raw, number, raw.length) : undefined;
 }
@@ -207,8 +221,8 @@ export function claudeBody(raw: Buffer): { ok: true; body: Buffer } | { ok: fals
   if (typeof call !== 'object' || call === null || Array.isArray(call)) return { ok: false, reason: 'Claude API body refused: not a JSON object' };
   const problem = callProblem(call as Record<string, unknown>);
   // ponytail: scanned, parsed, walked and serialised again whole: ~40 ms of the event loop for a 4.3 MiB call (measured),
-  // ~1 ms for a run's usual ~50 KB, ~150 ms at the 16 MiB cap. If calls grow there, check duplicate keys in a parse of
-  // one's own and send the bytes as they came.
+  // ~1 ms for a run's usual ~50 KB, ~120 ms at the 16 MiB cap, ~600 ms for the worst call under `CLAUDE_BODY_VALUES`. If
+  // calls grow there, check duplicate keys in a parse of one's own and send the bytes as they came.
   return problem ? { ok: false, reason: `Claude API body refused: ${problem}` } : { ok: true, body: Buffer.from(JSON.stringify(call)) };
 }
 
