@@ -31,6 +31,22 @@ describe('parseAgentOutput', () => {
     expect(parseAgentOutput({ ...done, intake: { ...intake, complete: false, missing: ['a?', 'b?', 'c?', 'd?'] } })).toEqual({ ok: false, error: expect.stringContaining('intake.missing') });
   });
 
+  it('takes the duplicates, the code to reuse and the scope intake found, each optional and bounded (ORC-207)', () => {
+    const intake = { size: 'xl', risk: 'low', complete: true, missing: [], screen: false } as const;
+    const found = {
+      duplicates: [{ url: 'https://github.com/acme/app/pull/12', why: 'Same export.' }],
+      reuse: [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Writes a line.' }, { path: 'src/io/', why: 'Helpers.' }],
+      scope: { refuse: 'Too big.', split: [{ title: 'One', summary: 'First.' }] },
+    };
+    expect(parseAgentOutput({ ...done, intake: { ...intake, ...found } }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, intake: { ...intake, scope: { refuse: 'Too big.' } } }).ok).toBe(true);
+    const dup = found.duplicates[0]!;
+    expect(parseAgentOutput({ ...done, intake: { ...intake, duplicates: [dup, dup, dup, dup] } })).toEqual({ ok: false, error: expect.stringContaining('intake.duplicates') });
+    expect(parseAgentOutput({ ...done, intake: { ...intake, duplicates: [{ url: '', why: 'x' }] } })).toEqual({ ok: false, error: expect.stringContaining('intake.duplicates') });
+    expect(parseAgentOutput({ ...done, intake: { ...intake, scope: { refuse: '' } } })).toEqual({ ok: false, error: expect.stringContaining('intake.scope') });
+    expect(parseAgentOutput({ ...done, intake: { ...intake, reuse: [{ path: 'a', why: 'b', line: 3 }] } })).toEqual({ ok: false, error: expect.stringContaining('intake.reuse') });
+  });
+
   it('takes a conflict the rebase step stops on, with its case, and only with a blocked status (ORC-146)', () => {
     const stops = { ...done, status: 'blocked', reason: 'conflict', conflict: 'migrations', question: 'Which migration goes first?' };
     expect(parseAgentOutput(stops).ok).toBe(true);

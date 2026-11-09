@@ -375,19 +375,19 @@ function forgeThat(patch: Partial<ForgeSubject>): () => ForgeSubject {
 
 describeForgeContract(
   'a forge that answers nothing instead of rejecting when it cannot reach the forge',
-  forgeThat({ unreachable: { findPr: async () => undefined, unresolvedReviewComments: async () => [] } }),
+  forgeThat({ unreachable: { findPr: async () => undefined, unresolvedReviewComments: async () => [], openPrs: async () => [], branches: async () => [], recentBranches: async () => [] } }),
   { violates: [UNREACHABLE] },
 );
 
 describeForgeContract(
   'a forge that answers no review threads instead of rejecting when it cannot reach the forge',
   forgeThat({
-    unreachable: { findPr: async () => Promise.reject(new Error('forge unreachable')), unresolvedReviewComments: async () => [] },
+    unreachable: { findPr: async () => Promise.reject(new Error('forge unreachable')), unresolvedReviewComments: async () => [], openPrs: async () => [], branches: async () => [], recentBranches: async () => [] },
   }),
   { violates: [UNREACHABLE] },
 );
 
-const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: { findPr, unresolvedReviewComments: async () => [] } });
+const findingPr = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ forge: { findPr, unresolvedReviewComments: async () => [], openPrs: async () => [], branches: async () => [], recentBranches: async () => [] } });
 const unreadable = (findPr: Forge['findPr']): Partial<ForgeSubject> => ({ ...findingPr(findPr), unreadableChecks: 'factory/rel-2-y' });
 
 describeForgeContract(

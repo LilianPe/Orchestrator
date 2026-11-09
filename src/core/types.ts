@@ -26,6 +26,12 @@ export interface ClarifyQuestion {
 
 /** An accepted answer to a `clarify` question (ORC-210), signed as the reply that gave it: a decision, as an approval is. */
 export type ClarifyAnswer = Pick<FeedbackItem, 'author' | 'authorId' | 'at'> & { question: string; answer: string };
+/** A lead to existing code `intake` found close to the request (ORC-207): a file or module, a symbol in it, and why. */
+export interface ReuseLead {
+  path: string;
+  symbol?: string | undefined;
+  why: string;
+}
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
@@ -419,7 +425,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -620,6 +626,8 @@ export interface TicketState {
    * a new run plans its own, cleared (`null`) like `risk` (ORC-365). Absent or `null`: undecided until `verify` (ORC-176).
    */
   visualProof?: 'required' | null;
+  /** The existing code `intake` found close to the request (ORC-207), its last assessment: leads `build` is given to reuse. */
+  reuse?: ReuseLead[];
   /**
    * The ticket's spec (ORC-212), its last version: waiting for review while it has no approval and no run of the ticket
    * is being drafted, the contract of the later steps once approved. Absent until `spec_draft` wrote one; `null` once a

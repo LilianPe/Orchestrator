@@ -84,6 +84,57 @@ describe('intake (ORC-206)', () => {
   });
 });
 
+describe('intake: duplicates, existing code and scope (ORC-207)', () => {
+  const pr = 'https://github.com/acme/app/pull/12';
+
+  /** The question clarify asks first, once the decision is applied. */
+  const firstQuestion = (t: TicketState) => t.clarify?.questions[0]?.question ?? '';
+
+  it('a probable duplicate goes to the guard: no start, a clarify question with the link, even judged complete (ORC-210)', () => {
+    const e = finished(assessed({ duplicates: [{ url: pr, why: 'PR #12 changes src/export.ts for the same CSV export.' }] }));
+    const out = decide(ticket(), e, workflow);
+    expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move')).toBe(false);
+    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'elicitation', body: expect.stringContaining(pr) }));
+    const t = after(ticket(), e);
+    expect(t).toMatchObject({ blocked: false, clarify: { job: 'intake', answered: 0 } });
+    expect(firstQuestion(t)).toContain(pr);
+  });
+
+  it('a ticket out of scope is refused with its explanation and the split proposed, nothing created nor started', () => {
+    const e = finished(assessed({ size: 'xl', scope: { refuse: 'A rewrite of the whole store layer is an architecture change.', split: [{ title: 'Extract the SQL of runs', summary: 'Move run queries behind one module.' }, { title: 'Port tickets', summary: 'Same for tickets.' }] } }));
+    const out = decide(ticket(), e, workflow);
+    expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move')).toBe(false);
+    const t = after(ticket(), e);
+    expect(t).toMatchObject({ size: 'xl', clarify: { job: 'intake' } });
+    expect(firstQuestion(t)).toContain('A rewrite of the whole store layer is an architecture change.');
+    expect(firstQuestion(t)).toContain('Extract the SQL of runs');
+    expect(firstQuestion(t)).toContain('Port tickets');
+  });
+
+  it("the failed checks, the findings and intake's questions are asked in that order, at most 3", () => {
+    const e = finished(assessed({ complete: false, missing: ['CSV or XLSX?', 'Which page?'], duplicates: [{ url: pr, why: 'Same export.' }] }), { pickup: ['The description has no acceptance criteria.'] });
+    const questions = after(ticket(), e).clarify?.questions.map((q) => q.question) ?? [];
+    expect(questions).toHaveLength(3);
+    expect(questions[0]).toContain('acceptance criteria');
+    expect(questions[1]).toContain(pr);
+    expect(questions[2]).toBe('CSV or XLSX?');
+  });
+
+  it('records the existing code to reuse for build, replaced by the next assessment', () => {
+    const reuse = [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Already writes a CSV line.' }];
+    const t = after(ticket(), finished(assessed({ reuse })));
+    expect(t.reuse).toEqual(reuse);
+    expect(after({ ...t, activeRunId: 'r1', activeJob: 'intake' }, finished(assessed())).reuse).toEqual([]);
+  });
+
+  it('the duplicate found on its own launch (its branch or PR already there) is a failed check with its link', () => {
+    const own = `This ticket already has work on the forge: ${pr} (branch factory/rel-1-export).`;
+    const t = after(ticket(), finished(assessed(), { pickup: [own] }));
+    expect(t.clarify?.job).toBe('intake');
+    expect(firstQuestion(t)).toContain(pr);
+  });
+});
+
 describe('the run boundary of the risk (ORC-365)', () => {
   // Delegation starts with intake, as a repository turns it on.
   const withIntake: Workflow = { ...workflow, on: { ...workflow.on, 'ticket.delegated': workflow.on['ticket.delegated']!.map((r) => ({ ...r, run: 'intake' })) } };
