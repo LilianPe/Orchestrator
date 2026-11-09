@@ -41,7 +41,7 @@ function detectNode(repo: string): Detected {
   const pm = pnpm ? 'pnpm' : 'npm';
   const setup = pnpm ? ['pnpm install --frozen-lockfile'] : npmLock ? ['npm ci'] : [];
   const verify = ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `${pm} ${s === 'test' ? 'test' : `run ${s}`}`);
-  return { setup, verify, ...(scripts.test ? { red: pnpm ? 'pnpm test' : 'npm test --' } : {}) };
+  return { setup, verify, red: scripts.test ? (pnpm ? 'pnpm test' : 'npm test --') : undefined };
 }
 
 /**
@@ -55,12 +55,16 @@ function detectPython(repo: string): Detected {
   return { setup: ['uv sync --frozen'], verify: ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'], red: 'uv run --frozen pytest' };
 }
 
-/** Both when the repository has both: the red check runs one command, Node's first. */
-function detect(repo: string): Detected {
+/** Both when the repository has both: the red check runs one command, Node's, and `init` says what it leaves out. */
+function detect(repo: string): Detected & { note?: string } {
   const node = detectNode(repo);
   const python = detectPython(repo);
-  const red = node.red ?? python.red;
-  return { setup: [...node.setup, ...python.setup], verify: [...node.verify, ...python.verify], ...(red ? { red } : {}) };
+  return {
+    setup: [...node.setup, ...python.setup],
+    verify: [...node.verify, ...python.verify],
+    red: node.red ?? python.red,
+    note: node.red && python.red ? `The red check runs "${node.red}": the Python tests a tests step adds are not checked red (jobs.tests.red takes one command).` : undefined,
+  };
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
@@ -126,7 +130,8 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   const wfFile = join(repoPath, '.factory/workflow.yml');
   if (!existsSync(wfFile)) {
-    const { setup, verify: detected, red } = detect(repoPath);
+    const { setup, verify: detected, red, note } = detect(repoPath);
+    if (note) io.print(note);
     const verify = (await io.ask('Verification commands after each run (separated by ;)', detected.join('; ')))
       .split(';')
       .map((s) => s.trim())
