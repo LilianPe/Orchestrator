@@ -6,7 +6,7 @@ import { repoRoot } from '../app/root.js';
 import { FactoryYmlError, loadFactoryYml } from '../config/factory-yml.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { effectiveInstance, homePaths } from '../config/instance.js';
-import { BASELINE_DAYS, baselinePeriod, baselineRows, type BaselineRow, type CompletedIssue, type MergedPr } from '../core/baseline.js';
+import { BASELINE_DAYS, DAY_MS, baselinePeriod, baselineRows, type BaselineRow, type CompletedIssue, type MergedPr } from '../core/baseline.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
 import { cliLinearTracker } from './linear.js';
@@ -16,7 +16,6 @@ export const BASELINE_USAGE = `Usage: factory baseline <project> --since <YYYY-M
   day given, UTC, left out), read from the project's Linear team and GitHub repository. One row per measure, in the store.
   --replace   compute the same period again, in place of the stored one`;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface BaselineOptions {
   store: Store;
@@ -62,19 +61,24 @@ function line(r: BaselineRow): string {
 /**
  * `factory baseline` (ORC-230): the 90 days before the factory's start, read from the project's Linear team and GitHub
  * repository, frozen in the store, one row per measure. The same period again is refused unless `replace`: a baseline is
- * what the factory is measured against, never recomputed by accident.
+ * what the factory is measured against, never recomputed by accident; its figures are printed once stored, never figures
+ * that are not the stored ones. A start still to come is refused: its period would not have happened yet.
  */
 export async function runBaseline(o: BaselineOptions): Promise<number> {
   const period = baselinePeriod(o.start);
+  const span = `${day(period.since)} → ${day(period.until)}`;
+  if (period.until > o.now) {
+    o.print(`The start ${day(o.start)} is still to come: the baseline is the ${BASELINE_DAYS} days before the factory started.`);
+    return 1;
+  }
   const [issues, prs] = await Promise.all([o.sources.completedIssues(o.project.teamKey, period.since, period.until), o.sources.mergedPrs(o.project.repoPath, period.since, period.until)]);
   const rows = baselineRows(o.project.id, period, issues, prs, o.now);
-  const span = `${day(period.since)} → ${day(period.until)}`;
-  o.print(`Baseline of ${o.project.id} over ${span} (${BASELINE_DAYS} days), from Linear ${o.project.teamKey} and GitHub:`);
-  for (const r of rows) o.print(line(r));
   if (!(await o.store.putBaseline(rows, o.replace))) {
     o.print(`A baseline of ${o.project.id} over ${span} is already stored: --replace to compute it again.`);
     return 1;
   }
+  o.print(`Baseline of ${o.project.id} over ${span} (${BASELINE_DAYS} days), from Linear ${o.project.teamKey} and GitHub:`);
+  for (const r of rows) o.print(line(r));
   o.print('Stored.');
   return 0;
 }
@@ -107,7 +111,13 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     return 1;
   }
   // The forge the daemon would use: the GitHub App when configured, otherwise the gh CLI.
-  const githubApp = resolveGithubApp(instance);
+  let githubApp;
+  try {
+    githubApp = resolveGithubApp(instance);
+  } catch (err) {
+    console.log((err as Error).message);
+    return 1;
+  }
   const forge = githubApp ? new GitHubAppForge(githubApp) : new GhCliForge();
   // The daemon migrates the schema; this only writes rows.
   const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });

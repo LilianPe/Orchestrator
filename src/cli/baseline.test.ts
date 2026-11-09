@@ -5,6 +5,7 @@ import { BASELINE_USAGE, parseStartDate, runBaseline, type BaselineOptions } fro
 
 const DAY = 24 * 60 * 60 * 1000;
 const START = Date.UTC(2026, 10, 1);
+const NOW = START + DAY;
 
 /** Linear and GitHub as fakes: the period each was asked, kept; no network. */
 function withStore(issues: CompletedIssue[] = [], prs: MergedPr[] = []) {
@@ -22,7 +23,7 @@ function withStore(issues: CompletedIssue[] = [], prs: MergedPr[] = []) {
     },
   };
   const baseline = (o: Partial<BaselineOptions> = {}) =>
-    runBaseline({ store, sources, project: { id: 'p', repoPath: '/repo', teamKey: 'ORC' }, start: START, replace: false, now: 7, print: (l) => void lines.push(l), ...o });
+    runBaseline({ store, sources, project: { id: 'p', repoPath: '/repo', teamKey: 'ORC' }, start: START, replace: false, now: NOW, print: (l) => void lines.push(l), ...o });
   return { store, lines, asked, baseline };
 }
 
@@ -37,7 +38,7 @@ describe('factory baseline (ORC-230)', () => {
     expect(asked).toEqual([{ teamKey: 'ORC', ...period }, { repoPath: '/repo', ...period }]);
     const rows = await store.latestBaseline();
     expect(rows.map((r) => [r.measure, r.value])).toEqual([['delivered', 1], ['lead_time', 2 * DAY], ['tokens_per_merged', null], ['first_try', 1]]);
-    expect(rows.every((r) => r.projectId === 'p' && r.since === period.since && r.until === period.until && r.computedAt === 7)).toBe(true);
+    expect(rows.every((r) => r.projectId === 'p' && r.since === period.since && r.until === period.until && r.computedAt === NOW)).toBe(true);
     expect(lines).toEqual([
       'Baseline of p over 2026-08-03 → 2026-11-01 (90 days), from Linear ORC and GitHub:',
       '  Delivered: 1 (of 1 issue completed)',
@@ -52,11 +53,21 @@ describe('factory baseline (ORC-230)', () => {
     const { store, lines, baseline } = withStore();
     expect(await baseline()).toBe(0);
     const stored = await store.latestBaseline();
-    expect(await baseline({ now: 8 })).toBe(1);
-    expect(lines.at(-1)).toBe('A baseline of p over 2026-08-03 → 2026-11-01 is already stored: --replace to compute it again.');
+    lines.length = 0;
+    expect(await baseline({ now: NOW + 1 })).toBe(1);
+    // Only the refusal: figures that are not the stored ones are never printed.
+    expect(lines).toEqual(['A baseline of p over 2026-08-03 → 2026-11-01 is already stored: --replace to compute it again.']);
     expect(await store.latestBaseline()).toEqual(stored);
-    expect(await baseline({ now: 9, replace: true })).toBe(0);
-    expect((await store.latestBaseline()).every((r) => r.computedAt === 9)).toBe(true);
+    expect(await baseline({ now: NOW + 2, replace: true })).toBe(0);
+    expect((await store.latestBaseline()).every((r) => r.computedAt === NOW + 2)).toBe(true);
+  });
+
+  it('refuses a start still to come, reading nothing: its 90 days have not all happened', async () => {
+    const { store, lines, asked, baseline } = withStore();
+    expect(await baseline({ now: START - 1 })).toBe(1);
+    expect(lines).toEqual(['The start 2026-11-01 is still to come: the baseline is the 90 days before the factory started.']);
+    expect(asked).toEqual([]);
+    expect(await store.latestBaseline()).toEqual([]);
   });
 
   it('says when nothing was delivered, a dash rather than a zero for what has no value', async () => {

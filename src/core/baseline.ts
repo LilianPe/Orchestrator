@@ -6,7 +6,7 @@
 import { median } from './overview.js';
 
 export const BASELINE_DAYS = 90;
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The measures of the overview the baseline faces, in the order the overview shows them. */
 export const BASELINE_MEASURES = ['delivered', 'lead_time', 'tokens_per_merged', 'first_try'] as const;

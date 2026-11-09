@@ -358,7 +358,6 @@ export interface SecurityLog {
   skipped: { egress: number; refusals: number };
 }
 
-/** What a store keeps of a security log (ORC-296): its fields alone, so a command or a path handed with it is never written. */
 /** The project and the period of a baseline's rows (ORC-230): rows of no baseline, or of several, are a bug of the caller. */
 export function oneBaseline(rows: readonly BaselineRow[]): { projectId: string; since: number; until: number } {
   const first = rows[0];
@@ -370,6 +369,7 @@ export function oneBaseline(rows: readonly BaselineRow[]): { projectId: string; 
 /** A baseline's rows in the order of `BASELINE_MEASURES` (ORC-230). */
 export const inMeasureOrder = (rows: BaselineRow[]): BaselineRow[] => rows.sort((a, b) => BASELINE_MEASURES.indexOf(a.measure) - BASELINE_MEASURES.indexOf(b.measure));
 
+/** What a store keeps of a security log (ORC-296): its fields alone, so a command or a path handed with it is never written. */
 export function keptSecurityLog(log: SecurityLog): SecurityLog {
   return {
     runId: log.runId,

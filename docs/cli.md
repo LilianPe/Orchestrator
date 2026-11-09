@@ -172,7 +172,7 @@ Baseline of p over 2026-08-03 → 2026-11-01 (90 days), from Linear ORC and GitH
 Stored.
 ```
 
-The same period again is refused, the stored rows kept, unless `--replace`: a baseline is what the factory is measured against, never recomputed by accident. The Overview shows the baseline computed last. A list Linear or GitHub cannot give to its end (GitHub's search stops at 1000 PRs) stops the command, never a baseline read in part. Like `flaky`, the command writes to the instance's database, without the daemon.
+The same period again is refused, the stored rows kept and no figure printed, unless `--replace`: a baseline is what the factory is measured against, never recomputed by accident. A start still to come is refused before anything is read. Linear's archived issues are read too: a team archives closed issues after its own delay, which the period may be past. The Overview shows the baseline computed last. A list Linear or GitHub cannot give to its end (GitHub's search stops at 1000 PRs) stops the command, never a baseline read in part. Like `flaky`, the command writes to the instance's database, without the daemon.
 
 ## `relais-agent` (agent side)
 

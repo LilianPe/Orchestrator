@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LinearApi, type FetchLike } from './api.js';
 import { IssueNotFoundError } from '../types.js';
+import { Q } from './queries.js';
 import { effectUuid, LinearTracker } from './tracker.js';
 
 type Handler = (vars: Record<string, any>) => unknown;
@@ -377,6 +378,8 @@ describe('LinearTracker', () => {
       { teamKey: 'REL', since: '2026-08-01T00:00:00.000Z', until: '2026-10-30T00:00:00.000Z', after: null },
       { teamKey: 'REL', since: '2026-08-01T00:00:00.000Z', until: '2026-10-30T00:00:00.000Z', after: 'c1' },
     ]);
+    // Linear archives a closed issue after the team's delay: the period may be past it.
+    expect(Q.completed).toContain('includeArchived: true');
   });
 
   it('never reads an issue whose links it cannot read to their end as complete (ORC-230)', async () => {
