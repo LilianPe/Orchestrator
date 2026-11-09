@@ -160,6 +160,18 @@ describe('runDetail (ORC-298)', () => {
     ]);
   });
 
+  it('two review rounds at the same instant come in journal order, whatever order the store gives the attempts in', () => {
+    const lens = (runId: string, job: string) => ev(`f-${runId}`, 'run.finished', 9, { runId, job, outcome: 'success', costUsd: 0, turns: 1, lastText: '', attempt: 'succeeded' });
+    const d = runDetail(run({}), facts({
+      events: [lens('a', 'review'), lens('b', 'review-security')],
+      runs: [
+        run({ id: 'b', job: 'review-security', sessionRole: 'reviewer', status: 'success', startedAt: 6, endedAt: 9 }),
+        run({ id: 'a', job: 'review', sessionRole: 'reviewer', status: 'success', startedAt: 6, endedAt: 9 }),
+      ],
+    }));
+    expect(d.findings.map((f) => (f.source === 'ai' ? f.job : f.id))).toEqual(['review', 'review-security']);
+  });
+
   it('the checks: verify, red with its cause, the factory checks that failed by name, an errored check, and the CI', () => {
     const d = runDetail(run({}), facts({
       events: [
