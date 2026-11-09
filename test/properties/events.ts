@@ -31,8 +31,8 @@ export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
 const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
-const DEV_JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'review', 'review-security'] as const;
+const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'fix-human', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
+const DEV_JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'fix-human', 'review', 'review-security'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 /** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
 const FREEZES: readonly FrozenTests[] = [
@@ -90,7 +90,8 @@ export const DEBOUNCE: EventPayloads['timer.fired'] = { kind: 'debounce', payloa
  * round the pack's tickets wait on (they start with `dev`, not `intake`), or a usage reset without a job.
  */
 const timerFired: fc.Arbitrary<EventPayloads['timer.fired']> = fc.oneof(
-  { arbitrary: fc.record({ job }).map((payload) => ({ kind: 'debounce' as const, payload })), weight: 3 },
+  // `inbox`: armed by a classified message (ORC-180), or by a review on the PR (ORC-190).
+  { arbitrary: fc.record({ job, inbox: fc.boolean() }).map(({ job: j, inbox }) => ({ kind: 'debounce' as const, payload: { job: j, ...(inbox ? { inbox: true as const } : {}) } })), weight: 3 },
   { arbitrary: fc.record({ linearSessionId: session }).map((payload) => ({ kind: 'clarify.remind' as const, payload })), weight: 1 },
   { arbitrary: fc.record({ linearSessionId: session }).map((payload) => ({ kind: 'clarify.expire' as const, payload })), weight: 1 },
   { arbitrary: fc.constant({ kind: 'usage.reset' as const, payload: {} }), weight: 1 },
@@ -257,6 +258,8 @@ const FROM_LINEAR: ReadonlySet<EventType> = new Set<EventType>([
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
   fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }), signed: signedBy }).map(({ draft: d, roll, signed }): DraftEntry => {
     const untrusted = ALWAYS_UNTRUSTED.has(d.type) || (roll === 0 && !FACTORY_PRODUCED.has(d.type));
+    // A review on the PR is signed by its GitHub login whatever its taint (ORC-190).
+    if (signed && d.type === 'pr.reviewed') return { kind: 'external', draft: d, untrusted, signed };
     if (!signed || !HUMAN.has(d.type)) return { kind: 'external', draft: d, untrusted };
     // An untrusted event has no signed actor (ORC-160): its roles, resolved for nobody, are none.
     return { kind: 'external', draft: d, untrusted, signed: untrusted ? { roles: [] } : signed };

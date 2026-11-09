@@ -136,10 +136,11 @@ describe('decide — a classified message (ORC-180)', () => {
 
   describe('a trusted event starts a run that empties an untrusted inbox (I12)', () => {
     const untrusted = { taint: 'untrusted' as const };
-    const moved = ev('status.changed', { from: 'human_review', to: 'dev' });
+    // A debounce armed before ORC-180 (no `inbox`): it starts its job whatever waits, as a move back to dev did before ORC-190.
+    const moved = ev('timer.fired', { kind: 'debounce', payload: { job: 'fix-human' } });
     const end = ev('verify.passed', { runId: 'r1', job: 'review' });
     const starts = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'start_run');
-    const sandboxed = [expect.objectContaining({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS })];
+    const sandboxed = (job = 'fix-human') => [expect.objectContaining({ job, sensitivePaths: SENSITIVE_PATHS })];
 
     it.each<[string, FeedbackItem[]]>([
       ['a message', [item(untrusted)]],
@@ -147,14 +148,15 @@ describe('decide — a classified message (ORC-180)', () => {
       ['a row written before ORC-180', [item({ kind: undefined, ...untrusted })]],
       ['a command alone', [item({ kind: 'command', ...untrusted })]],
       ['a command beside a trusted message', [item(), item({ kind: 'command', ...untrusted })]],
-    ])('by a move, %s', (_what, humanInbox) => {
-      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), moved, workflow))).toEqual(sandboxed);
+    ])('by a debounce, %s', (_what, humanInbox) => {
+      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), moved, workflow))).toEqual(sandboxed());
     });
 
     it('by the regrouping, and at the end of a step: a command beside a trusted message', () => {
       const humanInbox = [item(), item({ kind: 'command', ...untrusted })];
-      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), timer, workflow))).toEqual(sandboxed);
-      expect(starts(decide(ticket({ logical: 'ai_review', verifyingRunId: 'r1', humanInbox }), end, beforeOrc183(workflow)))).toEqual(sandboxed);
+      expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), timer, workflow))).toEqual(sandboxed('dev-feedback'));
+      // Handed to the round of human feedback the end of the review leaves in Human Review (ORC-190).
+      expect(starts(decide(ticket({ logical: 'ai_review', verifyingRunId: 'r1', humanInbox }), end, beforeOrc183(workflow)))).toEqual(sandboxed());
     });
 
     it('all of it trusted, no sensitive path', () => {
@@ -210,7 +212,7 @@ describe('decide — a classified message (ORC-180)', () => {
     const old = ev('session.prompted', { linearSessionId: 's1', body: 'boutons', author: 'L' });
     const out = decide(ticket({ logical: 'human_review' }), old, workflow);
     expect(out.effects).toEqual([]);
-    expect(out.timers).toEqual([{ kind: 'debounce', slot: 'dev-feedback', ms: 180_000, payload: { job: 'dev-feedback' } }]);
+    expect(out.timers).toEqual([{ kind: 'debounce', slot: 'fix-human', ms: 180_000, payload: { job: 'fix-human' } }]);
     expect(appended(out)).toEqual([expect.not.objectContaining({ kind: expect.anything() })]);
   });
 });
@@ -268,7 +270,8 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
   it('the end of the work moves the ticket, then the agent is resumed on them', () => {
     const out = decide(verifying({ humanInbox: [item()] }), passed, frozen);
     expect(out.effects.map((e) => e.kind)).toEqual(['move', 'post_output', 'start_run']);
-    expect(out.effects.at(-1)).toMatchObject({ job: 'dev-feedback', input: 'feedback' });
+    // In Human Review, a round of human feedback (ORC-190).
+    expect(out.effects.at(-1)).toMatchObject({ job: 'fix-human', input: 'feedback' });
   });
 
   it.each([
@@ -288,7 +291,7 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
     // Owed to AI Review, where no reply rule applies: the messages wait; only the review the move came with starts (ORC-183).
     const starts = decide(t, done, workflow).effects.filter((e) => e.kind === 'start_run');
     expect(starts).toEqual([expect.objectContaining({ job: 'review' })]);
-    expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'dev-feedback' });
+    expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'fix-human' });
   });
 
   it('the end of an answer starts no agent', () => {
