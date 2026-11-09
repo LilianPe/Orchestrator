@@ -891,6 +891,10 @@
             "risks": [],
             "untested": [],
             "review_hints": []
+          },
+          "diffClass": {
+            "class": "normal",
+            "paths": []
           }
         }
       },
@@ -946,7 +950,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "dev",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [
           {
@@ -1023,7 +1031,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1046,7 +1058,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [],
         "timers": [],
@@ -1100,7 +1116,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1123,7 +1143,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [],
         "timers": [],
@@ -1177,7 +1201,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1200,7 +1228,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [],
         "timers": [],
@@ -1254,7 +1286,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1277,7 +1313,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [],
         "timers": [],
@@ -1337,7 +1377,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1360,7 +1404,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [],
         "timers": [],
@@ -1420,7 +1468,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1443,7 +1495,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "effects": [],
         "timers": [],
@@ -1496,7 +1552,11 @@
           "branch": "factory/rel-1-export-csv",
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
-          "untrustedSince": null
+          "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          }
         },
         "ticket": {
           "projectId": "p",
@@ -1520,6 +1580,10 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "OPEN"
@@ -1584,6 +1648,10 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "OPEN"
@@ -1610,6 +1678,10 @@
           "recordedStatus": "human_review",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1681,6 +1753,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1705,6 +1781,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1760,6 +1840,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1784,6 +1868,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1839,6 +1927,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1863,6 +1955,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1918,6 +2014,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1942,6 +2042,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -1997,6 +2101,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2021,6 +2129,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2089,6 +2201,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2113,6 +2229,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2172,6 +2292,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2196,6 +2320,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2259,6 +2387,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2283,6 +2415,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2346,6 +2482,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
@@ -2370,6 +2510,10 @@
           "recordedStatus": "done",
           "claudeSessionId": "id-2",
           "untrustedSince": null,
+          "diffClass": {
+            "class": "normal",
+            "paths": []
+          },
           "prNumber": 3,
           "prUrl": "https://github.com/acme/app/pull/3",
           "prState": "MERGED"
