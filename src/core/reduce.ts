@@ -156,8 +156,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       const next = { ...t, ...(mark === undefined ? {} : { untrustedSince: mark }) };
       if (e.queue !== 'dev') return next;
       // A ticket whose session read under a mark its branch no longer holds takes the new one (ORC-358).
-      const takes = e.ticketSession !== false;
-      const claudeSessionId = !takes ? t.claudeSessionId : t.newSession ? e.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
+      const takesNew = e.ticketSession !== false && !!t.newSession;
+      const claudeSessionId = takesNew ? e.claudeSessionId : e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       // The run that starts the pending job takes it off the ticket in the same write, whoever launched it (settle,
       // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
       // a lost attempt, is not it.
@@ -167,7 +167,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
         activeRunId: e.runId,
         activeJob: e.job,
         claudeSessionId,
-        ...(takes && t.newSession ? { newSession: undefined } : {}),
+        ...(takesNew ? { newSession: undefined } : {}),
         ...(e.starts ? { activeStart: pendingOf(e.starts) } : {}),
         ...(startsPending ? { pendingJob: undefined } : {}),
       };
