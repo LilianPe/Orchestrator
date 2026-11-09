@@ -30,9 +30,9 @@ describe('standard workflow', () => {
     const moves = h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
     expect(moves).toEqual(['In Progress', 'Human Review']);
     const acts = h.tracker.activities('ls-1');
-    // Live, what the agent does in the factory's words; the summary composed from its `submit_result`, never its last text (ORC-214).
+    // Live, what the agent does in the factory's words; the recap composed from its `submit_result`, never its last text (ORC-214, ORC-195).
     expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
-    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists' });
+    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists\n\n**Tests added**\n- `src/export.test.ts`\n\n**Work**: 1 attempt, 1 turn, tokens not reported, 0 s.' });
     expect(JSON.stringify(acts)).not.toMatch(/npm test|PR ouverte/);
   });
 
@@ -120,14 +120,20 @@ describe('standard workflow', () => {
 
   it('criterion 5: AI review -> Human Review (no Ready to Merge, ORC-170) -> merge -> done, cleanup, learn', async () => {
     const h = createHarness();
+    // The worktree's head, which verify finds green and the factory publishes: what the review reads.
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'abc123');
     await delegatedAndInReview(h);
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
+    const summary = h.tracker.activities('ls-1').at(-1);
+    // A human's move to AI Review reviews the published commit again: the two read-only lenses, then Human Review (ORC-183).
     await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
-    expect(h.runner.requests[1]).toMatchObject({ model: 'opus', resume: false });
-    // The preset's review loop, its count shared with red CI (ORC-216, ORC-184): 2, not the pack's former 5.
-    expect(h.runner.requests[1]!.prompt).toContain('Max review rounds: 2');
+    expect(h.runner.requests.slice(1).map((r) => [r.prompt.split('\n')[0], r.model, r.resume, r.tools])).toEqual([
+      ['/factory:review', 'opus', false, ['Read', 'Grep', 'Glob']],
+      ['/factory:review', 'opus', false, ['Read', 'Grep', 'Glob']],
+    ]);
     expect((await h.ticket()).logical).toBe('human_review');
-    expect(h.tracker.activities('ls-1').at(-1)).toEqual({ type: 'response', body: 'Synthèse : 2 rounds, CI verte.' });
+    // Its findings go to the PR, not to Linear: the last word in the session is still the build's.
+    expect(h.tracker.activities('ls-1').at(-1)).toEqual(summary);
+    expect(h.forge.checkRuns.find((c) => c.name === 'factory/review')).toMatchObject({ conclusion: 'success' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
     expect((await h.ticket()).logical).toBe('done');
     expect(h.workspaces.cleaned).toEqual(['REL-1']);

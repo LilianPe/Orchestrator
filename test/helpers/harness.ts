@@ -29,9 +29,20 @@ import type { TestPreset } from './test-preset.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
-/** The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read. */
-export function loadTestWorkflow(projectYaml?: string): Workflow {
-  if (!projectYaml) return loadWorkflow({ packDir });
+/**
+ * The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read.
+ * Without `aiReview`, `dev`'s end goes straight to Human Review, as before ORC-183, instead of starting the AI review's two
+ * lenses: what the scenarios of the other steps, the properties and the recorded journals run on, their runs and moves counted
+ * without the review's. The review's own scenarios (`test/scenarios/review.test.ts`) run the pack as it ships.
+ */
+export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean } = {}): Workflow {
+  const wf = projectYaml ? withProjectFile(projectYaml) : loadWorkflow({ packDir });
+  const dev = wf.jobs['dev'];
+  if (!o.aiReview && dev?.onSuccess.run === 'review') dev.onSuccess = { move: 'human_review', post: 'summary' };
+  return wf;
+}
+
+function withProjectFile(projectYaml: string): Workflow {
   const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
   try {
     const projectFile = join(dir, 'workflow.yml');
@@ -226,10 +237,12 @@ export function createHarness(
     onUsageLimit?: 'wait';
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
+    /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
+    aiReview?: boolean;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
-  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
+  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
@@ -265,7 +278,8 @@ export function createHarness(
       hostChecks: opts.hostChecks ?? true,
       originUrl: async () => '/origin',
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
-      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
+      // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.
+      cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
     };

@@ -11,7 +11,10 @@ import {
   type DeadLetterStatus,
   type RepairAction,
 } from '../../core/dead-letter.js';
+import type { ReviewLens } from '../../config/workflow-schema.js';
+import type { Finding } from '../../core/agent-output.js';
 import type { OutboxEffect } from '../../core/decision.js';
+import type { ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
 import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
@@ -37,6 +40,7 @@ import {
   type QueueRetry,
   type QueueItem,
   type RunRecord,
+  type FindingsRecord,
   type SecurityLog,
   type SecurityStats,
   type TimerRecord,
@@ -930,6 +934,29 @@ export class PgStore implements AsyncStore {
       refusals: refusals.rows.map((r) => ({ at: Number(r.at), tool: r.tool, rule: r.rule, command: r.command })),
       skipped: { egress: h.skipped_egress, refusals: h.skipped_refusals },
     };
+  }
+
+  async putFindings(r: FindingsRecord): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`delete from findings where project_id = ${r.projectId} and ticket_id = ${r.ticketId} and sha = ${r.sha} and kind = ${r.lens}`);
+      if (!r.findings.length) return;
+      await tx.insert(schema.findings).values(
+        r.findings.map((f, n) => ({
+          id: `${r.runId}:${r.lens}:${n}`, attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
+          projectId: r.projectId, ticketId: r.ticketId, sha: r.sha, n, file: f.file, line: f.line, suggestion: f.suggestion, fact: f.fact ?? null,
+        })),
+      );
+    });
+  }
+
+  async findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]> {
+    const rows = await this.db.execute<{ attempt_id: string; kind: ReviewLens; severity: Finding['severity']; body: string; file: string; line: number; suggestion: string; fact: string | null }>(sql`
+      select attempt_id, kind, severity, body, file, line, suggestion, fact from findings
+      where project_id = ${projectId} and ticket_id = ${ticketId} and sha = ${sha} order by kind, n
+    `);
+    return rows.rows.map((r) => ({
+      file: r.file, line: r.line, severity: r.severity, explanation: r.body, suggestion: r.suggestion, ...(r.fact === null ? {} : { fact: r.fact }), lens: r.kind, runId: r.attempt_id,
+    }));
   }
 
   async securityStats(since: number, until: number): Promise<SecurityStats> {

@@ -387,6 +387,27 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.blocksEntered(160, 340)).toEqual([{ projectId: 'p', ticketId: 'REL-5', at: 300, kind: 'pickup' }]);
   });
 
+  it("keeps each review lens's findings on a ticket's commit, the last run of a lens replacing its earlier one (ORC-183)", async () => {
+    const s = await store();
+    const f = (file: string, severity: 'blocking' | 'minor' | 'out_of_scope', patch: object = {}) => ({ file, line: 3, severity, explanation: `${file} e`, suggestion: '', ...patch });
+    expect(await s.findingsOf('p', 'REL-1', 'sha1')).toEqual([]);
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'sha1', lens: 'security', runId: 'r2', at: 200, findings: [f('b.ts', 'blocking', { fact: 'F-1' }), f('a.ts', 'minor', { suggestion: 'do x' })] });
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'sha1', lens: 'correctness', runId: 'r1', at: 100, findings: [f('c.ts', 'out_of_scope')] });
+    // Another commit, another ticket: not mixed in.
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'sha0', lens: 'correctness', runId: 'r0', at: 50, findings: [f('old.ts', 'blocking')] });
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-2', sha: 'sha1', lens: 'correctness', runId: 'r9', at: 50, findings: [f('other.ts', 'blocking')] });
+    // By lens, then in the order the lens gave them.
+    expect(await s.findingsOf('p', 'REL-1', 'sha1')).toEqual([
+      { ...f('c.ts', 'out_of_scope'), lens: 'correctness', runId: 'r1' },
+      { ...f('b.ts', 'blocking', { fact: 'F-1' }), lens: 'security', runId: 'r2' },
+      { ...f('a.ts', 'minor', { suggestion: 'do x' }), lens: 'security', runId: 'r2' },
+    ]);
+    // The lens run again on the same commit (a replay of its effect, a review asked again): its findings now, the other lens's kept.
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'sha1', lens: 'security', runId: 'r3', at: 300, findings: [] });
+    expect(await s.findingsOf('p', 'REL-1', 'sha1')).toEqual([{ ...f('c.ts', 'out_of_scope'), lens: 'correctness', runId: 'r1' }]);
+    expect(await s.findingsOf('p', 'REL-1', 'sha0')).toHaveLength(1);
+  });
+
   it('still reads a run stored without labels', async () => {
     const s = await store();
     await s.putRun(run());
