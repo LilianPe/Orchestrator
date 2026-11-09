@@ -61,7 +61,7 @@ import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
-import { pendingOf, reduce, samePending } from './reduce.js';
+import { branchAnew, pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
@@ -2591,7 +2591,7 @@ export class Orchestrator {
       }
       // The ticket's own worktree only: a review's clone is the run's, gone with it. Made anew on the default branch, its
       // branch holds nothing of the old one's: the old mark and human pushes end (ORC-358).
-      const newBranch = ws.fresh && !ws.ahead && (typeof t.untrustedSince === 'string' || !!t.humanPushes?.length);
+      const newBranch = ws.fresh && !ws.ahead && branchAnew(t) !== t;
       if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch, ...(newBranch ? { newBranch } : {}) }));
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
       t = await state(this.ticket(project.id, ticketId));
@@ -2623,7 +2623,7 @@ export class Orchestrator {
       if (kind === 'feedback') read.push(...forAgent(t.humanInbox).filter((i) => !threadsOf || !i.thread));
       const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.repoPath, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
-      const held = ticketSession ? t.claudeSessionId : undefined;
+      const held = ticketSession && !t.newSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
       const consumes = kind === 'feedback' || stepInbox.length > 0;

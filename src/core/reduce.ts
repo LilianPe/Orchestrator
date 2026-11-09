@@ -49,13 +49,13 @@ function reopened(t: TicketState): TicketState {
 }
 
 /**
- * The ticket's branch starts again (ORC-358), merged or made anew on the default branch: its mark and the pushes humans
- * made to it were the old branch's, and would refuse the trusted commits of the new one. The session that read under the
- * mark goes too: resumed, it would carry what it read onto a branch that no longer says so. A ticket the mark has not read
- * yet keeps all: its runs are read once, fail closed.
+ * The ticket's branch made anew on the default branch (ORC-358): its mark and the pushes humans made to it were the old
+ * branch's, and would refuse the trusted commits of the new one. The session that read under the mark is not resumed
+ * (`newSession`): it would carry what it read onto a branch that no longer says so. A ticket the mark has not read yet
+ * keeps its state: its runs are read once, fail closed. The ticket itself when there is nothing to end.
  */
-function branchAnew(t: TicketState): TicketState {
-  if (typeof t.untrustedSince === 'string') return { ...t, untrustedSince: null, humanPushes: undefined, claudeSessionId: undefined };
+export function branchAnew(t: TicketState): TicketState {
+  if (typeof t.untrustedSince === 'string') return { ...t, untrustedSince: null, humanPushes: undefined, ...(t.claudeSessionId ? { newSession: true } : {}) };
   return t.humanPushes ? { ...t, humanPushes: undefined } : t;
 }
 
@@ -113,7 +113,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
     case 'publish.refused':
       return e.payload.runId === t.verifyingRunId ? { ...t, verifyingRunId: undefined } : t;
     case 'pr.merged':
-      return { ...branchAnew(t), prState: 'MERGED', prNumber: e.payload.number, prUrl: e.payload.url };
+      return { ...t, prState: 'MERGED', prNumber: e.payload.number, prUrl: e.payload.url };
     default:
       return t;
   }
@@ -155,7 +155,9 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       const mark = !e.untrusted ? t.untrustedSince : t.untrustedSince === null ? e.untrusted.head : (t.untrustedSince ?? '');
       const next = { ...t, ...(mark === undefined ? {} : { untrustedSince: mark }) };
       if (e.queue !== 'dev') return next;
-      const claudeSessionId = e.ticketSession === false ? t.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
+      // A ticket whose session read under a mark its branch no longer holds takes the new one (ORC-358).
+      const takes = e.ticketSession !== false;
+      const claudeSessionId = !takes ? t.claudeSessionId : t.newSession ? e.claudeSessionId : (t.claudeSessionId ?? e.claudeSessionId);
       // The run that starts the pending job takes it off the ticket in the same write, whoever launched it (settle,
       // the queue, a decision): never both, never neither (ORC-339). The same job with another input, or the relaunch of
       // a lost attempt, is not it.
@@ -165,6 +167,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
         activeRunId: e.runId,
         activeJob: e.job,
         claudeSessionId,
+        ...(takes && t.newSession ? { newSession: undefined } : {}),
         ...(e.starts ? { activeStart: pendingOf(e.starts) } : {}),
         ...(startsPending ? { pendingJob: undefined } : {}),
       };

@@ -553,10 +553,16 @@ export interface TicketState {
   /**
    * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
    * `''` when that head was not read or the run came before the mark existed: from then on, what the agent's commits
-   * change in the repository's `sensitive_paths` is refused. Sticky: its commits stay on the branch whoever runs next.
+   * change in the repository's `sensitive_paths` is refused. Sticky: its commits stay on the branch whoever runs next,
+   * until a worktree is made again on a branch made anew from the default branch (`workspace.prepared`, ORC-358).
    * `null` once read that no such run worked on it (`untrusted.read`); absent until then.
    */
   untrustedSince?: string | null;
+  /**
+   * The ticket's session read under a mark its branch no longer holds (ORC-358): the next implementer run starts a new
+   * one, which the ticket takes, rather than carry what it read onto a branch that no longer says so. Absent otherwise.
+   */
+  newSession?: true;
   /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
   humanPushes?: { before?: string; after: string }[];
   /**
