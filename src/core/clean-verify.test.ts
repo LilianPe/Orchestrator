@@ -662,8 +662,9 @@ describe('runCleanVerify', () => {
         npm(repo, { 'left-pad': '1' });
         commit(repo, 'deps');
         expect((await runCleanVerify(req)).ok).toBe(true);
-        expect(regs.opened).toEqual(['r1-dependencies']);
-        expect(regs.closed).toEqual(['r1-dependencies']);
+        // A name of this check's own: another check of the same run closes nothing of it.
+        expect(regs.opened).toEqual([expect.stringMatching(/^r1-dependencies-[0-9a-f]{8}$/)]);
+        expect(regs.closed).toEqual(regs.opened);
         // The sealed setup alone installs, at `limited`, as before; nothing of the check runs in a sandbox.
         expect(sandboxes.created.filter((c) => c.runId !== 'r1-verify-setup').map((c) => [c.runId, c.network])).toEqual([
           ['r1-bundle', 'none'],
@@ -701,7 +702,30 @@ describe('runCleanVerify', () => {
         npm(repo, { 'left-pad': '1' });
         commit(repo, 'deps');
         await expect(runCleanVerify(req)).rejects.toThrow(/registry did not answer \(connect ETIMEDOUT\)/);
-        expect(regs.closed).toEqual(['r1-dependencies']);
+        expect(regs.closed).toEqual(regs.opened);
+        expect(regs.closed).toHaveLength(1);
+      });
+
+      it('a registry down hides no verdict that needs no answer: the package off the allowlist blocks all the same', async () => {
+        const registry = new FakePackageRegistry({ npm: ['left-pad'] });
+        registry.fail('npm', 'evil', 'connect ETIMEDOUT');
+        const { repo, req } = setup({ registries: registries(registry).open }, ALLOW);
+        npm(repo, { 'left-pad': '1', evil: '1' });
+        commit(repo, 'deps');
+        const res = await runCleanVerify(req);
+        expect(res.failures).toEqual([{ command: 'factory/dependances', exitCode: 1, output: expect.stringContaining(`npm "evil" (package.json): not on the repository's allowlist.`) }]);
+        expect(res.failures[0]!.output).not.toContain('did not answer');
+      });
+
+      it('asked after gitleaks: a registry down hides no secret the branch committed', async () => {
+        const registry = new FakePackageRegistry();
+        registry.fail('npm', 'left-pad', 'connect ETIMEDOUT');
+        const { repo, sandboxes, req } = setup({ gitleaks: true, registries: registries(registry).open }, ALLOW);
+        sandboxes.scan = () => ({ stdout: JSON.stringify([{ File: 'a.txt', StartLine: 1, RuleID: 'github-pat', Secret: 'REDACTED' }]), stderr: '', code: 7 });
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps and a secret');
+        expect((await runCleanVerify(req)).failures.map((f) => f.command)).toEqual(['factory/secrets']);
+        expect(registry.lookups).toEqual([]);
       });
 
       it('an instance with no way to the registries is a breakdown too, as is a proxy that does not open', async () => {

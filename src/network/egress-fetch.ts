@@ -1,5 +1,4 @@
 import { once } from 'node:events';
-import { readFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import type { Socket } from 'node:net';
 import { Readable } from 'node:stream';
@@ -14,16 +13,15 @@ const NULL_BODY = new Set([204, 205, 304]);
  * The package registries `verify` asks (`factory/dependances`, ORC-371), from the daemon through the egress proxy: a run of
  * its own, `id`, at `limited`, whose rules let reads of the registries' hosts through and journal them; closed by `close`.
  */
-export function registriesViaEgress(egress: Pick<Egress, 'open' | 'close' | 'caCertPath'>) {
+export function registriesViaEgress(egress: Pick<Egress, 'open' | 'close' | 'caCertPem'>) {
   return async (id: string): Promise<{ registry: PackageRegistry; close: () => Promise<void> }> => {
-    const socket = await egress.open(id, { level: 'limited', allow: [] });
     const close = () => egress.close(id);
-    try {
-      return { registry: new HttpPackageRegistry({ fetch: egressFetch(socket, await readFile(egress.caCertPath, 'utf8')) }), close };
-    } catch (err) {
+    // An `open` the proxy made but whose answer was lost: closed all the same.
+    const socket = await egress.open(id, { level: 'limited', allow: [] }).catch(async (err: unknown) => {
       await close();
       throw err;
-    }
+    });
+    return { registry: new HttpPackageRegistry({ fetch: egressFetch(socket, egress.caCertPem) }), close };
   };
 }
 
@@ -44,7 +42,8 @@ export function egressFetch(socketPath: string, ca: string): typeof fetch {
       const req = request({ createConnection: () => tls, method: init.method ?? 'GET', path: url.pathname + url.search, headers, ...(signal ? { signal } : {}) }, (res) => {
         res.once('close', () => tls.destroy());
         const status = res.statusCode ?? 0;
-        const body = NULL_BODY.has(status) ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
+        // A status without a body: drained, so the response ends and its tunnel with it.
+        const body = NULL_BODY.has(status) ? (res.resume(), null) : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
         try {
           ok(new Response(body, { status }));
         } catch (err) {

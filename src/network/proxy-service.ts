@@ -8,7 +8,7 @@ import { NETWORK_RANK, type EgressPolicy } from './levels.js';
 import { egressJournalPath, PIPE, type EgressProxy } from './proxy.js';
 
 /** What the daemon asks of the egress proxy, in its own process or in the `proxy` service. */
-export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' | 'caCertPath' | 'journalPath'>;
+export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' | 'caCertPath' | 'caCertPem' | 'journalPath'>;
 
 /** The name of the agent API in a sandbox: the daemon writes it in `FACTORY_API`, the proxy recognises it. */
 export const sandboxAgentHost = (env: NodeJS.ProcessEnv) => env['FACTORY_SANDBOX_AGENT_HOST'] || 'host.docker.internal';
@@ -34,7 +34,7 @@ export async function serveEgressControl(proxy: EgressProxy, path: string): Prom
     ['/open', async (input) => {
       const { runId, policy, claudeToken } = OPEN.parse(input);
       const socket = await proxy.openRun(runId, policy, claudeToken);
-      return { socket, ca: proxy.caCertPath };
+      return { socket, ca: proxy.caCertPath, caPem: proxy.caCertPem };
     }],
     ['/close', async (input) => {
       await proxy.close(CLOSE.parse(input).runId);
@@ -89,6 +89,7 @@ export interface EgressClientOptions {
 export class EgressClient implements Egress {
   private readonly opened = new Set<string>();
   private ca?: string;
+  private caPem?: string;
   private watch?: Promise<ClientRequest>;
 
   constructor(
@@ -99,6 +100,12 @@ export class EgressClient implements Egress {
   get caCertPath(): string {
     if (!this.ca) throw new Error('egress: no run opened yet, so no CA');
     return this.ca;
+  }
+
+  /** Read by the proxy, which mounts the CA's folder: this service does not (ORC-371). */
+  get caCertPem(): string {
+    if (!this.caPem) throw new Error('egress: no run opened yet, so no CA');
+    return this.caPem;
   }
 
   isOpen(runId: string): boolean {
@@ -113,8 +120,9 @@ export class EgressClient implements Egress {
   async open(runId: string, policy: EgressPolicy): Promise<string> {
     await this.watching();
     const claudeToken = this.o.claudeToken?.();
-    const { socket, ca } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string };
+    const { socket, ca, caPem } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string; caPem: string };
     this.ca = ca;
+    this.caPem = caPem;
     this.opened.add(runId);
     return socket;
   }

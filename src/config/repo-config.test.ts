@@ -71,7 +71,11 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       expect(violations('dependencies: [zod]\n')).toEqual(['dependencies: `{ allow: { npm, pypi } }` expected']);
       expect(violations('dependencies: { allow: { cargo: [serde] } }\n')).toEqual(['dependencies.allow: lists of exact package names under `npm` and `pypi` expected']);
       expect(violations('dependencies: { allow: { npm: [""] } }\n')).toEqual(['dependencies.allow.npm[0]: lists of exact package names under `npm` and `pypi` expected']);
-      expect(violations('dependencies: { allow: { npm: ["@org/*"] } }\n')).toEqual(['dependencies.allow.npm[0]: "@org/*" is a pattern; exact package names only']);
+      expect(violations('dependencies: { allow: { npm: ["@org/*", "@org/pkg?", " "] } }\n')).toEqual([
+        'dependencies.allow.npm[0]: "@org/*" is not an exact package name; patterns are refused',
+        'dependencies.allow.npm[1]: "@org/pkg?" is not an exact package name; patterns are refused',
+        'dependencies.allow.npm[2]: " " is not an exact package name; patterns are refused',
+      ]);
     });
   });
 

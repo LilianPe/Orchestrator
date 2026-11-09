@@ -159,7 +159,7 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   for (const [ecosystem, names] of Object.entries(dependencies?.allow ?? {})) {
     // A pattern would be a rule of its own, which the MVP doc does not have (ORC-165).
     names?.forEach((name, i) => {
-      if (name.includes('*')) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is a pattern; exact package names only`);
+      if (/[*?[\]{}!\s]/.test(name)) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is not an exact package name; patterns are refused`);
     });
   }
   let maxDiff = resolveMaxDiff();
