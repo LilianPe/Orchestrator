@@ -4,7 +4,7 @@ import type { OverviewView, ReworkCause } from './types.js';
 
 /** The measures of the MVP doc that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
 export const NO_SOURCE = [
-  { label: 'Minutes of human review', ticket: 'ORC-190', why: 'a review says when it was posted, not when it began' },
+  { label: 'Minutes of human review', ticket: 'ORC-190', why: 'the review loop knows how long a PR waited for a human, not how long one read it: to be decided' },
   { label: 'Baseline over 90 days', ticket: 'ORC-230', why: 'nothing to compare the overview with yet' },
 ] as const;
 
