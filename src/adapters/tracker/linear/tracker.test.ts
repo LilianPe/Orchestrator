@@ -60,6 +60,8 @@ describe('LinearTracker', () => {
     const { api } = fakeLinear({ Issue: () => ({ issue: { ...node, creator } }) });
     expect((await new LinearTracker(api, 'app-1').getIssue('REL-1')).creator).toEqual(creator);
     expect(Q.issue).toContain('creator { id name url }');
+    // Not in the paged list of delegated tickets, which reads 100 issues a page under Linear's cost bound.
+    expect(Q.delegated).not.toContain('creator');
     // Created by an integration, or a user since deleted: no one to mention.
     const none = fakeLinear({ Issue: () => ({ issue: { ...node, creator: null } }) });
     expect(await new LinearTracker(none.api, 'app-1').getIssue('REL-1')).not.toHaveProperty('creator');

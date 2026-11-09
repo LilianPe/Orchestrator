@@ -384,8 +384,8 @@ export interface Artifact {
 }
 
 /**
- * An entry of the changelog (ORC-197): what a merged PR delivered, appended by the `after_merge` step and never changed. `id`: the
- * id of the effect that wrote it, its idempotency key. `summary`: what changed, as the published work said it (the ticket's title
+ * An entry of the changelog (ORC-197): what a merged PR delivered, appended by the `after_merge` step and never changed. `id`: its
+ * merge's, as the inbox names the `pr.merged` event, its idempotency key. `summary`: what changed, as the published work said it (the ticket's title
  * when none did); where: `page`, the page the visual proof shot, and `paths`, the paths of the diff that asked for it; `at`: when
  * GitHub merged it.
  */

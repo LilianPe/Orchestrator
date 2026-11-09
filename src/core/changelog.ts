@@ -1,4 +1,5 @@
 import { captureArtifactId, scenarioPath, type VisualProof } from '../checks/visual-proof.js';
+import { prEventId } from '../adapters/forge/github-webhook.js';
 import type { TrackerIssue } from '../adapters/tracker/types.js';
 import type { ChangelogEntry, ChangelogProof } from '../store/types.js';
 import type { Effect } from './decision.js';
@@ -18,13 +19,14 @@ export function mergedWork(events: readonly FactoryEvent[], headSha?: string): E
 }
 
 /**
- * The changelog entry of a merged PR (ORC-197), by the effect's key `id`: what changed as the published work said it, where (the
+ * The changelog entry of a merged PR (ORC-197), named by its merge as the inbox names the event (`prEventId`): a replay of the
+ * effect, or the event decided again, finds it. What changed as the published work said it, where (the
  * page the visual proof shot, the paths of the diff that asked for it), the captures `verify` took (ORC-176), and the PR's link.
  */
-export function changelogEntry(id: string, t: Pick<TicketState, 'projectId' | 'ticketId' | 'title'>, pr: MergedPr, work: EventPayloads['verify.passed'] | undefined): ChangelogEntry {
+export function changelogEntry(t: Pick<TicketState, 'projectId' | 'ticketId' | 'title'>, pr: MergedPr, work: EventPayloads['verify.passed'] | undefined): ChangelogEntry {
   const proof = changelogProof(work?.visualProof, work?.runId);
   return {
-    id,
+    id: prEventId(t.ticketId, pr.number, 'merged'),
     projectId: t.projectId,
     ticketId: t.ticketId,
     title: t.title,

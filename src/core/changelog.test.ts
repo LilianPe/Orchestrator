@@ -22,13 +22,13 @@ describe('the changelog entry of a merged PR (ORC-197)', () => {
   });
 
   it("says the ticket's title when no work is recorded, and no visual proof applicable", () => {
-    expect(changelogEntry('k', ticket, pr, undefined)).toEqual({ id: 'k', ...ticket, summary: 'Export CSV', prNumber: 3, prUrl: 'https://gh/pr/3', paths: [], visualProof: { status: 'not_applicable' }, at: 5 });
+    expect(changelogEntry(ticket, pr, undefined)).toEqual({ id: 'pr:REL-1:3:merged', ...ticket, summary: 'Export CSV', prNumber: 3, prUrl: 'https://gh/pr/3', paths: [], visualProof: { status: 'not_applicable' }, at: 5 });
   });
 
   it('names each capture by the artifact verify kept of it, and the page shot, the root when the agent named none', () => {
     const capture = { side: 'after' as const, sha: 'c'.repeat(40), width: 375, sha256: 'a'.repeat(64) };
     const work = (passed('r1', 'Restyled.', { visualProof: { decision: 'required', triggers: ['app/a.tsx'], captures: [capture] } }) as FactoryEvent<'verify.passed'>).payload;
-    expect(changelogEntry('k', ticket, { ...pr, mergeSha: 'm' }, work)).toMatchObject({
+    expect(changelogEntry(ticket, { ...pr, mergeSha: 'm' }, work)).toMatchObject({
       mergeSha: 'm', page: '/', paths: ['app/a.tsx'], visualProof: { status: 'taken', captures: [{ ...capture, artifactId: 'visual:r1:after:375' }] },
     });
   });

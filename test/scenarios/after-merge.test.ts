@@ -107,11 +107,11 @@ describe('the after_merge step (ORC-197)', () => {
     expect(all[1]).toEqual(first);
   });
 
-  it('the entry is named by its effect, never by the installation salt of the keys written to Linear', async () => {
+  it('the entry is named by its merge, as the inbox names the event: never by the installation salt of the keys written to Linear', async () => {
     const h = delivered(taken());
     await merge(h);
     const [entry] = await entries(h);
-    expect(entry!.id).toMatch(/^REL-1:\d+:\d+$/);
+    expect(entry!.id).toBe(`pr:REL-1:${entry!.prNumber}:merged`);
   });
 
   it('a mention Linear refuses holds back neither the entry, nor the cleanup and learn behind it: logged, the step done', async () => {
