@@ -26,6 +26,12 @@ describe('loadWorkflow', () => {
     expect(wf.commands).toEqual(['retiens', 'fais-le']);
   });
 
+  it('reads the command that starts the application for the visual proof, absent by default (ORC-176)', () => {
+    expect(loadWorkflow({ packDir }).workspace).not.toHaveProperty('preview');
+    const wf = loadWorkflow({ packDir, projectFile: projectFile('version: 1\nworkspace:\n  preview: npm run preview\n') });
+    expect(wf.workspace.preview).toBe('npm run preview');
+  });
+
   it('accepts the former event names of a project file as aliases', () => {
     const wf = loadWorkflow({
       packDir,

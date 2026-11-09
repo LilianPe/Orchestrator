@@ -2,8 +2,10 @@ import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
+import type { SpecVersion } from './spec.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
+import type { VisualProof } from '../checks/visual-proof.js';
 import type { ReviewLens } from '../config/workflow-schema.js';
 
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done'] as const;
@@ -72,10 +74,11 @@ export type Stagnation =
   | { kind: 'silent'; silentMs: number };
 
 /**
+ * `spec_check`: what the factory's check of a spec found wrong, with the refused draft (ORC-212).
  * `diff`: the published commit's diff an AI review reads (ORC-183). `findings`: the blocking findings of the last AI review,
  * which the fix of the review loop reads, with the PR's unresolved threads (ORC-184).
  */
-export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'diff' | 'findings';
+export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'spec_check' | 'diff' | 'findings';
 export type QueueName = 'dev' | 'questions';
 
 /** A finding of the AI review the fix contests (ORC-184): its id in the fix's input (`correctness-1`), and why it does not apply. */
@@ -317,7 +320,8 @@ export interface EventPayloads {
    * found green (ORC-151), the only one a merge may then carry; absent on the `red` check and on older rows.
    */
   /** `commands`: what `verify` ran on `sha`, for its check on the forge (ORC-151); absent when it ran nothing again. */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[] };
+  /** `visualProof`: what `verify` decided and took of the visual proof (ORC-176), the captures by their hash. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests };
   /**
@@ -420,7 +424,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -621,6 +625,16 @@ export interface TicketState {
    * a new run plans its own, cleared (`null`) like `risk` (ORC-365). Absent or `null`: undecided until `verify` (ORC-176).
    */
   visualProof?: 'required' | null;
+  /**
+   * The ticket's spec (ORC-212), its last version: waiting for review while it has no approval and no run of the ticket
+   * is being drafted, the contract of the later steps once approved. Absent until `spec_draft` wrote one; `null` once a
+   * new delegation started the ticket's work afresh.
+   */
+  spec?: SpecVersion | null;
+  /** The returns to `spec_draft` a failed `spec_check` used on the current draft (ORC-212): the next failure blocks. */
+  specCheckReturns?: number;
+  /** The `/changes` rounds since the last approval (ORC-212): one past the preset's bound blocks. */
+  specChanges?: number;
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */
   workflowHash?: string;
 }

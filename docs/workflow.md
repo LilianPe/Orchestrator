@@ -114,6 +114,7 @@ There is no budget in dollars (ORC-216): a `usd` key left in `per_run` or a job'
 |---|---|---|---|
 | `setup` | list of commands | `[]` | Run (via `bash -c`, in order) when a worktree is **created**, not on later runs that reuse it. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »). |
 | `ports.base` | integer > 0 | 4200 | First port assigned to runs in the `dev` queue (`PORT` in the run's environment). |
+| `preview` | command | — | Starts the application for the visual proof (ORC-176), in the background, on `PORT` = `ports.base`, in the sandbox of the capture. Absent: a required visual proof is not taken, and its check stays indicative. |
 
 ### `on`
 The event rules, detailed in section 3.
@@ -153,7 +154,10 @@ The checks (`verify`): with sandboxes (`FACTORY_CONTAINER_CLI`), the factory pin
 - One fails and attempts remain: Relais relaunches **the same job**, resuming the session, with the output of the failing commands, trimmed to its beginning, its end and its error lines (8,000 characters at most).
 - After `limits.verify_attempts` failed passes: the ticket is blocked and Relais posts the list of failing commands in the session.
 - The check cannot run (engine down, silent sandbox, failing `setup`, rejected configuration, unreachable forge): `verify.errored`, the ticket is blocked for infrastructure reasons, without sending anything back to the agent or touching the counter.
+- The visual proof (ORC-176), on a job that writes the commit, once its commands pass; see below.
 - Same failure three times in a row (same failing commands, same exit codes, unchanged commit content): the ticket is blocked with the cause « Loop », even if passes remain. The worktree's fingerprint is the git tree of its content, untracked files included, computed without touching its index or its objects (60 s at most). Files written by the checks must be ignored by git (`coverage/`, reports): otherwise the fingerprint changes on every pass and the guard never triggers, without ever blocking wrongly. The count resets to zero on a green check or a human relaunch. Outside a git repository, this guard does not apply. Its bound comes from the preset and is not set in `workflow.yml`.
+
+**The visual proof** (ORC-176, check `factory/preuve-visuelle`). `verify` decides it on the real diff and journals it with its verdict (`verify.passed.visualProof`): `required` when the diff touches a path of `visual_paths` (`.factory/config.yml` of the base branch, the paths that trigger it named) or when `intake` asked for it (a ticket that speaks of a screen, ORC-206), `not_applicable` otherwise. Nothing the agent submits enters the decision: a model's `not_applicable` is ignored. Required, the factory takes it itself, never the agent: the base's files are checked out from the clone before any code of the agent runs; then, in a sandbox of its own at network `none`, with a browser and nothing mounted, it starts the application (`workspace.preview`) and shoots the page of `visual_scenario.url` from `submit_result` (a path of the application, `/` otherwise; its `steps` are not played) at three widths (1280, 768, 375 px), on the commit, then, set up as the commit was, on the base. Each capture passes the `OutputPolicy` (ORC-214) and is kept by its sha256 under the factory's artifacts dir (`<artifactsDir>/<ticket>/`), which no run mounts, with its row in `artifacts`. Back to the job, with the `verify` counter: an application that does not start on the commit, a console error or an uncaught exception on its page, a capture the policy refuses, captures identical to the base's at every width. What is no fault of the branch leaves the proof unavailable and its check neutral, indicative until the application starts reliably in the sandbox (ORC-152): no browser in the sandboxes (none offers one yet), no `preview`, a base that does not start. The check, published on the commit: the captures by hash, or « No visual proof applicable. ». Not there yet: a human command that forces the decision, and the captures shown in the PR (ORC-195, ORC-197).
 
 Pack jobs:
 
@@ -463,6 +467,20 @@ on:
 ```
 
 Delegation then runs `intake` first: size and risk are recorded, and an incomplete ticket gets its questions (`clarify`, ORC-210) instead of starting `dev`. The pickup checks become inputs of that guard ([preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)).
+
+### A spec approved by a human before the tests
+
+```yaml
+version: 1
+on:
+  ticket.delegated:
+    - { when: "state in [todo, dev] && !blocked", run: intake }
+jobs:
+  intake:
+    on_success: { run: spec }
+```
+
+A complete ticket then gets its spec (`spec_draft`, `spec_check`), published in its session; a designated validator approves it with `/approve`, which starts `tests` (ORC-212, [preset](preset.md#spec_draft-spec_check-and-the-spec_review-gate-orc-212)). Without validators in `config.yaml` (`projects[].authz.validators`), nobody can approve.
 
 ## 7. Common errors and validation
 

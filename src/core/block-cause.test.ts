@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
 import type { AgentOutput } from './agent-output.js';
-import { causeOf, restatesCause, type BlockKind } from './block-cause.js';
+import { blockPareto, causeOf, restatesCause, type BlockKind } from './block-cause.js';
 import { liftDeadLetterBlock } from './dead-letter.js';
 import { decide, settledTicket } from './engine.js';
 import { reduce } from './reduce.js';
@@ -140,5 +140,21 @@ describe('a reworded reason changes no decision (ORC-345, criterion 1)', () => {
     const blocked = reduce(ticket(), { type: 'ticket.blocked', reason: 'r', kind: 'dead_letter', eventId: 'e9' });
     expect(blocked).toMatchObject({ blocked: true, blockReason: 'r', blockKind: 'dead_letter', blockedEvent: 'e9' });
     expect(reduce(blocked, { type: 'ticket.unblocked' })).toMatchObject({ blocked: false, blockKind: undefined, blockedEvent: undefined });
+  });
+});
+
+describe('the Pareto of the block causes (ORC-300)', () => {
+  it('counts the moves into Blocked per cause, most first, with each share and the running share', () => {
+    expect(blockPareto(['red', 'budget', 'ci_bound', 'red', 'limit', 'asked', undefined])).toEqual([
+      { cause: 'limit', count: 3, share: 3 / 7, cumulative: 3 / 7 },
+      { cause: 'red', count: 2, share: 2 / 7, cumulative: 5 / 7 },
+      { cause: 'question', count: 1, share: 1 / 7, cumulative: 6 / 7 },
+      { cause: 'other', count: 1, share: 1 / 7, cumulative: 1 },
+    ]);
+  });
+
+  it('breaks a tie in the order the Flow shows the causes, and is empty without a block', () => {
+    expect(blockPareto(['stopped', 'loop', 'conflict']).map((r) => r.cause)).toEqual(['conflict', 'loop', 'stopped']);
+    expect(blockPareto([])).toEqual([]);
   });
 });

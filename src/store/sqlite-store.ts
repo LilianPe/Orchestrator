@@ -18,11 +18,14 @@ import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
   TicketHeldError,
+  blockMoves,
+  byMostRefused,
   decidedOn,
   decisionRecord,
   effectResult,
   timerEvent,
   timerRowId,
+  type BlockEntry,
   type DecisionOutcome,
   type DecisionRecord,
   type JournalEntry,
@@ -34,6 +37,7 @@ import {
   type QueueRetry,
   type QueueItem,
   type RunRecord,
+  type Artifact,
   type FindingsRecord,
   type SecurityLog,
   type SecurityStats,
@@ -64,6 +68,7 @@ CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT 
 CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, status TEXT NOT NULL, failures INTEGER NOT NULL, error TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 `;
 
@@ -740,6 +745,15 @@ export class SqliteStore implements Store {
     return row && (JSON.parse(row.data) as SecurityLog);
   }
 
+  async putArtifact(a: Artifact): Promise<boolean> {
+    const res = this.db.prepare('INSERT INTO artifacts (id, ticket_id, data) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(a.id, a.ticketId, JSON.stringify(a));
+    return Number(res.changes) === 1;
+  }
+
+  async artifacts(ticketId: string): Promise<Artifact[]> {
+    return (this.db.prepare('SELECT data FROM artifacts WHERE ticket_id = ? ORDER BY seq').all(ticketId) as { data: string }[]).map((r) => JSON.parse(r.data) as Artifact);
+  }
+
   async putFindings(r: FindingsRecord): Promise<void> {
     this.atomically(() => {
       this.db.prepare('DELETE FROM findings WHERE project_id = ? AND ticket_id = ? AND sha = ? AND lens = ?').run(r.projectId, r.ticketId, r.sha, r.lens);
@@ -759,18 +773,33 @@ export class SqliteStore implements Store {
     const inPeriod = <T extends { at: number }>(xs: T[]) => xs.filter((x) => x.at >= since && x.at < until);
     const hosts = new Map<string, { host: string; requests: number; refused: number }>();
     const rules = new Map<string, { rule: string; refusals: number }>();
+    const runs: SecurityStats['runs'] = [];
     for (const log of logs) {
-      for (const e of inPeriod(log.egress)) {
+      const egress = inPeriod(log.egress);
+      const refusals = inPeriod(log.refusals);
+      for (const e of egress) {
         const h = hosts.get(e.host) ?? hosts.set(e.host, { host: e.host, requests: 0, refused: 0 }).get(e.host)!;
         h.requests++;
         if (!e.ok) h.refused++;
       }
-      for (const r of inPeriod(log.refusals)) (rules.get(r.rule) ?? rules.set(r.rule, { rule: r.rule, refusals: 0 }).get(r.rule)!).refusals++;
+      for (const r of refusals) (rules.get(r.rule) ?? rules.set(r.rule, { rule: r.rule, refusals: 0 }).get(r.rule)!).refusals++;
+      if (egress.length || refusals.length) {
+        runs.push({ runId: log.runId, projectId: log.projectId, ticketId: log.ticketId, requests: egress.length, refused: egress.filter((e) => !e.ok).length, refusals: refusals.length });
+      }
     }
     return {
       hosts: [...hosts.values()].sort((a, b) => b.requests - a.requests || a.host.localeCompare(b.host)),
       rules: [...rules.values()].sort((a, b) => b.refusals - a.refusals || a.rule.localeCompare(b.rule)),
+      runs: runs.sort(byMostRefused),
     };
+  }
+
+  // ponytail: every decision and ticket read; SQLite is kept until ORC-178, Postgres filters in SQL.
+  async blocksEntered(since: number, until: number): Promise<BlockEntry[]> {
+    const decisions = (this.db.prepare('SELECT data FROM decision_trace ORDER BY rowid').all() as { data: string }[]).map((r) => JSON.parse(r.data) as DecisionRecord);
+    return blockMoves(decisions, await this.listTickets())
+      .filter((b) => b.at >= since && b.at < until)
+      .sort((a, b) => a.at - b.at);
   }
 
   async getMeta(key: string): Promise<string | undefined> {

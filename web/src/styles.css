@@ -85,3 +85,11 @@ main.single { grid-template-columns: minmax(0, 1fr); }
 .timeline time { font-variant-numeric: tabular-nums; margin-right: 6px; }
 .no-source { margin: 0; padding-left: 18px; color: var(--muted); }
 .no-source strong { color: var(--fg); }
+
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.split h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.bar { display: block; height: 4px; margin-top: 4px; border-radius: 2px; background: var(--danger); }
+.refusals { list-style: none; margin: 12px 0 0; padding: 0; font-size: 13px; max-height: 30vh; overflow: auto; }
+.refusals li + li { border-top: 1px solid var(--line); }
+.periods { display: flex; gap: 4px; }
+.periods button[aria-pressed="true"] { border-color: var(--agent); color: var(--agent); }

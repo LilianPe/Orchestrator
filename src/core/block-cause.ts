@@ -23,6 +23,30 @@ export const causeOf = (kind: BlockKind | undefined): BlockCause => {
   return cause && (BLOCK_CAUSES as readonly string[]).includes(cause) ? (cause as BlockCause) : 'other';
 };
 
+/** A cause of the Pareto of the blocks (ORC-300): its moves into Blocked, their share of all, and the share up to it. */
+export interface ParetoCause {
+  cause: BlockCause;
+  count: number;
+  share: number;
+  cumulative: number;
+}
+
+/** The causes of moves into Blocked, by their kinds, most frequent first; a tie in the Flow's order of the causes. */
+export function blockPareto(kinds: readonly (BlockKind | undefined)[]): ParetoCause[] {
+  const counts = new Map<BlockCause, number>();
+  for (const k of kinds) {
+    const cause = causeOf(k);
+    counts.set(cause, (counts.get(cause) ?? 0) + 1);
+  }
+  const sorted = BLOCK_CAUSES.filter((c) => counts.has(c)).sort((a, b) => counts.get(b)! - counts.get(a)!);
+  let upTo = 0;
+  return sorted.map((cause) => {
+    const count = counts.get(cause)!;
+    upTo += count;
+    return { cause, count, share: count / kinds.length, cumulative: upTo / kinds.length };
+  });
+}
+
 /** The kinds whose reason says no more than their cause: the Flow does not repeat it under it (ORC-332). */
 export const restatesCause = (kind: BlockKind | undefined): boolean => kind === 'stopped' || kind === 'asked';
 

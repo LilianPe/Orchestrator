@@ -170,6 +170,20 @@ describe('mapLinearWebhook', () => {
       type: 'command', payload: { name: '/refreeze', body: 'le test était faux', linearSessionId: 'as-1', author: 'Lilian' },
     });
   });
+  it('maps /approve, /changes and /reject answered in a session as the commands of the spec gate, not as feedback (ORC-212)', async () => {
+    const reply = async (text: string) => {
+      const body = fx('session-prompted');
+      body.agentActivity.content.body = text;
+      return (await mapLinearWebhook(body, 'd3', ctx()))[0];
+    };
+    expect(await reply('/approve')).toMatchObject({ type: 'command', payload: { name: '/approve', body: '', linearSessionId: 'as-1', author: 'Lilian', kind: 'command' } });
+    expect(await reply('/changes Add the XLSX case.')).toMatchObject({ type: 'command', payload: { name: '/changes', body: 'Add the XLSX case.', linearSessionId: 'as-1' } });
+    expect(await reply('[@factory](https://linear.app/x/profiles/factory) /REJECT not this')).toMatchObject({ type: 'command', payload: { name: '/reject', body: 'not this' } });
+    // After a mention too, whatever the workflow declares.
+    const mention = fx('session-created-command');
+    mention.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /approve';
+    expect((await mapLinearWebhook(mention, 'd3', ctx()))[0]).toMatchObject({ type: 'command', payload: { name: '/approve', linearSessionId: 'as-3', ack: true } });
+  });
   it('maps a prompt and a stop', async () => {
     expect((await mapLinearWebhook(fx('session-prompted'), 'd4', ctx()))[0]).toMatchObject({
       type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'les boutons sont mal alignés', author: 'Lilian' },
@@ -1364,6 +1378,7 @@ describe('a comment on the ticket as the reply to a block (ORC-196)', () => {
     ['a mention: it opens its own session', { body: '@factory reprends' }, {}],
     ['a word to someone else', { body: '@alice tu regardes ?' }, {}],
     ['/refreeze: no instruction for the agent', { body: '/refreeze' }, {}],
+    ['/approve: the spec is approved in its session (ORC-212)', { body: '/approve' }, {}],
     ['an edit', {}, { action: 'update' }],
     ['an empty body', { body: '  ' }, {}],
   ])('drops %s', async (_what, data, patch) => {

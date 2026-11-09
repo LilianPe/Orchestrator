@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchFlow, fetchMeasures, fetchRunDetail, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
+import { fetchBlocks, fetchFlow, fetchMeasures, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
 import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
+import { Security } from './Security.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { FlowView, MeasuredTicketView, RunDetailView, WorkingRunView } from './types.js';
+import type { FlowView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -25,33 +26,77 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'measures' | 'run';
-const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : hash === '#measures' ? 'measures' : 'flow');
+type View = 'flow' | 'measures' | 'run' | 'security';
+const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : hash === '#measures' ? 'measures' : hash === '#security' ? 'security' : 'flow');
 
-/** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
-function MeasuresPage() {
-  const [tickets, setTickets] = useState<MeasuredTicketView[]>();
-  const [failed, setFailed] = useState(false);
-  const [selected, setSelected] = useState<string>();
-  const [now, setNow] = useState(() => Date.now());
+/**
+ * What `read` gives, read now and every 30 s while the page is shown and its tab visible, again when `deps` change; an
+ * answer to an earlier read never replaces a later one. `failed`: the last read failed, `data` still the one before.
+ */
+function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[]): { data?: T; failed: boolean } {
+  const [state, setState] = useState<{ data?: T; failed: boolean }>({ failed: false });
   useEffect(() => {
     let live = true;
     const load = () =>
-      void fetchMeasures().then(
-        (t) => live && (setTickets(t), setFailed(false), setNow(Date.now())),
-        () => live && setFailed(true),
+      void read().then(
+        (data) => live && setState({ data, failed: false }),
+        () => live && setState((s) => ({ ...s, failed: true })),
       );
     load();
-    const timer = setInterval(load, MEASURES_POLL_MS);
+    const timer = setInterval(() => document.hidden || load(), MEASURES_POLL_MS);
     return () => {
       live = false;
       clearInterval(timer);
     };
-  }, []);
+    // `read` is rebuilt each render: `deps` say when it changes.
+  }, deps);
+  return state;
+}
+
+/** The measures page (ORC-223), read when shown and every 30 s while it is: its figures change slowly, each read is a journal per ticket. */
+function MeasuresPage() {
+  const { data, failed } = usePolled(async () => ({ tickets: await fetchMeasures(), now: Date.now() }), []);
+  const [selected, setSelected] = useState<string>();
   return (
     <div className="flow">
-      {failed && <p className="flow-failed" role="alert">{tickets ? 'Measures out of date: reading them failed. Retrying within 30 s.' : 'Measures unavailable: reading them failed. Retrying within 30 s.'}</p>}
-      {tickets ? <Measures tickets={tickets} now={now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
+      {failed && <p className="flow-failed" role="alert">{data ? 'Measures out of date: reading them failed. Retrying within 30 s.' : 'Measures unavailable: reading them failed. Retrying within 30 s.'}</p>}
+      {data ? <Measures tickets={data.tickets} now={data.now} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the measures…</p></section>}
+    </div>
+  );
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PERIODS = [7, 30, 90] as const;
+
+/** The security log and the Pareto of the blocks (ORC-300), over the last days chosen, read when shown and every 30 s while it is. */
+function SecurityPage() {
+  const [days, setDays] = useState<(typeof PERIODS)[number]>(7);
+  const { data, failed } = usePolled(() => {
+    const until = Date.now();
+    const since = until - days * DAY_MS;
+    return Promise.all([fetchSecurity(since, until), fetchBlocks(since, until)]).then(([period, blocks]) => ({ period, blocks }));
+  }, [days]);
+  const [run, setRun] = useState<{ runId: string; view?: RunSecurityView; failed?: boolean }>();
+  // Another period lists other runs: the one selected goes with the last one.
+  const choose = (d: (typeof PERIODS)[number]) => {
+    setDays(d);
+    setRun(undefined);
+  };
+  // Picking a run reads it, picking it again reads it again: a failed read is the run's, not the period's.
+  const select = (runId: string) => {
+    setRun({ runId });
+    void fetchRunSecurity(runId).then(
+      (view) => setRun((r) => (r?.runId === runId ? { runId, view } : r)),
+      () => setRun((r) => (r?.runId === runId ? { runId, failed: true } : r)),
+    );
+  };
+  return (
+    <div className="flow">
+      <nav className="periods" aria-label="Period">
+        {PERIODS.map((d) => <button key={d} aria-pressed={d === days} onClick={() => choose(d)}>Last {d} days</button>)}
+      </nav>
+      {failed && <p className="flow-failed" role="alert">{data ? 'Security log out of date: reading it failed. Retrying within 30 s.' : 'Security log unavailable: reading it failed. Retrying within 30 s.'}</p>}
+      {data ? <Security period={data.period} blocks={data.blocks} run={run?.view} runFailed={run?.failed} selected={run?.runId} onSelect={select} /> : !failed && <section><p className="empty">Loading the security log…</p></section>}
     </div>
   );
 }
@@ -172,7 +217,8 @@ export function App() {
         <h1>{PRODUCT_NAME}</h1>
         <nav className="views">
           <a href="#flow" aria-current={view === 'flow' ? 'page' : undefined}>Flow</a>
-          <a href="#measures" aria-current={view !== 'flow' ? 'page' : undefined}>Measures</a>
+          <a href="#measures" aria-current={view === 'measures' || view === 'run' ? 'page' : undefined}>Measures</a>
+          <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
         </nav>
         {snap && (
           <div className="stats">
@@ -191,7 +237,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : <main>
+      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (
