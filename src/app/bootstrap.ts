@@ -348,7 +348,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
 
     const oauthStates = new Set<string>();
+    // A human's take-over (ORC-234): only with the sandboxes, never a shell on the host.
+    const takeOver = orchestrator.takeOverDesk();
     const app = createApp({
+      ...(takeOver ? { takeOver } : {}),
       knowledgeSearch: kb ? (q) => kb.search(q) : undefined,
       store,
       bus,

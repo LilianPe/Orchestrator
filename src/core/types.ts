@@ -358,9 +358,14 @@ export interface EventPayloads {
   'control.resume': Record<string, never>;
   /**
    * `runId`: the run the dashboard's inspection stops (ORC-301), nothing once it has ended; absent, the ticket's work
-   * (the CLI, a row journaled before). `pause`: a pause of that run, a stop that says so.
+   * (the CLI, a row journaled before). `pause`: a pause of that run, a stop that says so. `takeOver`: a human takes
+   * that run over (ORC-234): stopped, then a container of their own opens on its worktree.
    */
-  'control.stop': { runId?: string; pause?: true };
+  'control.stop': { runId?: string; pause?: true; takeOver?: true };
+  /** A bundle an operator hands back for a ticket taken over (ORC-234): `file`, where the daemon kept it, checked before any push. */
+  'control.bundle': { file: string };
+  /** The bundle handed back is refused (ORC-234): nothing was pushed, and the take-over stays open. */
+  'bundle.refused': { file: string; reason: string };
   /** An outbox effect carried out (ORC-150). */
   'effect.done': EffectResultPayload;
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */

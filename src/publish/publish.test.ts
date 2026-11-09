@@ -1,12 +1,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { NoCommitsBetween } from '../adapters/forge/types.js';
-import { PublishRefused, type PublishRequest } from '../adapters/publisher/types.js';
+import { PublishRefused, type BundleRequest, type PublishRequest } from '../adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { WORKSPACE_TARGET, type SandboxExecOptions, type SandboxRequest } from '../adapters/sandbox/types.js';
@@ -612,6 +612,101 @@ describe('GitPublisher, on the repository the agent really has (ORC-317)', () =>
     expect(r.code).toBe('head');
     expect(s.sandboxes.created).toEqual([]);
     expect(s.onForge()).toBe('');
+  });
+});
+
+describe('GitPublisher.publishBundle: a bundle a human hands back after a take-over (ORC-234)', () => {
+  /** The human's bundle of the branch, made out of the factory: it has only the file. */
+  const handBack = (s: ReturnType<typeof setup>) => {
+    const bundle = join(s.base, `human-${s.pushes.length}.bundle`);
+    git(s.repo, 'bundle', 'create', '-q', bundle, BRANCH);
+    return bundle;
+  };
+  const request = (s: ReturnType<typeof setup>, bundle: string): BundleRequest => ({ projectId: 'p', repoPath: s.repo, ticketId: 'ORC-1', runId: 'bundle-p-ORC-1', branch: BRANCH, bundle });
+  const refusedPush = async (s: ReturnType<typeof setup>, code: string, summary: RegExp) => {
+    const r = await refusal(s.publisher.publishBundle(request(s, handBack(s))));
+    expect(r.code).toBe(code);
+    expect(r.message).toMatch(summary);
+    expect(s.pushes).toEqual([]);
+    expect(s.onForge()).toBe('');
+  };
+
+  it('pushes a clean bundle forward through the same check, from the file alone: no sandbox on the worktree, no PR', async () => {
+    const s = setup();
+    const out = await s.publisher.publishBundle(request(s, handBack(s)));
+    expect(out).toEqual({ sha: s.sha });
+    expect(s.onForge()).toBe(s.sha);
+    expect(s.sandboxes.created).toEqual([]);
+    expect(s.forge.opened).toEqual([]);
+  });
+
+  it('says which head it went over, for the push it is', async () => {
+    const s = setup();
+    await s.publisher.publish(s.request());
+    write(s.repo, 'b.txt', 'human\n');
+    const sha = commit(s.repo);
+    expect(await s.publisher.publishBundle(request(s, handBack(s)))).toEqual({ sha, before: s.sha });
+    expect(s.onForge()).toBe(sha);
+  });
+
+  it('refuses a bundle that brings nothing the forge does not have: no push, nothing for verify to check', async () => {
+    const s = setup();
+    await s.publisher.publish(s.request());
+    const r = await refusal(s.publisher.publishBundle(request(s, handBack(s))));
+    expect(r.code).toBe('empty');
+    expect(s.pushes).toHaveLength(1);
+  });
+
+  it('refuses the push of a bundle that touches a forbidden path', async () => {
+    const s = setup();
+    write(s.repo, '.github/workflows/ci.yml', 'trap\n');
+    commit(s.repo);
+    await refusedPush(s, 'diff', /forbidden path/);
+  });
+
+  it('refuses the push of a bundle that holds a symbolic link out of the tree', async () => {
+    const s = setup();
+    linkOut(s.repo, '/etc/passwd', 'link');
+    git(s.repo, 'commit', '-q', '-m', 'link');
+    await refusedPush(s, 'diff', /symbolic link pointing outside/);
+  });
+
+  it('refuses a binary, and a secret found by gitleaks in a sandbox at none', async () => {
+    const s = setup();
+    write(s.repo, 'tool.bin', 'MZ\0\0\0payload');
+    commit(s.repo);
+    await refusedPush(s, 'diff', /Binary file/);
+    const t = setup({ gitleaks: true });
+    t.sandboxes.scan = () => ({ stdout: JSON.stringify([{ File: 'a.txt', StartLine: 1, RuleID: 'aws' }]), stderr: '', code: 7 });
+    await refusedPush(t, 'diff', /secret/);
+    expect(t.sandboxes.created.map((c) => [c.runId, c.network, c.mounts])).toEqual([['bundle-p-ORC-1-publish-secrets', 'none', []]]);
+  });
+
+  it("checks it as an untrusted branch's: the base's sensitive_paths refuse it", async () => {
+    const s = setup({ config: 'sensitive_paths: ["infra/**"]\n' });
+    git(s.repo, 'fetch', '-q', 'origin');
+    git(s.repo, 'merge', '-q', '--no-edit', 'origin/main');
+    write(s.repo, 'infra/main.tf', 'x\n');
+    commit(s.repo);
+    await refusedPush(s, 'diff', /sensitive path of the repository/);
+  });
+
+  it('refuses a corrupted bundle, decided once: nothing pushed', async () => {
+    const s = setup();
+    const bundle = handBack(s);
+    const bytes = readFileSync(bundle);
+    writeFileSync(bundle, bytes.subarray(0, bytes.length - 30));
+    const r = await refusal(s.publisher.publishBundle(request(s, bundle)));
+    expect(r.code).toBe('bundle');
+    expect(s.pushes).toEqual([]);
+  });
+
+  it("refuses a bundle that does not hold the forge's head: nothing is overwritten", async () => {
+    const s = setup();
+    const theirs = humanPush(s);
+    const r = await refusal(s.publisher.publishBundle(request(s, handBack(s))));
+    expect(r.code).toBe('moved');
+    expect(s.onForge()).toBe(theirs);
   });
 });
 

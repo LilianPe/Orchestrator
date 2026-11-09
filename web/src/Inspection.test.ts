@@ -13,7 +13,7 @@ const feed: FeedLine[] = [
   { kind: 'event', id: 'e1', type: 'run.finished', at: Date.UTC(2026, 10, 9, 9, 0, 2) },
 ];
 const page = (props: Partial<Parameters<typeof Inspection>[0]> = {}) =>
-  renderToStaticMarkup(createElement(Inspection, { run, feed, onPause: () => undefined, onStop: () => undefined, ...props }));
+  renderToStaticMarkup(createElement(Inspection, { run, feed, onPause: () => undefined, onStop: () => undefined, onTakeOver: () => undefined, ...props }));
 
 describe("a run's inspection (ORC-301)", () => {
   it("follows the run's live feed: its composed activities and the ticket's events, not another run's activities", () => {
@@ -29,17 +29,18 @@ describe("a run's inspection (ORC-301)", () => {
     expect(page({ feed: [] })).toContain('Nothing received from this run since the page was opened.');
   });
 
-  it('offers pause and stop on a run the agent is working, and take over as disabled until ORC-234', () => {
+  it('offers pause, stop and take over (ORC-234) on a run the agent is working', () => {
     const html = page();
     expect(html).toMatch(/<button[^>]*>Pause<\/button>/);
     expect(html).toMatch(/<button[^>]*>Stop<\/button>/);
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Take over<\/button>/);
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Take over<\/button>/);
   });
 
-  it('offers no pause nor stop on a verification, which no agent runs', () => {
+  it('offers no pause, stop nor take over on a verification, which no agent runs', () => {
     const html = page({ run: { ...run, verifying: true, stoppable: false } });
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Pause<\/button>/);
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Stop<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Take over<\/button>/);
   });
 
   it('shows the answer to a refused action', () => {
