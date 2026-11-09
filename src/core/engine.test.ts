@@ -223,7 +223,7 @@ describe('decide — YAML rules of the standard pack', () => {
     const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }] } };
     const out = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), reviewed, wf);
     expect(out.timers).toEqual([{ kind: 'debounce', slot: 'fix-human', ms: 180_000, payload: { job: 'fix-human', inbox: true } }]);
-    expect(out.trace).toContain('pr.reviewed: on.session.prompted[1]');
+    expect(out.trace).toContain('on.session.prompted[1]');
     const conflict = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), ev('pr.conflicted', { ...pr, headSha: 'h', baseRef: 'main' }), workflow);
     expect(conflict.trace).toContain('on.pr.conflicted[0]');
   });

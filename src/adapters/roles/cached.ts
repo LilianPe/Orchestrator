@@ -59,20 +59,22 @@ export class CachedRoleResolver implements RoleResolver {
   async rolesOf(projectId: string, actorId: string): Promise<Role[]> {
     const p = this.o.projects(projectId);
     if (!p) return [];
-    const github = githubLogin(actorId);
-    const login = github ?? p.githubLogins[actorId];
-    // A GitHub login configured for no Linear user holds no Linear role, and reads no team. GitHub logins ignore case.
-    const id = github === undefined ? actorId : Object.keys(p.githubLogins).find((u) => p.githubLogins[u]!.toLowerCase() === github.toLowerCase());
+    const github = githubLogin(actorId)?.toLowerCase();
+    // GitHub logins ignore case: one cache entry per user, whatever case the webhook or the configuration wrote.
+    const login = (github ?? p.githubLogins[actorId])?.toLowerCase();
     const repo = this.o.repo;
-    const [members, permission] = await Promise.all([
-      id === undefined ? new Set<string>() : this.cached(`team:${p.teamKey}`, async () => new Set(await this.o.team.teamMembers(p.teamKey))),
-      login && repo ? this.cached(`repo:${p.repoPath}:${login}`, () => repo.repoPermission(p.repoPath, login)) : undefined,
-    ]);
-    const roles: Role[] = [];
-    if (id !== undefined && members.has(id)) roles.push('team_member');
-    if (permission && WRITES.has(permission)) roles.push('repo_writer', 'repo_merger');
-    if (id !== undefined && p.maintainers.includes(id)) roles.push('maintainer');
-    if (id !== undefined && p.validators.includes(id)) roles.push('validator');
+    const permission = login && repo ? this.cached(`repo:${p.repoPath}:${login}`, () => repo.repoPermission(p.repoPath, login)) : undefined;
+    const id = github === undefined ? actorId : Object.keys(p.githubLogins).find((u) => p.githubLogins[u]!.toLowerCase() === github);
+    // A GitHub login configured for no Linear user holds no Linear role, and reads no team.
+    if (id === undefined) return writes(await permission);
+    const [members, read] = await Promise.all([this.cached(`team:${p.teamKey}`, async () => new Set(await this.o.team.teamMembers(p.teamKey))), permission]);
+    const roles: Role[] = members.has(id) ? ['team_member'] : [];
+    roles.push(...writes(read));
+    if (p.maintainers.includes(id)) roles.push('maintainer');
+    if (p.validators.includes(id)) roles.push('validator');
     return roles;
   }
 }
+
+/** The roles a GitHub permission gives: write access lets a user merge a PR too (branch protection aside). */
+const writes = (permission: RepoPermission | undefined): Role[] => (permission && WRITES.has(permission) ? ['repo_writer', 'repo_merger'] : []);

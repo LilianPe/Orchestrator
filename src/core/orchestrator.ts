@@ -2346,13 +2346,12 @@ export class Orchestrator {
       // Review comments are external content: whoever can comment on the PR wrote them, and nothing
       // authenticates them as the team's (ORC-160). Untrusted, whatever the forge says. The fix of the review loop reads
       // them too, as they are, with the review's findings (ORC-184).
-      const readsThreads = (kind === 'feedback' || kind === 'findings') && !!t.prNumber;
+      const threadsOf = kind === 'feedback' || kind === 'findings' ? t.prNumber : undefined;
       // An inline comment of a review is read in its thread, unresolved still, not as the inbox kept it (ORC-190): emptied all the same.
-      const shown = (items: FeedbackItem[]) => (readsThreads ? items.filter((i) => !i.thread) : items);
-      const carried = shown(stepInbox);
+      const carried = threadsOf ? stepInbox.filter((i) => !i.thread) : stepInbox;
       const read: FeedbackItem[] = [...carried];
-      if (kind === 'feedback') read.push(...shown(forAgent(t.humanInbox)));
-      const threads: FeedbackItem[] = readsThreads ? (await forge.unresolvedReviewComments(project.repoPath, t.prNumber!)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
+      if (kind === 'feedback') read.push(...forAgent(t.humanInbox).filter((i) => !threadsOf || !i.thread));
+      const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.repoPath, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
       const held = ticketSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
