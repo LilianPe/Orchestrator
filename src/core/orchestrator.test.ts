@@ -494,11 +494,14 @@ describe('Orchestrator', () => {
       await reset();
       await orch.tick();
       await orch.drained();
-      const relaunch = runner.requests[1]!;
+      // Both start once the hold is lifted, in parallel slots: found by their ticket, not by the order the runner got them.
+      const after = runner.requests.slice(1);
+      const tickets = await Promise.all(after.map(async (r) => (await store.getRun(r.runId))!.ticketId));
+      expect(tickets.toSorted()).toEqual(['REL-1', 'REL-2']);
+      const relaunch = after[tickets.indexOf('REL-1')]!;
       expect(await store.getRun(relaunch.runId)).toMatchObject({ ticketId: 'REL-1', job: 'dev' });
       // The implementer's session, taken up: a relaunch of the cut run, not a step from scratch.
       expect(relaunch).toMatchObject({ claudeSessionId: cut.claudeSessionId, resume: true });
-      expect((await store.getRun(runner.requests[2]!.runId))!.ticketId).toBe('REL-2');
     });
 
     it("holds the ticket's next steps behind the cut one: they wait for it, never start in its place", async () => {
