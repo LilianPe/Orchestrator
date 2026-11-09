@@ -91,6 +91,15 @@ describe('standard pack', () => {
     }
   });
 
+  it("tells the steps that write to rebase on a human's push, never to merge it (ORC-159)", () => {
+    for (const name of ['dev', 'feedback']) {
+      const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
+      expect(text, name).toContain('`git rebase origin/<branch>`');
+      expect(text, name).toContain('factory/commits-humains');
+      expect(text, name).not.toContain('merge --no-edit origin/<branch>');
+    }
+  });
+
   it('leaves a conflict with the base to the rebase step: no other skill integrates the base, each hands back (ORC-146)', () => {
     // A human's commits on the branch are not the base: bringing them in stays (ORC-159).
     const integrates = /git (merge|rebase)[^`\n]*origin\/<(trunk|base)>/;
