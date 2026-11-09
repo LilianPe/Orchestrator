@@ -254,7 +254,7 @@ export interface OrchestratorDeps {
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
-  /** The Claude account runs use (`claude.active`, ORC-211): a usage limit holds the launches of that account only. Absent: `default`. */
+  /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
   claudeAccount?: () => string | undefined;
   newId?: () => string;
   activityIntervalMs?: number;
@@ -1063,7 +1063,7 @@ export class Orchestrator {
       if (sha && sha === green) return { ok: true, failures: [], sha };
       // As on the clone, before any command: a refused branch runs nothing.
       const paths = await this.checkPathsOnHost(project, t, run);
-      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env);
+      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
       const blocking = [...paths, ...frozen];
@@ -2690,6 +2690,7 @@ export class Orchestrator {
         leaseToken: 1,
         cwd: ws.path,
         labels,
+        account: this.account(),
         sensitivePaths,
         ...(input ? { input } : {}),
         repoConfig: config,
@@ -2937,7 +2938,7 @@ export class Orchestrator {
     // Only when the factory waits on it (`on_usage_limit: wait`): otherwise the run ends as any failure (ORC-340).
     // A reset already past, or none told: never sooner than `USAGE_MIN_WAIT_MS`, an hour when none was told.
     const now = this.d.clock.now();
-    const account = this.account();
+    const account = run.account ?? this.account();
     const usageLimit =
       result.usageLimit && this.d.onUsageLimit === 'wait' ? { resetAt: Math.max(result.usageLimit.resetAt ?? now + USAGE_RETRY_MS, now + USAGE_MIN_WAIT_MS), account } : undefined;
     if (usageLimit) {

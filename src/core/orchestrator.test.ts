@@ -362,6 +362,24 @@ describe('Orchestrator', () => {
     expect((await store.getTicket('p', 'REL-1'))!.logical).not.toBe('human_review');
   });
 
+  it('logs a worktree fingerprint verify could not read, with the ticket (ORC-319)', async () => {
+    const { tracker, orch, bus } = setup({
+      verify: async (_cwd, commands, _timeoutMs, _env, warn) => {
+        warn?.('boom');
+        return { ok: false, failures: [{ command: commands[0]!, exitCode: 1, output: '' }] };
+      },
+      tweak: (w) => {
+        w.jobs['dev']!.verify = ['false'];
+      },
+    });
+    const logs: string[] = [];
+    bus.subscribe((m) => void (m.kind === 'log' && logs.push(`${m.level}: ${m.message}`)));
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    await orch.accept(delegated());
+    await orch.drained();
+    expect(logs).toContain('warn: verify of REL-1: boom');
+  });
+
   it('never holds the queue on a daily budget in dollars, however much the day cost (ORC-216)', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'A' });
@@ -508,6 +526,24 @@ describe('Orchestrator', () => {
       // Another account has its own limit: not held.
       account = 'acc-2';
       expect(await orch.usageLimitedUntil()).toBeUndefined();
+    });
+
+    it('the hold is the account the run was launched on, even when `active` changed under it (ORC-215)', async () => {
+      let account = 'acc-1';
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait', account: () => account });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 }, hold: true });
+      await orch.accept(delegated());
+      await orch.drained();
+      const runId = runner.requests[0]!.runId;
+      expect(await store.getRun(runId)).toMatchObject({ account: 'acc-1' });
+      account = 'acc-2';
+      runner.release(runId);
+      await orch.drained();
+      expect(await orch.usageLimitedUntil()).toBeUndefined();
+      expect(await store.dueTimers(Number.MAX_SAFE_INTEGER)).toMatchObject([{ kind: 'usage.reset', payload: { account: 'acc-1' } }]);
+      account = 'acc-1';
+      expect(await orch.usageLimitedUntil()).toBe(1_000_000);
     });
 
     it('a store that fails to record the hold never holds back the result: the step still waits for its reset', async () => {

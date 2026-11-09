@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeClaudeToken, claudeToken, FactoryYmlError, loadFactoryBudgets, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
+import { activeClaudeToken, claudeAccountReader, claudeToken, FactoryYmlError, loadFactoryBudgets, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -183,5 +183,57 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(() => loadFactoryBudgets(home)).toThrow(FactoryYmlError);
     writeFileSync(join(home, 'factory.yml'), 'linear: {}\n');
     expect(loadFactoryBudgets(home)).toBeUndefined();
+  });
+
+  describe('the Claude account runs use (ORC-215)', () => {
+    const home = () => {
+      const h = mkdtempSync(join(tmpdir(), 'factory-home-'));
+      writeFileSync(join(h, 'factory.yml'), EXAMPLE);
+      return h;
+    };
+
+    it('takes a change of `active` at the next read, without a restart', () => {
+      const h = home();
+      const account = claudeAccountReader(h, ENV);
+      expect(account()).toEqual({ name: 'compte-1', token: 'tok-1' });
+      writeFileSync(join(h, 'factory.yml'), EXAMPLE.replace('active: compte-1', 'active: compte-2'));
+      expect(account()).toEqual({ name: 'compte-2', token: 'tok-2' });
+    });
+
+    it("without an active account, the daemon's CLAUDE_CODE_OAUTH_TOKEN, under no name", () => {
+      const h = mkdtempSync(join(tmpdir(), 'factory-home-'));
+      expect(claudeAccountReader(h, { CLAUDE_CODE_OAUTH_TOKEN: ' tok-d\n' })()).toEqual({ token: 'tok-d' });
+      expect(claudeAccountReader(h, {})()).toEqual({});
+    });
+
+    it('re-reads the claude section alone: a fault elsewhere in the file does not stop a switch', () => {
+      const h = home();
+      const account = claudeAccountReader(h, ENV);
+      writeFileSync(join(h, 'factory.yml'), EXAMPLE.replace('active: compte-1', 'active: compte-2').replace('concurrency: 1', 'concurrency: -1'));
+      expect(account()).toEqual({ name: 'compte-2', token: 'tok-2' });
+    });
+
+    it('refuses a faulty file at the first read, as the start does; later, keeps the last account and logs once', () => {
+      const h = home();
+      const logs: string[] = [];
+      const account = claudeAccountReader(h, ENV, (m) => logs.push(m));
+      writeFileSync(join(h, 'factory.yml'), EXAMPLE.replace('active: compte-1', 'active: compte-3'));
+      expect(account()).toEqual({ name: 'compte-1', token: 'tok-1' });
+      expect(account()).toEqual({ name: 'compte-1', token: 'tok-1' });
+      expect(logs).toEqual(['Warning: factory.yml: the Claude account is not read again, compte-1 stays active: invalid factory.yml:\n- claude.active: "compte-3" is not one of the declared accounts (compte-1, compte-2)']);
+      expect(() => claudeAccountReader(h, ENV)).toThrow(FactoryYmlError);
+    });
+
+    it('keeps the last account while the file is gone, as an editor saving it leaves it, and logs it once', () => {
+      const h = home();
+      const logs: string[] = [];
+      const account = claudeAccountReader(h, { ...ENV, CLAUDE_CODE_OAUTH_TOKEN: 'tok-d' }, (m) => logs.push(m));
+      rmSync(join(h, 'factory.yml'));
+      expect(account()).toEqual({ name: 'compte-1', token: 'tok-1' });
+      expect(account()).toEqual({ name: 'compte-1', token: 'tok-1' });
+      expect(logs).toEqual(['Warning: factory.yml: the Claude account is not read again, compte-1 stays active: the file is gone']);
+      writeFileSync(join(h, 'factory.yml'), EXAMPLE.replace('active: compte-1', 'active: compte-2'));
+      expect(account()).toEqual({ name: 'compte-2', token: 'tok-2' });
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -156,6 +156,40 @@ describe('runVerify', () => {
     expect(made).toMatch(/^[0-9a-f]{40}$/);
     expect(made).not.toBe(git(dir, 'rev-parse', 'HEAD^{tree}'));
     expect(git(dir, 'ls-files', '-t', '.claude')).toBe('H .claude/CLAUDE.md\nS .claude/settings.json');
+  });
+
+  // Not on Windows: the hook is a POSIX script.
+  it.skipIf(process.platform === 'win32')('runs no fsmonitor of the agent, and its clean filter without the daemon env (ORC-319)', async () => {
+    const dir = repo();
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'init');
+    const out = mkdtempSync(join(tmpdir(), 'factory-leak-'));
+    const hook = join(out, 'fsmonitor.sh');
+    writeFileSync(hook, `#!/bin/sh\nenv > '${join(out, 'fsmonitor')}'\nexit 1\n`, { mode: 0o755 });
+    git(dir, 'config', 'core.fsmonitor', hook);
+    git(dir, 'config', 'filter.leak.clean', `env > '${join(out, 'filter')}'; cat`);
+    writeFileSync(join(dir, '.gitattributes'), '* filter=leak\n');
+    writeFileSync(join(dir, 'a.txt'), 'two\n');
+    vi.stubEnv('FACTORY_DAEMON_TOKEN', 'daemon-secret');
+    onTestFinished(() => void vi.unstubAllEnvs());
+    expect((await runVerify(dir, ['exit 1'])).tree).toMatch(/^[0-9a-f]{40}$/);
+    expect(existsSync(join(out, 'fsmonitor'))).toBe(false);
+    const filterEnv = readFileSync(join(out, 'filter'), 'utf8');
+    expect(filterEnv).toContain('PATH=');
+    expect(filterEnv).not.toContain('daemon-secret');
+  });
+
+  it('says why the fingerprint of a worktree could not be read (ORC-319)', async () => {
+    const dir = repo();
+    // The filter prints first, then git fails: the warning names git's error, not what the filter printed to forge a line.
+    git(dir, 'config', 'filter.broken.clean', `printf 'forged\\033[2K\\rfactoryd: ok\\n' >&2; false`);
+    git(dir, 'config', 'filter.broken.required', 'true');
+    writeFileSync(join(dir, '.gitattributes'), '* filter=broken\n');
+    const warn = vi.fn();
+    expect((await runVerify(dir, ['exit 1'], undefined, {}, warn)).tree).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]![0]).toMatch(/^unreadable worktree fingerprint: fatal: .*filter.*; the loop guard does not see this failure\.$/);
+    expect(warn.mock.calls[0]![0]).not.toMatch(/forged|\p{Cc}/u);
   });
 
   it('has no fingerprint outside a git worktree', async () => {
