@@ -37,6 +37,7 @@ import {
   type QueueRetry,
   type QueueItem,
   type RunRecord,
+  type Artifact,
   type FindingsRecord,
   type SecurityLog,
   type SecurityStats,
@@ -931,6 +932,22 @@ export class PgStore implements AsyncStore {
       refusals: refusals.rows.map((r) => ({ at: Number(r.at), tool: r.tool, rule: r.rule, command: r.command })),
       skipped: { egress: h.skipped_egress, refusals: h.skipped_refusals },
     };
+  }
+
+  async putArtifact(a: Artifact): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.artifacts)
+      .values({ id: a.id, ticketId: a.ticketId, attemptId: a.attemptId ?? null, kind: a.kind, path: a.path, sha256: a.sha256, createdAt: new Date(a.createdAt) })
+      .onConflictDoNothing()
+      .returning({ id: schema.artifacts.id });
+    return rows.length === 1;
+  }
+
+  async artifacts(ticketId: string): Promise<Artifact[]> {
+    const rows = await this.db.execute<{ id: string; attempt_id: string | null; kind: string; path: string; sha256: string; at: string | number }>(sql`
+      select id, attempt_id, kind, path, sha256, round(extract(epoch from created_at) * 1000) as at from artifacts where ticket_id = ${ticketId} order by created_at, id
+    `);
+    return rows.rows.map((r) => ({ id: r.id, ticketId, ...(r.attempt_id === null ? {} : { attemptId: r.attempt_id }), kind: r.kind, path: r.path, sha256: r.sha256, createdAt: Number(r.at) }));
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
@@ -79,7 +79,7 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
@@ -88,6 +88,9 @@ import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
+import { mdCode } from '../checks/markdown.js';
+import { captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { READ_TOOLS } from '../presets/preset.js';
@@ -216,6 +219,11 @@ export interface OrchestratorDeps {
    * with its sandbox. Required with `sandboxes`.
    */
   runsDir?: string;
+  /**
+   * The visual proof (ORC-176), with sandboxes that offer a browser: its `shooter`, and where its captures are kept,
+   * `<artifactsDir>/<ticket>/<sha256>.png`, on the daemon's disk, out of every mount of a run. Absent, a required proof is unavailable, indicative.
+   */
+  visualProof?: { shooter: VisualShooter; artifactsDir: string };
   /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
   egressJournal?: (runId: string) => string;
   /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
@@ -368,8 +376,23 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
   return existsSync(projects) && readdirSync(projects).some((dir) => existsSync(join(projects, dir, `${sessionId}.jsonl`)));
 }
 
+/**
+ * `factory/preuve-visuelle` (ORC-176): the captures the factory took, or that there is none to take. A required proof the instance
+ * could not take is neutral, indicative until the application starts reliably in the sandbox (ORC-152): it blocks nothing.
+ */
+function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summary: string } {
+  if (p.decision === 'not_applicable') return { conclusion: 'neutral', summary: 'No visual proof applicable.' };
+  const why = [
+    ...(p.intake ? ['Asked for at intake.'] : []),
+    ...(p.triggers.length ? [`Changed under \`visual_paths\`:\n${p.triggers.map((t) => `- ${mdCode(t)}`).join('\n')}`] : []),
+  ].join('\n');
+  if (!p.captures?.length) return { conclusion: 'neutral', summary: `Visual proof required, not taken: ${p.unavailable ?? 'no capture'}. Indicative until the application starts reliably in the sandbox (ORC-152).\n${why}` };
+  const lines = p.captures.map((c) => `- ${captureLabel(c)}: sha256 ${c.sha256}`);
+  return { conclusion: 'success', summary: `Captures taken by the factory, before on the base and after on this commit:\n${lines.join('\n')}\n${why}` };
+}
+
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
-type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[] };
+type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
@@ -989,7 +1012,7 @@ export class Orchestrator {
    * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
    * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
    */
-  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec): Promise<Verified> {
+  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec, output?: AgentOutput): Promise<Verified> {
     const { sandboxes } = this.d;
     // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
     const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
@@ -1007,14 +1030,16 @@ export class Orchestrator {
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify };
     }
     // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
-    return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
+    // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
+    const visual = job.verifyFailure === 'block' ? {} : { visual: this.visualRequest(project, t, output) };
+    return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}), ...visual });
   }
 
   /**
    * `runCleanVerify` for the ticket under the checks of `job`, in a place of its own under `runsDir/<runId>`: the commit
    * the agent's worktree holds, or with `head` a human's push, as the forge holds it (ORC-159).
    */
-  private async cleanCheck(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, over: Pick<CleanVerifyRequest, 'green' | 'head' | 'humanHead'>): Promise<CleanVerifyResult> {
+  private async cleanCheck(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, over: Pick<CleanVerifyRequest, 'green' | 'head' | 'humanHead' | 'visual'>): Promise<CleanVerifyResult> {
     const { sandboxes, runsDir, originUrl } = this.d;
     if (!sandboxes || !runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
     if (!t.branch || (!over.head && !t.worktreePath)) throw new Error(`no branch or no worktree for ${t.ticketId}`);
@@ -1046,6 +1071,37 @@ export class Orchestrator {
     }
   }
 
+  /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
+  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined): VisualRequest {
+    const { preview, portBase } = project.workflow.workspace;
+    return {
+      intake: t.visualProof === 'required',
+      ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
+      ...(preview ? { start: preview } : {}),
+      port: portBase,
+      path: scenarioPath(output?.visual_scenario?.url),
+      gate: (c) => this.policy.capture(c),
+    };
+  }
+
+  /**
+   * The captures `verify` took (ORC-176), kept before the verdict that names them: each file by its hash, under `artifactsDir`, which
+   * no run mounts, and its row in `artifacts`, once by its id. A capture that cannot be kept throws: no verdict names a missing file.
+   */
+  private async keepCaptures(t: TicketState, runId: string, files: NonNullable<CleanVerifyResult['visual']>['files']): Promise<void> {
+    // Only a shooter takes captures, and it comes with its dir.
+    const dir = join(this.d.visualProof!.artifactsDir, t.ticketId);
+    await mkdir(dir, { recursive: true });
+    const createdAt = this.d.clock.now();
+    await Promise.all(
+      files.map(async ({ capture, png }) => {
+        const path = join(dir, `${capture.sha256}.png`);
+        await writeFile(path, png);
+        await this.d.store.putArtifact({ id: `visual:${runId}:${capture.side}:${capture.width}`, ticketId: t.ticketId, attemptId: runId, kind: 'visual-proof', path, sha256: capture.sha256, createdAt });
+      }),
+    );
+  }
+
   /**
    * `verify` on a human's push (ORC-159): the pushed commit as the forge holds it, in a fresh clone, under the checks of the
    * job the factory publishes, the freeze included; never in the agent's worktree, and no run of it. Its verdict keeps the
@@ -1074,13 +1130,14 @@ export class Orchestrator {
     let res: Verified & { tree?: string };
     try {
       res = await check();
+      if (res.ok && res.visual?.files.length) await this.keepCaptures(t, runId, res.visual.files);
     } catch (err) {
       await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
       return;
     }
     await this.submitResult(
       res.ok
-        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}) } }
+        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}) } }
         : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}) } },
     );
   }
@@ -1629,7 +1686,7 @@ export class Orchestrator {
               );
               return;
             }
-            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job), c.output);
+            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job, c.output), c.output);
           })(),
         );
         return;
@@ -1893,6 +1950,7 @@ export class Orchestrator {
       { name: VERIFY_CHECK, ...verifySummary(sha, commands) },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
+      ...(c.visualProof ? [{ name: VISUAL_PROOF_CHECK, ...visualCheck(c.visualProof) }] : []),
     ] as const;
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>
