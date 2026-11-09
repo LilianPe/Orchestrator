@@ -83,8 +83,19 @@ export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIME
 const git = promisify(execFile);
 const GIT_TIMEOUT_MS = 60_000;
 const HARDENED = HARDENING.flatMap((c) => ['-c', c]);
-/** What a warning takes of git's stderr: its first line, cut. git names a path there, not what a file holds. */
+/**
+ * What a warning takes of git's stderr: its last line, where git puts its `fatal:` after any warning, cut and without
+ * control characters. A filter of the agent writes there too: one line, which forges no other.
+ */
 const STDERR_LINE_MAX = 200;
+
+function readFailure(err: unknown): string {
+  const { stderr, message, killed } = err as { stderr?: string; message?: string; killed?: boolean };
+  if (killed) return `timed out after ${GIT_TIMEOUT_MS / 1000} s`;
+  const line = (stderr?.trim() || message || String(err)).split('\n').at(-1)!;
+  // eslint-disable-next-line no-control-regex
+  return line.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, STDERR_LINE_MAX);
+}
 
 /**
  * The git tree of the worktree as it is, untracked files included: equal trees mean an unchanged diff.
@@ -125,8 +136,7 @@ async function worktreeTree(cwd: string, warn?: (message: string) => void): Prom
     await git('git', [...HARDENED, '-c', 'core.excludesFile=', 'add', '-A', '--sparse'], { ...opts, env });
     return (await git('git', [...HARDENED, 'write-tree'], { ...opts, env })).stdout.trim();
   } catch (err) {
-    const { stderr, message } = err as { stderr?: string; message?: string };
-    warn?.(`unreadable worktree fingerprint: ${(stderr?.trim() || message || String(err)).split('\n')[0]!.trim().slice(0, STDERR_LINE_MAX)}; the loop guard does not see this failure.`);
+    warn?.(`unreadable worktree fingerprint: ${readFailure(err)}; the loop guard does not see this failure.`);
     return undefined;
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });

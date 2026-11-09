@@ -182,13 +182,15 @@ describe('runVerify', () => {
 
   it('says why the fingerprint of a worktree could not be read (ORC-319)', async () => {
     const dir = repo();
-    git(dir, 'config', 'filter.broken.clean', 'false');
+    // The filter prints first, then git fails: the warning names git's error, not what the filter printed to forge a line.
+    git(dir, 'config', 'filter.broken.clean', `printf 'forged\\033[2K\\rfactoryd: ok\\n' >&2; false`);
     git(dir, 'config', 'filter.broken.required', 'true');
     writeFileSync(join(dir, '.gitattributes'), '* filter=broken\n');
     const warn = vi.fn();
     expect((await runVerify(dir, ['exit 1'], undefined, {}, warn)).tree).toBeUndefined();
     expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0]![0]).toMatch(/^unreadable worktree fingerprint: .*filter.*the loop guard does not see this failure\.$/);
+    expect(warn.mock.calls[0]![0]).toMatch(/^unreadable worktree fingerprint: fatal: .*filter.*; the loop guard does not see this failure\.$/);
+    expect(warn.mock.calls[0]![0]).not.toMatch(/forged|[\x00-\x1f]/);
   });
 
   it('has no fingerprint outside a git worktree', async () => {
