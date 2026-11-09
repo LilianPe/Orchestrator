@@ -160,6 +160,11 @@ export interface JobSpec {
   lens?: ReviewLens;
   /** The network level of the job's preset step (ORC-183), narrowed by the repository's at the launch. Absent from the jobs out of the preset. */
   network?: NetworkLevel;
+  /**
+   * The built-in tools of the job's preset step when it writes nothing (`stepTools`, ORC-367): `Read`, `Grep` and `Glob`,
+   * refused anything else by the run itself, whatever its skill says. Absent: every tool.
+   */
+  tools?: readonly string[];
   input?: InputKind;
   verify: string[];
   /**

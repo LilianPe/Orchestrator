@@ -156,6 +156,14 @@ export function isAgentStep(s: Step): s is Extract<Step, { maxTurns: number }> {
   return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
 }
 
+/** The built-in tools of a step that writes nothing (`claude --tools`): it reads and searches, it writes nothing and runs no command (ORC-183, ORC-367). */
+export const READ_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob'];
+
+/** Its tools, when the step writes nothing: `intake`, `clarify` and the AI review. Every other step has all of them. */
+export function stepTools(s: Step): readonly string[] | undefined {
+  return (s.type === 'agent_step' && s.writes === 'nothing') || (s.type === 'review' && s.readOnly) ? READ_TOOLS : undefined;
+}
+
 /** The ways back a step can take: its own failure edge, the red CI's and the conflict's (ORC-146). */
 export function failureEdges(s: Step, preset: Preset): FailureEdge[] {
   const out = s.onFailure ? [s.onFailure] : [];

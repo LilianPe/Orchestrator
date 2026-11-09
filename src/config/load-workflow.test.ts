@@ -117,6 +117,17 @@ on:
       expect(jobs['ask']).not.toHaveProperty('network');
     });
 
+    it('gives a step that writes nothing, and the AI review, the read and search tools only; every other job all of them (ORC-367)', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: ['Read', 'Grep', 'Glob'] });
+      for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read', 'Grep', 'Glob']);
+      for (const name of ['dev', 'tests', 'dev-feedback', 'ask', 'learn']) expect(jobs[name], name).not.toHaveProperty('tools');
+    });
+
+    it("refuses a step that writes nothing in the ticket's worktree: it runs on a clone of its own (ORC-367)", () => {
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  intake: { workspace: worktree }\n') })).toThrow(/jobs\.intake\.workspace/);
+    });
+
     it('starts the AI review once the build is published, in AI Review (ORC-183)', () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['dev']!.onSuccess).toEqual({ move: 'ai_review', post: 'summary', run: 'review' });
