@@ -8,6 +8,7 @@ import type { Decision } from './decision.js';
 import { BLOCKED_LABEL, decide, mayCheck, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type MessageKind, type TicketState } from './types.js';
+import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 /** A version frozen before ORC-196, as a recorded journal holds it. */
@@ -288,7 +289,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
   it('a block with no step to resume (stop, dead letter, a commit the job does not fix, a refused publication) relaunches the rule\'s job', () => {
     const state = ticket({ blocked: true, blockReason: 'Arrêté à la demande', activeRunId: undefined });
     expect(starts(decide(state, comment(), workflow))[0]).toMatchObject({ job: 'dev-feedback' });
-    const review = decide(verifying({ activeJob: 'review' }), ev('verify.failed', { runId: 'r1', job: 'review', failures: [failure] }), workflow);
+    const review = decide(verifying({ activeJob: 'review' }), ev('verify.failed', { runId: 'r1', job: 'review', failures: [failure] }), beforeOrc183(workflow));
     expect(review.events).toContainEqual(expect.objectContaining({ type: 'ticket.blocked' }));
     expect((review.events.find((e) => e.type === 'ticket.blocked') as { job?: string }).job).toBeUndefined();
     const refused = decide(verifying(), ev('publish.refused', { runId: 'r1', job: 'dev', reason: 'diff trop gros' } as never), workflow);

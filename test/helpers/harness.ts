@@ -30,9 +30,20 @@ import type { TestPreset } from './test-preset.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
-/** The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read. */
-export function loadTestWorkflow(projectYaml?: string): Workflow {
-  if (!projectYaml) return loadWorkflow({ packDir });
+/**
+ * The standard pack with `projectYaml` on top, as a project's workflow.yml; the temporary file is removed once read.
+ * Without `aiReview`, `dev`'s end goes straight to Human Review, as before ORC-183, instead of starting the AI review's two
+ * lenses: what the scenarios of the other steps, the properties and the recorded journals run on, their runs and moves counted
+ * without the review's. The review's own scenarios (`test/scenarios/review.test.ts`) run the pack as it ships.
+ */
+export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean } = {}): Workflow {
+  const wf = projectYaml ? withProjectFile(projectYaml) : loadWorkflow({ packDir });
+  const dev = wf.jobs['dev'];
+  if (!o.aiReview && dev?.onSuccess.run === 'review') dev.onSuccess = { move: 'human_review', post: 'summary' };
+  return wf;
+}
+
+function withProjectFile(projectYaml: string): Workflow {
   const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
   try {
     const projectFile = join(dir, 'workflow.yml');
@@ -229,10 +240,12 @@ export function createHarness(
     outputPolicy?: OrchestratorDeps['outputPolicy'];
     /** The browser of the visual proof (ORC-176), with sandboxes; its captures kept in a temporary dir. */
     visualShooter?: VisualShooter;
+    /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
+    aiReview?: boolean;
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
-  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml);
+  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();

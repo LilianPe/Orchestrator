@@ -9,7 +9,10 @@ import {
   type DeadLetterStatus,
   type RepairAction,
 } from '../core/dead-letter.js';
+import type { ReviewLens } from '../config/workflow-schema.js';
+import type { Finding } from '../core/agent-output.js';
 import type { OutboxEffect } from '../core/decision.js';
+import type { ReviewFinding } from '../core/review.js';
 import { claims, holds } from '../core/routing.js';
 import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
@@ -32,6 +35,7 @@ import {
   type QueueItem,
   type RunRecord,
   type Artifact,
+  type FindingsRecord,
   type SecurityLog,
   type SecurityStats,
   type Store,
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TE
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 `;
 
 interface DeadLetterSqlRow {
@@ -744,6 +749,19 @@ export class SqliteStore implements Store {
 
   async artifacts(ticketId: string): Promise<Artifact[]> {
     return (this.db.prepare('SELECT data FROM artifacts WHERE ticket_id = ? ORDER BY seq').all(ticketId) as { data: string }[]).map((r) => JSON.parse(r.data) as Artifact);
+  }
+
+  async putFindings(r: FindingsRecord): Promise<void> {
+    this.atomically(() => {
+      this.db.prepare('DELETE FROM findings WHERE project_id = ? AND ticket_id = ? AND sha = ? AND lens = ?').run(r.projectId, r.ticketId, r.sha, r.lens);
+      const insert = this.db.prepare('INSERT INTO findings (project_id, ticket_id, sha, lens, n, run_id, at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      r.findings.forEach((f, n) => insert.run(r.projectId, r.ticketId, r.sha, r.lens, n, r.runId, r.at, JSON.stringify(f)));
+    });
+  }
+
+  async findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]> {
+    const rows = this.db.prepare('SELECT lens, run_id, data FROM findings WHERE project_id = ? AND ticket_id = ? AND sha = ? ORDER BY lens, n').all(projectId, ticketId, sha) as { lens: ReviewLens; run_id: string; data: string }[];
+    return rows.map((r) => ({ ...(JSON.parse(r.data) as Finding), lens: r.lens, runId: r.run_id }));
   }
 
   // ponytail: every log read and counted in memory; SQLite is kept until ORC-178, Postgres counts in SQL.

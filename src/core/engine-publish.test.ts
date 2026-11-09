@@ -68,9 +68,9 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects.some((e) => e.kind === 'publish')).toBe(false);
   });
 
-  it('published, the on_success of the job applies: the move, the summary', () => {
+  it('published, the on_success of the job applies: the move, the summary, the AI review (ORC-183)', () => {
     const out = decide(verifying(), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
-    expect(out.effects).toEqual([{ kind: 'move', to: 'human_review' }, { kind: 'post_output', style: 'summary', runId: 'r1' }]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'summary', runId: 'r1' }, expect.objectContaining({ kind: 'start_run', job: 'review' })]);
     expect(after(verifying(), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), out).verifyingRunId).toBeUndefined();
   });
 
@@ -84,16 +84,16 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ step: 'publish', reason: expect.stringContaining('la branche a bougé') }) });
   });
 
-  it('a move the refused publication owed comes with the next one: a relaunch by dev-feedback, which has no move of its own, still shows the work', () => {
+  it('a move the refused publication owed comes with the next one: a relaunch by dev-feedback, which has no move of its own, still shows the work, and starts the AI review it came with (ORC-183)', () => {
     const owed = after(verifying(), passed(), decide(verifying(), passed(), workflow));
-    expect(owed.owedMove).toBe('human_review');
+    expect(owed.owedMove).toBe('ai_review');
     const refused = ev('publish.refused', { runId: 'r1', job: 'dev', sha: 'abc', reason: 'x' });
     const blocked = after(owed, refused, decide(owed, refused, workflow));
-    expect(blocked.owedMove).toBe('human_review');
+    expect(blocked.owedMove).toBe('ai_review');
     const relaunched = { ...blocked, blocked: false, blockReason: undefined, verifyingRunId: 'r2' };
     const done = ev('publish.done', { runId: 'r2', job: 'dev-feedback', sha: 'def' });
     const out = decide(relaunched, done, workflow);
-    expect(out.effects).toEqual([{ kind: 'move', to: 'human_review' }, { kind: 'post_output', style: 'reply', runId: 'r2' }]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'reply', runId: 'r2' }, expect.objectContaining({ kind: 'start_run', job: 'review' })]);
     expect(after(relaunched, done, out).owedMove).toBeNull();
   });
 

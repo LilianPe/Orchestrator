@@ -86,7 +86,7 @@ You can redefine only some of them; after merging, all five must have a name. `r
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
 | `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Number of runs a red CI (`pr.checks_failed`) or a conflict with the base (`pr.conflicted`, ORC-146) can launch, together, before the next one blocks the ticket (see below). `0` blocks on the first. |
-| `review_rounds` | integer > 0 | 2 (preset) | Given to the review skill in its prompt (« Max review rounds: 2 »); only for jobs whose skill ends with `:review`. The skill respects this number; Relais does not count it. By default the preset's `review_ci` bound, the count shared with red CI and rebases (ORC-184, ORC-216, ORC-146). |
+| `review_rounds` | integer > 0 | 5 | Accepted, read by nothing since ORC-183: the AI review no longer loops. The review → fix loop is bounded by the preset's `review_ci` counter with ORC-184. |
 
 The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These two keys remain a possible override until `workflow.yml` is removed (ORC-177).
 
@@ -129,18 +129,19 @@ A job describes **how** to launch a Claude Code run. Fields:
 | `step` | agent step of the [preset](preset.md) | — | The step this job runs (ORC-136): it sets its effort (`claude --effort`) and caps its turns. A name that is not an agent step makes loading fail. Without `step`, the job keeps its own limits and has no effort, except `claude.effort.default` from `factory.yml`. |
 | `queue` | `dev`, `questions` | **required** | Execution queue (section 5). A `dev` job is only launched on a ticket delegated to Relais. |
 | `model` | text | **required** | Passed as is to `claude --model` (alias such as `sonnet`, `opus`, `haiku`, or full identifier). |
-| `workspace` | `worktree`, `trunk-readonly`, `knowledge` | **required** | `worktree`: git worktree specific to the ticket, on a `relais/<ticket>-<title>` branch, reused from one run to the next. `trunk-readonly`: up-to-date copy of the main branch, run launched in plan mode (read-only). `knowledge`: worktree of the knowledge repository; the job is ignored if no knowledge repository is configured. |
+| `workspace` | `worktree`, `trunk-readonly`, `knowledge`, `published` | **required** | `worktree`: git worktree specific to the ticket, on a `relais/<ticket>-<title>` branch, reused from one run to the next. `trunk-readonly`: up-to-date copy of the main branch, run launched in plan mode (read-only). `knowledge`: worktree of the knowledge repository; the job is ignored if no knowledge repository is configured. `published`: a fresh clone of the commit the factory published, detached, gone with the run; only a job of the `review` step has it, and it must (ORC-183). |
+| `lens` | `correctness`, `security` | — | The angle of an AI review job, given in its prompt (ORC-183); only a job of the `review` step has one. |
 | `session` | `new`, `resume` | `new` | `resume` resumes the ticket's Claude session if it exists (the development context), otherwise opens a new one. |
 | `skill` | text | **required** | The run's prompt starts with `/<skill>` followed by the ticket (identifier, title, URL, branch, PR, description). The pack's job skills are called `relais:dev`, `relais:feedback`, `relais:fix-ci`, `relais:review`, `relais:ask`, `relais:learn`; they load the method skills themselves ([`pack-and-skills.md`](pack-and-skills.md#method-skills)). |
-| `input` | `feedback`, `ci_failures`, `thread`, `verify_failures` | — | Section added to the prompt (see below). |
+| `input` | `feedback`, `ci_failures`, `thread`, `verify_failures` | — | Section added to the prompt (see below). A job with a `lens` reads the published commit's diff against the trunk instead, whatever relaunched it (ORC-183). |
 | `verify` | list of commands | `[]` | Run after a successful run (see below). |
 | `repo_checks` | boolean | `false` | The run goes through `verify` even without commands: the commands from `.factory/config.yml` read on the base branch, forbidden paths, the freeze. Merging then requires a green `verify` on the reviewed commit. True in the pack for `dev`, what inherits from it, and `review`. **Only such a job publishes** (ORC-125): a job that writes code without it stays in its worktree, the agent having no way to push. |
-| `verify_failure` | `block` | — | A failing `verify` blocks the ticket instead of relaunching the job, which did not write the commit: `review`, on a human push. |
+| `verify_failure` | `block` | — | A failing `verify` blocks the ticket instead of relaunching the job, which did not write the commit: the `review` of a version frozen before ORC-183, on a human push. |
 | `pickup` | boolean | `false` | If `true`, applies `tracker.pickup.checks` before the ticket's first run (when no Claude session exists yet). `intake` runs them too, as inputs of its guard rather than a block (ORC-206, [preset](preset.md#intake-step-and-the-guard-before-in-progress-orc-206)). Both also read the « blocked by » tickets not done: the ticket waits for them instead of starting (ORC-363, [preset](preset.md#waiting-on-a-blocked-by-ticket-orc-363)). |
 | `structured_output` | boolean | absent | **Provisional** (ORC-289, until ORC-191/ORC-192 make every agent call `submit_result`): if `true`, a run in the `dev` queue that ends without valid output is a failure. When absent, it stays a success. In the pack, `true` for `dev` only, the `build` step (ORC-136). |
 | `limits` | `{ turns, duration }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
 | `on_start` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
-| `on_success` | `{ move: <logical state>, post: summary \| reply \| synthesis }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message the factory composes from the agent's `submit_result`, never from its last message (ORC-214): `summary` (end of the dev work) posts the recap: its summary, why, risks, untested and points to review when stated, the tests added, and the attempts, turns, tokens and duration of the ticket's work (ORC-195); `reply` (reply to feedback, to a question) and `synthesis` (review synthesis) post its `summary` alone. A run that returned no result posts a fixed sentence saying so. The text then goes through the `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)). |
+| `on_success` | `{ move: <logical state>, post: summary \| reply \| synthesis \| review, run: <job> }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message the factory composes from the agent's `submit_result`, never from its last message (ORC-214): `summary` (end of the dev work) posts the recap: its summary, why, risks, untested and points to review when stated, the tests added, and the attempts, turns, tokens and duration of the ticket's work (ORC-195); `reply` (reply to feedback, to a question) and `synthesis` (the review synthesis of a version frozen before ORC-183) post its `summary` alone; `review` posts nothing in Linear: the findings of the ticket's AI review lenses go to the PR as a GitHub review and the `factory/review` check (ORC-183). `run` starts that job next. A run that returned no result posts a fixed sentence saying so. The text then goes through the `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)). |
 
 The values of `input`:
 - `feedback`: the Linear thread messages accumulated since the last run, plus the PR's unresolved review comments (title « Feedback to address »).
@@ -162,10 +163,11 @@ Pack jobs:
 
 | Job | Queue | Model | Role |
 |---|---|---|---|
-| `dev` | dev | sonnet | First development; moves the ticket to `dev` at the start, to `human_review` at the end, and posts a summary. |
+| `dev` | dev | sonnet | First development; moves the ticket to `dev` at the start; once published, posts a summary, moves it to `ai_review` and starts `review`. |
 | `dev-feedback` | dev | sonnet | Extends `dev`: resumes the session to address feedback. |
 | `fix-ci` | dev | sonnet | Extends `dev-feedback`: fixes CI. |
-| `review` | dev | opus | AI review in a fresh session, then moves back to `human_review`. |
+| `review` | dev | opus | First lens of the AI review (correctness and spec), read-only, on a fresh clone of the published commit; then starts `review-security` ([preset.md](preset.md#review-step-orc-183)). |
+| `review-security` | dev | opus | Extends `review`: the security and tests lens; publishes both lenses' findings (GitHub review, `factory/review` check), then moves the ticket to `human_review`. |
 | `ask` | questions | sonnet | Answers questions read-only (30 turns, 5 min, $0.50). |
 | `learn` | questions | haiku | After a merge, feeds the knowledge base. |
 | `remember` | questions | haiku | Extends `learn`: remembers what it is asked to (`@relais retiens …`). |
@@ -258,7 +260,7 @@ There is no `post` field in a rule: publishing the result is configured in `jobs
 | Event | Rules (in order) |
 |---|---|
 | `ticket.delegated` | if `state in [todo, dev] && !blocked` → `dev` |
-| `status.changed` | from `human_review` to `dev` → `dev-feedback`; to `ai_review` → `review` |
+| `status.changed` | from `human_review` to `dev` → `dev-feedback`; to `ai_review` → `review` (the published commit reviewed again: how a commit `dev-feedback` published gets a review, until ORC-184) |
 | `session.prompted` | if `blocked` → `dev-feedback` immediately; if `state in [dev, human_review]` → 3-minute grouping with no new message, then `dev-feedback` if no work is in progress (otherwise the end of that work hands the messages over); otherwise, the message stays in `humanInbox` |
 | `session.mentioned` | → `ask` |
 | `command` | `retiens` → `remember`; `fais-le` → `propose_delegate` |
@@ -410,13 +412,16 @@ Relais only creates the `agent:stop` and `Bloqué` labels: create `agent:review`
 
 You cannot delete a job from the pack, but a job that no rule launches never runs. To remove a behavior, redeclare the list of the event concerned without the rule to remove.
 
-No AI review (moving to AI Review no longer launches anything):
+No AI review: `dev` goes straight to Human Review, and moving to AI Review no longer launches anything:
 
 ```yaml
 version: 1
 on:
   status.changed:
     - { from: human_review, to: dev, run: dev-feedback }
+jobs:
+  dev:
+    on_success: { move: human_review, post: summary }
 ```
 
 No automatic CI fixing, and no learning after the merge:
