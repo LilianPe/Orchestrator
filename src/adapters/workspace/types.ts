@@ -53,9 +53,11 @@ export interface WorkspaceManager {
   stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined>;
   /**
    * A worktree's branch as the path rules read it (ORC-338), on the factory's repository against its default branch: the
-   * same `gitReader` as the clone's. None for a path that is no worktree. Without sandboxes only, where `verify` reads no clone.
+   * same `gitReader` as the clone's. With `fetch`, the forge's default branch, its `HEAD` fetched as the clone fetches it
+   * (ORC-358); without, the repository's own, no forge read. None for a path that is no worktree. Without sandboxes only,
+   * where `verify` reads no clone.
    */
-  branchReader(repoPath: string, path: string): Promise<BranchReader | undefined>;
+  branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined>;
   /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */
   uncommitted(path: string): Promise<string[]>;
   /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */

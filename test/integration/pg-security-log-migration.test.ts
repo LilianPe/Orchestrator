@@ -1,25 +1,8 @@
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
-
-const DRIZZLE = join(import.meta.dirname, '../../drizzle');
-
-/** `drizzle/` as it was up to the migration `tag`, included: a database migrated by an older daemon. */
-function migrationsUpTo(tag: string): string {
-  const dir = join(mkdtempSync(join(tmpdir(), 'factory-drizzle-')), 'drizzle');
-  cpSync(DRIZZLE, dir, { recursive: true });
-  const journalPath = join(dir, 'meta', '_journal.json');
-  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { tag: string }[] };
-  const last = journal.entries.findIndex((e) => e.tag === tag);
-  expect(last).toBeGreaterThanOrEqual(0);
-  writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, last + 1) }));
-  return dir;
-}
+import { createTestDatabase, migrationsUpTo, PG_URL } from '../helpers/pg-database.js';
 
 describe.skipIf(!PG_URL)('the security log of a database migrated before the rule and host only (ORC-296)', () => {
   let db: Awaited<ReturnType<typeof createTestDatabase>>;

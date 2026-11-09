@@ -742,15 +742,18 @@ export interface Store {
   findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]>;
   getMeta(key: string): Promise<string | undefined>;
   /**
-   * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: false, and nothing
-   * written, when one with this key is kept already. In the meta rows, under `delivery:`: a few short-lived rows.
+   * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: undefined when this call
+   * kept it; when one with this key is kept already, its value, and nothing written (ORC-355). A few short-lived rows:
+   * the `deliveries` table on Postgres, the meta rows under `delivery:` on SQLite.
    */
-  receiveDelivery(key: string, value: string): Promise<boolean>;
+  receiveDelivery(key: string, value: string): Promise<string | undefined>;
   /** The deliveries kept, in the order received: what a restart writes to the inbox. */
   pendingDeliveries(): Promise<{ key: string; value: string }[]>;
   deleteDelivery(key: string): Promise<void>;
-  /** Moves a kept delivery that will not be written aside, under `delivery-aside:`: no longer pending, kept for an operator. */
+  /** Moves a kept delivery that will not be written aside: no longer pending, kept for an operator, in place of one set aside before. */
   asideDelivery(key: string): Promise<void>;
+  /** The deliveries set aside, for an operator (ORC-355). */
+  asideDeliveries(): Promise<{ key: string; value: string }[]>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;
 }

@@ -221,27 +221,32 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.getMeta(PAUSE_ACCEPTED)).toBe('0');
   });
 
-  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {
+  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336, ORC-355)', async () => {
     const s = await store();
     expect(await s.pendingDeliveries()).toEqual([]);
-    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBe(true);
-    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBe(true);
-    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe(false);
+    // Kept by this call: nothing returned; kept already: the value kept, untouched.
+    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBeUndefined();
+    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBeUndefined();
+    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe('{"raw":"2"}');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"2"}' }, { key: 'activity:a', value: '{"raw":"1"}' }]);
     await s.deleteDelivery('activity:b');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
-    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBeUndefined();
     // Set aside: no longer pending, its value kept for an operator; the key may be kept again.
+    expect(await s.asideDeliveries()).toEqual([]);
     await s.asideDelivery('activity:a');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"again"}' }]);
-    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"1"}');
-    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.asideDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBeUndefined();
     await s.asideDelivery('activity:a');
-    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"new"}');
+    expect(await s.asideDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"new"}' }]);
     // The same delivery, same value, kept again once set aside: kept, beside the row set aside.
-    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBeUndefined();
     expect(await s.pendingDeliveries()).toContainEqual({ key: 'activity:a', value: '{"raw":"new"}' });
-    expect(await s.getMeta('delivery:activity:a')).toBe('{"raw":"new"}');
+    expect(await s.receiveDelivery('activity:a', '{"raw":"newer"}')).toBe('{"raw":"new"}');
+    // A key not kept is no delivery to set aside.
+    await s.asideDelivery('activity:none');
+    expect(await s.asideDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"new"}' }]);
   });
 
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
