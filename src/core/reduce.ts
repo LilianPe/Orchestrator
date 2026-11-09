@@ -137,6 +137,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       const left = (t.relayed ?? []).filter((r) => r.handedTo !== e.runId);
       return { ...t, relayed: left.length ? left : undefined };
     }
+    case 'relay.dropped':
+      return { ...t, relayed: undefined };
     case 'feedback.appended':
       return { ...t, humanInbox: withinBound([...t.humanInbox, e.item]) };
     case 'work.cancelled':

@@ -46,6 +46,11 @@ export function awaitsAgent(items: readonly FeedbackItem[]): boolean {
   return items.some((i) => classified(i) && (i.source === 'session' || i.source === 'review'));
 }
 
+/** Whether a change request waits for the agent that implements (ORC-374): what `awaitsAgent` reads, a question left out. */
+export function asksForChange(items: readonly FeedbackItem[]): boolean {
+  return awaitsAgent(items.filter((i) => i.kind !== 'question'));
+}
+
 /**
  * What a launch that does not read the feedback by itself gives the agent that implements: its step boundary (ORC-180).
  * Nothing without a classified message, so that what was written before ORC-180 goes on waiting for its debounce.
