@@ -24,6 +24,7 @@ max_diff: { files: 15, lines: 400 }
 feature_flags: { provider: openfeature }
 visual_paths: ["src/components/**", "app/**"]
 network: { level: custom, allow: ["docs.exemple.com"] }
+dependencies: { allow: { npm: ["zod", "@types/node"], pypi: ["requests"] } }
 `;
 
 describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
@@ -38,6 +39,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       maxDiff: { files: 15, lines: 400 },
       network: { level: 'custom', allow: ['docs.exemple.com'] },
       visualPaths: ['src/components/**', 'app/**'],
+      dependencies: { allow: { npm: ['zod', '@types/node'], pypi: ['requests'] } },
     });
   });
 
@@ -54,8 +56,30 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
         maxDiff: { files: 15, lines: 400 },
         network: { level: 'limited', allow: [] },
         visualPaths: [],
+        dependencies: { allow: {} },
       });
     }
+  });
+
+  describe('the dependencies a branch may add (ORC-371)', () => {
+    it('reads exact names per ecosystem; an ecosystem left out allows nothing there', () => {
+      expect(parseRepoConfig('dependencies: { allow: { npm: [left-pad] } }\n').dependencies).toEqual({ allow: { npm: ['left-pad'] } });
+      expect(parseRepoConfig('dependencies: { allow: {} }\n').dependencies).toEqual({ allow: {} });
+    });
+
+    it('refuses another shape, another ecosystem, or a pattern, which would be a rule of its own', () => {
+      expect(violations('dependencies: [zod]\n')).toEqual(['dependencies: `{ allow: { npm, pypi } }` expected']);
+      expect(violations('dependencies: { allow: { cargo: [serde] } }\n')).toEqual(['dependencies.allow: lists of exact package names under `npm` and `pypi` expected']);
+      expect(violations('dependencies: { allow: { npm: [""] } }\n')).toEqual(['dependencies.allow.npm[0]: lists of exact package names under `npm` and `pypi` expected']);
+      expect(violations('dependencies: { allow: { npm: ["@org/*", "@org/pkg?", " ", "a/b/c"], pypi: ["req*", "../x"] } }\n')).toEqual([
+        'dependencies.allow.npm[0]: "@org/*" is not an exact package name; patterns are refused',
+        'dependencies.allow.npm[1]: "@org/pkg?" is not an exact package name; patterns are refused',
+        'dependencies.allow.npm[2]: " " is not an exact package name; patterns are refused',
+        'dependencies.allow.npm[3]: "a/b/c" is not an exact package name; patterns are refused',
+        'dependencies.allow.pypi[0]: "req*" is not an exact package name; patterns are refused',
+        'dependencies.allow.pypi[1]: "../x" is not an exact package name; patterns are refused',
+      ]);
+    });
   });
 
   describe('the variables a repository declares (ORC-211)', () => {

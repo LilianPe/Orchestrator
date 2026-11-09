@@ -90,10 +90,13 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
     expect(client.isOpen('run-1')).toBe(true);
     expect(client.caCertPath).toBe(proxy.caCertPath);
     expect(readFileSync(client.caCertPath, 'utf8')).toContain('BEGIN CERTIFICATE');
+    // The daemon's own requests (ORC-371): under compose, it does not mount the authority's folder.
+    expect(client.caCertPem).toBe(readFileSync(proxy.caCertPath, 'utf8'));
   });
 
   it("has no certificate to give before a run is opened, like the proxy's own", () => {
     expect(() => client.caCertPath).toThrow(/no run opened/);
+    expect(() => client.caCertPem).toThrow(/no run opened/);
   });
 
   it('closes the run', async () => {
