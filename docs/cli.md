@@ -137,6 +137,21 @@ Event l1 (label.changed) replayed by armand: repair journaled, decided at the ne
 
 The ticket is unblocked and the repair logged (`dead_letter.repaired` event, with the user's name). The command writes to the instance's database (SQLite, or Postgres with `FACTORY_DATABASE_URL`): the daemon does not need to be running, it decides the repair on its next pass. An event without a ticket is designated by its id in place of `<ID>`. Details: [`operations.md`](operations.md#dead-letter-and-factory-run-repair-orc-175).
 
+### `factory flaky <project>` (ORC-164)
+
+The repository's known flaky tests, which `verify` marks indicative: failing, they do not count, and the agent is not sent back for them ([`workflow.md`](workflow.md)). A test is named as `verify` names it: `<file> > <full name>` for vitest and jest, its node id for pytest, as the journal's `flaky` field shows them.
+
+```text
+$ factory flaky p add 'src/cart.test.ts > cart total' --reason 'times out under load'
+src/cart.test.ts > cart total is now a known flaky test of p: failing, it is indicative.
+$ factory flaky p
+Known flaky tests of p:
+  src/cart.test.ts > cart total  (armand: times out under load)
+$ factory flaky p remove 'src/cart.test.ts > cart total'
+```
+
+`--frozen` also covers the test while it is frozen for a ticket (ORC-131): without it, a frozen test always counts. Each entry keeps who added it (the user's name), why and when. Like `run repair`, the command writes to the instance's database, without the daemon.
+
 ## `relais-agent` (agent side)
 
 During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` and `RELAIS_RUN_TOKEN`. The agent then uses:
