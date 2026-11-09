@@ -47,9 +47,13 @@ describe('scenario « budget exhausted » (ORC-216)', () => {
     const resetAt = Date.UTC(2026, 9, 10, 11, 0);
     h.runner.enqueue({ outcome: 'limit', tokens: { input: 10, output: 10, cacheRead: 0, cacheCreation: 0 }, usageLimit: { resetAt } }, { hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: MEMBER });
-    expect(await h.ticket()).toMatchObject({ blocked: false, usageWait: { job: 'dev' } });
+    expect(await h.ticket()).toMatchObject({ blocked: false });
+    expect(await h.store.listQueue()).toMatchObject([{ job: 'dev', relaunchOf: h.runner.requests[0]!.runId }]);
     expect(h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴'))).toEqual([]);
     await h.advance(2 * HOUR);
+    // The daemon's tick, each minute: past the reset, it drains the queue the cut step waits in (ORC-357).
+    await h.orch.tick();
+    await h.orch.drained();
     expect(h.runner.requests).toHaveLength(2);
     expect(await h.ticket()).toMatchObject({ blocked: false, activeJob: 'dev' });
   });

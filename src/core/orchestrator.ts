@@ -471,6 +471,11 @@ export class Orchestrator {
   private admitting: Record<QueueName, number> = { dev: 0, questions: 0 };
   /** Runs of this daemon's launches that ended without letting go of their hold on the ticket (ORC-359): dead, whatever its time. */
   private droppedHolds = new Set<string>();
+  /**
+   * Until when each account's usage limit holds its launches, as this daemon knows it (ORC-357): the limits it heard of, and the store's
+   * hold read again at each drain and each start outside one. A hold the store failed to record still holds this daemon's launches.
+   */
+  private usageHolds = new Map<string, number>();
   /** Drains run one at a time. */
   private draining: Promise<void> = Promise.resolve();
   private instance: Promise<string> | undefined;
@@ -1342,12 +1347,20 @@ export class Orchestrator {
    * A launch before its reset would only hit it again; another account active is not held. The tick drains the queues once it passes.
    */
   async usageLimitedUntil(): Promise<number | undefined> {
-    const until = Number((await this.d.store.getMeta(usageHoldKey(this.account()))) ?? 0);
+    const account = this.account();
+    this.holdUsage(account, Number((await this.d.store.getMeta(usageHoldKey(account))) ?? 0));
+    return this.heldUntil();
+  }
+
+  /** `usageLimitedUntil` on what this daemon knows already, without reading the store. */
+  private heldUntil(): number | undefined {
+    const until = this.usageHolds.get(this.account()) ?? 0;
     return until > this.d.clock.now() ? until : undefined;
   }
 
-  private async usageLimited(): Promise<boolean> {
-    return (await this.usageLimitedUntil()) !== undefined;
+  /** Keeps the latest hold heard of on `account`. */
+  private holdUsage(account: string, until: number): void {
+    if (until > (this.usageHolds.get(account) ?? 0)) this.usageHolds.set(account, until);
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -1593,8 +1606,7 @@ export class Orchestrator {
   private async settle(project: ProjectRuntime, ticketId: string): Promise<void> {
     const t = await this.ticket(project.id, ticketId);
     const pending = t.pendingJob;
-    // A step waiting for a usage reset keeps the pending job behind it (ORC-340): nothing to start yet.
-    if (!t.activeRunId && !t.verifyingRunId && !t.usageWait && pending) {
+    if (!t.activeRunId && !t.verifyingRunId && pending) {
       // The job stays on the ticket until a run starts it (ORC-339): its `run.started` takes it off in the same
       // write (`reduce`), whoever launches it. A crash or a throw before leaves it to the retry of this effect.
       // Queued by a settle cut before the clear below: the queue holds that very start, a launch here would run it twice.
@@ -1640,8 +1652,10 @@ export class Orchestrator {
     if (this.stopping) return;
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
+    // Read once per drain: its starts, and a limit heard of meanwhile, are held on what this daemon knows (`heldUntil`).
+    if (n > 0) await this.usageLimitedUntil();
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || (await this.usageLimited()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if ((await this.isPaused()) || this.heldUntil() !== undefined || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -2364,8 +2378,7 @@ export class Orchestrator {
       if (!fromQueue) await this.d.scheduler.enqueue(item);
       return 'queued';
     };
-    // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
-    const busy = t.activeRunId || t.verifyingRunId || t.usageWait;
+    const busy = t.activeRunId || t.verifyingRunId;
     // Behind another daemon's launch alone, which may end with no run whose end starts what waits (ORC-359).
     const launch = this.heldByOther(t);
     if (job.queue === 'dev' && !busy && launch) return behindLaunch(launch, pendingOf({ ...opts, job: job.name })) === 'deferred' ? 'deferred' : requeue();
@@ -2376,7 +2389,8 @@ export class Orchestrator {
       await this.apply(t, { type: 'pending.set', job: start });
       return 'deferred';
     }
-    if (this.stopping || (await this.isPaused()) || (await this.usageLimited())) return requeue();
+    // The account's usage limit holds every launch on it until its reset (ORC-340), a step it cut too (ORC-357): in line meanwhile.
+    if (this.stopping || (await this.isPaused()) || (fromQueue ? this.heldUntil() : await this.usageLimitedUntil()) !== undefined) return requeue();
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];
@@ -3039,16 +3053,20 @@ export class Orchestrator {
       unreadable = true;
     }
     // Only when the factory waits on it (`on_usage_limit: wait`): otherwise the run ends as any failure (ORC-340).
-    // A reset already past, or none told: never sooner than `USAGE_MIN_WAIT_MS`, an hour when none was told.
+    // A reset already past, or none told: never sooner than `USAGE_MIN_WAIT_MS` after the run's end, an hour when none was told.
+    // From its end, not from now (ORC-357): a result recover() sends after a long stop holds nothing once its reset is past.
     const now = this.d.clock.now();
+    const end = run.endedAt ?? now;
     const account = run.account ?? this.account();
     const usageLimit =
-      result.usageLimit && this.d.onUsageLimit === 'wait' ? { resetAt: Math.max(result.usageLimit.resetAt ?? now + USAGE_RETRY_MS, now + USAGE_MIN_WAIT_MS), account } : undefined;
-    if (usageLimit) {
+      result.usageLimit && this.d.onUsageLimit === 'wait' ? { resetAt: Math.max(result.usageLimit.resetAt ?? end + USAGE_RETRY_MS, end + USAGE_MIN_WAIT_MS), account } : undefined;
+    if (usageLimit && usageLimit.resetAt > now) {
       const until = new Date(usageLimit.resetAt).toISOString();
       this.log('warn', `usage limit of the Claude account ${account} reached (run ${run.id}): launches held until ${until}`);
-      // The account's limit: every launch on it waits for its reset (`usageLimited`), the latest one heard of. A store that fails
-      // here must not hold back the result: logged, and recover() sets the hold again from the run's record.
+      // The account's limit: every launch on it waits for its reset, the latest one heard of. Held here first: a store that fails to
+      // record it must not hold back the result, and this daemon still holds its launches (`usageHolds`). Only a restart before
+      // the reset loses it then: the next launch meets the limit again, and waits as this one did.
+      this.holdUsage(account, usageLimit.resetAt);
       try {
         const key = usageHoldKey(account);
         await this.d.store.setMeta(key, String(Math.max(Number((await this.d.store.getMeta(key)) ?? 0), usageLimit.resetAt)));

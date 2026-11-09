@@ -172,7 +172,7 @@ The ticket then waits, **not blocked** (`TicketState.clarify`): nothing moves, t
 | 24 h (`clarify.remind`) | the question on screen is asked again, prefixed « Reminder » |
 | 72 h (`clarify.expire`) | the ticket is blocked on `intake` at step `clarify`, cause « question », the open questions in the blocking comment; a reply relaunches `intake` (ORC-196) |
 
-A timer only acts on the round that armed it (`at`): a round answered, asked again, or ended by whatever moves the ticket on (a block, an undelegation, a delegation again, a dev run, a move: the same events as the usage-limit wait) does nothing.
+A timer only acts on the round that armed it (`at`): a round answered, asked again, or ended by whatever moves the ticket on (a block, an undelegation, a delegation again, a dev run, a move) does nothing.
 
 **Answers.** A reply in the ticket's session is checked against the matrix (`answer_clarify`: the requester or a team member, ORC-186); refused, it is traced, answered in the session and counts for nothing. Accepted, it is kept in `humanInbox` as any reply (ORC-180) and answers the question on screen, a picked option or free text alike; any other authorized reply in the session counts too (a « +1 » included). A command (`/status`) answers none, nor does a question back (classified `question`): it is answered by `ask`, the question stays. A comment on the ticket is not read while it waits (`ticket.commented` awaits only a block's reply, and the matrix keeps `answer_clarify` to the session): the questions say to answer here. Once every question has its answer, `intake` starts again with the inbox as feedback, reads the ticket again and judges it anew: complete, `dev` starts; otherwise it asks again.
 
