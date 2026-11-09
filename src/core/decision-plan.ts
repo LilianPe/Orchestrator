@@ -2,7 +2,7 @@ import type { Workflow } from '../config/workflow-schema.js';
 import type { DecisionPlan, TimerRecord } from '../store/types.js';
 import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';
-import { AUTHZ_REFUSED, decide, isFenced, isReconcileTicket } from './engine.js';
+import { authzRefusal, decide, isFenced, isReconcileTicket } from './engine.js';
 import type { Decision } from './decision.js';
 import { reduce } from './reduce.js';
 import { CREATES_TICKET, type EventType, type FactoryEvent, type TicketState } from './types.js';
@@ -12,7 +12,7 @@ export const SETTLES_RUN: ReadonlySet<EventType> = new Set<EventType>(['run.fini
 
 /** The log line of an action the authorization matrix refused (ORC-186); the refusal itself is in the trace. */
 function refusedNote(event: FactoryEvent, trace: readonly string[]): string | undefined {
-  const refused = trace.find((t) => t.startsWith(AUTHZ_REFUSED));
+  const refused = authzRefusal(trace);
   return refused && `${event.type} ${event.id} on ${event.ticketId ?? '*'}: ${refused}`;
 }
 
