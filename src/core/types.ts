@@ -469,9 +469,10 @@ export type ShellEvent =
   | { type: 'pending.set'; job: PendingJob }
   /**
    * A dev launch takes the ticket before any effect (ORC-359), until `until`: refused while another launch holds it, its
-   * hold not expired at `at`, or a run does. Written again by its holder to keep it; its `run.started` ends it.
+   * hold not expired at `at`, or a run does. Written again by its holder to keep it; its `run.started` ends it. `over`: a hold
+   * of the same daemon's launch that ended without letting go of it, taken over whatever its time.
    */
-  | { type: 'launch.reserved'; runId: string; start: PendingJob; at: number; until: number }
+  | { type: 'launch.reserved'; runId: string; start: PendingJob; at: number; until: number; over?: string }
   /** A launch that ends before its `run.started` lets go of the ticket, if it still holds it. */
   | { type: 'launch.released'; runId: string }
   | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }

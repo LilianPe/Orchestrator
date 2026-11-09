@@ -467,6 +467,8 @@ export class Orchestrator {
   private workflows = new Map<string, Workflow>();
   /** Dequeued items whose start has not taken its slot yet, per queue: drain hands out no more than the free slots. */
   private admitting: Record<QueueName, number> = { dev: 0, questions: 0 };
+  /** Runs of this daemon's launches that ended without letting go of their hold on the ticket (ORC-359): dead, whatever its time. */
+  private droppedHolds = new Set<string>();
   /** Drains run one at a time. */
   private draining: Promise<void> = Promise.resolve();
   private instance: Promise<string> | undefined;
@@ -2376,7 +2378,7 @@ export class Orchestrator {
     // A step the usage limit cut holds the ticket's next ones too (ORC-340): it resumes first, at the reset, and they follow it.
     const busy = t.activeRunId || t.verifyingRunId || t.usageWait;
     // Behind another daemon's launch alone, which may end with no run whose end starts what waits (ORC-359).
-    const launch = heldByOther(t, this.d.clock.now());
+    const launch = this.heldByOther(t);
     if (job.queue === 'dev' && !busy && launch) return behindLaunch(launch, pendingOf({ ...opts, job: job.name })) === 'deferred' ? 'deferred' : requeue();
     if (job.queue === 'dev' && busy) {
       const start = pendingOf({ ...opts, job: job.name });
@@ -2487,9 +2489,19 @@ export class Orchestrator {
         clearInterval(at.renew);
         await this.ticket(project.id, ticketId)
           .then((t) => this.apply(t, { type: 'launch.released', runId }))
-          .catch((err: Error) => this.log('warn', `${job.name} on ${ticketId}: the launch's hold on the ticket not let go of (${err.message}), it runs out by itself`));
+          .catch((err: Error) => {
+            // Its own next launch takes it over at once; another daemon's waits for it to run out.
+            this.droppedHolds.add(runId);
+            this.log('warn', `${job.name} on ${ticketId}: the launch's hold on the ticket not let go of (${err.message}), taken over by this daemon's next launch`);
+          });
       }
     }
+  }
+
+  /** Another dev launch's hold on the ticket (ORC-359), not over, unless it is a hold this daemon dropped (`droppedHolds`). */
+  private heldByOther(t: TicketState, runId?: string): TicketState['launching'] {
+    const held = heldByOther(t, this.d.clock.now(), runId);
+    return held && !this.droppedHolds.has(held.runId) ? held : undefined;
   }
 
   /**
@@ -2517,7 +2529,7 @@ export class Orchestrator {
         throw new RetryableStart(err);
       });
     /** The ticket holds another dev run, or another launch holds it (another daemon's launch won the race). */
-    const taken = (x: TicketState): boolean => job.queue === 'dev' && (!!x.activeRunId || !!heldByOther(x, clock.now(), runId));
+    const taken = (x: TicketState): boolean => job.queue === 'dev' && (!!x.activeRunId || !!this.heldByOther(x, runId));
     /**
      * Another launch took the ticket (ORC-339). Its run is this very start, all of it (a settle taken up by another
      * worker after a lost lease): nothing more to start. Another start: this one waits behind it, pending, as
@@ -2527,7 +2539,7 @@ export class Orchestrator {
      */
     const lose = async (holder: TicketState): Promise<StartOutcome> => {
       this.d.scheduler.release(key);
-      const launch = holder.activeRunId ? undefined : heldByOther(holder, clock.now(), runId);
+      const launch = holder.activeRunId ? undefined : this.heldByOther(holder, runId);
       if (launch) {
         const behind = behindLaunch(launch, start);
         this.log('warn', `${job.name} on ${ticketId} not launched: the launch of ${launch.runId} took the ticket first${behind === 'queued' ? ': back in line' : ', for the same start'}`);
@@ -2546,7 +2558,7 @@ export class Orchestrator {
       return 'deferred';
     };
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
-    const hold = (): InternalEvent => ({ type: 'launch.reserved', runId, start, at: clock.now(), until: clock.now() + leaseMs });
+    const hold = (over?: string): InternalEvent => ({ type: 'launch.reserved', runId, start, at: clock.now(), until: clock.now() + leaseMs, ...(over ? { over } : {}) });
 
     // Before any workspace (ORC-340): factory.yml's cap now, the repository's, read from its config, once the worktree is there.
     // Read only under a cap: without one, a launch reads no run of the ticket.
@@ -2562,7 +2574,9 @@ export class Orchestrator {
       if (taken(t)) return { lost: t } as const;
       // A dev launch takes the ticket before any effect (ORC-359): of two daemons' launches, the second does nothing.
       if (job.queue === 'dev') {
-        t = await state(this.apply(t, hold()));
+        const dropped = t.launching && this.droppedHolds.has(t.launching.runId) ? t.launching.runId : undefined;
+        t = await state(this.apply(t, hold(dropped)));
+        if (dropped) this.droppedHolds.delete(dropped);
         if (t.launching?.runId !== runId) return { lost: t } as const;
         at.renew = setInterval(() => {
           this.apply(t, hold())

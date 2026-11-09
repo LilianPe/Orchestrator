@@ -137,7 +137,8 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
       return e.job && !samePending(t.pendingJob, e.job) ? { ...t } : { ...t, pendingJob: undefined };
     case 'launch.reserved': {
       // One launch at a time (ORC-359): not over a run, nor over another launch whose hold is not over.
-      return t.activeRunId || heldByOther(t, e.at, e.runId) ? { ...t } : { ...t, launching: { runId: e.runId, start: pendingOf(e.start), until: e.until } };
+      const held = heldByOther(t, e.at, e.runId);
+      return t.activeRunId || (held && held.runId !== e.over) ? { ...t } : { ...t, launching: { runId: e.runId, start: pendingOf(e.start), until: e.until } };
     }
     case 'launch.released':
       return t.launching?.runId === e.runId ? { ...t, launching: undefined } : { ...t };

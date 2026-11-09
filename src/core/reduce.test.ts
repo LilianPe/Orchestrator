@@ -236,6 +236,9 @@ describe('reduce — facts recorded by the orchestrator', () => {
       // Its holder keeps it; a hold run out goes to the next launch.
       expect(reduce(held, hold('r1', 50))!.launching).toEqual({ runId: 'r1', start, until: 110 });
       expect(reduce(held, hold('r2', 60))!.launching).toEqual({ runId: 'r2', start, until: 120 });
+      // A hold its daemon dropped (its launch ended without letting go of it) is taken over by name, and only that one.
+      expect(reduce(held, { ...hold('r2', 10), over: 'r1' } as InternalEvent)!.launching).toEqual({ runId: 'r2', start, until: 70 });
+      expect(reduce(held, { ...hold('r2', 10), over: 'r0' } as InternalEvent)).toEqual(held);
     });
 
     it('only its holder lets go of it, and its run.started ends it', () => {
