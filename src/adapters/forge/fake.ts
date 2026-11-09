@@ -41,7 +41,7 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   async findPr(_repoPath: string, branch: string): Promise<PrInfo | undefined> {
     this.answer();
     const pr = this.prs.get(branch);
-    return pr && { ...pr, failedChecks: [...pr.failedChecks] };
+    return pr && structuredClone(pr);
   }
 
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
@@ -92,6 +92,28 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
   async markPrReady(_repoPath: string, number: number): Promise<void> {
     this.answer();
     this.readied.push(number);
+  }
+
+  private prLabels = new Map<number, string[]>();
+  /** How many label writes reached the forge (ORC-198): a final state already in place adds none. */
+  labelWrites = 0;
+
+  /** The labels of a PR, as a test or a human set them. */
+  setPrLabels(number: number, labels: readonly string[]): void {
+    this.prLabels.set(number, [...labels]);
+  }
+
+  labelsOf(number: number): string[] {
+    return [...(this.prLabels.get(number) ?? [])];
+  }
+
+  async setExclusiveLabel(_repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
+    this.answer();
+    const now = this.labelsOf(number);
+    const others = now.filter((l) => !group.includes(l));
+    if (now.includes(label) && others.length === now.length - 1) return;
+    this.labelWrites++;
+    this.prLabels.set(number, [...others, label]);
   }
 
   /** Where the factory's git goes: a local repository in a test. */

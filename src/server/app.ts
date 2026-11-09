@@ -13,6 +13,7 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';
 import type { TakeOverDesk } from '../core/orchestrator.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
+import { BASELINE_DAYS, DAY_MS } from '../core/baseline.js';
 import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
@@ -76,11 +77,10 @@ const MEASURES_AT_ONCE = 2;
 
 /** Runs `GET /api/security` serves, the most refused: the others are counted. */
 const SECURITY_RUNS = 50;
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** The period the security log and the Pareto read when none is asked (ORC-300). */
 const DEFAULT_PERIOD_MS = 7 * DAY_MS;
 /** The period the overview reads when none is asked (ORC-299): as long as the baseline it is to be compared with (ORC-230). */
-const OVERVIEW_PERIOD_MS = 90 * DAY_MS;
+const OVERVIEW_PERIOD_MS = BASELINE_DAYS * DAY_MS;
 
 /** `[since, until)` from the query, in ms, `until` now and `since` `length` before by default; undefined when it is not a period. */
 function periodOf(c: Context, now: number, length = DEFAULT_PERIOD_MS): { since: number; until: number } | undefined {
@@ -288,11 +288,12 @@ export function createApp(d: ServerDeps): Hono {
 
   // The reduced overview (ORC-299), read-only, over a period, the last 90 days by default. Only the tickets the factory
   // updated since the period began are read: each event it decides updates its ticket, so the others hold no merge nor
-  // message of the period. A ticket whose measures cannot be read is counted, the error logged.
+  // message of the period. A ticket whose measures cannot be read is counted, the error logged. The baseline computed
+  // last faces the measures (ORC-230).
   app.get('/api/overview', overPeriod(async (c, period) => {
-    const measures = await measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since));
+    const [measures, baseline] = await Promise.all([measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since)), d.store.latestBaseline()]);
     const measured = measures.filter((m) => m !== null);
-    return c.json(overview(period, measured, measures.length - measured.length));
+    return c.json(overview(period, measured, measures.length - measured.length, baseline));
   }, OVERVIEW_PERIOD_MS));
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
@@ -312,6 +313,10 @@ export function createApp(d: ServerDeps): Hono {
     const blocks = await d.store.blocksEntered(period.since, period.until);
     return c.json({ ...period, total: blocks.length, causes: blockPareto(blocks.map((b) => b.kind)) });
   }));
+
+  // The changelog (ORC-197), read-only: what the merged PRs delivered over a period, the last 7 days by default, the most recent first,
+  // of one project with `project`. Only the after_merge step appends to it.
+  app.get('/api/changelog', overPeriod(async (c, period) => c.json({ ...period, entries: await d.store.changelog(period.since, period.until, c.req.query('project') || undefined) })));
 
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 

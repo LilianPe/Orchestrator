@@ -14,6 +14,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { FactoryEvent, FeedbackItem } from '../../core/types.js';
+import type { ChangelogEntry } from '../types.js';
 
 /** Every timestamp is `timestamptz`, so Postgres stores it in UTC and returns it in the session zone. */
 const createdAt = () => timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow();
@@ -352,7 +353,69 @@ export const refusals = pgTable(
   (t) => [primaryKey({ columns: [t.runId, t.n] }), index('refusals_at_idx').on(t.at)],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296). */
+/** A project's known flaky tests (ORC-164), a human's list: one row per test, as `verify` names it. */
+export const knownFlakyTests = pgTable(
+  'known_flaky_tests',
+  {
+    projectId: text('project_id').notNull(),
+    test: text('test').notNull(),
+    coversFrozen: boolean('covers_frozen').notNull(),
+    reason: text('reason').notNull(),
+    addedBy: text('added_by').notNull(),
+    addedAt: timestamp('added_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.test] })],
+);
+
+/** The changelog (ORC-197), append-only: one row per `after_merge` step, by the id of its effect, the entry whole in `entry`. */
+export const changelog = pgTable(
+  'changelog',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+    entry: jsonb('entry').$type<ChangelogEntry>().notNull(),
+  },
+  (t) => [index('changelog_at_idx').on(t.at)],
+);
+
+/**
+ * A project's baseline over 90 days (ORC-230), frozen by `factory baseline`: one row per measure and period. `value` null
+ * when there is nothing to compute it over, or no source (`no_source`); `over_count` and `left_out`, what it counts and leaves out.
+ */
+export const baselines = pgTable(
+  'baselines',
+  {
+    projectId: text('project_id').notNull(),
+    since: timestamp('since', { withTimezone: true, mode: 'date' }).notNull(),
+    until: timestamp('until', { withTimezone: true, mode: 'date' }).notNull(),
+    measure: text('measure').notNull(),
+    value: doublePrecision('value'),
+    overCount: integer('over_count').notNull(),
+    leftOut: integer('left_out').notNull(),
+    noSource: boolean('no_source').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.since, t.until, t.measure] })],
+);
+
+/**
+ * The webhook deliveries answered before they are written to the inbox (ORC-336), out of the meta rows (ORC-355): a few
+ * short-lived rows, pending until written, or set aside (`aside`) for an operator, beside a pending one of the same key.
+ */
+export const deliveries = pgTable(
+  'deliveries',
+  {
+    key: text('key').notNull(),
+    aside: boolean('aside').notNull(),
+    value: text('value').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.key, t.aside] })],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -369,6 +432,10 @@ export const PG_TABLES = {
   securityLogs,
   egressRequests,
   refusals,
+  knownFlakyTests,
+  changelog,
+  baselines,
+  deliveries,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -387,6 +454,10 @@ export const PG_TABLE_NAMES = [
   'security_logs',
   'egress_requests',
   'refusals',
+  'known_flaky_tests',
+  'changelog',
+  'baselines',
+  'deliveries',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

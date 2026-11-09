@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import { connect as tlsConnect } from 'node:tls';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { httpsUpstream } from '../../test/helpers/egress-upstream.js';
-import { CLAUDE_BODY_DEPTH, CLAUDE_BODY_MAX, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN } from './levels.js';
+import { CLAUDE_BODY_DEPTH, CLAUDE_BODY_MAX, CLAUDE_BODY_VALUES, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN } from './levels.js';
 import { readSecurityLog, refusalSummary } from './security-log.js';
 import { EgressProxy, isPrivate, type EgressEntry, type EgressProxyOptions } from './proxy.js';
 
@@ -189,6 +189,16 @@ describe('EgressProxy', () => {
   it('sends the host it checked upstream, whatever Host the client sets (no fronting)', async () => {
     const sock = await proxy.open('run-1', docs);
     expect((await viaTls(sock, 'docs.test', 'GET', '/', { host: 'evil.example' })).body).toBe('up GET docs.test /');
+  });
+
+  it('refuses a request target that is not a path inside a tunnel: an absolute URL could name another host than the one checked (ORC-219)', async () => {
+    const sock = await proxy.open('run-1', docs);
+    for (const target of ['https://evil.example/x', '*', 'https://x-access-token:s3cr3t@evil.example/y']) expect((await viaTls(sock, 'docs.test', 'OPTIONS', target)).status).toBe(403);
+    const entries = await journal('run-1');
+    expect(entries).toContainEqual(expect.objectContaining({ method: 'OPTIONS', host: 'docs.test', path: 'https://evil.example/x', ok: false, reason: expect.stringMatching(/not a path/) as string }));
+    // Its credentials, as a query's, never journaled.
+    expect(entries).toContainEqual(expect.objectContaining({ path: 'https://evil.example/y', ok: false }));
+    expect(JSON.stringify(entries)).not.toContain('s3cr3t');
   });
 
   it('speaks HTTP/1.1 alone: an h2-only client is refused, and journaled', async () => {
@@ -445,6 +455,26 @@ describe('EgressProxy', () => {
       // A throttle and a client gone are no refusals.
       expect((await journal('run-1')).filter((e) => e.ok === false)).toEqual([]);
     });
+
+    it('refuses a run\'s model calls of empty objects past the bound before any parse, in a loop, while another run\'s calls go through (ORC-373)', async () => {
+      const hostile = await proxy.open('run-1', { level: 'limited', allow: [] });
+      const other = await proxy.open('run-2', { level: 'limited', allow: [] });
+      const empties = Buffer.from(`{"model":"${MESSAGE.model}","max_tokens":1,"messages":[${'{},'.repeat(CLAUDE_BODY_VALUES)}{}]}`);
+      const ROUNDS = 3;
+      const flood = (async () => {
+        const answers: number[] = [];
+        for (let round = 0; round < ROUNDS; round++) {
+          const calls = Array.from({ length: CLAUDE_READS_PER_RUN }, () => viaTls(hostile, CLAUDE, 'POST', '/v1/messages', {}, undefined, empties));
+          answers.push(...(await Promise.all(calls)).map((r) => r.status));
+        }
+        return answers;
+      })();
+      const served: number[] = [];
+      for (let i = 0; i < ROUNDS; i++) served.push((await call(other, MESSAGE)).status);
+      expect(await flood).toEqual(Array(ROUNDS * CLAUDE_READS_PER_RUN).fill(403));
+      expect(served).toEqual(Array(ROUNDS).fill(200));
+      expect((await journal('run-1')).map((e) => e.reason)).toEqual(Array(ROUNDS * CLAUDE_READS_PER_RUN).fill(`Claude API body refused: more than ${CLAUDE_BODY_VALUES} values`));
+    }, 30_000);
 
     it('cuts a model call whose body is too slow to come in, and frees its place', async () => {
       const slow = new EgressProxy({ dir: join(dir, 'slow'), caDir: join(dir, 'ca'), claudeToken: () => FACTORY_TOKEN, upstream, claudeReadMs: 200 });

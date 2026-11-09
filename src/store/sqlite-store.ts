@@ -11,6 +11,7 @@ import {
 } from '../core/dead-letter.js';
 import type { ReviewLens } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
+import type { Baseline, BaselineMeasure, BaselineValue } from '../core/baseline.js';
 import type { OutboxEffect } from '../core/decision.js';
 import type { ReviewFinding } from '../core/review.js';
 import { claims, holds } from '../core/routing.js';
@@ -42,6 +43,8 @@ import {
   type RunRecord,
   type Artifact,
   type FindingsRecord,
+  type KnownFlakyTest,
+  type ChangelogEntry,
   type SecurityLog,
   type SecurityStats,
   type Store,
@@ -72,6 +75,10 @@ CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TE
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS changelog (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS changelog_at ON changelog (at);
+CREATE TABLE IF NOT EXISTS baselines (project_id TEXT NOT NULL, since INTEGER NOT NULL, until INTEGER NOT NULL, measure TEXT NOT NULL, computed_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, since, until, measure));
+CREATE TABLE IF NOT EXISTS known_flaky_tests (project_id TEXT NOT NULL, test TEXT NOT NULL, added_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, test));
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 `;
 
@@ -793,6 +800,55 @@ export class SqliteStore implements Store {
     return (this.db.prepare('SELECT data FROM artifacts WHERE ticket_id = ? ORDER BY seq').all(ticketId) as { data: string }[]).map((r) => JSON.parse(r.data) as Artifact);
   }
 
+  async appendChangelog(e: ChangelogEntry): Promise<boolean> {
+    return Number(this.db.prepare('INSERT INTO changelog (id, project_id, at, data) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING').run(e.id, e.projectId, e.at, JSON.stringify(e)).changes) === 1;
+  }
+
+  async changelog(since: number, until: number, projectId?: string): Promise<ChangelogEntry[]> {
+    const rows = this.db
+      .prepare('SELECT data FROM changelog WHERE at >= ?1 AND at < ?2 AND (?3 IS NULL OR project_id = ?3) ORDER BY at DESC, id DESC')
+      .all(since, until, projectId ?? null) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as ChangelogEntry);
+  }
+
+  async knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]> {
+    const rows = this.db.prepare('SELECT data FROM known_flaky_tests WHERE project_id = ? ORDER BY added_at, test').all(projectId) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as KnownFlakyTest);
+  }
+
+  async putKnownFlakyTest(t: KnownFlakyTest): Promise<void> {
+    this.db
+      .prepare('INSERT INTO known_flaky_tests (project_id, test, added_at, data) VALUES (?, ?, ?, ?) ON CONFLICT (project_id, test) DO UPDATE SET added_at = excluded.added_at, data = excluded.data')
+      .run(t.projectId, t.test, t.addedAt, JSON.stringify(t));
+  }
+
+  async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
+    return Number(this.db.prepare('DELETE FROM known_flaky_tests WHERE project_id = ? AND test = ?').run(projectId, test).changes) === 1;
+  }
+
+  async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {
+    const period = [b.projectId, b.since, b.until] as const;
+    return this.atomically(() => {
+      if (this.db.prepare('SELECT 1 FROM baselines WHERE project_id = ? AND since = ? AND until = ? LIMIT 1').get(...period)) {
+        if (!replace) return false;
+        this.db.prepare('DELETE FROM baselines WHERE project_id = ? AND since = ? AND until = ?').run(...period);
+      }
+      const insert = this.db.prepare('INSERT INTO baselines (project_id, since, until, measure, computed_at, data) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const [measure, v] of Object.entries(b.measures)) insert.run(...period, measure, b.computedAt, JSON.stringify(v));
+      return true;
+    });
+  }
+
+  async latestBaseline(): Promise<Baseline | null> {
+    const rows = this.db
+      .prepare('SELECT b.project_id, b.since, b.until, b.measure, b.computed_at, b.data FROM baselines b JOIN (SELECT project_id, since, until FROM baselines ORDER BY computed_at DESC LIMIT 1) l USING (project_id, since, until)')
+      .all() as { project_id: string; since: number; until: number; measure: BaselineMeasure; computed_at: number; data: string }[];
+    const first = rows[0];
+    if (!first) return null;
+    const measures = Object.fromEntries(rows.map((r) => [r.measure, JSON.parse(r.data) as BaselineValue]));
+    return { projectId: first.project_id, since: Number(first.since), until: Number(first.until), computedAt: Number(first.computed_at), measures };
+  }
+
   async putFindings(r: FindingsRecord): Promise<void> {
     this.atomically(() => {
       this.db.prepare('DELETE FROM findings WHERE project_id = ? AND ticket_id = ? AND sha = ? AND lens = ?').run(r.projectId, r.ticketId, r.sha, r.lens);
@@ -854,13 +910,24 @@ export class SqliteStore implements Store {
     this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO UPDATE SET value = excluded.value').run(key, value);
   }
 
-  async receiveDelivery(key: string, value: string): Promise<boolean> {
-    return this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO NOTHING').run(`delivery:${key}`, value).changes > 0;
+  async receiveDelivery(key: string, value: string): Promise<string | undefined> {
+    // Read and written with no await between: no other call comes in between.
+    const kept = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(`delivery:${key}`) as { value: string } | undefined;
+    if (!kept) this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run(`delivery:${key}`, value);
+    return kept?.value;
   }
 
   async pendingDeliveries(): Promise<{ key: string; value: string }[]> {
-    const rows = this.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'delivery:%' ORDER BY rowid").all() as { key: string; value: string }[];
-    return rows.map((r) => ({ key: r.key.slice('delivery:'.length), value: r.value }));
+    return this.deliveriesUnder('delivery:');
+  }
+
+  async asideDeliveries(): Promise<{ key: string; value: string }[]> {
+    return this.deliveriesUnder('delivery-aside:');
+  }
+
+  private deliveriesUnder(prefix: string): { key: string; value: string }[] {
+    const rows = this.db.prepare('SELECT key, value FROM meta WHERE key LIKE ? ORDER BY rowid').all(`${prefix}%`) as { key: string; value: string }[];
+    return rows.map((r) => ({ key: r.key.slice(prefix.length), value: r.value }));
   }
 
   async deleteDelivery(key: string): Promise<void> {

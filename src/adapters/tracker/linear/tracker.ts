@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { PlanStep } from '../../../core/session-plan.js';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
+import type { CompletedIssue } from '../../../core/baseline.js';
 import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
 import { allNodes, type Connection } from '../../graphql-pages.js';
@@ -25,6 +26,8 @@ interface IssueNode {
   inverseRelations: Connection<RelationNode>;
   delegate: { id: string } | null;
   team: { id: string; key: string };
+  /** Null for an issue an integration created, or whose creator was deleted. Absent from answers older than ORC-197. */
+  creator?: { id: string; name: string; url: string } | null;
 }
 /** `parent`: the label group, whose labels are exclusive in Linear (one per issue). */
 interface LabelNode {
@@ -87,6 +90,7 @@ function toIssue(n: IssueNode): TrackerIssue {
       r.type === 'blocks' && r.issue && !r.issue.trashed ? [{ identifier: r.issue.identifier, stateName: r.issue.state.name, stateType: r.issue.state.type }] : [],
     ),
     delegateId: n.delegate?.id,
+    ...(n.creator ? { creator: { id: n.creator.id, name: n.creator.name, url: n.creator.url } } : {}),
     teamKey: n.team.key,
     priority: n.priority,
     createdAt: Date.parse(n.createdAt),
@@ -230,6 +234,22 @@ export class LinearTracker implements Tracker, TeamDirectory {
     const live = issues.filter((n) => !n.trashed);
     for (const n of live) this.issueIds.set(n.identifier, n.id);
     return (await Promise.all(live.map((n) => this.withAllPages(n, true)))).map(toIssue);
+  }
+
+  /**
+   * The issues of the team completed in `[since, until)`, every page (ORC-230): for `factory baseline`, not the factory's own
+   * work. An issue whose links run past the page read throws: a PR missed would read as an issue delivered without one.
+   */
+  async completedIssues(teamKey: string, since: number, until: number): Promise<CompletedIssue[]> {
+    type Node = { identifier: string; startedAt: string | null; completedAt: string; trashed?: boolean | null; attachments: Connection<{ url: string }> };
+    const vars = { teamKey, since: new Date(since).toISOString(), until: new Date(until).toISOString() };
+    const issues = await this.pages<Node>(`the issues of Linear team ${teamKey} completed in the period`, Q.completed, vars, 'issues');
+    return issues
+      .filter((n) => !n.trashed)
+      .map((n) => {
+        if (n.attachments.pageInfo.hasNextPage) throw new Error(`the links of ${n.identifier}: more than one page, never read as complete`);
+        return { identifier: n.identifier, startedAt: n.startedAt ? Date.parse(n.startedAt) : null, completedAt: Date.parse(n.completedAt), links: n.attachments.nodes.map((a) => a.url) };
+      });
   }
 
   async search(term: string, teamKey: string): Promise<SearchHit[]> {

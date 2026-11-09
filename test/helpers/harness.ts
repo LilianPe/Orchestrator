@@ -213,7 +213,6 @@ export function createHarness(
     noPublisher?: boolean;
     /** `false`: an instance with neither sandboxes nor `FACTORY_ALLOW_HOST_VERIFY`. */
     hostChecks?: boolean;
-    knowledge?: boolean;
     /**
      * A store to run on instead of the harness's own database (the SQLite file a SIGKILLed child
      * left). It keeps its own clock: `advance` then moves no lease or backoff of it.
@@ -334,7 +333,6 @@ export function createHarness(
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }),
     newId: () => `id-${++n}`,
     activityIntervalMs: 0,
-    knowledgeConfigured: opts.knowledge,
     inboxRetry: { attempts: 3, baseMs: 1 },
     effectLeaseMs: opts.effectLeaseMs,
     processRetry: opts.processRetry,

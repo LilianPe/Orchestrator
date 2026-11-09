@@ -54,7 +54,6 @@ Each job declares a workspace type (`workspace` in [`workflow.md`](workflow.md#j
 |---|---|---|
 | `worktree` | `<RELAIS_HOME>/workspaces/<project>/<ticket>/`, branch `relais/<ticket>-<title>` | `dev`, `dev-feedback`, `fix-ci`, `review` |
 | `trunk-readonly` | `<RELAIS_HOME>/workspaces/<project>/_trunk/<runId>/`, detached on `origin/<default branch>` | `ask` and `intake` (`Read`, `Grep` and `Glob` only, ORC-367, ORC-182) |
-| `knowledge` | `<RELAIS_HOME>/workspaces/_kb/<runId>/`, branch `learn/<ticket>-<run>` | `learn`, `remember` |
 
 These are not `git worktree`s of the repository: each is a repository of its own, with its `.git` and its copy of the objects, so that nothing the agent writes there is read by the host's git ([security](interface-and-security.md), ORC-317). `git worktree list` therefore does not show them, and disk space counts one copy of the history per ticket and per question.
 
@@ -63,11 +62,11 @@ Lifecycle of a ticket worktree:
 1. **Creation** on the first run: `git fetch origin`, then a new repository on the ticket's branch (reuses a remote branch, failing that a local one, with the same name, otherwise creates it from `origin/<default branch>`). `.claude/` is masked there from that moment, except `.claude/CLAUDE.md`, including for the `setup`.
 2. **Setup**: the `workspace.setup` commands (e.g. `npm ci`) are run once, in order, via `bash -c`, in the attempt's container when `FACTORY_CONTAINER_CLI` is set, on the host otherwise. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »); the next run starts from scratch.
 3. **Reuse**: the ticket's following runs (feedback, CI, review) pick up the same worktree, without setup.
-4. **Cleanup**: when the PR is merged (rule `pr.merged` → `do: cleanup`), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
+4. **Cleanup**: when the PR is merged (rule `pr.merged` → `do: after_merge`, which ends with the cleanup, ORC-197), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
 
 Each question has its own `_trunk/<runId>/`, created for it and deleted when it ends.
 
-What is **not** cleaned up automatically (to do by hand if disk space matters): directories of tickets whose PR was closed without merging or that were abandoned, the `_kb/<runId>` directories of `learn`/`remember` runs, and a `_trunk/<runId>` whose daemon was killed mid-run. They are deleted like any directory, and git keeps no trace of them.
+What is **not** cleaned up automatically (to do by hand if disk space matters): directories of tickets whose PR was closed without merging or that were abandoned, the `_kb/<runId>` directories the `learn` and `remember` runs left before ORC-193, and a `_trunk/<runId>` whose daemon was killed mid-run. They are deleted like any directory, and git keeps no trace of them.
 
 ### `workspace.setup` and checks
 
@@ -82,7 +81,7 @@ Each run in the `dev` queue receives a `PORT` variable unique among concurrent r
 
 ## Shared knowledge base
 
-A separate git repository, shared by all projects of the instance, where agents record what is worth remembering (conventions, pitfalls, decisions):
+A separate git repository, shared by all projects of the instance, that holds what is worth remembering (conventions, pitfalls, decisions). Agents read it; none writes to it (ORC-193):
 
 ```text
 relais-knowledge/
@@ -94,15 +93,11 @@ How it is used:
 
 - **reading**: on each run, the pack's startup hook injects `INDEX.md` (first 8,000 characters) into the agent's context; the agent searches the notes with `relais-agent kb search "<words>"`;
 - **updating**: before each run, Relais runs `git fetch origin` then `git merge --ff-only` on the clone; the clone must therefore stay on its default branch, with no local commits;
-- **writing**: after a merge (`learn`) or on `@relais retiens …` (`remember`), an agent writes 0 to 3 notes in a `learn/…` worktree and opens a **PR** in the knowledge repository. A human reviews and merges it.
+- **writing**: asleep at the MVP (ORC-193). No job writes to it any more: neither `learn` after a merge nor `remember` (the `retiens` command is gone, a `@relais retiens …` is a message as any other). Humans edit the repository; the `learn` PRs still open are closed or merged by hand. Writing comes back in another form, fed only by signed human signals (ORC-247).
 
 ### Setup
 
-`relais init` offers « Create a private GitHub repository "relais-knowledge" » (`gh repo create relais-knowledge --private --add-readme --clone`), then records `knowledge.repoPath` in `config.yaml`.
-
-> **Check after `init`.** `init` records `knowledge.repoPath: <RELAIS_HOME>/knowledge`, whereas `gh repo create --clone` run from `<RELAIS_HOME>` clones into `<RELAIS_HOME>/relais-knowledge`. Check that `knowledge.repoPath` does point to a git clone containing `INDEX.md` and `notes/` (`git -C <path> status`); otherwise fix the path, or do the manual setup below.
-
-Manual setup (or existing repository):
+`relais init` no longer creates the repository (ORC-193). For an existing repository, record its clone in `config.yaml`; to create one:
 
 ```bash
 gh repo create relais-knowledge --private --add-readme --clone
@@ -118,6 +113,6 @@ knowledge:
   repoPath: /chemin/absolu/vers/relais-knowledge
 ```
 
-Without `knowledge`, everything works except memory: the `learn` and `remember` jobs are skipped (log « skipped … no knowledge repo configured ») and `kb search` returns nothing.
+Without `knowledge`, everything works: the startup hook injects no index and `kb search` returns nothing.
 
 There is also **per-repository** knowledge, with no configuration: the skills read the repository's `CLAUDE.md` and `docs/agent/` if they exist.

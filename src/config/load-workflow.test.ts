@@ -6,6 +6,8 @@ import { factoryDefault } from '../presets/factory-default.js';
 import { loadWorkflow, presetBound, WorkflowError } from './load-workflow.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
+/** A job a project adds out of the preset, with nothing of its own but its limits. */
+const OWN_JOB = 'version: 1\njobs:\n  own: { queue: questions, model: haiku, workspace: trunk-readonly, skill: "factory:ask", limits: { turns: 40 } }\n';
 
 function projectFile(yaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-wf-'));
@@ -27,7 +29,15 @@ describe('loadWorkflow', () => {
     expect(wf.on['session.prompted']![1]).toMatchObject({ run: 'fix-human', debounceMs: 180_000 });
     expect(wf.jobs['fix-human']).toMatchObject({ counter: 'human_review', input: 'feedback', onSuccess: { move: 'ai_review', post: 'reply', run: 'review' } });
     expect(wf.on['status.changed']!.some((r) => r.from === 'human_review' && r.to === 'dev')).toBe(false);
-    expect(wf.commands).toEqual(['retiens', 'fais-le']);
+    // The memory in writing sleeps (ORC-193): no `retiens` nor `fais-le`, no `learn` nor `remember`.
+    expect(wf.commands).toEqual([]);
+    expect(Object.keys(wf.jobs)).not.toContain('learn');
+    expect(Object.keys(wf.jobs)).not.toContain('remember');
+  });
+
+  it('refuses a knowledge workspace and the fais-le answer: the memory in writing sleeps (ORC-193)', () => {
+    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  ask: { workspace: knowledge }\n') })).toThrow(/jobs\.ask\.workspace/);
+    expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  command:\n    - { say: "fais-le", do: propose_delegate }\n') })).toThrow(/do/);
   });
 
   it('reads the command that starts the application for the visual proof, absent by default (ORC-176)', () => {
@@ -74,7 +84,6 @@ on:
     expect(wf.jobs['fix-ci']!.input).toBe('ci_failures');
     expect(wf.jobs['fix-ci']!.skill).toBe('factory:fix-ci');
     expect(wf.jobs['fix-ci']!.session).toBe('resume');
-    expect(wf.jobs['remember']!.workspace).toBe('knowledge');
     // No dollars (ORC-216): a budget is tokens and turns.
     expect(wf.jobs['ask']!.limits).toEqual({ turns: 30, durationMs: 5 * 60_000, tokens: 200_000 });
     expect(wf.jobs['dev']!.limits.turns).toBe(150);
@@ -96,10 +105,12 @@ on:
       expect(jobs['review']).toMatchObject({ effort: 'high', limits: { turns: 25 } });
     });
 
-    it('leaves the jobs out of the preset alone: their own limits, no effort', () => {
-      const { jobs } = loadWorkflow({ packDir });
-      expect(jobs['learn']!.limits.turns).toBe(40);
-      expect(jobs['learn']).not.toHaveProperty('effort');
+    it('leaves the jobs out of the preset alone: their own limits, no effort, no network, every tool', () => {
+      const { jobs } = loadWorkflow({ packDir, projectFile: projectFile(OWN_JOB) });
+      expect(jobs['own']!.limits.turns).toBe(40);
+      for (const k of ['effort', 'network', 'tools']) expect(jobs['own'], k).not.toHaveProperty(k);
+      // `claude.effort.default` of factory.yml is for them.
+      expect(loadWorkflow({ packDir, projectFile: projectFile(OWN_JOB), settings: { effort: { default: 'low' } } }).jobs['own']).toMatchObject({ effort: 'low' });
     });
 
     it('runs the answer agent read-only, at network claude-api, low effort, 30 turns and 200,000 tokens (ORC-182)', () => {
@@ -117,7 +128,8 @@ on:
 
     it('refuses a job of its own at network full, or read-only anywhere but a clone of its own (ORC-182)', () => {
       expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  ask: { network: full }\n') })).toThrow(/jobs\.ask\.network/);
-      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  learn: { read_only: true }\n') })).toThrow(/jobs\.learn\.read_only/);
+      const writer = 'version: 1\njobs:\n  own: { queue: questions, model: haiku, workspace: worktree, skill: "factory:ask", read_only: true }\n';
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile(writer) })).toThrow(/jobs\.own\.read_only/);
     });
 
     it('asks a submit_result of the build only, until ORC-191 rewrites the other skills', () => {
@@ -154,22 +166,26 @@ on:
       expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  review-security: { on_blocking: { run: nowhere } }\n') })).toThrow(/jobs\.review-security\.on_blocking\.run/);
     });
 
-    it("gives each job its step's network level, the jobs out of the preset their own or none (ORC-183, ORC-182)", () => {
+    it("gives each job its step's network level, the answer agent its own (ORC-183, ORC-182)", () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['dev']!.network).toBe('limited');
       expect(jobs['dev-feedback']!.network).toBe('limited');
       expect(jobs['ask']!.network).toBe('claude-api');
-      expect(jobs['learn']).not.toHaveProperty('network');
     });
 
     it('gives a read-only step (intake, clarify) and the AI review the read and search tools only; every other job all of them (ORC-367)', () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: ['Read', 'Grep', 'Glob'] });
       for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read', 'Grep', 'Glob']);
-      for (const name of ['dev', 'tests', 'dev-feedback', 'learn']) expect(jobs[name], name).not.toHaveProperty('tools');
+      for (const name of ['dev', 'tests', 'dev-feedback']) expect(jobs[name], name).not.toHaveProperty('tools');
       // A step that writes no code is not read-only for that: after_merge keeps its shell.
-      const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:learn" }\n';
+      const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:dev" }\n';
       expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']).not.toHaveProperty('tools');
+    });
+
+    it('takes the after_merge step on a merge only: no other event carries a merged PR (ORC-197)', () => {
+      expect(loadWorkflow({ packDir }).on['pr.merged']).toEqual([{ move: 'done', do: 'after_merge' }]);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  pr.closed:\n    - { do: after_merge }\n') })).toThrow(/on\.pr\.closed\[0\]\.do: after_merge/);
     });
 
     it("refuses a read-only step anywhere but a clone of its own: never the ticket's worktree (ORC-367)", () => {
@@ -214,8 +230,8 @@ on:
       expect(jobs['dev']).toMatchObject({ effort: 'high', limits: { turns: 40, tokens: 1_000_000 } });
       expect(jobs['dev-feedback']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
       expect(jobs['dev-feedback']!.limits).not.toHaveProperty('tokens');
-      // `default` is for what the preset does not set: the jobs out of it.
-      expect(jobs['learn']).toMatchObject({ effort: 'low' });
+      // `default` is for what neither the preset nor the job sets: the answer agent keeps its own.
+      expect(jobs['ask']).toMatchObject({ effort: 'low' });
       expect(jobs['review']).toMatchObject({ effort: 'high' });
     });
 

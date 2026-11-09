@@ -123,7 +123,7 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
 }
 
 /**
- * A job out of the preset (`ask`, `learn`): its own limits, effort and network, factory.yml's default effort for the rest
+ * A job out of the preset (`ask`, or one a project adds): its own limits, effort and network, factory.yml's default effort for the rest
  * (ORC-182). `read_only` gives it the read-only steps' tools, only on a clone of its own, as for them; `full` is setup's.
  */
 function ownFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
@@ -226,6 +226,8 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
     on[type as EventType] = rules.map((r, i) => {
       const path = `on.${type}[${i}]`;
       if (r.run && !jobs[r.run]) throw new WorkflowError(`${path}.run: unknown job "${r.run}"`);
+      // The step of a merged PR (ORC-197): no other event carries one.
+      if (r.do === 'after_merge' && type !== 'pr.merged') throw new WorkflowError(`${path}.do: after_merge is the step of a merged PR, on pr.merged only`);
       let when;
       if (r.when !== undefined) {
         try {

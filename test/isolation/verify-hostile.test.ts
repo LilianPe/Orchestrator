@@ -24,7 +24,7 @@ echo "setup-witness:$(cat .setup-ran 2>/dev/null || echo missing)"
 # The engine: every socket of the container, this one's own as the witness.
 node -e "require('net').createServer().listen('/tmp/witness.sock', () => setTimeout(() => process.exit(0), 3000))" &
 sleep 1
-echo "sockets:$(find / \\( -path /proc -o -path /sys \\) -prune -o -type s -print 2>/dev/null | sort | tr '\\n' ' ')"
+echo "sockets:$(timeout 120 find / \\( -path /proc -o -path /sys \\) -prune -o -type s -print 2>/dev/null | sort | tr '\\n' ' ')"
 echo "mounts-engine:$(grep -cE 'docker\\.sock|podman\\.sock' /proc/mounts)"
 wait
 
@@ -171,7 +171,7 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
     expect(seen['env-canary']).toBe('1');
     expect(seen['worktree-write']).toBe('yes');
     rmSync(join(worktree, 'pwned'), { force: true });
-    // Its `find /` walks the host's whole disk.
+    // Its `find /` walks the host's whole disk: `timeout 120` bounds it here (ORC-372), the sandbox's is quick.
   }, 300_000);
 });
 

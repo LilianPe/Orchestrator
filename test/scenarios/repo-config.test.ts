@@ -253,6 +253,8 @@ describe('the path rules of verify on the host', () => {
     expect(await failed(h)).toEqual([]);
     // Read once in its runs: none untrusted, and kept so.
     expect((await h.ticket()).untrustedSince).toBeNull();
+    // No mark, no forge (ORC-358): a slow forge never holds back a ticket that does not need it.
+    expect(h.workspaces.branchReads).toEqual([{ fetch: false }]);
   });
 
   it('a human push the branch took in is the human\'s: only the agent\'s commits since the mark count', async () => {
@@ -278,5 +280,32 @@ describe('the path rules of verify on the host', () => {
     const [failures] = await failed(h);
     expect(failures).toEqual([expect.objectContaining({ command: 'factory/chemins-interdits', output: expect.stringContaining('infra/new.tf') })]);
     expect(failures![0]!.output).not.toContain('infra/old.tf');
+    // A marked branch is read against the forge's default branch, fetched (ORC-358).
+    expect(h.workspaces.branchReads.length).toBeGreaterThan(0);
+    expect(h.workspaces.branchReads.filter((r) => !r.fetch)).toEqual([]);
+  });
+
+  it('a worktree made again on a branch made anew ends the old mark and its session: the trusted work on it passes (ORC-358)', async () => {
+    const h = onHost(['src/a.ts'], { since: 'head-before', paths: ['src/a.ts'] });
+    h.runner.enqueue({});
+    await h.orch.accept({ ...TRUSTED, taint: 'untrusted', id: 'd1', type: 'ticket.delegated', at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
+    await h.orch.drained();
+    const marked = await h.ticket();
+    expect(marked.untrustedSince).toBe('head-before');
+    expect(marked.claudeSessionId).toBeDefined();
+    // The worktree goes, and its branch with it: the next launch makes both again from the default branch, where a trusted
+    // run changes a sensitive path. Under the old mark, it would be refused.
+    await h.workspaces.cleanup('p', 'REL-1');
+    h.workspaces.branches.set(WORKTREE, { changed: [{ path: 'infra/new.tf', deleted: false }], baseConfig: 'sensitive_paths: [infra]\n' });
+    h.runner.enqueue({});
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'touch infra again', author: 'Lilian' });
+    await h.advance(600_000);
+    const t = await h.ticket();
+    expect(t.untrustedSince).toBeNull();
+    // The new run's session is a new one: the old read under the mark.
+    const last = h.runner.requests.at(-1)!;
+    expect(h.runner.requests).toHaveLength(2);
+    expect([last.resume, last.claudeSessionId === marked.claudeSessionId]).toEqual([false, false]);
+    expect(await failed(h)).toEqual([]);
   });
 });

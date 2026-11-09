@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
+import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -220,27 +221,32 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.getMeta(PAUSE_ACCEPTED)).toBe('0');
   });
 
-  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336)', async () => {
+  it('keeps a delivery answered before the inbox until it is deleted, once, in the order received (ORC-336, ORC-355)', async () => {
     const s = await store();
     expect(await s.pendingDeliveries()).toEqual([]);
-    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBe(true);
-    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBe(true);
-    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe(false);
+    // Kept by this call: nothing returned; kept already: the value kept, untouched.
+    expect(await s.receiveDelivery('activity:b', '{"raw":"2"}')).toBeUndefined();
+    expect(await s.receiveDelivery('activity:a', '{"raw":"1"}')).toBeUndefined();
+    expect(await s.receiveDelivery('activity:b', '{"raw":"other"}')).toBe('{"raw":"2"}');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"2"}' }, { key: 'activity:a', value: '{"raw":"1"}' }]);
     await s.deleteDelivery('activity:b');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
-    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:b', '{"raw":"again"}')).toBeUndefined();
     // Set aside: no longer pending, its value kept for an operator; the key may be kept again.
+    expect(await s.asideDeliveries()).toEqual([]);
     await s.asideDelivery('activity:a');
     expect(await s.pendingDeliveries()).toEqual([{ key: 'activity:b', value: '{"raw":"again"}' }]);
-    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"1"}');
-    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.asideDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"1"}' }]);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBeUndefined();
     await s.asideDelivery('activity:a');
-    expect(await s.getMeta('delivery-aside:activity:a')).toBe('{"raw":"new"}');
+    expect(await s.asideDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"new"}' }]);
     // The same delivery, same value, kept again once set aside: kept, beside the row set aside.
-    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBe(true);
+    expect(await s.receiveDelivery('activity:a', '{"raw":"new"}')).toBeUndefined();
     expect(await s.pendingDeliveries()).toContainEqual({ key: 'activity:a', value: '{"raw":"new"}' });
-    expect(await s.getMeta('delivery:activity:a')).toBe('{"raw":"new"}');
+    expect(await s.receiveDelivery('activity:a', '{"raw":"newer"}')).toBe('{"raw":"new"}');
+    // A key not kept is no delivery to set aside.
+    await s.asideDelivery('activity:none');
+    expect(await s.asideDeliveries()).toEqual([{ key: 'activity:a', value: '{"raw":"new"}' }]);
   });
 
   it("gathers a ticket's measure facts: journal in order, its attempts, its outbox, the first ack of its events (ORC-235)", async () => {
@@ -310,6 +316,63 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putArtifact({ ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 });
     await s.putArtifact({ ...a, id: 'other', ticketId: 'REL-2' });
     expect(await s.artifacts('REL-1')).toEqual([a, { ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 }]);
+  });
+
+  it('appends a changelog entry once by its id, never changes one, and lists those of a period most recent first (ORC-197)', async () => {
+    const s = await store();
+    const capture = { artifactId: 'visual:r1:after:1280', side: 'after' as const, sha: 'c'.repeat(40), width: 1280, sha256: 'a'.repeat(64) };
+    const e: ChangelogEntry = {
+      id: 'REL-1:7:2', projectId: 'p', ticketId: 'REL-1', title: 'Export CSV', summary: 'Audits export to CSV.', prNumber: 3, prUrl: 'https://gh/pr/3',
+      mergeSha: 'm'.repeat(40), page: '/audits', paths: ['app/audits.tsx'], visualProof: { status: 'taken', captures: [capture] }, at: 1_700_000_000_000,
+    };
+    expect(await s.changelog(0, Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect(await s.appendChangelog(e)).toBe(true);
+    // Replayed, or the same id with other words: nothing written, the entry as it was.
+    expect(await s.appendChangelog({ ...e, summary: 'rewritten', visualProof: { status: 'not_applicable' } })).toBe(false);
+    const later: ChangelogEntry = { ...e, id: 'REL-2:4:1', ticketId: 'REL-2', prNumber: 4, paths: [], visualProof: { status: 'unavailable', reason: 'no browser' }, at: 1_700_000_000_005 };
+    // No merge commit nor page: kept without them.
+    const old: ChangelogEntry = { id: 'REL-3:1:1', projectId: 'q', ticketId: 'REL-3', title: 'Old', summary: 'Old', prNumber: 1, prUrl: 'https://gh/pr/1', paths: [], visualProof: { status: 'not_applicable' }, at: 1_600_000_000_000 };
+    expect(await s.appendChangelog(later)).toBe(true);
+    expect(await s.appendChangelog(old)).toBe(true);
+    expect(await s.changelog(1_700_000_000_000, 1_800_000_000_000)).toEqual([later, e]);
+    expect(await s.changelog(0, 1_700_000_000_000)).toEqual([old]);
+    expect(await s.changelog(0, 1_800_000_000_000, 'q')).toEqual([old]);
+    expect(await s.changelog(0, 1_800_000_000_000, 'p')).toEqual([later, e]);
+  });
+
+  it("keeps a project's known flaky tests, a human's list: replaced by test, listed oldest first, taken off (ORC-164)", async () => {
+    const s = await store();
+    const t: KnownFlakyTest = { projectId: 'p', test: 'src/a.test.ts > cart total', coversFrozen: false, reason: 'times out under load', addedBy: 'armand', addedAt: 1_700_000_000_000 };
+    expect(await s.knownFlakyTests('p')).toEqual([]);
+    await s.putKnownFlakyTest(t);
+    await s.putKnownFlakyTest({ ...t, test: 'tests/t.py::test_it', addedAt: 1_700_000_000_002 });
+    await s.putKnownFlakyTest({ ...t, projectId: 'other' });
+    await s.putKnownFlakyTest({ ...t, coversFrozen: true, reason: 'still', addedAt: 1_700_000_000_001 });
+    expect(await s.knownFlakyTests('p')).toEqual([{ ...t, coversFrozen: true, reason: 'still', addedAt: 1_700_000_000_001 }, { ...t, test: 'tests/t.py::test_it', addedAt: 1_700_000_000_002 }]);
+    expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(true);
+    expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(false);
+    expect((await s.knownFlakyTests('p')).map((k) => k.test)).toEqual(['tests/t.py::test_it']);
+    expect(await s.knownFlakyTests('other')).toEqual([{ ...t, projectId: 'other' }]);
+  });
+
+  it('keeps a baseline frozen, its rows all or none: the same period again only on replace, the last computed read back (ORC-230)', async () => {
+    const s = await store();
+    const v = (value: number | null, patch: Partial<BaselineValue> = {}): BaselineValue => ({ value, over: 4, leftOut: 1, noSource: false, ...patch });
+    const first: Baseline = {
+      projectId: 'p', since: 1_700_000_000_000, until: 1_707_776_000_000, computedAt: 1_710_000_000_000,
+      measures: { delivered: v(3), lead_time: v(129_600_000.5), tokens_per_merged: v(null, { over: 0, leftOut: 3, noSource: true }), first_try: v(2 / 3) },
+    };
+    expect(await s.latestBaseline()).toBeNull();
+    expect(await s.putBaseline(first, false)).toBe(true);
+    expect(await s.latestBaseline()).toEqual(first);
+    const again: Baseline = { ...first, computedAt: 1_710_000_000_001, measures: { delivered: v(1), lead_time: v(1) } };
+    expect(await s.putBaseline(again, false)).toBe(false);
+    expect(await s.latestBaseline()).toEqual(first);
+    expect(await s.putBaseline(again, true)).toBe(true);
+    expect(await s.latestBaseline()).toEqual(again);
+    const other: Baseline = { ...first, since: 1_600_000_000_000, until: 1_607_776_000_000, computedAt: 1_710_000_000_002, measures: { delivered: v(5) } };
+    expect(await s.putBaseline(other, false)).toBe(true);
+    expect(await s.latestBaseline()).toEqual(other);
   });
 
   it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {

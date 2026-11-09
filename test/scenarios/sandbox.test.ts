@@ -7,6 +7,7 @@ import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { TRUSTED, type EventPayloads } from '../../src/core/types.js';
 import { causeOf } from '../../src/core/block-cause.js';
+import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
@@ -124,6 +125,26 @@ describe('a disposable sandbox per attempt', () => {
     expect(seen).toMatchObject([{ commands: ['npm test'], worktree: '/tmp/factory-fake/p/REL-1', runId: h.runner.requests[0]!.runId }]);
     expect(h.checks.calls).toEqual([]);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  });
+
+  it("verify gets the project's known flaky tests, and its verdict journals the tests it reran with their causes (ORC-164)", async () => {
+    const seen: CleanVerifyRequest[] = [];
+    const flaky = [{ command: 'npm test', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total', attempts: [{ on: 'head' as const, attempt: 1, outcome: 'failed' as const, output: 'boom' }], indicative: true as const }];
+    const h = createHarness({
+      sandboxed: true,
+      projectYaml: VERIFIED,
+      cleanVerify: async (req) => {
+        seen.push(req);
+        return { ok: true, failures: [], sha: 'abc', tree: 'tree', flaky };
+      },
+    });
+    const known = { projectId: 'p', test: 'src/a.test.ts > cart total', coversFrozen: false, reason: 'load', addedBy: 'armand', addedAt: 1 };
+    await h.store.putKnownFlakyTest(known);
+    await h.store.putKnownFlakyTest({ ...known, projectId: 'other', test: 'elsewhere' });
+    await delegate(h);
+    expect(seen[0]!.knownFlaky).toEqual([known]);
+    const [passed] = (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'verify.passed');
+    expect(passed!.payload).toMatchObject({ flaky });
   });
 
   it('verify holds the branch to the repository sensitive paths once an untrusted run worked on it, a later trusted run included (ORC-338)', async () => {
@@ -449,6 +470,101 @@ describe('a disposable sandbox per attempt', () => {
     const orphan = await h.sandboxes.create({ runId: 'gone', ticketId: 'REL-9', workspacePath: '/w', network: 'claude-api', requirements: DEFAULT_REQUIREMENTS, mounts: [] });
     await h.restart({ mode: 'brutal' });
     expect(h.sandboxes.destroyed).toEqual([orphan.id]);
+  });
+
+  describe("the repository's services (ORC-309)", () => {
+    const PG = { ...DEFAULT_REQUIREMENTS, services: ['postgres'] };
+    const repoConfig = async () => parseRepoConfig('services: [postgres]\n');
+    const VARS = { env: {}, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] };
+
+    it("the attempt's setup and agent share its services, gone with the agent's sandbox", async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig });
+      h.runner.enqueue({ outcome: 'failure' });
+      await delegate(h);
+      const runId = h.runner.requests[0]!.runId;
+      expect(h.sandboxes.created.map((c) => [c.runId, c.servicesOf, c.requirements])).toEqual([
+        [`${runId}-setup`, runId, PG],
+        [runId, undefined, PG],
+      ]);
+      expect(h.sandboxes.activeServices()).toEqual([]);
+      expect(h.sandboxes.destroyed).toEqual(['sbx-1', 'sbx-2', 'svc-1']);
+    });
+
+    it('a new attempt on the same worktree runs the setup again, for its new database, without the secrets; a failure there keeps the worktree', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
+      await delegate(h);
+      expect(setups(h)).toHaveLength(1);
+      expect(setups(h)[0]!.opts!.env).toHaveProperty('REGISTRY_TOKEN');
+      h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'reprends', author: 'L' });
+      await h.advance(600_000);
+      expect(setups(h)).toHaveLength(2);
+      // The worktree holds the first attempt's work, which nobody reviewed.
+      expect(setups(h)[1]!.opts!.env).not.toHaveProperty('REGISTRY_TOKEN');
+      expect(h.runner.requests).toHaveLength(1);
+      expect(h.workspaces.cleaned).toEqual([]);
+      expect(await h.ticket()).toMatchObject({ blocked: true });
+    });
+
+    it('a setup that writes a secret in its database blocks the ticket, without the value, and no agent starts', async () => {
+      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
+      h.sandboxes.execResult = (argv) => ({ stdout: argv[0] === 'pg_dumpall' ? 'INSERT INTO t VALUES (\'registry-secret\');\n' : '', stderr: '', code: 0 });
+      await delegate(h);
+      expect(h.runner.requests).toEqual([]);
+      expect(h.sandboxes.active()).toEqual([]);
+      expect(h.sandboxes.activeServices()).toEqual([]);
+      expect(await h.ticket()).toMatchObject({ blocked: true });
+      const comment = h.tracker.comments('REL-1').at(-1)!;
+      expect(comment).toContain('a secret of the setup is in its database (REGISTRY_TOKEN)');
+      expect(comment).not.toContain('registry-secret');
+    });
+
+    it('recover destroys the services of an attempt that is no longer running, after its sandboxes', async () => {
+      const h = createHarness({ sandboxed: true });
+      const box = (runId: string, servicesOf?: string) =>
+        h.sandboxes.create({ runId, ...(servicesOf ? { servicesOf } : {}), ticketId: 'REL-9', workspacePath: '/w', network: 'limited', requirements: PG, mounts: [] });
+      const setup = await box('gone-setup', 'gone');
+      await h.sandboxes.destroy(setup.id);
+      const left = await box('left-setup', 'left');
+      await h.restart({ mode: 'brutal' });
+      expect(h.sandboxes.activeServices()).toEqual([]);
+      const d = h.sandboxes.destroyed;
+      expect([...d].sort()).toEqual([setup.id, left.id, 'svc-1', 'svc-2'].sort());
+      expect(d.indexOf(left.id)).toBeLessThan(d.indexOf('svc-2'));
+    });
+  });
+});
+
+/** ORC-282: a service the repository declares is provided, or no run starts: never a poorer environment than declared. */
+describe('a service nobody provides', () => {
+  const declares = (services: string) => async () => parseRepoConfig(`services: [${services}]\n`);
+
+  /** Blocked at the launch, nothing opened nor run, the ticket told which service is missing. */
+  async function refused(h: ReturnType<typeof createHarness>, service: string) {
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(h.sandboxes.created).toEqual([]);
+    expect(h.checks.calls).toEqual([]);
+    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: true });
+    expect(t.activeRunId).toBeUndefined();
+    expect(h.tracker.comments('REL-1').at(-1)).toContain(`The service ${service} is not available`);
+  }
+
+  it('no backend provides it: no sandbox, not even for the setup, and the ticket is blocked naming it', async () => {
+    await refused(createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig: declares('postgres, redis') }), 'redis');
+  });
+
+  it('without sandboxes, none is provided: no setup on the host, no run, the ticket blocked naming it', async () => {
+    await refused(createHarness({ projectYaml: SETUP, repoConfig: declares('postgres') }), 'postgres');
+  });
+
+  it('without services, the run starts as before', async () => {
+    const h = createHarness({ projectYaml: SETUP, repoConfig: async () => parseRepoConfig('services: []\n') });
+    await delegate(h);
+    expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
+    expect(h.runner.requests).toHaveLength(1);
   });
 });
 

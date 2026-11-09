@@ -35,6 +35,35 @@ describe('SandboxRouter', () => {
     expect(weak.provider.created).toHaveLength(1);
   });
 
+  it("sends exec and destroy of a sandbox's services to the backend that made them (ORC-309)", async () => {
+    const other = backend('other');
+    const pg = backend('pg', { level: 'L3', browser: false, services: ['postgres'] });
+    const router = new SandboxRouter([other, pg]);
+    const box = await router.create({ ...request, requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres'] } });
+    expect(box.services).toBe('svc-1');
+    expect(await router.exec('svc-1', ['pg_dumpall'])).toEqual(EXEC_PROBE.result);
+    await router.destroy('svc-1');
+    expect(pg.provider.activeServices()).toEqual([]);
+  });
+
+  it("a replayed create gives the sandbox's services back, as its backend has them (ORC-309)", async () => {
+    const pg = backend('pg', { level: 'L3', browser: false, services: ['postgres'] });
+    const req = { ...request, runId: 'r1-setup', servicesOf: 'r1', requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres'] } };
+    await pg.provider.create(req);
+    const router = new SandboxRouter([pg]);
+    expect((await router.create(req)).services).toBe('svc-1');
+    expect(await router.exec('svc-1', ['pg_dumpall'])).toEqual(EXEC_PROBE.result);
+  });
+
+  it('provides services together, as create picks one backend for them all: else what the closest one lacks (ORC-282)', () => {
+    const pg = backend('pg', { ...L3, services: ['postgres'] });
+    const redis = backend('redis', { ...L3, services: ['redis'] });
+    expect(new SandboxRouter([pg, redis]).unprovided(['postgres'])).toEqual([]);
+    expect(new SandboxRouter([redis, pg]).unprovided(['postgres', 'redis', 'kafka'])).toEqual(['postgres', 'kafka']);
+    expect(new SandboxRouter([backend('both', { ...L3, services: ['redis', 'postgres'] })]).unprovided(['postgres', 'redis'])).toEqual([]);
+    expect(new SandboxRouter([]).unprovided(['postgres'])).toEqual(['postgres']);
+  });
+
   it('refuses instead of falling back to a weaker backend, naming what is missing', async () => {
     const weak = backend('weak');
     const router = new SandboxRouter([weak]);

@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { makeOriginUrl } from '../../app/repo-variables.js';
-import { KnowledgeBase } from '../../knowledge/kb.js';
 import { GitWorkspaces, originHead } from './git-workspaces.js';
 import { execCmd } from '../exec.js';
 
@@ -129,16 +128,6 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       await whatever(f.ws.prepare(req(f.repo, other)));
       expect(f.fired()).toEqual([]);
     });
-
-    it('post-merge: the pull of the knowledge base', async () => {
-      const f = fixture();
-      const kb = new GitWorkspaces({ root: f.root, knowledgeRepo: f.repo });
-      const { path } = await kb.prepare(req(f.repo, { kind: 'knowledge' }));
-      hook(reach(path), 'post-merge', f.trap('post-merge'));
-      f.pushed();
-      await whatever(new KnowledgeBase(f.repo).pull());
-      expect(f.fired()).toEqual([]);
-    });
   });
 
   describe('config', () => {
@@ -188,16 +177,6 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       const { path } = await f.ws.prepare(req(f.repo));
       plant(f, reach(path));
       await whatever(f.ws.remoteBranchExists(f.repo, 'factory/rel-2-'));
-      expect(f.fired()).toEqual([]);
-    });
-
-    it('core.sshCommand: the fetch of the knowledge base', async () => {
-      const f = fixture();
-      const kb = new GitWorkspaces({ root: f.root, knowledgeRepo: f.repo });
-      const { path } = await kb.prepare(req(f.repo, { kind: 'knowledge' }));
-      set(reach(path), 'remote.origin.url', 'ssh://git@example.invalid/x.git');
-      set(reach(path), 'core.sshCommand', f.trap('kb-ssh'));
-      await whatever(new KnowledgeBase(f.repo).pull());
       expect(f.fired()).toEqual([]);
     });
 

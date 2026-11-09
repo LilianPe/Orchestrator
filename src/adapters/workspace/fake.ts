@@ -29,7 +29,6 @@ export class FakeWorkspaces implements WorkspaceManager {
       this.trunks.add(trunk);
       return req.sha ? { path: trunk, diff: this.diffs.get(req.sha) ?? 'diff --git a/src/export.ts b/src/export.ts\n+export const csv = 1;' } : { path: trunk };
     }
-    if (req.kind === 'knowledge') return { path: `/tmp/factory-fake/_kb/${req.runId}` };
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;
     const fresh = !this.made.has(path);
     this.made.add(path);
@@ -81,8 +80,11 @@ export class FakeWorkspaces implements WorkspaceManager {
   gone = new Set<string>();
   /** What each `changedSince` was asked: the mark, and the human heads left out. */
   sinceAsked: { rev: string; humanPushes: readonly HumanPush[] }[] = [];
+  /** How each branch was read: from the forge (`fetch`) or not (ORC-358). */
+  branchReads: { fetch: boolean }[] = [];
 
-  async branchReader(_repoPath: string, path: string): Promise<BranchReader | undefined> {
+  async branchReader(_repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined> {
+    this.branchReads.push({ fetch: o.fetch });
     if (this.gone.has(path)) return undefined;
     const b = this.branches.get(path) ?? { changed: [] };
     return {

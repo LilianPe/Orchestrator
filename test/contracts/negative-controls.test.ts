@@ -450,6 +450,14 @@ describeForgeContract(
   { violates: [UNKNOWN_BUCKET] },
 );
 
+const UNKNOWN_NAMED = 'findPr names each check whose state it does not know';
+
+describeForgeContract(
+  'a forge that reads a check in a state it does not know as pending without naming it',
+  forgeThat({ ...withUnknownBucket(async (_repo, branch) => ({ ...openPr(branch), checks: 'pending' })), unknownChecks: ['deploy'] }),
+  { violates: [UNKNOWN_NAMED] },
+);
+
 const NO_PR = 'findPr answers undefined for a branch without a PR';
 
 describeForgeContract(
@@ -832,6 +840,20 @@ describeSandboxContract(
     },
   ),
   { violates: [RECREATE] },
+);
+
+const UNPROVIDED = 'create refuses a service `unprovided` names, naming it, and makes no sandbox (ORC-282)';
+
+describeSandboxContract(
+  'a sandbox provider that opens a sandbox without a service it does not provide',
+  sandboxesThat(
+    class extends FakeSandboxProvider {
+      override async create(req: SandboxRequest): Promise<Sandbox> {
+        return super.create({ ...req, requirements: { ...req.requirements, services: req.requirements.services.filter((s) => !this.unprovided([s]).length) } });
+      }
+    },
+  ),
+  { violates: [UNPROVIDED] },
 );
 
 const EXEC = 'exec returns the exit code and the output, a non-zero exit included';

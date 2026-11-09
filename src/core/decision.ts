@@ -1,7 +1,7 @@
 import type { ReviewLens } from '../config/workflow-schema.js';
 import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
-import type { InputKind, InternalEvent, LogicalState, TimerFired } from './types.js';
+import type { DecidedEvent, InputKind, LogicalState, TimerFired } from './types.js';
 import type { VisualProof } from '../checks/visual-proof.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
@@ -54,6 +54,11 @@ export type Effect =
   | { kind: 'close_take_over' }
   /** The bundle `by` handed back (ORC-234), checked by the factory and pushed if it passes: then the human's push (`push.human`). */
   | { kind: 'publish_bundle'; file: string; by: string }
+  /**
+   * The `after_merge` step (ORC-197), once the ticket's PR `number` is merged at `at`: its changelog entry appended, once by the
+   * effect's id, then the ticket's requester told in its session, with the PR's link. `headSha`, `mergeSha`: as GitHub gave them.
+   */
+  | { kind: 'after_merge'; number: number; url: string; at: number; headSha?: string; mergeSha?: string }
   | { kind: 'cleanup' }
   | { kind: 'set_paused'; paused: boolean };
 
@@ -72,7 +77,7 @@ export type Timer = TimerFired & { slot: string; ms: number };
 
 /** What `decide` returns: state changes for `reduce`, effects to run, timers to arm, and why. */
 export interface Decision {
-  events: InternalEvent[];
+  events: DecidedEvent[];
   effects: Effect[];
   timers: Timer[];
   trace: string[];

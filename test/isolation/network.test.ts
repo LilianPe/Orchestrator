@@ -205,6 +205,14 @@ describe.skipIf(!enabled)(`egress proxy (${cli})`, () => {
     expect(isNumberFetches()).toBeGreaterThan(before);
   });
 
+  it('limited: Corepack fetches the Yarn a repository names in `packageManager` through the proxy, with its own HTTP client (ORC-219)', async () => {
+    if ((await run('limited', 'command -v corepack')).code !== 0) return;
+    const before = journal('limited').filter((e) => e.host === 'registry.npmjs.org' && e.path?.startsWith('/@yarnpkg/cli-dist') && e.ok).length;
+    const r = await run('limited', `cd $(mktemp -d) && echo '{"name":"p","packageManager":"yarn@4.5.0"}' > package.json && HOME=$(mktemp -d) COREPACK_HOME=$(mktemp -d) COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack yarn --version`);
+    expect(r).toMatchObject({ code: 0, out: expect.stringMatching(/4\.5\.0$/) as string });
+    expect(journal('limited').filter((e) => e.host === 'registry.npmjs.org' && e.path?.startsWith('/@yarnpkg/cli-dist') && e.ok).length).toBeGreaterThan(before);
+  });
+
   it('limited: an https GET to a docs host passes, journaled with its path; a POST to it is refused', async () => {
     expect(await run('limited', fetchIn('https://nodejs.org/en/about'))).toMatchObject({ code: 0, out: '200' });
     expect(journal('limited')).toContainEqual(expect.objectContaining({ method: 'GET', host: 'nodejs.org', path: '/en/about', ok: true }));

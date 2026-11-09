@@ -17,8 +17,10 @@ export const REFUSAL_RULES = [
   'push-trunk',
   'push',
   'full-read',
-  'forge-read',
 ] as const;
+
+/** Rules the hook wrote once and no longer does: a log written before is still read. `forge-read`, a knowledge run's, until ORC-193. */
+const RETIRED_RULES = ['forge-read'] as const;
 
 /** Postgres text and jsonb refuse NUL: a line carrying one would fail the whole write. */
 const text = (max: number) => z.string().max(max).refine((s) => !s.includes('\0'));
@@ -41,7 +43,7 @@ const refusalLine = (ticketId: string) =>
   z.object({
     at,
     tool: z.enum(['Bash', 'WebSearch', 'Read']),
-    rule: z.enum(REFUSAL_RULES),
+    rule: z.enum([...REFUSAL_RULES, ...RETIRED_RULES]),
     // The hook writes the run's FACTORY_TICKET: another ticket is a forged line.
     ticket: z.literal(ticketId),
   });

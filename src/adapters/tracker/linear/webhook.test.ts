@@ -156,6 +156,12 @@ describe('mapLinearWebhook', () => {
       type: 'command', payload: { name: 'retiens', body: 'les agrégats côté serveur', linearSessionId: 'as-3' },
     });
   });
+  it('maps "retiens" under the standard pack as a mention, classified as any message: no command declares it (ORC-193)', async () => {
+    const { commands } = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    expect((await mapLinearWebhook(fx('session-created-command'), 'd3', { ...ctx(), commands: () => commands }))[0]).toMatchObject({
+      type: 'session.mentioned', payload: { body: 'Retiens les agrégats côté serveur', linearSessionId: 'as-3', kind: 'instruction' },
+    });
+  });
   it('maps /refreeze as a command whatever the workflow declares (ORC-131)', async () => {
     const body = fx('session-created-command');
     body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
@@ -258,6 +264,14 @@ describe('mapLinearWebhook', () => {
       expect((await m.mention('[@factory](https://linear.app/x/profiles/factory) Could you switch the sort?'))[0]).toMatchObject({ payload: { kind: 'instruction' } });
       // Masked and without its mention, as the event carries it.
       expect(m.asked).toEqual(['corrige le tri, ok ?', 'Could you switch the sort?']);
+    });
+
+    it('a mention is stripped once: a message opened by a second one is not a command after the model (ORC-355)', async () => {
+      const m = model('instruction');
+      expect((await m.mention('[@factory](https://linear.app/x/profiles/factory) @bob /stop'))[0]).toMatchObject({ type: 'session.mentioned', payload: { body: '@bob /stop', kind: 'instruction' } });
+      expect((await m.reply('[@factory](https://linear.app/x/profiles/factory) @bob /stop'))[0]).toMatchObject({ type: 'session.prompted', payload: { kind: 'instruction' } });
+      // What the mapping classified: the first word is `@bob`.
+      expect(m.asked).toEqual(['@bob /stop', '@bob /stop']);
     });
 
     it('/stop, /status, /refreeze and a workflow command are commands, the model never asked', async () => {
@@ -742,7 +756,7 @@ describe('ingest', () => {
       expect(events).toEqual([]);
       expect(logs.at(-1)).toMatch(/^ERROR: webhook AgentSessionEvent:activity:a1 set aside/);
       expect(await store.pendingDeliveries()).toEqual([]);
-      expect(await store.getMeta('delivery-aside:AgentSessionEvent:activity:a1')).toContain('corrige');
+      expect(await store.asideDeliveries()).toEqual([{ key: 'AgentSessionEvent:activity:a1', value: expect.stringContaining('corrige') }]);
       // Linear sends it again: no longer kept, so taken afresh.
       down = false;
       await send(once);
@@ -769,7 +783,7 @@ describe('ingest', () => {
       await ingest.settled();
       expect(accepted).toEqual([]);
       expect(logs).toEqual([expect.stringMatching(/^ERROR: webhook AgentSessionEvent:activity:a1 set aside.*unreadable/)]);
-      expect(await store.getMeta('delivery-aside:AgentSessionEvent:activity:a1')).toBe('{broken');
+      expect(await store.asideDeliveries()).toEqual([{ key: 'AgentSessionEvent:activity:a1', value: '{broken' }]);
     });
 
     it('the past-horizon clock starts at the first arrival as kept, not at each start', async () => {
@@ -863,7 +877,7 @@ describe('ingest', () => {
       expect(accepted).toEqual(['REL-1 session.prompted']);
       expect(logs).toEqual([expect.stringMatching(/^ERROR: webhook bad set aside.*unreadable/)]);
       expect(await store.pendingDeliveries()).toEqual([]);
-      expect(await store.getMeta('delivery-aside:bad')).toBe('{not json');
+      expect(await store.asideDeliveries()).toEqual([{ key: 'bad', value: '{not json' }]);
     });
 
     it('resumed deliveries wait for a slot instead of taking the fallback rule', async () => {
@@ -901,6 +915,68 @@ describe('ingest', () => {
       bare.close();
       const { raw, sig } = reply('a3', 'trop tard');
       expect(await bare(raw, { 'linear-signature': sig })).toEqual({ status: 503 });
+    });
+
+    it('once closed, a delivery not classified yet takes the fallback rule, the model never asked (ORC-355)', async () => {
+      const store = new SqliteStore(':memory:');
+      for (const k of [1, 2, 3, 4, 5]) {
+        await store.receiveDelivery(`activity:a${k}`, JSON.stringify({ raw: reply(`a${k}`, `message ${k} ?`, { id: `u${k}`, identifier: `REL-${k}` }).raw, at: 5000 }));
+      }
+      const asked: string[] = [];
+      let answer!: () => void;
+      const held = new Promise<void>((r) => (answer = r));
+      const kinds: Record<string, unknown> = {};
+      const { ingest } = setup(
+        async (b) => {
+          asked.push(b);
+          await held;
+          return 'instruction';
+        },
+        { store, accept: async (e) => void (kinds[e.ticketId!] = (e.payload as { kind?: string }).kind) },
+      );
+      await ingest.resume();
+      // Four slots taken, the fifth waits for one.
+      await vi.waitFor(() => expect(asked).toHaveLength(4));
+      ingest.close();
+      answer();
+      await ingest.settled();
+      expect(asked).toHaveLength(4);
+      expect(kinds).toEqual({ 'REL-1': 'instruction', 'REL-2': 'instruction', 'REL-3': 'instruction', 'REL-4': 'instruction', 'REL-5': 'question' });
+    });
+
+    it('a redelivery is delivered again from the value the store returns, never read back by its key (ORC-355)', async () => {
+      const inner = new SqliteStore(':memory:');
+      const { raw } = reply('a1', 'corrige');
+      await inner.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw, at: 4000 }));
+      const store = Object.assign(Object.create(inner) as SqliteStore, { getMeta: async () => Promise.reject(new Error('not the way')) });
+      const events: FactoryEvent[] = [];
+      const { send, ingest } = setup(async () => 'question', { store, accept: async (e) => void events.push(e) });
+      expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
+      await ingest.settled();
+      expect(events).toMatchObject([{ id: 'linear:activity:a1', at: 4000, payload: { kind: 'question' } }]);
+    });
+
+    it('a redelivery whose first delivery ends while the store answers is not delivered again from the stale value (ORC-355)', async () => {
+      const inner = new SqliteStore(':memory:');
+      let calls = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const store = Object.assign(Object.create(inner) as SqliteStore, {
+        receiveDelivery: async (key: string, value: string) => {
+          const kept = await inner.receiveDelivery(key, value);
+          if (++calls === 2) await gate;
+          return kept;
+        },
+      });
+      const { send, ingest, accepted } = setup(slow(30), { store });
+      expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
+      const again = send(reply('a1', 'corrige'));
+      // The first delivery writes its event and removes its row before the store answers the redelivery.
+      await vi.waitFor(async () => expect(await inner.pendingDeliveries()).toEqual([]));
+      release();
+      expect(await again).toEqual({ status: 200 });
+      await ingest.settled();
+      expect(accepted).toEqual(['REL-1 session.prompted']);
     });
 
     it('a later webhook of the issue never overtakes one whose row is still being kept', async () => {

@@ -10,9 +10,9 @@ import {
   type EventPayloads,
   type EventType,
   type FactoryEvent,
+  type InternalEvent,
   type IssueSnapshot,
   type PrPayload,
-  type ShellEvent,
 } from '../../src/core/types.js';
 
 /**
@@ -20,7 +20,7 @@ import {
  *
  * A sequence is one ticket's inbox as the orchestrator would see it: external events (`FactoryEvent`,
  * deduplicated by id) interleaved with the facts the orchestrator records around the effects it carries
- * out (`ShellEvent`: a run started, a pending job set…). Values are drawn from small pools so that run
+ * out (`InternalEvent`: a run started, a pending job set…). Values are drawn from small pools so that run
  * ids, sessions and jobs collide often: a `run.finished` meets the active run, a stale one, or none.
  * Once built, the sequence is reordered (adjacent swaps, sometimes a full shuffle) and then gets
  * duplicates: copies of external events, same id, inserted anywhere after their original.
@@ -31,7 +31,7 @@ export const TICKET = 'REL-1';
 export const DEV_SESSION = 's-dev';
 const RUN_IDS = ['r1', 'r2', 'r3'] as const;
 /** Every job of the standard pack, plus one the workflow does not know. */
-const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'fix-human', 'review', 'review-security', 'ask', 'learn', 'remember', 'unknown'] as const;
+const JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'fix-human', 'review', 'review-security', 'ask', 'unknown'] as const;
 const DEV_JOBS = ['intake', 'spec', 'dev', 'tests', 'dev-feedback', 'fix-ci', 'fix-review', 'fix-human', 'review', 'review-security'] as const;
 export const VERIFY_FAILURES = [{ command: 'fake:check', exitCode: 1, output: 'rouge' }];
 /** Freezes the red check reads, or a `/refreeze` (ORC-131): they share a file, with another fingerprint. */
@@ -44,13 +44,13 @@ const frozen = fc.constantFrom(undefined, ...FREEZES);
 const SPEC: Spec = { goal: 'g', out_of_scope: [], criteria: ['Given x, when y, then z.'], files: [], architecture: 'None.', risks: [], assumed: [] };
 const SPECS: readonly Spec[] = [SPEC, { ...SPEC, criteria: [] }];
 
-export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell'; event: ShellEvent };
+export type Entry = { kind: 'external'; event: FactoryEvent } | { kind: 'shell'; event: InternalEvent };
 
 /** An external event before it gets its id, time and taint. */
 type Draft = { [K in EventType]: { type: K; payload: EventPayloads[K] } }[EventType];
 /** `signed`: the signed actor and the roles the orchestrator resolved for it (ORC-186); absent, the event is not checked. */
 type Signed = { actor?: string; roles: readonly Role[] };
-type DraftEntry = { kind: 'external'; draft: Draft; untrusted: boolean; signed?: Signed } | { kind: 'shell'; event: ShellEvent };
+type DraftEntry = { kind: 'external'; draft: Draft; untrusted: boolean; signed?: Signed } | { kind: 'shell'; event: InternalEvent };
 
 const session = fc.constantFrom(DEV_SESSION, 's-q1', 's-q2');
 const author = fc.constantFrom('lilian', 'armand');
@@ -267,18 +267,18 @@ const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
     return { kind: 'external', draft: d, untrusted, signed: untrusted ? { roles: [] } : signed };
   });
 
-const shell: fc.Arbitrary<ShellEvent> = fc.oneof(
+const shell: fc.Arbitrary<InternalEvent> = fc.oneof(
   fc.record({
     type: fc.constant('run.started' as const),
     runId,
     job: fc.constantFrom(...DEV_JOBS, 'ask'),
-  }).map((e): ShellEvent => ({ ...e, queue: e.job === 'ask' ? 'questions' : 'dev', claudeSessionId: 'claude-1' })),
-  fc.constant<ShellEvent>({ type: 'run.cleared' }),
-  fc.constant<ShellEvent>({ type: 'feedback.consumed' }),
-  logical.map((to): ShellEvent => ({ type: 'status.recorded', to })),
-  fc.constantFrom(...DEV_JOBS).map((j): ShellEvent => ({ type: 'pending.set', job: { job: j } })),
-  fc.constant<ShellEvent>({ type: 'pending.cleared' }),
-  fc.constant<ShellEvent>({ type: 'session.linked', linearSessionId: DEV_SESSION }),
+  }).map((e): InternalEvent => ({ ...e, queue: e.job === 'ask' ? 'questions' : 'dev', claudeSessionId: 'claude-1' })),
+  fc.constant<InternalEvent>({ type: 'run.cleared' }),
+  fc.constant<InternalEvent>({ type: 'feedback.consumed' }),
+  logical.map((to): InternalEvent => ({ type: 'status.recorded', to })),
+  fc.constantFrom(...DEV_JOBS).map((j): InternalEvent => ({ type: 'pending.set', job: { job: j } })),
+  fc.constant<InternalEvent>({ type: 'pending.cleared' }),
+  fc.constant<InternalEvent>({ type: 'session.linked', linearSessionId: DEV_SESSION }),
 );
 
 /**

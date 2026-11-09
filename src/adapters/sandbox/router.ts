@@ -9,13 +9,18 @@ export interface SandboxBackend {
 
 const RANK: Record<IsolationLevel, number> = { L3: 3, L4: 4, L5: 5 };
 
+/** The services `b` does not start, of `services`: `create`'s rule, and `unprovided`'s (ORC-282). */
+function lacking(b: SandboxBackend, services: readonly string[]): string[] {
+  return services.filter((s) => !b.capabilities.services.includes(s));
+}
+
 /** What `b` lacks of `req`, in the words of the refusal; empty when it satisfies all of it. */
 function unmet(b: SandboxBackend, req: SandboxRequirements): string[] {
-  const { level, browser, services } = b.capabilities;
+  const { level, browser } = b.capabilities;
   return [
     ...(RANK[level] < RANK[req.minLevel] ? [`level >= ${req.minLevel}`] : []),
     ...(req.browser && !browser ? ['browser'] : []),
-    ...req.services.filter((s) => !services.includes(s)).map((s) => `service ${s}`),
+    ...lacking(b, req.services).map((s) => `service ${s}`),
   ];
 }
 
@@ -29,6 +34,11 @@ export class SandboxRouter implements SandboxProvider {
 
   constructor(private readonly backends: readonly SandboxBackend[]) {}
 
+  /** As `create` picks (ORC-282): one backend gives them all, or those the closest one lacks; all of them without a backend. */
+  unprovided(services: readonly string[]): string[] {
+    return this.backends.map((b) => lacking(b, services)).reduce((best, l) => (l.length < best.length ? l : best), [...services]);
+  }
+
   async create(req: SandboxRequest): Promise<Sandbox> {
     // A replayed create can land after a restart, or after the backend list changed: the run's sandbox wins.
     const existing = await this.findByAttempt(req.runId);
@@ -38,15 +48,21 @@ export class SandboxRouter implements SandboxProvider {
       if (existing.network !== req.network) throw new Error(`sandbox of ${req.runId} has network ${existing.network}, asked ${req.network}`);
       const missing = unmet(b, req.requirements);
       if (missing.length) throw new Error(`sandbox of ${req.runId} does not satisfy the requirements: ${b.name} lacks ${missing.join(', ')}`);
-      return existing;
+      // Its services are the backend's to give back (ORC-309): `findByAttempt` does not.
+      return req.requirements.services.length ? this.remember(await b.provider.create(req), b) : existing;
     }
     const chosen = this.backends.find((b) => unmet(b, req.requirements).length === 0);
     if (!chosen) {
       const why = this.backends.map((b) => `${b.name} lacks ${unmet(b, req.requirements).join(', ')}`).join('; ');
       throw new Error(`no sandbox backend satisfies the requirements of ${req.runId}: ${why || 'no backend'}`);
     }
-    const sandbox = await chosen.provider.create(req);
-    this.owner.set(sandbox.id, chosen);
+    return this.remember(await chosen.provider.create(req), chosen);
+  }
+
+  /** Its services are a target of `exec` and `destroy` too (ORC-309). */
+  private remember(sandbox: Sandbox, b: SandboxBackend): Sandbox {
+    this.owner.set(sandbox.id, b);
+    if (sandbox.services) this.owner.set(sandbox.services, b);
     return sandbox;
   }
 

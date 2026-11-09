@@ -1,8 +1,10 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
+import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
+import { excerpt, summarizeChecks, toRepoPermission, type CheckSummary } from './gh-cli.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
+import { mergedPullRequests } from './merged-prs.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
@@ -125,7 +127,10 @@ export function parseGitHubRemote(remote: string): GitHubRepoRef | undefined {
   return owner && name ? { owner, name } : undefined;
 }
 
-/** Bucket of a check run, as `aggregateChecks` reads it; also read by the GitHub webhook (ORC-134). */
+/**
+ * Bucket of a check run, as `aggregateChecks` reads it; also read by the GitHub webhook (ORC-134). A completed run with a
+ * conclusion it does not know (or none) gets `unknown`, a bucket outside them: `pending` in the verdict, and named (ORC-304).
+ */
 export function checkRunBucket(run: { status: string; conclusion: string | null }): string {
   if (run.status !== 'completed') return 'pending';
   switch (run.conclusion) {
@@ -141,14 +146,14 @@ export function checkRunBucket(run: { status: string; conclusion: string | null 
     case 'startup_failure':
       return 'fail';
     default:
-      return 'pending';
+      return 'unknown';
   }
 }
 
 function statusBucket(state: string): string {
   if (state === 'success') return 'pass';
   if (state === 'failure' || state === 'error') return 'fail';
-  return 'pending';
+  return state === 'pending' ? 'pending' : 'unknown';
 }
 
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -186,6 +191,9 @@ const isCheckRunRef = (r: unknown): r is Pick<CheckRunDto, 'id' | 'external_id'>
   isRecord(r) && typeof r.id === 'number' && (r.external_id === undefined || r.external_id === null || typeof r.external_id === 'string');
 
 const isCreated = (r: unknown): r is { id: number } => isRecord(r) && typeof r.id === 'number';
+
+/** A page of an issue's labels, as `setExclusiveLabel` reads it: each one's name. */
+const isLabels = (v: unknown): v is { name: string }[] => Array.isArray(v) && v.every((l) => isRecord(l) && typeof l.name === 'string');
 
 /** A page of a PR's reviews, as `postReview` reads it: each one's id and text (null for a review without one). */
 const isReviews = (v: unknown): v is { id: number; body: string | null }[] =>
@@ -461,7 +469,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const [pr] = await this.read('GET', `${repoApi(repo)}/pulls?${query}`, token, isPulls, 'a list of pull requests');
     if (!pr) return undefined;
     const state: PrInfo['state'] = pr.state === 'open' ? 'OPEN' : pr.merged_at ? 'MERGED' : 'CLOSED';
-    const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : { checks: 'none' as const, failedChecks: [] };
+    const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : summarizeChecks([]);
     const merged = state === 'MERGED' ? { ...(pr.merge_commit_sha ? { mergeSha: pr.merge_commit_sha } : {}), mergedAt: Date.parse(pr.merged_at!) } : {};
     return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...merged, ...checks };
   }
@@ -608,6 +616,27 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     }
   }
 
+  /** Its labels read first, every page: a label of the group in place, alone, writes nothing; one already gone (404) is no failure. */
+  async setExclusiveLabel(repoPath: string, number: number, label: string, group: readonly string[]): Promise<void> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const path = `${repoApi(repo)}/issues/${number}/labels`;
+    const names: string[] = [];
+    for (let page = 1; ; page++) {
+      if (page > MAX_PAGES + 1) throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} labels, never read as complete`);
+      const list = await this.read('GET', `${path}?${new URLSearchParams({ per_page: '100', page: String(page) })}`, token, isLabels, 'a list of labels');
+      names.push(...list.map((l) => l.name));
+      if (list.length < 100) break;
+    }
+    // Added first: a failure between the two leaves a label of the group, never none.
+    if (!names.includes(label)) await this.call('POST', path, token, { labels: [label] });
+    for (const other of names.filter((n) => n !== label && group.includes(n))) {
+      await this.call('DELETE', `${path}/${encodeURIComponent(other)}`, token).catch((err: unknown) => {
+        if (!(err instanceof GitHubApiError && err.status === 404)) throw err;
+      });
+    }
+  }
+
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     // Every page of threads and of their comments (ORC-347).
@@ -627,6 +656,12 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     return recentRepoBranches(gql, owner, name);
+  }
+
+  /** The repository's PRs merged in `[since, until)` (ORC-230), for `factory baseline`: not part of the `Forge` port the factory runs on. */
+  async mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return mergedPullRequests(gql, owner, name, since, until);
   }
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */
@@ -668,25 +703,15 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     repo: GitHubRepoRef,
     sha: string,
     token: string,
-  ): Promise<{ checks: PrInfo['checks']; failedChecks: string[] }> {
+  ): Promise<CheckSummary> {
     const base = `${repoApi(repo)}/commits/${encodeURIComponent(sha)}`;
     const [runs, statuses] = await Promise.all([
       this.allPages(`${base}/check-runs`, 'check_runs', 'a list of check runs', isCheckRun, token),
       this.allPages(`${base}/status`, 'statuses', 'a list of commit statuses', isStatus, token),
     ]);
-    const buckets: string[] = [];
-    const failedChecks: string[] = [];
-    for (const run of runs) {
-      if (isFactoryCheck(run.name)) continue;
-      const bucket = checkRunBucket(run);
-      buckets.push(bucket);
-      if (bucket === 'fail') failedChecks.push(run.name);
-    }
-    for (const status of statuses) {
-      const bucket = statusBucket(status.state);
-      buckets.push(bucket);
-      if (bucket === 'fail') failedChecks.push(status.context);
-    }
-    return { checks: aggregateChecks(buckets), failedChecks };
+    return summarizeChecks([
+      ...runs.filter((run) => !isFactoryCheck(run.name)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
+      ...statuses.map((status) => ({ name: status.context, bucket: statusBucket(status.state) })),
+    ]);
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EgressPolicy } from '../../network/levels.js';
 import type { Exec, ExecResult } from '../exec.js';
-import { ContainerSandboxProvider, defaultLimits, isPodman } from './docker-rootless.js';
+import { ContainerSandboxProvider, defaultLimits, isPodman, POSTGRES_IMAGE } from './docker-rootless.js';
 import { DEFAULT_REQUIREMENTS, type SandboxRequest } from './types.js';
 
 const ok = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
@@ -11,11 +11,11 @@ const QUIET = '--log-level=error';
 const sub = (args: string[]) => (args[0] === QUIET ? args.slice(1) : args);
 
 /** A scripted engine: `answer` gets the args after the cli (and podman's global flag) and says what the cli prints. */
-function engine(answer: (args: string[]) => ExecResult) {
+function engine(answer: (args: string[], env?: Record<string, string>) => ExecResult) {
   const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
   const exec: Exec = async (cmd, args, opts) => {
     calls.push({ cmd, args, ...(opts?.env ? { env: opts.env } : {}) });
-    return answer(sub(args));
+    return answer(sub(args), opts?.env);
   };
   return { calls, exec };
 }
@@ -142,7 +142,7 @@ describe('ContainerSandboxProvider.create', () => {
     expect(a).toContain('type=bind,source=/home/d/.factory/egress-ca/ca.crt,target=/run/factory/egress-ca.crt,readonly');
     expect(a.some((x) => x.includes('ca.key'))).toBe(false);
     expect(a.slice(a.indexOf('--network'), a.indexOf('--network') + 2)).toEqual(['--network', 'none']);
-    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'NODE_EXTRA_CA_CERTS=/run/factory/egress-ca.crt', 'GIT_SSL_CAINFO=/run/factory/egress-ca.crt', 'YARN_HTTPS_PROXY=http://127.0.0.1:3128', 'YARN_HTTPS_CA_FILE_PATH=/run/factory/egress-ca.crt']) {
+    for (const v of ['HTTPS_PROXY=http://127.0.0.1:3128', 'http_proxy=http://127.0.0.1:3128', 'NO_PROXY=localhost,127.0.0.1', 'NODE_USE_ENV_PROXY=1', 'NODE_EXTRA_CA_CERTS=/run/factory/egress-ca.crt', 'GIT_SSL_CAINFO=/run/factory/egress-ca.crt', 'YARN_HTTPS_PROXY=http://127.0.0.1:3128', 'YARN_HTTPS_CA_FILE_PATH=/run/factory/egress-ca.crt', 'COREPACK_NPM_REGISTRY=https://registry.npmjs.org']) {
       expect(a).toContain(v);
     }
     // Yarn ≥ 2 refuses `cafile` ("Unrecognized or legacy configuration settings").
@@ -159,6 +159,7 @@ describe('ContainerSandboxProvider.create', () => {
     await p.create(req());
     await p.destroy('c1');
     expect(egress.closed).toEqual(['r1']);
+    // No lookup of services: it joined none (ORC-309).
     expect(e.calls.map((c) => c.args[0])).toEqual(['ps', 'run', 'rm']);
     const failing = engine((a) => (a[0] === 'run' ? { stdout: '', stderr: 'no such image', code: 125 } : ok()));
     const f = fakeEgress();
@@ -262,11 +263,11 @@ describe('ContainerSandboxProvider.create', () => {
     await expect(p.create(req({ workspacePath: '/h/a,target=/etc' }))).rejects.toThrow(/mount/);
   });
 
-  it('refuses requirements beyond L3 without browser nor services', async () => {
+  it('refuses requirements beyond L3, a browser, and a service other than postgres', async () => {
     const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: empty().exec });
     await expect(p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, minLevel: 'L4' } }))).rejects.toThrow(/L4/);
     await expect(p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, browser: true } }))).rejects.toThrow(/browser/);
-    await expect(p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres'] } }))).rejects.toThrow(/postgres/);
+    await expect(p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, services: ['redis'] } }))).rejects.toThrow(/redis/);
   });
 
   it('rejects when the engine fails to run the container', async () => {
@@ -417,6 +418,7 @@ describe('ContainerSandboxProvider with an instance (several daemons on one engi
       ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.attempt=r1', '--filter', mine],
       ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.attempt=r1', '--filter', mine],
       ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.attempt', '--filter', mine],
+      ['ps', '-a', '-q', '--no-trunc', '--filter', 'label=factory.services', '--filter', mine],
     ]);
   });
 
@@ -429,7 +431,7 @@ describe('ContainerSandboxProvider with an instance (several daemons on one engi
 
 describe('ContainerSandboxProvider lookups and destroy', () => {
   const two = engine((a) => {
-    if (a[0] === 'ps') return ok('c1\nc2\n');
+    if (a[0] === 'ps') return ok(a.includes('label=factory.attempt') ? 'c1\nc2\n' : '');
     if (a[0] === 'inspect') return ok(inspectLine('c1', true, 'r1', 'none') + inspectLine('c2', false, 'r2', 'full'));
     return ok();
   });
@@ -454,8 +456,183 @@ describe('ContainerSandboxProvider lookups and destroy', () => {
     const e = engine(() => ({ stdout: '', stderr: 'Error: No such container: c1', code: 1 }));
     const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
     await p.destroy('c1');
-    expect(e.calls).toEqual([{ cmd: 'docker', args: ['rm', '-f', 'c1'] }]);
+    expect(e.calls).toEqual([{ cmd: 'docker', args: ['rm', '-f', '-v', 'c1'] }]);
     const broken = engine(() => ({ stdout: '', stderr: 'Cannot connect to the Docker daemon', code: 1 }));
     await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: broken.exec }).destroy('c1')).rejects.toThrow(/daemon/);
+  });
+});
+
+describe('ContainerSandboxProvider services (ORC-309)', () => {
+  interface Container { labels: Record<string, string>; env: Record<string, string>; running: boolean; args: string[] }
+
+  /** An engine that keeps its containers: their labels and env at `run` (a bare `-e NAME` from the CLI's env), looked up by `ps --filter`. */
+  function stateful(over: { ready?: () => number; role?: () => ExecResult; failRun?: (args: string[]) => boolean } = {}) {
+    const containers = new Map<string, Container>();
+    let made = 0;
+    const pair = (x: string): [string, string] => [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1)];
+    const e = engine((a, cliEnv = {}) => {
+      if (a[0] === 'run') {
+        if (over.failRun?.(a)) return { stdout: '', stderr: 'run failed', code: 125 };
+        const labels = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === '--label' ? [pair(x)] : [])));
+        const env = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === '-e' ? [x.includes('=') ? pair(x) : [x, cliEnv[x]!]] : [])));
+        const id = labels['factory.services'] ? `svc${++made}` : `c${++made}`;
+        containers.set(id, { labels, env, running: true, args: a });
+        return ok(`${id}\n`);
+      }
+      if (a[0] === 'ps') {
+        const filters = a.flatMap((x, i) => (a[i - 1] === '--filter' ? [x.slice('label='.length)] : []));
+        const match = (c: Container) => filters.every((f) => (f.includes('=') ? c.labels[pair(f)[0]] === pair(f)[1] : f in c.labels));
+        return ok([...containers].filter(([, c]) => match(c)).map(([id]) => `${id}\n`).join(''));
+      }
+      if (a[0] === 'inspect') {
+        const format = a[2]!;
+        const found = a.slice(3).flatMap((id) => (containers.has(id) ? [[id, containers.get(id)!] as const] : []));
+        if (format.startsWith('{{.State.Running}}')) return ok(found.map(([, c]) => `${c.running}${Object.entries(c.env).map(([k, v]) => `\t${k}=${v}`).join('')}\n`).join(''));
+        if (format.includes('"factory.services"')) return ok(found.map(([id, c]) => `${id}\t${c.labels['factory.services']}\n`).join(''));
+        return ok(found.map(([id, c]) => inspectLine(id, c.running, c.labels['factory.attempt']!, c.labels['factory.network']!)).join(''));
+      }
+      if (a[0] === 'exec' && a.includes('pg_isready')) return { stdout: '', stderr: 'no response', code: over.ready?.() ?? 0 };
+      if (a[0] === 'exec' && a[2] === 'sh') return over.role?.() ?? ok();
+      if (a[0] === 'rm') containers.delete(a.at(-1)!);
+      return ok();
+    });
+    return { ...e, containers };
+  }
+  const pg = { ...DEFAULT_REQUIREMENTS, services: ['postgres'] };
+  const rms = (calls: { args: string[] }[]) => calls.map((c) => sub(c.args)).filter((a) => a[0] === 'rm');
+
+  it('starts a Postgres of its own for the attempt, without route nor capability, and the sandbox joins its loopback with DATABASE_URL', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, instance: 'i1' });
+    const sbx = await p.create(req({ requirements: pg }));
+    expect(sbx).toEqual({ id: 'c2', network: 'none', level: 'L3', services: 'svc1' });
+    const svc = e.containers.get('svc1')!;
+    expect(svc.labels).toEqual({ 'factory.services': 'r1', 'factory.ticket': 'ORC-1', 'factory.instance': 'i1' });
+    expect(svc.args.slice(svc.args.indexOf('--cap-drop'))).toEqual([
+      '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--pids-limit', '512', '--memory', '4g', '--memory-swap', '4g', '--cpus', String(defaultLimits().cpus),
+      '--user', 'postgres',
+      '--mount', 'type=tmpfs,target=/var/lib/postgresql/data,tmpfs-mode=1777',
+      '-e', 'POSTGRES_DB=factory', '-e', 'PGDATA=/var/lib/postgresql/data/pgdata', '-e', 'POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust',
+      '-e', 'POSTGRES_PASSWORD', '-e', 'FACTORY_DB_PASSWORD',
+      '--network', 'none',
+      POSTGRES_IMAGE,
+    ]);
+    const password = svc.env['FACTORY_DB_PASSWORD']!;
+    expect(password).toMatch(/^[0-9a-f]{48}$/);
+    // The superuser's is another, given to nobody; DATABASE_URL's role is made by it, no superuser.
+    expect(svc.env['POSTGRES_PASSWORD']).toMatch(/^[0-9a-f]{48}$/);
+    expect(svc.env['POSTGRES_PASSWORD']).not.toBe(password);
+    expect(svc.env).toMatchObject({ POSTGRES_DB: 'factory', POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=trust' });
+    expect(svc.env).not.toHaveProperty('POSTGRES_USER');
+    const role = e.calls.map((c) => sub(c.args)).find((a) => a[0] === 'exec' && a[2] === 'sh')!;
+    expect(role.slice(0, 4)).toEqual(['exec', 'svc1', 'sh', '-c']);
+    expect(role[4]).toContain(`CREATE ROLE factory LOGIN PASSWORD '$FACTORY_DB_PASSWORD'`);
+    expect(role[4]).toContain('ALTER DATABASE factory OWNER TO factory');
+    expect(role[4]).not.toMatch(/SUPERUSER/i);
+    const box = e.containers.get('c2')!;
+    expect(box.args.slice(box.args.indexOf('--network'), box.args.indexOf('--network') + 2)).toEqual(['--network', 'container:svc1']);
+    expect(box.env['DATABASE_URL']).toBe(`postgres://factory:${password}@127.0.0.1:5432/factory`);
+    // Neither the passwords nor the URL on a command line, which the host's process list shows.
+    expect(e.calls.flatMap((c) => c.args).some((x) => x.includes(password) || x.includes(svc.env['POSTGRES_PASSWORD']!))).toBe(false);
+  });
+
+  it('waits until Postgres accepts connections on the loopback before the sandbox starts', async () => {
+    const answers = [2, 2, 0];
+    const e = stateful({ ready: () => answers.shift() ?? 0 });
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req({ requirements: pg }));
+    const steps = e.calls.map((c) => sub(c.args)).filter((a) => a[0] === 'run' || a[0] === 'exec').map((a) => (a[0] === 'run' ? `run ${a.at(-1)}` : `${a[1]} ${a[2]}`));
+    expect(steps).toEqual([`run ${POSTGRES_IMAGE}`, 'svc1 pg_isready', 'svc1 pg_isready', 'svc1 pg_isready', 'svc1 sh', 'run infinity']);
+  });
+
+  it('a Postgres whose role cannot be made is removed, and no sandbox starts', async () => {
+    const e = stateful({ role: () => ({ stdout: '', stderr: 'role exists', code: 1 }) });
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req({ requirements: pg }))).rejects.toThrow('postgres role not made in svc1: role exists');
+    expect([...e.containers.keys()]).toEqual([]);
+  });
+
+  it('a Postgres never ready is removed, and no sandbox starts', async () => {
+    const e = stateful({ ready: () => 2 });
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, serviceReadyMs: 0 });
+    await expect(p.create(req({ requirements: pg }))).rejects.toThrow('postgres not ready in svc1: no response');
+    expect([...e.containers.keys()]).toEqual([]);
+  });
+
+  it("the attempt's setup and its agent share one Postgres; another key gets a new one", async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    const setup = await p.create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }));
+    await p.destroy(setup.id);
+    expect([...e.containers.keys()]).toEqual(['svc1']);
+    const agent = await p.create(req({ requirements: pg }));
+    expect(agent.services).toBe('svc1');
+    expect(e.containers.get(agent.id)!.env['DATABASE_URL']).toBe(`postgres://factory:${e.containers.get('svc1')!.env['FACTORY_DB_PASSWORD']}@127.0.0.1:5432/factory`);
+    const verify = await p.create(req({ runId: 'r1-verify', requirements: pg }));
+    expect(verify.services).not.toBe('svc1');
+    expect(e.containers.get(verify.id)!.env['DATABASE_URL']).not.toBe(e.containers.get(agent.id)!.env['DATABASE_URL']);
+  });
+
+  it('never starts a new Postgres in place of a stopped one: its database would be empty', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    await p.create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }));
+    e.containers.get('svc1')!.running = false;
+    await expect(p.create(req({ requirements: pg }))).rejects.toThrow('the services of r1 are no longer running');
+  });
+
+  it('destroying the sandbox that owns them destroys its services; one that only joins them leaves them', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    const setup = await p.create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }));
+    await p.destroy(setup.id);
+    expect(e.containers.has('svc1')).toBe(true);
+    const agent = await p.create(req({ requirements: pg }));
+    await p.destroy(agent.id);
+    expect([...e.containers.keys()]).toEqual([]);
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', setup.id], ['rm', '-f', '-v', agent.id], ['rm', '-f', '-v', 'svc1']]);
+  });
+
+  it('a sandbox that fails to start takes the services it owns or started with it; one that only joins them leaves them', async () => {
+    const owner = stateful({ failRun: (a) => a.includes('container:svc1') });
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: owner.exec }).create(req({ requirements: pg }))).rejects.toThrow('run failed');
+    expect([...owner.containers.keys()]).toEqual([]);
+    // A setup whose container never ran: no agent follows it.
+    const starter = stateful({ failRun: (a) => a.includes('container:svc1') });
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: starter.exec }).create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }))).rejects.toThrow('run failed');
+    expect([...starter.containers.keys()]).toEqual([]);
+    let fail = false;
+    const joiner = stateful({ failRun: (a) => fail && a.includes('container:svc1') });
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: joiner.exec });
+    await p.create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }));
+    fail = true;
+    await expect(p.create(req({ runId: 'r1-again', servicesOf: 'r1', requirements: pg }))).rejects.toThrow('run failed');
+    expect(joiner.containers.has('svc1')).toBe(true);
+  });
+
+  it('removes with --depend under Podman, which refuses a service a leftover container still joins', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'podman', exec: e.exec });
+    const agent = await p.create(req({ requirements: pg }));
+    await p.destroy(agent.id);
+    expect(rms(e.calls)).toEqual([['rm', '-f', '-v', '--depend', agent.id], ['rm', '-f', '-v', '--depend', 'svc1']]);
+  });
+
+  it('list gives the services under the key they serve, so recover destroys those of dead attempts', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    await p.create(req({ runId: 'r1-setup', servicesOf: 'r1', requirements: pg }));
+    expect(await p.list()).toEqual([
+      { runId: 'r1-setup', sandbox: { id: 'c2', network: 'none', level: 'L3' } },
+      { runId: 'r1', sandbox: { id: 'svc1', network: 'none', level: 'L3' } },
+    ]);
+    await p.destroy('svc1');
+    expect([...e.containers.keys()]).toEqual(['c2']);
+  });
+
+  it('refuses a service it does not start, naming it, before anything runs', async () => {
+    const e = stateful();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec });
+    await expect(p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres', 'redis'] } }))).rejects.toThrow('no services (redis)');
+    expect(e.calls).toEqual([]);
   });
 });

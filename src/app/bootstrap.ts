@@ -13,6 +13,7 @@ import { messageClassifier } from '../adapters/runner/message-classifier.js';
 import { purgeRunDirs, purgeSessionDirs, purgeTranscripts } from '../adapters/runner/transcript.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
+import { registriesViaEgress } from '../network/egress-fetch.js';
 import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { GitPublisher } from '../publish/publish.js';
@@ -28,7 +29,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { activeClaudeToken, claudeToken as checkedClaudeToken, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
+import { claudeAccountReader, loadFactoryYml, stepSettings } from '../config/factory-yml.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -146,17 +147,21 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const devSessions = devCapacity(yml?.concurrency, limits?.parallelSessions);
     const scheduler = new Scheduler(store, { dev: devSessions, questions: limits?.questionSessions ?? 2 });
+    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token goes to the proxy alone (ORC-337):
+    // it sets it on their model calls, which hold a placeholder; the runner only asks whether there is one. factory.yml's `claude`
+    // section is read again at each launch: a change of `active` counts from the next run, without a restart (ORC-215).
+    const claudeAccount = claudeAccountReader(o.home, env, log);
+    const claudeTokenOf = () => claudeAccount().token;
+    const chosenClaudeToken = () => {
+      const a = claudeAccount();
+      return a.name ? a.token : undefined;
+    };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
-    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token, resolved once for the runner
-    // and the proxy (ORC-337): the proxy sets it on their model calls, which hold a placeholder alone.
-    const claudeAccount = activeClaudeToken(yml);
-    const claudeToken = claudeAccount ?? checkedClaudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
-    const claudeTokenOf = () => claudeToken;
     const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf }) : new EgressProxy({
       dir: paths.network,
       caDir: paths.egressCa,
@@ -171,11 +176,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     }
     // No default cap (ORC-216): the values are to calibrate, any default would be a guess that stops work silently.
     if (yml?.budgets?.perTicketTokens === undefined) log('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
-    if (sandboxes && !claudeToken) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
+    if (sandboxes && !claudeTokenOf()) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: () => claudeAccount, sandboxClaudeToken: claudeTokenOf, log, ...(sandboxes ? { sandboxes } : {}) });
-    const workspaces = new GitWorkspaces({ root: paths.workspaces, knowledgeRepo: instance.knowledge?.repoPath, log });
+      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: chosenClaudeToken, proxyHasToken: () => !!claudeTokenOf(), log, ...(sandboxes ? { sandboxes } : {}) });
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, log });
     const forge = githubApp
       ? new GitHubAppForge({ ...githubApp, log })
       : new GhCliForge();
@@ -241,10 +246,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       settingsPath: writeRunSettings(packDir, o.home),
       ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
       ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),
-      // The account whose token the runner and the proxy use (`claudeToken` above): `claude.active` when its token is the one resolved,
+      // The account whose token the runner and the proxy use (`claudeAccount` above): `claude.active` when its token is the one resolved,
       // else the daemon's CLAUDE_CODE_OAUTH_TOKEN, held as `default`. A usage limit holds the launches of that account only (ORC-340).
-      claudeAccount: () => (claudeAccount ? yml?.claude?.active : undefined),
-      knowledgeConfigured: !!instance.knowledge,
+      claudeAccount: () => claudeAccount().name,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       repoConfig: makeRepoConfig({ log }),
@@ -256,6 +260,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             sessionsDir: paths.sessions,
             runsDir: paths.runs,
             egressJournal: (runId: string) => egress.journalPath(runId),
+            registries: registriesViaEgress(egress),
             // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
             // which can hold a `.env` or a dev FACTORY_HOME. The knowledge base, read-only, for the session-start hook.
             sandboxMounts: [
@@ -300,7 +305,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // One turn for the webhook and the reconciliation around the known labels (ORC-185).
     const labelsTurn = serial();
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
-    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeToken, !sandboxes, log);
+    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeTokenOf(), !sandboxes, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
       // A message for the model is kept in the store and answered before it is classified (ORC-336); what an earlier

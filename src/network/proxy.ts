@@ -165,6 +165,12 @@ export class EgressProxy {
     return this.tls.ca.certPath;
   }
 
+  /** The CA certificate itself, for the daemon's own requests through a run (ORC-371): under compose, the daemon does not mount its folder. */
+  get caCertPem(): string {
+    if (!this.tls) throw new Error('egress: no run opened yet, so no CA');
+    return this.tls.ca.certPem;
+  }
+
   socketPath(runId: string): string {
     // Hashed: a Unix socket path is capped near 108 bytes. In a dir of its own, the sandbox's mount:
     // bound anew after a daemon restart, the living container sees it (ORC-220).
@@ -296,19 +302,17 @@ export class EgressProxy {
     run.journal.write(`${JSON.stringify({ at: new Date().toISOString(), up: 0, down: 0, ...e })}\n`);
   }
 
-  /** A note of the run's journal (`EgressNote`): never throws, never blocks. */
+  /** A note of the run's journal: never throws, never blocks. */
   private note(run: Run, method: string, host: string, path: string, note: string): void {
     if (run.closed) return;
-    run.journal.write(`${JSON.stringify({ at: new Date().toISOString(), kind: 'note', method, host, path: pathOf(path), note })}\n`);
+    const line: EgressNote = { at: new Date().toISOString(), kind: 'note', method, host, path: pathOf(path), note };
+    run.journal.write(`${JSON.stringify(line)}\n`);
   }
 
-  /** Something of the run under way: close() waits for its release (idempotent). */
+  /** Something of the run under way: close() waits for its release, which its callers make once. */
   private hold(run: Run): () => void {
     run.inflight++;
-    let held = true;
     return () => {
-      if (!held) return;
-      held = false;
       if (--run.inflight === 0) run.drained?.();
     };
   }
@@ -388,6 +392,8 @@ export class EgressProxy {
     served.add(req.socket);
     const method = req.method ?? 'GET';
     const path = req.url ?? '/';
+    // A path alone: an absolute URL would go upstream as is, its authority naming a host other than the one checked (ORC-219).
+    if (!path.startsWith('/')) return this.refuse(run, res, method, t.host, path, 'request target refused: not a path');
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
     this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) =>
@@ -486,11 +492,12 @@ export class EgressProxy {
     };
     const encoding = req.headers['content-encoding'];
     if (encoding !== undefined && encoding !== 'identity') return refuse(`Claude API body refused: content-encoding ${encoding}`);
-    const tooBig = `Claude API body refused: over ${CLAUDE_BODY_MAX} bytes`;
-    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) {
-      this.journal(run, { method, host, path: pathOf(path), ok: false, reason: tooBig });
-      return cut(413, tooBig);
-    }
+    const tooBig = () => {
+      const reason = `Claude API body refused: over ${CLAUDE_BODY_MAX} bytes`;
+      this.journal(run, { method, host, path: pathOf(path), ok: false, reason });
+      cut(413, reason);
+    };
+    if (Number(req.headers['content-length'] ?? 0) > CLAUDE_BODY_MAX) return tooBig();
     if (run.reading >= CLAUDE_READS_PER_RUN || this.reading >= CLAUDE_READS_MAX) {
       note('model call throttled: too many held at once (429)');
       return cut(429, 'too many model calls held at once, retry');
@@ -511,11 +518,16 @@ export class EgressProxy {
     let reading = true;
     let chunks: Buffer[] = [];
     let size = 0;
-    const deadline = setTimeout(() => {
-      if (!reading) return;
+    /** The read given up: its chunks dropped, its place given back. False when the read was over already. */
+    const stop = () => {
+      if (!reading) return false;
       reading = false;
       chunks = [];
       free();
+      return true;
+    };
+    const deadline = setTimeout(() => {
+      if (!stop()) return;
       note('model call cut: its body too slow to come in');
       cut(408, 'body too slow');
     }, this.o.claudeReadMs ?? CLAUDE_READ_MS);
@@ -524,11 +536,8 @@ export class EgressProxy {
       if (!reading) return;
       size += c.length;
       if (size <= CLAUDE_BODY_MAX) return void chunks.push(c);
-      reading = false;
-      chunks = [];
-      free();
-      this.journal(run, { method, host, path: pathOf(path), ok: false, reason: tooBig });
-      cut(413, tooBig);
+      stop();
+      tooBig();
     });
     req.on('end', () => {
       if (!reading) return;
@@ -551,11 +560,7 @@ export class EgressProxy {
       }
     });
     const gone = () => {
-      if (!reading) return;
-      reading = false;
-      chunks = [];
-      free();
-      note('model call dropped: its client went away while sending the body');
+      if (stop()) note('model call dropped: its client went away while sending the body');
     };
     req.on('error', gone).on('close', gone);
   }
@@ -663,7 +668,8 @@ function authority(host: string, port: number, defaultPort: number): string {
   return port === defaultPort ? h : `${h}:${port}`;
 }
 
-const pathOf = (path: string) => path.split('?')[0]!;
+/** A path as journaled: never its query, which can carry a token, nor the credentials of an absolute target (ORC-219). */
+const pathOf = (path: string) => path.split('?')[0]!.replace(/^([^:/?#]+:\/\/)[^/?#]*@/, '$1');
 
 /** `host:port` of a CONNECT, IPv6 in brackets, the host normalised. */
 function target(authority: string): { hostname: string; port: number } {

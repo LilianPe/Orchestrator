@@ -4,11 +4,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { copyPythonRepo, pythonRepoFiles } from '../../test/helpers/python-repo.js';
 import { FakeShooter } from '../adapters/browser/fake.js';
 import type { ShootRequest, VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxProvider, SandboxRequest } from '../adapters/sandbox/types.js';
+import { FakePackageRegistry } from '../checks/fake-registry.js';
+import type { RegistryOpener } from '../checks/registry.js';
+import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
@@ -66,6 +70,17 @@ class LocalSandboxes extends FakeSandboxProvider {
   }
 }
 
+/** The registries `factory/dependances` reaches (ORC-371): each opening and closing recorded. */
+function registries(registry: FakePackageRegistry) {
+  const opened: string[] = [];
+  const closed: string[] = [];
+  const open: RegistryOpener = async (id) => {
+    opened.push(id);
+    return { registry, close: async () => void closed.push(id) };
+  };
+  return { opened, closed, open };
+}
+
 const identity = (repo: string) => {
   git(repo, 'config', 'user.email', 't@t');
   git(repo, 'config', 'user.name', 't');
@@ -82,13 +97,14 @@ const commit = (repo: string, message: string) => {
 };
 
 /** The forge's repository, its default branch holding `config`, and the agent's clone of it on its branch, one commit ahead. */
-function setup(over: Partial<CleanVerifyRequest> = {}, config?: string) {
+function setup(over: Partial<CleanVerifyRequest> = {}, config?: string, baseFiles: Record<string, string> = {}) {
   const base = mkdtempSync(join(tmpdir(), 'factory-clean-'));
   const origin = join(base, 'origin');
   git(base, 'init', '-q', '-b', 'main', origin);
   identity(origin);
   write(origin, 'README.md', 'base\n');
   if (config) write(origin, '.factory/config.yml', config);
+  for (const [path, content] of Object.entries(baseFiles)) write(origin, path, content);
   commit(origin, 'base');
   const repo = join(base, 'agent');
   git(base, 'clone', '-q', origin, repo);
@@ -297,6 +313,20 @@ describe('runCleanVerify', () => {
       expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-ref');
     });
 
+    it("gives verify's setup and commands services of their own, new, gone with the commands' sandbox (ORC-309)", async () => {
+      const { sandboxes, req } = setup({}, `${CONFIG}services: [postgres]\n`);
+      await runCleanVerify(req);
+      const asked = sandboxes.created.map((c) => [c.runId, c.servicesOf, c.requirements.services]);
+      expect(asked).toEqual([
+        ['r1-bundle', undefined, []],
+        ['r1-prepare', undefined, []],
+        ['r1-verify-setup', 'r1-verify', ['postgres']],
+        ['r1-verify', undefined, ['postgres']],
+      ]);
+      expect(sandboxes.activeServices()).toEqual([]);
+      expect(sandboxes.destroyed).toContain('svc-1');
+    });
+
     it('asks the variables of the repository from the base\'s config', async () => {
       const asked: string[][] = [];
       const { req } = setup({ env: async (config) => (asked.push(config.env), { REPO_VAR: 'v' }) }, CONFIG);
@@ -370,6 +400,14 @@ describe('runCleanVerify', () => {
         expect((await runCleanVerify(touchInfra({}).req)).ok).toBe(true);
       });
 
+      it("the verdict carries the class of the diff against the default branch, under the base's sensitive_paths (ORC-198)", async () => {
+        expect((await runCleanVerify(touchInfra({}).req)).diffClass).toEqual({ class: 'sensitive', paths: ['infra/main.tf'] });
+        const { repo, req } = setup({ commands: [] });
+        write(repo, 'vitest.config.ts', 'export default {};\n');
+        commit(repo, 'harness');
+        expect((await runCleanVerify(req)).diffClass).toEqual({ class: 'verification-config', paths: ['vitest.config.ts'] });
+      });
+
       it('only what changed since the branch took untrusted content counts: a trusted commit before it stays the reviewer\'s', async () => {
         const { repo, req } = touchInfra({}, 'sensitive_paths: ["infra"]\n');
         const marked = { ...req, untrusted: { since: git(repo, 'rev-parse', 'HEAD'), humanPushes: [] } };
@@ -414,7 +452,7 @@ describe('runCleanVerify', () => {
     });
 
     it('package.json#scripts blocks, its dependencies do not', async () => {
-      const { origin, repo, req } = setup({ commands: [] });
+      const { origin, repo, req } = setup({ commands: [], registries: registries(new FakePackageRegistry({ npm: ['a'] })).open }, 'dependencies: { allow: { npm: [a] } }\n');
       const manifest = (o: object) => write(repo, 'package.json', JSON.stringify(o));
       manifest({ dependencies: { a: '1' } });
       commit(repo, 'deps');
@@ -581,6 +619,143 @@ describe('runCleanVerify', () => {
         rmSync(join(repo, 'gone.ts'));
         commit(repo, 'delete');
         expect((await runCleanVerify(setupAgain(req))).failures[0]!.output).toContain('5 lines outside tests, over 4');
+      });
+    });
+
+    describe('factory/dependances (ORC-371)', () => {
+      const ALLOW = 'dependencies: { allow: { npm: [left-pad, zod], pypi: [requests] } }\n';
+      const npm = (repo: string, deps: Record<string, string>) => write(repo, 'package.json', JSON.stringify({ dependencies: deps }));
+
+      it('criterion 1: an added package missing from its registry blocks with its cause, before anything of it runs', async () => {
+        const regs = registries(new FakePackageRegistry({ npm: ['left-pad'] }));
+        const { repo, sandboxes, req } = setup({ registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1', zod: '3' });
+        commit(repo, 'deps');
+        const res = await runCleanVerify(req);
+        expect(res.ok).toBe(false);
+        expect(res.failures).toEqual([{ command: 'factory/dependances', exitCode: 1, output: expect.stringContaining('npm "zod" (package.json): package missing from the npm registry') }]);
+        expect(sandboxes.ran).toEqual([]);
+      });
+
+      it("criterion 2: an added package off the base's allowlist blocks", async () => {
+        const regs = registries(new FakePackageRegistry({ npm: ['left-pad', 'evil'], pypi: ['requests'] }));
+        const { repo, req } = setup({ commands: [], registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1', evil: '1' });
+        write(repo, 'requirements.txt', 'requests==2\n');
+        commit(repo, 'deps');
+        const res = await runCleanVerify(req);
+        expect(res.failures.map((f) => f.command)).toEqual(['factory/dependances']);
+        expect(res.failures[0]!.output).toContain(`npm "evil" (package.json): not on the repository's allowlist.`);
+        expect(res.failures[0]!.output).not.toContain('left-pad');
+      });
+
+      it('without an allowlist on the base, no added package passes', async () => {
+        const { repo, req } = setup({ commands: [], registries: registries(new FakePackageRegistry({ npm: ['left-pad'] })).open });
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('no npm allowlist for this repository');
+      });
+
+      it('criterion 3: added packages that exist and are allowed pass, npm and PyPI, and the commands run', async () => {
+        const registry = new FakePackageRegistry({ npm: ['left-pad'], pypi: ['requests'] });
+        const { repo, sandboxes, req } = setup({ registries: registries(registry).open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        write(repo, 'requirements.txt', 'Requests>=2\n');
+        commit(repo, 'deps');
+        expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
+        expect(registry.lookups).toEqual([{ ecosystem: 'npm', name: 'left-pad' }, { ecosystem: 'pypi', name: 'requests' }]);
+        expect(sandboxes.ran.map((r) => r.box)).toEqual(['r1-verify']);
+      });
+
+      it('criterion 4: read from the clone by the daemon, the registries reached outside every sandbox, which stay at network none', async () => {
+        const regs = registries(new FakePackageRegistry({ npm: ['left-pad'] }));
+        const { repo, sandboxes, req } = setup({ setup: ['true'], registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        // A name of this check's own: another check of the same run closes nothing of it.
+        expect(regs.opened).toEqual([expect.stringMatching(/^r1-dependencies-[0-9a-f]{8}$/)]);
+        expect(regs.closed).toEqual(regs.opened);
+        // The sealed setup alone installs, at `limited`, as before; nothing of the check runs in a sandbox.
+        expect(sandboxes.created.filter((c) => c.runId !== 'r1-verify-setup').map((c) => [c.runId, c.network])).toEqual([
+          ['r1-bundle', 'none'],
+          ['r1-prepare', 'none'],
+          ['r1-verify', 'none'],
+        ]);
+      });
+
+      it('a branch that adds no dependency reaches no registry', async () => {
+        const regs = registries(new FakePackageRegistry());
+        const { repo, req } = setup({ commands: [], registries: regs.open });
+        write(repo, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0' }));
+        commit(repo, 'a manifest, no dependency');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        expect(regs.opened).toEqual([]);
+      });
+
+      it('a version bump adds nothing: only what the base did not declare is checked', async () => {
+        const regs = registries(new FakePackageRegistry());
+        const { origin, repo, req } = setup({ commands: [], registries: regs.open });
+        npm(origin, { zod: '3' });
+        commit(origin, 'zod on the base');
+        git(repo, 'pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main');
+        npm(repo, { zod: '4' });
+        commit(repo, 'bump');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        expect(regs.opened).toEqual([]);
+      });
+
+      it('a registry that does not answer is a breakdown, never sent to the agent, and its way out is closed', async () => {
+        const registry = new FakePackageRegistry();
+        registry.fail('npm', 'left-pad', 'connect ETIMEDOUT');
+        const regs = registries(registry);
+        const { repo, req } = setup({ registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        await expect(runCleanVerify(req)).rejects.toThrow(/registry did not answer \(connect ETIMEDOUT\)/);
+        expect(regs.closed).toEqual(regs.opened);
+        expect(regs.closed).toHaveLength(1);
+      });
+
+      it('a registry down hides no verdict that needs no answer: the package off the allowlist blocks all the same', async () => {
+        const registry = new FakePackageRegistry({ npm: ['left-pad'] });
+        registry.fail('npm', 'evil', 'connect ETIMEDOUT');
+        const { repo, req } = setup({ registries: registries(registry).open }, ALLOW);
+        npm(repo, { 'left-pad': '1', evil: '1' });
+        commit(repo, 'deps');
+        const res = await runCleanVerify(req);
+        expect(res.failures).toEqual([{ command: 'factory/dependances', exitCode: 1, output: expect.stringContaining(`npm "evil" (package.json): not on the repository's allowlist.`) }]);
+        expect(res.failures[0]!.output).not.toContain('did not answer');
+      });
+
+      it('asked after gitleaks: a registry down hides no secret the branch committed', async () => {
+        const registry = new FakePackageRegistry();
+        registry.fail('npm', 'left-pad', 'connect ETIMEDOUT');
+        const { repo, sandboxes, req } = setup({ gitleaks: true, registries: registries(registry).open }, ALLOW);
+        sandboxes.scan = () => ({ stdout: JSON.stringify([{ File: 'a.txt', StartLine: 1, RuleID: 'github-pat', Secret: 'REDACTED' }]), stderr: '', code: 7 });
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps and a secret');
+        expect((await runCleanVerify(req)).failures.map((f) => f.command)).toEqual(['factory/secrets']);
+        expect(registry.lookups).toEqual([]);
+      });
+
+      it('an instance with no way to the registries is a breakdown too, as is a proxy that does not open', async () => {
+        const { repo, req } = setup({}, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        await expect(runCleanVerify(req)).rejects.toThrow(/registry did not answer \(no package registry on this instance\)/);
+        const down = { ...setupAgain(req), registries: () => Promise.reject(new Error('egress: proxy unreachable')) };
+        await expect(runCleanVerify(down)).rejects.toThrow(/registry did not answer \(egress: proxy unreachable\)/);
+      });
+
+      it('a branch refused already reaches no registry: a breakdown there would hide its verdict', async () => {
+        const regs = registries(new FakePackageRegistry());
+        const { repo, req } = setup({ registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        write(repo, '.github/workflows/x.yml', 'on: push\n');
+        commit(repo, 'deps and a workflow');
+        expect((await runCleanVerify(req)).failures.map((f) => f.command)).toEqual(['factory/chemins-interdits']);
+        expect(regs.opened).toEqual([]);
       });
     });
 
@@ -753,6 +928,55 @@ describe('runCleanVerify', () => {
     expect(argv.at(-1)).toBe('npm test');
   });
 
+  describe('a Python repository (ORC-172)', () => {
+    const COMMANDS = ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'];
+
+    /** The fixture on the base branch, the agent's branch on it, frozen at its tests and harness; uv answers green. */
+    async function python() {
+      const s = setup({ commands: COMMANDS, setup: ['uv sync --frozen'] });
+      copyPythonRepo(s.origin);
+      commit(s.origin, 'the fixture');
+      git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
+      const files = pythonRepoFiles();
+      const frozen = await freezeTests(['tests/test_export.py'], { head: 'freeze', changed: [], filesAtHead: async () => Object.keys(files), showAtHead: async (p) => files[p] });
+      // pytest's line comes after the path of its report (ORC-164).
+      s.sandboxes.answer = (command) => (/^(?:f=.*\n)?uv /.test(command) ? { stdout: '', stderr: '', code: 0 } : undefined);
+      return { ...s, req: { ...s.req, frozen } };
+    }
+
+    it('freezes conftest.py and the pytest section of pyproject.toml with the tests', async () => {
+      const { req } = await python();
+      expect(Object.keys(req.frozen.files).sort()).toEqual(['pyproject.toml', 'tests/conftest.py', 'tests/test_export.py']);
+    });
+
+    it('runs its setup, then the commands init proposes for it: green', async () => {
+      const { sandboxes, req } = await python();
+      expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
+      // Without the reads of pytest's report (ORC-164).
+      const ran = sandboxes.ran.map((r) => r.command).filter((c) => !c.startsWith('[ -f '));
+      expect(ran).toContain('uv sync --frozen');
+      expect(ran.slice(-3)).toEqual([COMMANDS[0], COMMANDS[1], expect.stringMatching(/\nuv run --frozen pytest --junitxml="\$f" -o junit_family=xunit1$/)]);
+    });
+
+    it('criterion 3: a conftest.py the agent changed after the freeze blocks as factory/tests-gelés', async () => {
+      const { repo, req, sandboxes } = await python();
+      write(repo, 'tests/conftest.py', `${pythonRepoFiles()['tests/conftest.py']}\ncollect_ignore = ["test_export.py"]\n`);
+      commit(repo, 'skip the slow tests');
+      const res = await runCleanVerify(req);
+      expect(res.failures).toEqual([{ command: 'factory/tests-gelés', exitCode: 1, output: expect.stringContaining('tests/conftest.py') }]);
+      expect(sandboxes.ran).toEqual([]);
+    });
+
+    it('criterion 4: a # noqa the agent added blocks as factory/anti-triche', async () => {
+      const { repo, req, sandboxes } = await python();
+      write(repo, 'src/app/export.py', pythonRepoFiles()['src/app/export.py']!.replace('import io\n', 'import io\nimport os  # noqa: F401\n'));
+      commit(repo, 'export');
+      const res = await runCleanVerify(req);
+      expect(res.failures).toEqual([{ command: 'factory/anti-triche', exitCode: 1, output: expect.stringContaining('src/app/export.py:5') }]);
+      expect(sandboxes.ran).toEqual([]);
+    });
+  });
+
 describe('a failure of its own git (ORC-125)', () => {
   it('is no verdict: merge-base failing is not a branch without history, whose every file would be judged a change', async () => {
     const failing: Exec = async (cmd, args, opts) => (args.includes('merge-base') ? { stdout: '', stderr: 'fatal: out of memory', code: 128 } : execCmd(cmd, args, opts));
@@ -882,6 +1106,23 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     }
   });
 
+  it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {
+    const { req, sandboxes } = setup({ commands: ['true'] }, 'services: [redis]\n');
+    await expect(runCleanVerify(req)).rejects.toThrow('The service redis is not available');
+    expect(sandboxes.ran).toEqual([]);
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify');
+  });
+
+  it("a repository with services: a required proof is unavailable, naming them, as the shots get none of them (ORC-282)", async () => {
+    const { req, shooter, sandboxes } = visual({ page: 'new page\n', config: `${VISUAL}services: [postgres]
+` });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(true);
+    expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.stringContaining('postgres') });
+    expect(shooter.calls).toEqual([]);
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain(`${req.runId}-visual-after`);
+  });
+
   it('the base is read before any code of the agent runs: a command that rewrites the clone changes nothing of the before', async () => {
     const { req, shooter } = visual({ page: 'new page\n', commands: ['git --git-dir=.git update-ref refs/factory/base HEAD; true'] });
     await runCleanVerify(req);
@@ -955,5 +1196,83 @@ describe("a human's push on the agent's branch (ORC-159)", () => {
       commit(repo, 'the agent goes on');
       expect(await runCleanVerify({ ...req, humanHead: pushed })).toMatchObject({ ok: true, failures: [] });
     });
+  });
+});
+
+/**
+ * A vitest of the test's making, on the base and the commit: it writes its JSON report where `--outputFile.json` says, each
+ * test of `plan` (by side: the commit holds `a.txt`, the base does not) with its next outcome, or its last; `-t` runs one.
+ */
+const fakeVitest = (state: string, plan: Record<'head' | 'base', Record<string, ('passed' | 'failed')[]>>) => `
+const fs = require('fs');
+const args = process.argv.slice(2);
+const out = args.find((a) => a.startsWith('--outputFile.json=')).slice('--outputFile.json='.length);
+const t = args.indexOf('-t');
+const side = fs.existsSync('a.txt') ? 'head' : 'base';
+const results = [];
+for (const [name, seq] of Object.entries(${JSON.stringify(plan)}[side])) {
+  if (t >= 0 && !new RegExp(args[t + 1]).test(name)) continue;
+  const count = ${JSON.stringify(state)} + '/' + side + '-' + name.replace(/[^A-Za-z0-9]/g, '_');
+  const n = fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0;
+  fs.writeFileSync(count, String(n + 1));
+  const status = seq[Math.min(n, seq.length - 1)];
+  results.push({ fullName: name, title: name, status, duration: 5, failureMessages: status === 'failed' ? ['AssertionError: ' + name + ' broke'] : [] });
+}
+fs.writeFileSync(out, JSON.stringify({ testResults: [{ name: '/work/src/a.test.ts', assertionResults: results }] }));
+process.exit(results.some((r) => r.status === 'failed') ? 1 : 0);
+`;
+
+describe('flaky tests in verify (ORC-164)', () => {
+  const withVitest = (plan: Parameters<typeof fakeVitest>[1], over: Partial<CleanVerifyRequest> = {}) => {
+    const state = mkdtempSync(join(tmpdir(), 'factory-flaky-'));
+    return setup({ commands: ['node bin/vitest run'], ...over }, undefined, { 'bin/vitest': fakeVitest(state, plan) });
+  };
+
+  it('criteria 1 and 2: reruns a failing test once on the commit and once on the base, each in its sandbox, the cause of each attempt recorded', async () => {
+    const { sandboxes, req } = withVitest({ head: { 'cart total': ['failed'], 'cart ok': ['passed'] }, base: { 'cart total': ['failed'] } });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.flaky).toEqual([
+      {
+        command: 'node bin/vitest run', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total',
+        attempts: [
+          { on: 'head', attempt: 1, outcome: 'failed', durationMs: 5, output: 'AssertionError: cart total broke' },
+          { on: 'head', attempt: 2, outcome: 'failed', durationMs: expect.any(Number), output: 'AssertionError: cart total broke' },
+          { on: 'base', attempt: 1, outcome: 'failed', durationMs: expect.any(Number), output: 'AssertionError: cart total broke' },
+        ],
+      },
+    ]);
+    expect(res.failures).toHaveLength(1);
+    expect(res.failures[0]!.output).toContain('`src/a.test.ts > cart total`: failed again on its rerun; fails on the base commit too: not caused by this ticket');
+    // Each run, then the read of its report.
+    expect(sandboxes.ran.map((r) => r.box)).toEqual(['r1-verify', 'r1-verify', 'r1-verify', 'r1-verify', 'r1-verify-base', 'r1-verify-base']);
+    const baseBox = sandboxes.created.find((c) => c.runId === 'r1-verify-base')!;
+    expect(baseBox).toMatchObject({ network: 'none', mounts: [] });
+    expect(baseBox.workspacePath).toBe(join(req.workDir, 'before'));
+  });
+
+  it('a test that passes on its rerun is said flaky to the agent, still counted: only a known flaky test is indicative', async () => {
+    const { req } = withVitest({ head: { 'cart total': ['failed', 'passed'] }, base: { 'cart total': ['passed'] } });
+    const res = await runCleanVerify(req);
+    expect(res.ok).toBe(false);
+    expect(res.failures[0]!.output).toContain('`src/a.test.ts > cart total`: failed, then passed on its rerun: flaky on this commit; passes on the base commit');
+  });
+
+  it('criterion 3: a known flaky test is marked indicative before the agent sees the verdict: alone failing, the commit passes', async () => {
+    const { req } = withVitest(
+      { head: { 'cart total': ['failed'], 'cart ok': ['passed'] }, base: { 'cart total': ['passed'] } },
+      { knownFlaky: [{ test: 'src/a.test.ts > cart total', coversFrozen: false }] },
+    );
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.flaky).toEqual([expect.objectContaining({ test: 'src/a.test.ts > cart total', indicative: true })]);
+  });
+
+  it('a passing run reruns nothing', async () => {
+    const { sandboxes, req } = withVitest({ head: { 'cart ok': ['passed'] }, base: {} });
+    const res = await runCleanVerify(req);
+    expect(res).toMatchObject({ ok: true, failures: [] });
+    expect(res.flaky).toBeUndefined();
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify-base');
   });
 });

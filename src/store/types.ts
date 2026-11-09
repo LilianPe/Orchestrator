@@ -1,7 +1,9 @@
+import type { VisualCapture } from '../checks/visual-proof.js';
 import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { Baseline } from '../core/baseline.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -72,6 +74,8 @@ export interface RunRecord {
   infra?: true;
   /** The limits it was launched with when they are not its job's: the ticket's token budget lowered them (ORC-340). A reattach keeps them. */
   limits?: RunLimits;
+  /** The Claude account it was launched on (`claude.active`, ORC-215): a usage limit holds that one, whatever is active by its end. Absent on older records. */
+  account?: string;
   /** The subscription's usage limit stopped the attempt (ORC-340). */
   usageLimit?: { resetAt?: number };
   /** The cap of its budget that stopped the attempt (ORC-216): recover() sends it again with its result. */
@@ -382,6 +386,47 @@ export interface Artifact {
   createdAt: number;
 }
 
+/**
+ * An entry of the changelog (ORC-197): what a merged PR delivered, appended by the `after_merge` step and never changed. `id`: its
+ * merge's, as the inbox names the `pr.merged` event, its idempotency key. `summary`: what changed, as the published work said it (the ticket's title
+ * when none did); where: `page`, the page the visual proof shot, and `paths`, the paths of the diff that asked for it; `at`: when
+ * GitHub merged it.
+ */
+export interface ChangelogEntry {
+  id: string;
+  projectId: string;
+  ticketId: string;
+  title: string;
+  summary: string;
+  prNumber: number;
+  prUrl: string;
+  mergeSha?: string;
+  page?: string;
+  paths: string[];
+  visualProof: ChangelogProof;
+  at: number;
+}
+
+/** The visual proof of a changelog entry (ORC-176): the captures before and after, each by the artifact kept of it, or why there are none. */
+export type ChangelogProof =
+  | { status: 'taken'; captures: (VisualCapture & { artifactId: string })[] }
+  | { status: 'not_applicable' }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * A test of a project's repository a human listed as flaky (ORC-164): failing, `verify` marks it indicative. `test`, as
+ * `verify` names it (`<file> > <full name>`, a pytest node id); `coversFrozen`, the human decided it may be indicative
+ * while frozen for a ticket too; `addedBy` and `addedAt`, who decided, and when.
+ */
+export interface KnownFlakyTest {
+  projectId: string;
+  test: string;
+  coversFrozen: boolean;
+  reason: string;
+  addedBy: string;
+  addedAt: number;
+}
+
 /** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
 export interface FindingsRecord {
   projectId: string;
@@ -670,6 +715,23 @@ export interface Store {
   putArtifact(a: Artifact): Promise<boolean>;
   /** A ticket's artifacts, oldest first. */
   artifacts(ticketId: string): Promise<Artifact[]>;
+  /** Appends an entry to the changelog (ORC-197), once by its id: false, and nothing written nor changed, when it is there already. */
+  appendChangelog(e: ChangelogEntry): Promise<boolean>;
+  /** The changelog entries dated in `[since, until)` (ORC-197), of one project when `projectId` is given, the most recent first. */
+  changelog(since: number, until: number, projectId?: string): Promise<ChangelogEntry[]>;
+  /** A project's known flaky tests (ORC-164), oldest first. */
+  knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]>;
+  /** Lists a test as known flaky (ORC-164), in place of its entry if it has one. */
+  putKnownFlakyTest(t: KnownFlakyTest): Promise<void>;
+  /** Takes a test off the list (ORC-164): false when it was not on it. */
+  deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean>;
+  /**
+   * Freezes a baseline (ORC-230), one row per measure, all or none: false, nothing written, when that period of the project
+   * already has one and `replace` is not set; with it, the new one takes the place of the stored one.
+   */
+  putBaseline(b: Baseline, replace: boolean): Promise<boolean>;
+  /** The baseline computed last, whichever project and period (ORC-230); null without one. */
+  latestBaseline(): Promise<Baseline | null>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */
@@ -680,15 +742,18 @@ export interface Store {
   findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]>;
   getMeta(key: string): Promise<string | undefined>;
   /**
-   * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: false, and nothing
-   * written, when one with this key is kept already. In the meta rows, under `delivery:`: a few short-lived rows.
+   * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: undefined when this call
+   * kept it; when one with this key is kept already, its value, and nothing written (ORC-355). A few short-lived rows:
+   * the `deliveries` table on Postgres, the meta rows under `delivery:` on SQLite.
    */
-  receiveDelivery(key: string, value: string): Promise<boolean>;
+  receiveDelivery(key: string, value: string): Promise<string | undefined>;
   /** The deliveries kept, in the order received: what a restart writes to the inbox. */
   pendingDeliveries(): Promise<{ key: string; value: string }[]>;
   deleteDelivery(key: string): Promise<void>;
-  /** Moves a kept delivery that will not be written aside, under `delivery-aside:`: no longer pending, kept for an operator. */
+  /** Moves a kept delivery that will not be written aside: no longer pending, kept for an operator, in place of one set aside before. */
   asideDelivery(key: string): Promise<void>;
+  /** The deliveries set aside, for an operator (ORC-355). */
+  asideDeliveries(): Promise<{ key: string; value: string }[]>;
   setMeta(key: string, value: string): Promise<void>;
   close(): Promise<void>;
 }

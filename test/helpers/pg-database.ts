@@ -1,3 +1,6 @@
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from 'pg';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 
@@ -35,4 +38,16 @@ export const TRUNCATE_ALL = `truncate table ${PG_TABLE_NAMES.map((name) => `"${n
 
 export function queryOn<T>(connectionString: string, f: (c: Client) => Promise<T>): Promise<T> {
   return onServer(connectionString, f);
+}
+
+/** `drizzle/` as it was up to the migration `tag`, included: a database migrated by an older daemon. */
+export function migrationsUpTo(tag: string): string {
+  const dir = join(mkdtempSync(join(tmpdir(), 'factory-drizzle-')), 'drizzle');
+  cpSync(join(import.meta.dirname, '../../drizzle'), dir, { recursive: true });
+  const journalPath = join(dir, 'meta', '_journal.json');
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { tag: string }[] };
+  const last = journal.entries.findIndex((e) => e.tag === tag);
+  if (last < 0) throw new Error(`no migration ${tag}`);
+  writeFileSync(journalPath, JSON.stringify({ ...journal, entries: journal.entries.slice(0, last + 1) }));
+  return dir;
 }

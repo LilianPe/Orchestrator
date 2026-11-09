@@ -24,6 +24,9 @@ export const factoryDefault: Preset = {
   redCi: { goto: 'fix', counter: 'review_ci' },
   // A conflict with the default branch (ORC-146): the rebase step, on the counter of the review and CI loop.
   conflict: { goto: 'rebase', counter: 'review_ci' },
+  // The approvers of each diff class (ORC-198): a human's Done for every one; the verification configuration also waits,
+  // before publication, for a designated maintainer's `/refreeze`.
+  approvers: { normal: ['done_merge'], sensitive: ['done_merge'], 'verification-config': ['refreeze', 'done_merge'] },
   steps: [
     { id: 'intake', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
     { id: 'clarify', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },

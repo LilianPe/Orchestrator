@@ -1,8 +1,10 @@
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
+import type { ClassifiedDiff } from './diff-class.js';
 import type { StoredEvent } from './upcast.js';
 import type { SpecVersion } from './spec.js';
+import type { FlakyTest } from '../checks/flaky.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
 import type { VisualProof } from '../checks/visual-proof.js';
@@ -336,9 +338,11 @@ export interface EventPayloads {
    */
   /** `commands`: what `verify` ran on `sha`, for its check on the forge (ORC-151); absent when it ran nothing again. */
   /** `visualProof`: what `verify` decided and took of the visual proof (ORC-176), the captures by their hash. */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof };
+  /** `flaky`: the failing tests `verify` reran (ORC-164), with the cause of each attempt; on a pass, only indicative ones. */
+  /** `diffClass`: the class of the diff of `sha` against the default branch (ORC-198); absent on a commit found green again, or before ORC-198. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof; flaky?: FlakyTest[]; diffClass?: ClassifiedDiff };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
-  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests };
+  'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests; flaky?: FlakyTest[] };
   /**
    * An attempt gone without a result (ORC-220): `restart`, cut by a restart of the factory, and no
    * container left to reattach to; `lease`, its lease expired under a living factory. `decide` starts
@@ -369,7 +373,8 @@ export interface EventPayloads {
   /** An outbox effect carried out (ORC-150). */
   'effect.done': EffectResultPayload;
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */
-  'effect.failed': EffectResultPayload & { error: string };
+  /** `queued`: a dead `settle` whose pending job the queue holds, read before its decision (ORC-359): nothing is lost, nothing blocked. */
+  'effect.failed': EffectResultPayload & { error: string; queued?: true };
   /** An event whose decision threw, set aside in `dead_letter` (ORC-175): the ticket is blocked. */
   /** `refused`: the store refused the event, this notice goes to the project holding the ticket (ORC-316). */
   'dead_letter.added': { eventId: string; eventType: string; error: string; failures: number; attempts?: number; refused?: { projectId: string; linearSessionId?: string } };
@@ -439,7 +444,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** A question the answer agent relays to the agent that implements, into the run inbox (ORC-182). */
@@ -448,7 +453,11 @@ export type DecidedEvent =
   | { type: 'relay.done'; runId: string }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
   | { type: 'work.cancelled' }
-  | { type: 'verify.started'; runId: string };
+  | { type: 'verify.started'; runId: string }
+  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
+  | { type: 'pending.cleared'; job?: PendingJob }
+  /** The ticket's Linear session: the delegation's that chose its repo (ORC-171), or the one a launch opened. */
+  | { type: 'session.linked'; linearSessionId: string };
 
 /**
  * A dev start kept for when the slot frees. `sensitivePaths`: those its start was decided with; the launch
@@ -461,11 +470,23 @@ export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
   /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */
   | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
-  | { type: 'session.linked'; linearSessionId: string }
   | { type: 'pending.set'; job: PendingJob }
-  /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
-  | { type: 'pending.cleared'; job?: PendingJob }
-  | { type: 'workspace.prepared'; path: string; port?: number; branch?: string }
+  /**
+   * A dev launch takes the ticket before any effect (ORC-359), until `until`: refused while another launch holds it, its
+   * hold not expired at `at`, or a run does. Written again by its holder to keep it; its `run.started` ends it. `over`: a hold
+   * of the same daemon's launch that ended without letting go of it, taken over whatever its time.
+   */
+  | { type: 'launch.reserved'; runId: string; start: PendingJob; at: number; until: number; over?: string }
+  /** A launch that ends before its `run.started` lets go of the ticket, if it still holds it. */
+  | { type: 'launch.released'; runId: string }
+  | {
+      type: 'workspace.prepared';
+      path: string;
+      port?: number;
+      branch?: string;
+      /** A fresh worktree on a branch made anew, nothing on it beyond the default branch, for a ticket with a mark or human pushes to end (ORC-358). */
+      newBranch?: true;
+    }
   | { type: 'workspace.released' }
   | {
       type: 'run.started';
@@ -549,16 +570,26 @@ export interface TicketState {
   activeJob?: string;
   /** What `activeRunId` started, in the shape of a pending job (ORC-339): a launch that lost to it tells the same start from another. */
   activeStart?: PendingJob;
+  /** The dev launch under way before its `run.started` (ORC-359): what it starts, and until when its hold lasts unless written again. */
+  launching?: { runId: string; start: PendingJob; until: number };
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
+  /** The class of the diff of `verifiedSha` against the default branch (ORC-198), as `verify` read it. Absent before ORC-198, null for a commit verified without one. */
+  diffClass?: ClassifiedDiff | null;
   /**
    * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
    * `''` when that head was not read or the run came before the mark existed: from then on, what the agent's commits
-   * change in the repository's `sensitive_paths` is refused. Sticky: its commits stay on the branch whoever runs next.
+   * change in the repository's `sensitive_paths` is refused. Sticky: its commits stay on the branch whoever runs next,
+   * until a worktree is made again on a branch made anew from the default branch (`workspace.prepared`, ORC-358).
    * `null` once read that no such run worked on it (`untrusted.read`); absent until then.
    */
   untrustedSince?: string | null;
+  /**
+   * The ticket's session read under a mark its branch no longer holds (ORC-358): the next implementer run starts a new
+   * one, which the ticket takes, rather than carry what it read onto a branch that no longer says so. Absent otherwise.
+   */
+  newSession?: true;
   /** The pushes humans made to the ticket's branch (`push.human`, ORC-338): the commits of each are theirs, not the agent's. */
   humanPushes?: { before?: string; after: string }[];
   /**

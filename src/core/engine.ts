@@ -1,4 +1,5 @@
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
+import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Rule, Workflow } from '../config/workflow-schema.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
 import { evalCondition } from './conditions.js';
@@ -7,7 +8,9 @@ import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
+import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
+import { factoryDefault } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
@@ -30,55 +33,11 @@ const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
 
 /**
- * The refusal of a knowledge job (I12): its event is untrusted, or what it would read at its launch is (ORC-274), the
- * ticket and its PR included (ORC-349).
+ * The refusal of a knowledge job (I12) whose event is untrusted. Only a version frozen before ORC-193 has one (`learn`,
+ * `remember`): decided as it was, the launch refuses it anyway, as the memory in writing sleeps.
  */
-export function taintedKnowledge(job: string, source: 'event' | 'read' | 'history' = 'event'): string {
-  const what = {
-    event: 'the event comes',
-    read: 'the feedback it would read (thread or review comments) comes',
-    history: 'what it would read of the ticket and its PR (reviews, messages, commits) comes in part',
-  }[source];
-  return `I am not starting ${job}: this job writes to the knowledge base, and ${what} from an untrusted source.`;
-}
-
-/**
- * The events whose text or code a run reads later through the ticket or its PR, not only as its input (ORC-349): the
- * ticket a delegation brings, a human message, a review of the PR, the commits a human pushed. The others carry nothing
- * an agent reads (a move, a label, CI's facts) or what the factory wrote itself. `HUMAN_EVENTS` without its move and label, and the
- * forge's two: a human event added there that brings text belongs here too.
- */
-const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
-
-/**
- * The taint of a ticket's history, as a run that reads the ticket and its PR takes it in (ORC-349): untrusted once an
- * untrusted event brought it content, whoever starts that run. `Orchestrator.launch` adds the branch's mark (ORC-338).
- */
-export function historyTaint(events: readonly FactoryEvent[]): Taint {
-  return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
-}
-
-/**
- * The Linear messages whose text `ingestedConversation` gives. A command is control, not knowledge; a review is GitHub's,
- * untrusted whoever wrote it (ORC-160), so never given.
- */
-const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
-
-/**
- * What `learn` after a merge is given of the ticket's conversation, in place of reading the PR itself (ORC-361): the Linear
- * messages the factory ingested, in their order, as it would hand them to an agent (`keepMessage`, `forAgent`). Only trusted
- * ones, never one the matrix refused (`refused`, the ids of those events): untrusted content is never read as knowledge,
- * whatever `historyTaint` lets through. What the forge holds that was never ingested (a comment on the PR's conversation, any
- * review with GitHub webhooks off) is not in the journal, so not here either.
- */
-export function ingestedConversation(events: readonly FactoryEvent[], refused: ReadonlySet<string> = new Set()): FeedbackItem[] {
-  const given = events.filter((e): e is HumanMessage => e.taint !== 'untrusted' && CONVERSATION.has(e.type) && !refused.has(e.id));
-  return forAgent(given.map((e) => messageItem(e, 'session'))).filter((i) => i.body.trim());
-}
-
-/** A review without a word (an approval, most often): it brings nothing a run reads. */
-function silentReview(e: FactoryEvent): boolean {
-  return e.type === 'pr.reviewed' && !(e as FactoryEvent<'pr.reviewed'>).payload.body.trim();
+export function taintedKnowledge(job: string): string {
+  return `I am not starting ${job}: this job writes to the knowledge base, and the event comes from an untrusted source.`;
 }
 
 const BUILT_IN = new Set<EventType>([
@@ -507,6 +466,29 @@ export function goesThroughFreeze(ticket: TicketState | undefined, job: JobSpec)
 }
 
 /**
+ * A diff of the verification configuration (ORC-198) whose class asks a designated maintainer's `/refreeze`, with a path the
+ * freeze of a `/refreeze` does not hold: publication waits. Once refrozen, `factory/tests-gelés` holds those files as approved.
+ */
+function unapprovedConfig(ticket: TicketState | undefined, diffClass: ClassifiedDiff): boolean {
+  const frozen = ticket?.frozenTests;
+  // Each path in a maintainer's freeze, where the check holds it; one outside (`.factory/**`, a workflow) was never approved.
+  return needsRefreeze(diffClass.class, factoryDefault.approvers) && !(frozen?.refrozenBy && diffClass.paths.every((p) => p in frozen.files));
+}
+
+/** The block of a refused publication: no job of its own, what relaunches it is a job that writes (`owedMove`), the rule's. */
+function publicationBlock(reason: string, job: string, relaunch = 'Reply in this thread to relaunch.'): Block {
+  return { kind: 'other', reason, body: `${reason}
+${relaunch}`, step: 'publish', tried: [`Publication of the commit of ${job}.`] };
+}
+
+/** The block of a diff of the verification configuration held before publication (ORC-198): a refused publication, its relaunch the same. */
+function configGate(diffClass: ClassifiedDiff, job: string): Block {
+  const named = diffClass.paths.slice(0, CLASS_PATHS).map(mdCode).join(', ') + (diffClass.paths.length > CLASS_PATHS ? `, and ${diffClass.paths.length - CLASS_PATHS} more` : '');
+  const reason = `Publication held: this diff changes the verification configuration (${named}). A designated maintainer reviews it and sends ${REFREEZE}, which freezes it as it is.`;
+  return publicationBlock(reason, job, 'Then reply in this thread to relaunch.');
+}
+
+/**
  * `/refreeze` (ORC-131): the freeze read at the branch's head before the decision replaces the old one, for a designated
  * maintainer only (ORC-186). Checked even on an event without resolved roles: a freeze never opens by default.
  */
@@ -521,7 +503,8 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   }
   const count = Object.keys(frozen.files).length;
   out.trace.push(`refreeze by ${event.actor}: ${count} files frozen at ${frozen.sha}`);
-  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...frozen, ...frozenDecisions(ticket), ...frozenCriteria(ticket) } } });
+  // Who refroze (ORC-198): the approval a diff of the verification configuration waits for before publication.
+  out.events.push({ type: 'ticket.patched', patch: { frozenTests: { ...frozen, ...frozenDecisions(ticket), ...frozenCriteria(ticket), refrozenBy: event.actor! } } });
   answer(`Refrozen: ${count} files, as of commit ${frozen.sha.slice(0, 12)}. The next verification starts from this freeze.`);
   return out;
 }
@@ -551,9 +534,14 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
  * good, in silence. The ticket is blocked on that job instead; the job stays pending, all of it (its input, its
  * restrictions), and a reply starts that very job (`resumedPending`). Anything else: only logged.
  */
-function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, error: string, attempts: number): Decision {
+function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, { error, attempts, queued }: EventPayloads['effect.failed']): Decision {
   const pending = ticket.pendingJob;
   if (!pending || !ticket.delegated || ticket.activeRunId || ticket.verifyingRunId || ticket.usageWait || ticket.blocked || settledTicket(ticket)) return out;
+  // Queued before it died (ORC-359): the queue launches it, and its run takes it off the ticket. A block would refuse that start.
+  if (queued) {
+    out.trace.push(`effect.failed (settle): its pending ${pending.job} is queued, nothing blocked`);
+    return out;
+  }
   const reason = `Error: the pending ${pending.job} could not be started: ${error}`;
   return block(out, workflow, {
     kind: 'stuck',
@@ -876,7 +864,10 @@ export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKin
   return input === 'verify_failures' && !job.red && !ticket.verifyAttempts;
 }
 
-/** Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12). */
+/**
+ * Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12): a
+ * `knowledge` job of a version frozen before ORC-193, decided as it was.
+ */
 function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, taint = runTaint(event, ticket, job.input)): 'merged' | 'taint' | undefined {
   if (refusesDevWork(ticket, job) === 'merged') return 'merged';
   return job.workspace === 'knowledge' && taint === 'untrusted' ? 'taint' : undefined;
@@ -953,15 +944,10 @@ const commandText = (event: FactoryEvent<'command'>): string => `${event.payload
  * `as`: what of it an agent reads, the comment of a `/changes` (ORC-212).
  */
 function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread', as?: { body: string; kind: MessageKind }): void {
-  out.events.push({ type: 'feedback.appended', item: messageItem(event, source, as) });
-}
-
-/** A human message as an agent is handed it: kept in humanInbox (`keepMessage`), or given to `learn` (`ingestedConversation`). */
-function messageItem(event: HumanMessage, source: 'session' | 'thread', as?: { body: string; kind: MessageKind }): FeedbackItem {
   const { author } = event.payload;
   const kind = as?.kind ?? event.payload.kind;
   const body = as?.body ?? (event.type === 'command' && kind ? commandText(event) : event.payload.body);
-  return { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) };
+  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
 }
 
 /**
@@ -1219,13 +1205,8 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
 
 /** Starts `job` as `pending` was set aside: its input and its restrictions. */
 function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob): void {
-  startRun(out, event, ticket, job, {
-    ...(pending.input ? { input: pending.input } : {}),
-    ...(pending.inputText !== undefined ? { inputText: pending.inputText } : {}),
-    ...(pending.resume ? { resume: true } : {}),
-    ...(pending.sensitivePaths ? { sensitivePaths: pending.sensitivePaths } : {}),
-    ...(pending.relaunchOf ? { relaunchOf: pending.relaunchOf } : {}),
-  });
+  const { job: _, ...run } = pendingOf(pending);
+  startRun(out, event, ticket, job, run);
 }
 
 function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Decision {
@@ -1237,14 +1218,21 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   // A block on a stranded pending job stays until the debounce fires: it is what tells that reply to start that job (ORC-339).
   const keepsBlock = !!rule.debounceMs && !!strandedPending(ticket, workflow);
   const refused = !job || !!refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input));
-  if (!refused && !keepsBlock && ticket?.blocked) unblock(out, event, ticket);
+  // Already lifted by the merge itself (its built-in, ORC-193).
+  const unblocked = event.type === 'pr.merged' && out.events.some((e) => e.type === 'ticket.unblocked');
+  if (!refused && !keepsBlock && ticket?.blocked && !unblocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
   if (rule.do === 'stop') stop(out, workflow);
+  if (rule.do === 'after_merge' && event.type === 'pr.merged') {
+    const { number, url, mergedAt, headSha, mergeSha } = event.payload;
+    out.effects.push({ kind: 'after_merge', number, url, at: mergedAt ?? event.at, ...(headSha ? { headSha } : {}), ...(mergeSha ? { mergeSha } : {}) }, { kind: 'cleanup' });
+  }
   if (rule.do === 'cleanup') out.effects.push({ kind: 'cleanup' });
+  // The answer to `fais-le` of a version frozen before ORC-193.
   if (rule.do === 'propose_delegate') {
     out.effects.push({
       kind: 'activity',
@@ -1927,7 +1915,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         // The findings the fix of the review loop contests stay open: the next review's lenses read them (ORC-184).
         const review = ticket?.reviewBlocking;
         if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
-        // The answer agent's only: `learn` and `remember` share its queue, and no human question waits on them.
+        // The answer agent's only: no human question waits on another job of its queue.
         if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
@@ -1987,12 +1975,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!job) return out;
       // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
       const toPublish = publishes(job) ? event.payload.sha : undefined;
-      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
+      // The class verify read of this commit; a commit found green again keeps the one read of it before (ORC-198).
+      const diffClass = event.payload.diffClass ?? (event.payload.sha && event.payload.sha === ticket?.verifiedSha ? ticket.diffClass : undefined);
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(event.payload.sha && diffClass !== ticket?.diffClass ? { diffClass: diffClass ?? null } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
       const pending = ticket?.pendingJob;
       if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
+      if (toPublish && diffClass && unapprovedConfig(ticket, diffClass)) return ticket?.blocked ? out : block(out, workflow, configGate(diffClass, job.name));
       if (toPublish) {
         const { runId, output, commands, visualProof } = event.payload;
         out.events.push({ type: 'verify.started', runId });
@@ -2022,8 +2013,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'publish.refused': {
       const reason = `Publication refused: ${event.payload.reason}`;
-      // No job of its own: what relaunches it is a job that writes (`owedMove`), the rule's.
-      return ticket?.blocked ? out : block(out, workflow, { kind: 'other', reason, body: `${reason}\nReply in this thread to relaunch.`, step: 'publish', tried: [`Publication of the commit of ${event.payload.job}.`] });
+      return ticket?.blocked ? out : block(out, workflow, publicationBlock(reason, event.payload.job));
     }
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
@@ -2155,7 +2145,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // `settle` is a step of the shell, not an effect of the workflow: its failure is only logged, unless it leaves a
       // pending job no run will start (ORC-339). Its block says so, and a reply resumes the ticket (ORC-196).
       const { kind, error, eventId } = event.payload;
-      if (kind === 'settle') return ticket ? stuckPending(out, ticket, workflow, error, event.payload.attempts) : out;
+      if (kind === 'settle') return ticket ? stuckPending(out, ticket, workflow, event.payload) : out;
       if (!ticket) return out;
       if (isRefusedNotice(eventId)) {
         out.trace.push('effect.failed ignored: the notice of a refused event, which blocks nothing');
@@ -2196,8 +2186,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     }
     case 'pr.merged':
       // Delivered: the dev run in flight stops, and nothing pending, queued or debounced starts after the merge.
-      // Before the rule's effects, so its cleanup and learn run come after the stop.
+      // Before the rule's effects, so its cleanup comes after the stop.
       cancelWork(out, 'built-in pr.merged: work cancelled');
+      // And its block lifted: the learn run of a version frozen before ORC-193 lifted it through its rule, which decides as it did.
+      if (ticket?.blocked && !Object.values(workflow.jobs).some((j) => j.workspace === 'knowledge')) unblock(out, event, ticket);
       break;
     case 'pr.closed': {
       // Closed without merge (ORC-134): the run is cancelled as by a stop, then the rules apply. The close

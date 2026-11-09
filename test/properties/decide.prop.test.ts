@@ -16,13 +16,12 @@ import {
   type EventType,
   type FactoryEvent,
   type InternalEvent,
-  type ShellEvent,
   type TicketState,
 } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../../src/store/types.js';
 import { BLOCKING, DEBOUNCE, DEV_SESSION, handedBack, PROJECT, sequences, TICKET, VERIFY_FAILURES, type Entry, type Sequences } from './events.js';
-import { decided, effects, fold, isDevStart, isFactoryEvent, launches, params, readsFeedback, readsHistory, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
+import { decided, effects, fold, isDevStart, launches, params, readsFeedback, stepEffects, TIMEOUT, workflow, type Run, type Step } from './fold.js';
 
 /**
  * Invariants of `decide` (docs/decisions/ORC-138.md, I1 to I12) checked as properties over generated
@@ -45,7 +44,7 @@ function ext<T extends EventType>(type: T, payload: EventPayloads[T], taint: 'tr
   const event = { id: `ex-${n}`, type, at: 1_000 * n, projectId: PROJECT, ticketId: TICKET, ...TRUSTED, taint, payload };
   return { kind: 'external', event: event as FactoryEvent };
 }
-const sh = (event: ShellEvent): Entry => ({ kind: 'shell', event });
+const sh = (event: InternalEvent): Entry => ({ kind: 'shell', event });
 const seq = (...entries: Entry[]): Sequences => ({ unique: entries, withDuplicates: entries });
 const issue = { title: 'Titre', logical: 'todo' as const, priority: 0 };
 const delegated = (logical: 'todo' | 'dev' = 'todo') => [
@@ -891,7 +890,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
   describe('I12 — untrusted content never writes a sensitive path', () => {
     it(
-      'a run started by an untrusted event carries the sensitive paths, and never writes the knowledge base',
+      'a run started by an untrusted event carries the sensitive paths',
       () => {
         holds((s) => {
           for (const step of decided(run(s))) {
@@ -899,7 +898,6 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             for (const e of step.decision.effects) {
               if (e.kind !== 'start_run') continue;
               expect(e.sensitivePaths).toEqual(SENSITIVE_PATHS);
-              expect(wf.jobs[e.job]?.workspace).not.toBe('knowledge');
             }
           }
         });
@@ -954,29 +952,13 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       TIMEOUT,
     );
 
-    /**
-     * The taint follows who wrote what a run reads, not who started it (ORC-349): learn, started by a trusted merge, reads
-     * the ticket and its PR. Stated here on the event types, apart from `historyTaint`, so that one dropped there turns red.
-     */
+    /** The memory in writing sleeps (ORC-193): whatever came before, a merge starts no run, `learn` least of all. */
     it(
-      'a knowledge job that reads the ticket is never launched once untrusted content reached its history, whoever starts it (ORC-349)',
+      'a merge starts no run (ORC-193)',
       () => {
-        const content = new Set<string>(['ticket.delegated', 'session.prompted', 'session.mentioned', 'command', 'ticket.commented', 'pr.reviewed', 'push.human']);
-        // A review without a word (an approval) brings nothing to read.
-        const silent = (e: FactoryEvent) => e.type === 'pr.reviewed' && !(e.payload as { body: string }).body.trim();
-        const pr = { number: 1, url: 'https://forge/pr/1', branch: 'agent/rel-1' };
-        const merged = (...before: Entry[]) => seq(...delegated('dev'), ...before, ext('pr.merged', pr));
-        const reviewed = merged(ext('pr.reviewed', { ...pr, kind: 'review', author: 'passant', body: 'retiens ceci' }, 'untrusted'));
-        // The control: the same merge on a trusted history launches learn, so the example is about something.
-        expect(launches0(merged()).filter((e) => readsHistory(e, wf))).not.toEqual([]);
         holds((s) => {
-          const r = run(s);
-          for (const step of r.steps) {
-            if (!launches(step).length) continue;
-            const untrusted = r.journal.slice(0, step.journalEnd).some((e) => isFactoryEvent(e) && e.taint === 'untrusted' && content.has(e.type) && !silent(e));
-            for (const e of launches(step)) if (untrusted) expect(readsHistory(e, wf), `${e.job} launched on an untrusted history`).toBe(false);
-          }
-        }, [reviewed]);
+          for (const step of decided(run(s))) if (step.event.type === 'pr.merged') expect(step.decision.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+        });
       },
       TIMEOUT,
     );

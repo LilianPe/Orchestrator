@@ -34,6 +34,12 @@ export interface SandboxRequest {
   /** The repository's own hosts (`network.allow` of a `custom` repository), at `limited`. */
   allow?: readonly string[];
   requirements: SandboxRequirements;
+  /**
+   * Whose services (ORC-309) the sandbox joins when `requirements.services` names some: an attempt's `setup` and its
+   * agent share the attempt's, `verify`'s `setup` and commands their own. Defaults to `runId`: the sandbox whose
+   * `runId` it is owns them, and they are destroyed with it.
+   */
+  servicesOf?: string;
   /** Other host paths the run needs (Claude session dir, pack): nothing else is mounted. */
   mounts: readonly SandboxMount[];
 }
@@ -45,6 +51,11 @@ export interface Sandbox {
   /** The level asked (the contract compares it on a replay), applied by the egress proxy. */
   network: NetworkLevel;
   level: IsolationLevel;
+  /**
+   * The container of its services (ORC-309), whose loopback it shares, when it asked for some: itself a target of
+   * `exec` (as the service's own user) and of `destroy`. Given by `create` only.
+   */
+  services?: string;
 }
 
 export interface SandboxExecOptions {
@@ -61,6 +72,8 @@ export interface SpawnCommand {
 }
 
 export interface SandboxProvider {
+  /** Those of `services` (ORC-309) it cannot start next to a sandbox, which `create` refuses: the launch asks first (ORC-282). Empty when it provides them all. */
+  unprovided(services: readonly string[]): string[];
   /** A live sandbox for `req.runId`; replayed for the same run, it returns that sandbox. Rejects when no backend satisfies `req.requirements`. */
   create(req: SandboxRequest): Promise<Sandbox>;
   /** Runs `argv` in the sandbox to completion. Rejects on an unknown sandbox; a non-zero exit is a result, not a rejection. */
@@ -79,7 +92,7 @@ export interface SandboxProvider {
    * its egress listens again. Undefined when none runs: the supervisor then starts the step again.
    */
   reattach(runId: string): Promise<Sandbox | undefined>;
-  /** Every live sandbox this provider made (by label), for recover() to destroy those of dead attempts. */
+  /** Every live sandbox this provider made (by label), for recover() to destroy those of dead attempts; services (ORC-309) too, under the key they serve. */
   list(): Promise<{ runId: string; sandbox: Sandbox }[]>;
   /** Idempotent: an unknown or destroyed id is ignored. */
   destroy(id: string): Promise<void>;

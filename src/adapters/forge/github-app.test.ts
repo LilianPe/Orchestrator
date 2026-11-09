@@ -162,6 +162,7 @@ describeForgeContract('GitHubAppForge (scripted fetch)', () => ({
   noChecks: 'factory/rel-3-z',
   checksDown: 'factory/rel-4-w',
   unknownBucket: 'factory/rel-5-v',
+  unknownChecks: ['deploy', 'docs'],
 }));
 
 describe('createAppJwt', () => {
@@ -286,6 +287,17 @@ describe('GitHubAppForge.findPr', () => {
     },
     { name: 'no checks', runs: [], statuses: [], checks: 'none', failedChecks: [] },
     {
+      name: 'checks in a state it does not know, named (ORC-304)',
+      runs: [
+        { name: 'lint', status: 'completed', conclusion: 'success' },
+        { name: 'deploy', status: 'completed', conclusion: null },
+      ],
+      statuses: [{ context: 'docs', state: 'mystery' }, { context: 'legacy-ci', state: 'pending' }],
+      checks: 'pending',
+      failedChecks: [],
+      unknownChecks: ['deploy', 'docs'],
+    },
+    {
       name: "the factory's own checks alone: no CI (ORC-151)",
       runs: [
         { name: 'factory/verify', status: 'completed', conclusion: 'success' },
@@ -295,7 +307,7 @@ describe('GitHubAppForge.findPr', () => {
       checks: 'none',
       failedChecks: [],
     },
-  ])('maps $name', async ({ runs, statuses, checks, failedChecks }) => {
+  ])('maps $name', async ({ runs, statuses, checks, failedChecks, unknownChecks }) => {
     const { forge } = makeForge([
       installationRoute(),
       tokenRoute(42),
@@ -310,6 +322,7 @@ describe('GitHubAppForge.findPr', () => {
       headSha: 'abc123',
       checks,
       failedChecks,
+      unknownChecks,
     });
   });
 
@@ -823,6 +836,42 @@ describe('GitHubAppForge writes, idempotent (ORC-162)', () => {
     );
     await expect(forge.ensurePr('/repo', req)).rejects.toBeInstanceOf(NoCommitsBetween);
     await expect(forge.ensurePr('/repo', req)).rejects.toThrow('No commits between main and factory/REL-1');
+  });
+
+  describe('setExclusiveLabel (ORC-198)', () => {
+    const GROUP = ['revue: requise', 'revue: échantillon', 'revue: auto'];
+    const LABELS = '/repos/acme/app/issues/7/labels';
+    const labels = (names: string[]): Route => (url, init) => (url.pathname === LABELS && init.method === 'GET' ? { body: names.map((name) => ({ name })) } : undefined);
+    const writes: Route = (url, init) => (url.pathname.startsWith(LABELS) && init.method !== 'GET' ? { body: [] } : undefined);
+    const written = (calls: { method: string; url: string; body?: unknown }[]) => calls.filter((c) => c.url.includes('/issues/7/labels') && c.method !== 'GET').map((c) => [c.method, decodeURIComponent(new URL(c.url).pathname), c.body]);
+
+    it("takes the group's other label off and adds the one asked, leaving the PR's other labels alone", async () => {
+      const { forge, calls } = makeForge([tokenRoute(42), labels(['bug', 'revue: auto']), writes], { installationId: 42 });
+      await forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP);
+      // Added before the other is taken off: a failure between the two never leaves the PR without one.
+      expect(written(calls)).toEqual([
+        ['POST', LABELS, { labels: ['revue: requise'] }],
+        ['DELETE', `${LABELS}/revue: auto`, undefined],
+      ]);
+    });
+
+    it('writes nothing when the label is already the only one of the group: a replay leaves one visible effect', async () => {
+      const { forge, calls } = makeForge([tokenRoute(42), labels(['revue: requise', 'bug']), writes], { installationId: 42 });
+      await forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP);
+      expect(written(calls)).toEqual([]);
+    });
+
+    it('a label already gone when it is taken off is no failure (a human or a replay took it off first)', async () => {
+      const gone: Route = (url, init) => (init.method === 'DELETE' && url.pathname.startsWith(LABELS) ? { status: 404, body: { message: 'Label does not exist' } } : undefined);
+      const { forge } = makeForge([tokenRoute(42), labels(['revue: auto', 'revue: requise']), gone, writes], { installationId: 42 });
+      await expect(forge.setExclusiveLabel('/repo', 7, 'revue: requise', GROUP)).resolves.toBeUndefined();
+    });
+
+    it('rejects, saying it is unreadable, a list of labels that is no list', async () => {
+      const { forge, calls } = makeForge([tokenRoute(42), (url, init) => (url.pathname === LABELS && init.method === 'GET' ? { body: { message: 'ok' } } : undefined), writes], { installationId: 42 });
+      await expect(forge.setExclusiveLabel('/repo', 7, 'revue: auto', GROUP)).rejects.toThrow(/unreadable answer, not a list of labels/);
+      expect(written(calls)).toEqual([]);
+    });
   });
 
   it('takes a draft out of draft by the only call that can, and writes nothing for a PR already out (ORC-125)', async () => {

@@ -213,7 +213,7 @@ describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
     const out = after(t, ev('verify.passed', { runId: 'r2', job: 'tests', red: 'assertion', frozen }));
     expect(out.frozenTests).toEqual({ ...frozen, criteria: SPEC.criteria });
     const refrozen = decide(out, ev('command', { name: '/refreeze', body: '', linearSessionId: 's1', author: 'M', frozen: { sha: 'new', files: {} } }, { roles: ['maintainer'], actor: 'u-m' } as Partial<FactoryEvent>), workflow);
-    expect(refrozen.events).toContainEqual({ type: 'ticket.patched', patch: { frozenTests: { sha: 'new', files: {}, criteria: SPEC.criteria } } });
+    expect(refrozen.events).toContainEqual({ type: 'ticket.patched', patch: { frozenTests: { sha: 'new', files: {}, criteria: SPEC.criteria, refrozenBy: 'u-m' } } });
   });
 
   it('a later freeze adds the criteria of the version approved since to those already frozen, as it does the files', () => {

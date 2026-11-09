@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -5,16 +6,21 @@ import { WIDTHS, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
+import { checkDependencies, DEPENDENCY_CHECK, manifestKind, type ManifestChange } from '../checks/deps.js';
 import { parseDiff, type DiffFile } from '../checks/diff.js';
 import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
+import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type FlakyTest, type KnownFlaky, type Run, type Standing } from '../checks/flaky.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
+import { REPORT_FLAGS, runnerOfCommand, type Runner } from '../checks/red.js';
+import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
 import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
+import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
 import { VERIFY_TIMEOUT_MS, type VerifyResult } from './verify.js';
@@ -47,8 +53,12 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/semgrep` (ORC-333), by the image's Semgrep. Only an isolation test on a public image without it turns it off. */
   semgrep: boolean;
+  /** `factory/dependances` (ORC-371): the daemon's way to the package registries, never a sandbox's. Absent, a branch that adds a package has no verdict. */
+  registries?: RegistryOpener;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
+  /** The repository's known flaky tests (ORC-164), a human's list: failing, they are indicative and do not count. */
+  knownFlaky?: readonly KnownFlaky[];
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
   untrusted?: UntrustedMark;
   /** A human's push (ORC-159): this commit is checked as the forge's branch holds it, fetched from the forge; the worktree is not read. */
@@ -78,8 +88,12 @@ export interface VisualRequest {
   gate: CaptureGate;
 }
 
-/** `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again. */
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; visual?: { proof: VisualProof; files: Judged['files'] } };
+/**
+ * `commands`: what ran on the commit, none when nothing is declared; absent when it was found green before, and nothing ran again.
+ * `flaky`: the failing tests the factory reran (ORC-164), with what each attempt found, those that do not count `indicative`.
+ */
+/** `diffClass`: the class of the diff against the default branch (ORC-198), absent on a commit found green again. */
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -137,9 +151,12 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  * 3. the base branch fetched into the clone from the forge, and `.factory/config.yml` read on it, never on the agent's
  *    branch nor on a ref of the repository it can write. Every read of the clone happens here, before any code of the
  *    agent has run in it, the checks of the commit included;
+ *    `factory/dependances` (ORC-371) reads the manifests there too, and once step 4 refused nothing, the daemon asks the
+ *    registries through the egress proxy, before the setup installs anything: no sandbox opens to the network for it;
  * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout, and Semgrep on the files the diff adds
  *    lines to (ORC-333), with the factory's rules and the base's, read at step 3;
- * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted;
+ * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted; each failing test their
+ *    runner's report names rerun once there, and a few on the base, set up in a sandbox of its own (ORC-164, `runAndRerun`, `rerunOnBase`);
  * 6. the visual proof (ORC-176), when it is required and the commands passed: the application started and shot by the
  *    factory's browser, after on the commit and before on the base, each in a sandbox of its own at network `none`. The
  *    base is checked out from the clone's objects at step 3, before any code of the agent has run in it.
@@ -182,20 +199,28 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
+    // Only a verdict that passes carries it: a branch refused already is not read again.
+    const diffClass = failures.length ? undefined : await classOfBranch(gitReader(git, BASE, from, sha), config);
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config));
+    const manifests = failures.length ? [] : await changedManifests(git, from, sha);
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
     const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
-    if (shooting) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
+    // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
+    const runners = await testRunners(git, sha, commands);
+    const onBase = from !== EMPTY_TREE && runners.size > 0 && !failures.length;
+    if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
+    let flaky: FlakyTest[] = [];
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
-      ok: !failures.length, failures, sha, tree, commands,
+      ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
+      ...(flaky.length ? { flaky } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
-    const setUp = async (suffix: string, workspacePath: string) => {
-      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
+    const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
+      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services, now: new Date() });
     };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
@@ -213,16 +238,32 @@ export const runCleanVerify: CleanVerifier = async (req) => {
         if (added.size) failures.push(...(await scanCode(sandboxes, id, added, rules)));
       });
     }
+    // Last of the checks that need no install, before the setup installs what the branch added. Refused already: no registry is asked, as a breakdown would hide the verdict.
+    if (!failures.length && manifests.length) failures.push(...(await checkDeps(manifests, config, req)));
     if (failures.length || !runs) return verdict();
 
-    await setUp('verify', cloneDir);
+    // As the commit declares them, which the launch did not read: provided, or refused before any of its code runs (ORC-282).
+    const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
+    if (unprovided.length) throw new Error(servicesUnavailable(unprovided, true));
+    // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
+    const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
+    await setUp('verify', cloneDir, config.services);
+    const ran: CommandRun[] = [];
+    const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
-        const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(command), { env });
-        // 124: the cap's, whose failure stays the agent's (a test that hangs), as on the host.
-        if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
+        const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
+        if (failed) ran.push(failed);
       }
-    });
+    }, withServices);
+    // The base's tests get services as the commit's do, new ones.
+    if (onBase && needsBase(ran, standing)) {
+      await setUp('verify-base', beforeDir, config.services);
+      await inBox('verify-base', beforeDir, [], (id) => rerunOnBase(ran, reportRun(sandboxes, id, env), standing), withServices);
+    }
+    const settled = settle(ran, standing);
+    failures.push(...settled.failures);
+    flaky = settled.flaky;
     if (!shooting || failures.length) return verdict();
     const judged = await shootBoth(sandboxes, inBox, shooting, { from, sha, env, cloneDir, beforeDir, setUp });
     failures.push(...judged.failures);
@@ -236,7 +277,46 @@ export const runCleanVerify: CleanVerifier = async (req) => {
   }
 };
 
+/** A launch or a check refused for the repository's `services` this factory does not provide (ORC-282): said on the ticket. */
+export function servicesUnavailable(missing: readonly string[], sandboxed: boolean): string {
+  const [which, it] = missing.length === 1 ? [`The service ${missing[0]} is`, 'it'] : [`The services ${missing.join(', ')} are`, 'them'];
+  const why = sandboxed ? `no sandbox backend of this factory provides ${it}` : 'this factory runs without sandboxes (FACTORY_CONTAINER_CLI), which provide none';
+  return `${which} not available: .factory/config.yml declares ${it} under \`services\`, and ${why}. Nothing runs without ${it}: take ${it} out of \`services\` or give the factory a backend that provides ${it}, then reply here.`;
+}
+
 export const BASE = 'refs/factory/base';
+
+/** What a report may weigh on its way to the daemon: past it, it is cut, unreadable, and nothing is rerun. */
+const MAX_REPORT_BYTES = 16 * 1024 * 1024;
+/** What its read may take: the agent's code, still running, could have put a pipe in its place, which a regular-file test refuses. */
+const REPORT_READ_S = 60;
+
+/**
+ * Runs a line in sandbox `id` as a command of `verify` (`verifyCommand`), its exit 124 the cap's, whose failure stays the
+ * agent's (a test that hangs), as on the host. With a runner, the line asks it for its report in a file of the sandbox, read
+ * back by an exec of its own, capped: not through the command's output, whose tail alone reaches the daemon.
+ */
+function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): Run {
+  return async (line, runner) => {
+    const f = `"\${TMPDIR:-/tmp}"/factory-report-${randomUUID()}`;
+    const started = Date.now();
+    const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(runner ? `f=${f}\n${line} ${REPORT_FLAGS[runner]}` : line), { env });
+    const run = { exitCode: code === 124 ? null : code, output: stdout + stderr, ms: Date.now() - started };
+    if (!runner) return run;
+    const report = await sandboxes.exec(id, ['bash', '--norc', '-c', `[ -f ${f} ] && timeout ${REPORT_READ_S} head -c ${MAX_REPORT_BYTES} ${f}; rm -f ${f}`], { env });
+    return report.stdout ? { ...run, report: report.stdout } : run;
+  };
+}
+
+/** The runner of each command that names one, from the commit's `package.json` for an npm script: read before any of its code runs. */
+async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, Runner>> {
+  const runners = new Map<string, Runner>();
+  for (const command of commands) {
+    const runner = await runnerOfCommand(command, { showAtHead: (p) => show(git, sha, p) });
+    if (runner) runners.set(command, runner);
+  }
+  return runners;
+}
 
 type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>>;
 
@@ -255,6 +335,8 @@ async function planVisual(
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!v.start) proof.unavailable = 'no command starts the application (`workspace.preview`)';
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
+  // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
+  else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;
   else return { proof, shooting: { ...v, shooter: v.shooter, start: v.start } };
   return { proof };
 }
@@ -415,6 +497,34 @@ function checkSize(diff: DiffFile[] | undefined, config: RepoConfig): VerifyFail
   return r.ok ? [] : [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: r.summary }];
 }
 
+/** The manifests `factory/dependances` reads (ORC-371), as the fork point and the commit hold them, from the clone's objects. */
+async function changedManifests(git: CloneGit, from: string, sha: string): Promise<ManifestChange[]> {
+  const paths = zFields(await git.raw('diff', '--name-only', '-z', '--no-renames', from, sha)).filter((p) => manifestKind(p));
+  return Promise.all(paths.map(async (path) => ({ path, before: (await show(git, from, path)) ?? null, after: (await show(git, sha, path)) ?? null })));
+}
+
+/**
+ * `factory/dependances` (ORC-165, ORC-371) on the changed manifests, against the base's allowlist. The registries are opened
+ * for a package to look up, and only then, under a name of this check's own. A lookup without an answer is no fault of the
+ * branch: it blocks nothing, and rejects when nothing else of the check does.
+ */
+async function checkDeps(changes: ManifestChange[], config: RepoConfig, req: Pick<CleanVerifyRequest, 'registries' | 'runId' | 'log'>): Promise<VerifyFailure[]> {
+  const open = req.registries ?? (() => Promise.reject(new Error('no package registry on this instance')));
+  let opened: ReturnType<RegistryOpener> | undefined;
+  const id = `${req.runId}-dependencies-${randomUUID().slice(0, 8)}`;
+  const registry: PackageRegistry = { lookup: async (ecosystem, name) => (await (opened ??= open(id))).registry.lookup(ecosystem, name) };
+  try {
+    const { findings } = await checkDependencies({ changes, registry, allowList: config.dependencies.allow });
+    const blocking = findings.filter((f) => f.reason !== 'registry_unknown');
+    if (blocking.length) return [{ command: DEPENDENCY_CHECK, exitCode: 1, output: `Dependency the factory does not accept, publication blocked. Remove it, or have a human add it to \`dependencies.allow\` of \`${REPO_CONFIG_PATH}\` on the default branch:\n${blocking.map((f) => `- ${f.message}`).join('\n')}` }];
+    if (findings.length) throw new Error(findings.map((f) => f.message).join('\n'));
+    return [];
+  } finally {
+    // Opened only: one that never opened has nothing to close.
+    await opened?.then((o) => o.close().catch((err: Error) => req.log(`package registries not closed: ${err.message}`)), () => {});
+  }
+}
+
 const isRegular = (mode: string) => mode === '100644' || mode === '100755';
 
 /**
@@ -531,7 +641,6 @@ export function logPaths(out: string): { commit: string; paths: string[] }[] {
 
 /** A branch read by git: `base`, the default branch's ref; `from`, where `sha` left it. */
 export function gitReader(git: CloneGit, base: string, from: string, sha: string): BranchReader {
-  const ancestor = async (rev: string) => (await git.status('merge-base', '--is-ancestor', rev, sha)).code === 0;
   return {
     changed: async () => {
       const changed = [];
@@ -541,11 +650,14 @@ export function gitReader(git: CloneGit, base: string, from: string, sha: string
       return changed;
     },
     agentChanges: async (since, humanPushes) => {
-      const start = since && (await ancestor(since)) ? since : from;
+      // Whether the head still holds the mark and each push, in one read (ORC-358): its commits beyond the default branch.
+      // One the default branch holds reads as gone, and changes nothing: `--not base` below leaves out all it reaches.
+      const own = since || humanPushes.length ? new Set((await git('rev-list', sha, '--not', base)).split('\n')) : new Set<string>();
+      const start = since && own.has(since) ? since : from;
       // The commits a human pushed: only theirs, not the agent's they were built on, which `--not <after>` would also leave out.
       const human = new Set<string>();
       for (const { before, after } of humanPushes) {
-        if (!before || !(await ancestor(after))) continue;
+        if (!before || !own.has(after)) continue;
         const r = await git.status('rev-list', ...(/^0+$/.test(before) ? [after, '--not', base] : [`${before}..${after}`]));
         if (r.code === 0) for (const c of r.stdout.split('\n').filter(Boolean)) human.add(c);
       }
@@ -579,6 +691,11 @@ export const untrustedCheck = (mark: UntrustedMark, config: RepoConfig): Untrust
   sensitivePaths: config.sensitivePaths,
   ...(config.sensitivePathWarnings ? { sensitivePathWarnings: config.sensitivePathWarnings } : {}),
 });
+
+/** The class of a branch's diff (ORC-198), read as the path rules read it, under the default branch's `sensitive_paths`. */
+export async function classOfBranch(reader: BranchReader, config: RepoConfig): Promise<ClassifiedDiff> {
+  return classifyBranch((await reader.changed()).map((c) => c.path), config.sensitivePaths, reader);
+}
 
 /**
  * `factory/chemins-interdits` on a branch, whoever reads it: the forbidden paths, outward links and `package.json#scripts`

@@ -8,7 +8,8 @@ const ISSUE_FIELDS = `id identifier title description url priority createdAt upd
   delegate { id } team { id key }`;
 
 export const Q = {
-  issue: `query Issue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`,
+  /** With its creator (ORC-197), read for one issue only: the list of delegated tickets stays under Linear's cost bound. */
+  issue: `query Issue($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} creator { id name url } } }`,
   /** An issue's labels past the page `ISSUE_FIELDS` read (ORC-347). */
   issueLabels: `query IssueLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 250, after: $after) { nodes { id name parent { id } } ${PAGE} } } }`,
   /** An issue's relations past the page `ISSUE_FIELDS` read (ORC-363). */
@@ -17,6 +18,14 @@ export const Q = {
   delegated: `query Delegated($teamKey: String!, $appUserId: ID!, $after: String) {
     issues(first: 100, after: $after, filter: { team: { key: { eq: $teamKey } }, delegate: { id: { eq: $appUserId } },
       state: { type: { nin: ["completed", "canceled"] } } }) { nodes { ${ISSUE_FIELDS} } ${PAGE} } }`,
+  /**
+   * The team's issues completed in `[since, until)` (ORC-230), with their start and the URLs attached to them (Linear's
+   * GitHub integration attaches the PRs): what `factory baseline` reads of the 90 days before the factory. Archived ones
+   * included: Linear archives a closed issue after the team's delay, and the baseline's period may be past it.
+   */
+  completed: `query Completed($teamKey: String!, $since: DateTimeOrDuration!, $until: DateTimeOrDuration!, $after: String) {
+    issues(first: 100, after: $after, includeArchived: true, filter: { team: { key: { eq: $teamKey } }, completedAt: { gte: $since, lt: $until } }) { nodes {
+      identifier startedAt completedAt trashed attachments(first: 50) { nodes { url } ${PAGE} } } ${PAGE} } }`,
   teamStates: `query TeamStates($teamKey: String!, $after: String) {
     workflowStates(first: 250, after: $after, filter: { team: { key: { eq: $teamKey } } }) { nodes { id name type position } ${PAGE} } }`,
   teamLabels: `query TeamLabels($teamKey: String!, $after: String) {

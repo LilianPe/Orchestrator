@@ -1,10 +1,16 @@
+import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import { isRecord } from '../graphql-pages.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
+import { mergedPullRequests } from './merged-prs.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import { REPO_PERMISSIONS, type RepoPermission, type RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, type Forge, type ForgeBranch, type OpenPr, type PrInfo } from './types.js';
+
+const PASSED = new Set(['pass', 'skipping']);
+const FAILED = new Set(['fail', 'cancel']);
+const KNOWN = new Set([...PASSED, ...FAILED, 'pending']);
 
 /**
  * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
@@ -12,9 +18,24 @@ import { isFactoryCheck, type Forge, type ForgeBranch, type OpenPr, type PrInfo 
  */
 export function aggregateChecks(buckets: string[]): PrInfo['checks'] {
   if (buckets.length === 0) return 'none';
-  if (buckets.some((b) => b === 'fail' || b === 'cancel')) return 'fail';
-  if (buckets.every((b) => b === 'pass' || b === 'skipping')) return 'pass';
+  if (buckets.some((b) => FAILED.has(b))) return 'fail';
+  if (buckets.every((b) => PASSED.has(b))) return 'pass';
   return 'pending';
+}
+
+/**
+ * The verdict of `checks`, the failed ones, and the ones in a bucket it does not know, named so that a refused merge says
+ * which one it waits on, never a bare `pending` read as a CI still running (ORC-304). Shared with `GitHubAppForge`.
+ */
+export type CheckSummary = Pick<PrInfo, 'checks' | 'failedChecks' | 'unknownChecks'>;
+export function summarizeChecks(checks: { name: string; bucket: string }[]): CheckSummary {
+  const named = (keep: (bucket: string) => boolean) => checks.filter((c) => keep(c.bucket)).map((c) => c.name);
+  const unknownChecks = named((b) => !KNOWN.has(b));
+  return {
+    checks: aggregateChecks(checks.map((c) => c.bucket)),
+    failedChecks: named((b) => FAILED.has(b)),
+    ...(unknownChecks.length ? { unknownChecks } : {}),
+  };
 }
 
 /**
@@ -102,8 +123,7 @@ export class GhCliForge implements Forge, RepoPermissions {
       mergedAt?: string | null;
     }[];
     if (!pr) return undefined;
-    let checks: PrInfo['checks'] = 'none';
-    let failedChecks: string[] = [];
+    let summary = summarizeChecks([]);
     if (pr.state === 'OPEN') {
       const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
       const r = await this.exec('gh', args, { cwd: repoPath });
@@ -113,9 +133,7 @@ export class GhCliForge implements Forge, RepoPermissions {
           throw execFailure('gh', args, r);
         }
       } else {
-        const list = parseChecks(args, r).filter((c) => !isFactoryCheck(c.name));
-        checks = aggregateChecks(list.map((c) => c.bucket));
-        failedChecks = list.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').map((c) => c.name);
+        summary = summarizeChecks(parseChecks(args, r).filter((c) => !isFactoryCheck(c.name)));
       }
     }
     return {
@@ -126,8 +144,7 @@ export class GhCliForge implements Forge, RepoPermissions {
       ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
       ...(pr.state === 'MERGED' && pr.mergeCommit?.oid ? { mergeSha: pr.mergeCommit.oid } : {}),
       ...(pr.state === 'MERGED' && pr.mergedAt && Number.isFinite(Date.parse(pr.mergedAt)) ? { mergedAt: Date.parse(pr.mergedAt) } : {}),
-      checks,
-      failedChecks,
+      ...summary,
     };
   }
 
@@ -150,6 +167,12 @@ export class GhCliForge implements Forge, RepoPermissions {
   async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     return recentRepoBranches(gql, owner, name);
+  }
+
+  /** The repository's PRs merged in `[since, until)` (ORC-230), for `factory baseline`: not part of the `Forge` port the factory runs on. */
+  async mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return mergedPullRequests(gql, owner, name, since, until);
   }
 
   /**
