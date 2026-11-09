@@ -44,6 +44,7 @@ import {
   type RunRecord,
   type Artifact,
   type FindingsRecord,
+  type KnownFlakyTest,
   type SecurityLog,
   type SecurityStats,
   type TimerRecord,
@@ -957,6 +958,26 @@ export class PgStore implements AsyncStore {
       select id, attempt_id, kind, path, sha256, round(extract(epoch from created_at) * 1000) as at from artifacts where ticket_id = ${ticketId} order by created_at, id
     `);
     return rows.rows.map((r) => ({ id: r.id, ticketId, ...(r.attempt_id === null ? {} : { attemptId: r.attempt_id }), kind: r.kind, path: r.path, sha256: r.sha256, createdAt: Number(r.at) }));
+  }
+
+  async knownFlakyTests(projectId: string): Promise<KnownFlakyTest[]> {
+    const rows = await this.db.execute<{ test: string; covers_frozen: boolean; reason: string; added_by: string; at: string | number }>(sql`
+      select test, covers_frozen, reason, added_by, round(extract(epoch from added_at) * 1000) as at from known_flaky_tests where project_id = ${projectId} order by added_at, test
+    `);
+    return rows.rows.map((r) => ({ projectId, test: r.test, coversFrozen: r.covers_frozen, reason: r.reason, addedBy: r.added_by, addedAt: Number(r.at) }));
+  }
+
+  async putKnownFlakyTest(t: KnownFlakyTest): Promise<void> {
+    const row = { coversFrozen: t.coversFrozen, reason: t.reason, addedBy: t.addedBy, addedAt: new Date(t.addedAt) };
+    await this.db
+      .insert(schema.knownFlakyTests)
+      .values({ projectId: t.projectId, test: t.test, ...row })
+      .onConflictDoUpdate({ target: [schema.knownFlakyTests.projectId, schema.knownFlakyTests.test], set: row });
+  }
+
+  async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
+    const rows = await this.db.execute(sql`delete from known_flaky_tests where project_id = ${projectId} and test = ${test} returning test`);
+    return rows.rows.length === 1;
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {
