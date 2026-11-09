@@ -72,6 +72,8 @@ export interface SpawnCommand {
 }
 
 export interface SandboxProvider {
+  /** Those of `services` (ORC-309) it cannot start next to a sandbox, which `create` refuses: the launch asks first (ORC-282). Empty when it provides them all. */
+  unprovided(services: readonly string[]): string[];
   /** A live sandbox for `req.runId`; replayed for the same run, it returns that sandbox. Rejects when no backend satisfies `req.requirements`. */
   create(req: SandboxRequest): Promise<Sandbox>;
   /** Runs `argv` in the sandbox to completion. Rejects on an unknown sandbox; a non-zero exit is a result, not a rejection. */

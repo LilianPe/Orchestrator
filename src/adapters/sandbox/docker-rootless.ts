@@ -181,12 +181,16 @@ export class ContainerSandboxProvider implements SandboxProvider {
     this.podman = isPodman(opts.cli);
   }
 
+  unprovided(services: readonly string[]): string[] {
+    return services.filter((s) => !CONTAINER_SERVICES.includes(s));
+  }
+
   async create(req: SandboxRequest): Promise<Sandbox> {
     // The router refuses these too, but a backend that accepted them would claim an isolation it does not give.
     const { minLevel, browser, services } = req.requirements;
     if (minLevel !== 'L3') throw new Error(`container sandbox: isolation ${minLevel} not available (L3 only)`);
     if (browser) throw new Error('container sandbox: no browser');
-    const unknown = services.filter((s) => !CONTAINER_SERVICES.includes(s));
+    const unknown = this.unprovided(services);
     if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
     const mounts = [{ host: req.workspacePath, target: WORKSPACE_TARGET, readOnly: false }, ...req.mounts].map(mountArg);
     const key = req.servicesOf ?? req.runId;

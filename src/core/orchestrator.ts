@@ -83,7 +83,8 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
+import type { RegistryOpener } from '../checks/registry.js';
+import { checkBranchPaths, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
@@ -207,6 +208,8 @@ export interface OrchestratorDeps {
   hostChecks?: boolean;
   /** `verify` with sandboxes (ORC-151); a test replaces it. */
   cleanVerify?: CleanVerifier;
+  /** The package registries `verify` asks (`factory/dependances`, ORC-371), through the egress proxy. */
+  registries?: RegistryOpener;
   projects: ProjectRuntime[];
   packDir: string;
   /** `--settings` file for runs; defaults to <packDir>/settings.json. */
@@ -1098,6 +1101,7 @@ export class Orchestrator {
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
+        ...(this.d.registries ? { registries: this.d.registries } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
@@ -2537,6 +2541,10 @@ export class Orchestrator {
       // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
       // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
       const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
+      // Provided, or no run starts (ORC-282): never a setup nor an agent in an environment poorer than the repository declares.
+      const declared = [...new Set(config.services)];
+      const unprovided = this.d.sandboxes ? this.d.sandboxes.unprovided(declared) : declared;
+      if (unprovided.length) throw new Error(servicesUnavailable(unprovided, !!this.d.sandboxes));
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
       const cap = ticketTokenCap(this.d.perTicketTokens, config);
