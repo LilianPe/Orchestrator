@@ -128,6 +128,10 @@ export const normalizePypiName = (name: string): string => name.replace(/[-_.]+/
 
 const NPM_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i;
 const isValidNpmName = (name: string): boolean => name.length > 0 && name.length <= 214 && NPM_NAME.test(name);
+const PYPI_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
+/** A package name as its registry takes it (the allowlist of `.factory/config.yml`, ORC-371): no pattern, no path. */
+export const isPackageName = (ecosystem: Ecosystem, name: string): boolean => (ecosystem === 'npm' ? isValidNpmName(name) : PYPI_NAME.test(name));
 
 interface Declared {
   ecosystem: Ecosystem;
