@@ -205,13 +205,14 @@ describe('allowRequest (plain HTTP: the method and the path are seen)', () => {
     expect(v(`{"x":"${'['.repeat(1000)}\\"${'{'.repeat(100)}","y":"a\\\\"}`).ok).toBe(true);
   });
 
-  it('refuses a call of more than CLAUDE_BODY_VALUES values on its raw bytes, before any parse: millions of empty objects cost 40 times their size (ORC-373)', () => {
+  it('refuses a call of more than CLAUDE_BODY_VALUES values on its raw bytes, before any parse: a parse costs per value, empty objects 40 times their size (ORC-373)', () => {
     const v = (raw: string) => claudeBody(Buffer.from(raw));
     const reason = `Claude API body refused: more than ${CLAUDE_BODY_VALUES} values`;
     // Counted as the brackets and the commas: `{"messages":[` is 2, each `{}` 2 more, less the first one's comma.
-    const objects = (n: number) => `{"messages":[${Array(n).fill('{}').join(',')}]}`;
+    const objects = (n: number, tail = '') => `{"messages":[${Array(n).fill('{}').join(',')}]${tail}}`;
     const at = CLAUDE_BODY_VALUES / 2 - 1;
-    expect(v(objects(at)).ok).toBe(true);
+    expect(v(objects(at, ',"x":0')).ok).toBe(true);
+    expect(v(objects(at, ',"x":0,"y":0'))).toEqual({ ok: false, reason });
     expect(v(objects(at + 1))).toEqual({ ok: false, reason });
     for (const raw of [
       `{"messages":[{"role":"user","content":[{"type":"tool_use","id":"t","name":"B","input":[${Array(CLAUDE_BODY_VALUES).fill('[]').join(',')}]}]}]}`,

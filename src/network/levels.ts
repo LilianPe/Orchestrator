@@ -67,9 +67,9 @@ export const CLAUDE_BODY_MAX = 16 * 1024 * 1024;
  * Memory at worst, to size the proxy's container by: the calls held, `CLAUDE_READS_MAX` × `CLAUDE_BODY_MAX`, plus
  * the one being checked (`claudeBody`: joined, decoded, parsed, serialised again, encoded), one at a time since the
  * check is synchronous. Measured at `CLAUDE_BODY_MAX` (ORC-356, ORC-373): a call of text, 4 to 5 times its size; one
- * character outside Latin-1 makes both strings two bytes a character, 8 times; a hostile call, `CLAUDE_BODY_VALUES`
- * empty objects and a text with such a character, 13 times. At 16 MiB: ~260 MiB for Claude Code's calls, ~330 MiB
- * under a hostile sandbox, over the process's own.
+ * character outside Latin-1 makes both strings two bytes a character, 8 times; a hostile call at `CLAUDE_BODY_VALUES`,
+ * objects of one key each, a new key in each, and a text with such a character, 13 times. At 16 MiB: ~260 MiB for
+ * Claude Code's calls, ~330 MiB under a hostile sandbox, over the process's own.
  */
 export const CLAUDE_READS_PER_RUN = 2;
 export const CLAUDE_READS_MAX = 8;
@@ -89,9 +89,9 @@ export const CLAUDE_BODY_DEPTH = 64;
  * brackets and the commas outside strings: a list or an object, and each member past its first. A parse costs per
  * value, not per byte: 16 MiB of empty objects took 41 times their size in RSS, 656 MiB, and 1.6 s of the event loop;
  * refused here, ~10 ms. Claude Code's conversations hold one value per 160 to 460 bytes (measured on long sessions'
- * messages), ~100 000 at the cap; the bound, one per 16 bytes there, is ten times that.
+ * messages), ~100 000 at the cap; the bound, one per 32 bytes there, is five times that.
  */
-export const CLAUDE_BODY_VALUES = 1024 * 1024;
+export const CLAUDE_BODY_VALUES = 512 * 1024;
 
 /**
  * Tools run by the client, Claude Code: its own (no `type`, or `custom`), and the Anthropic-defined ones the
@@ -221,8 +221,8 @@ export function claudeBody(raw: Buffer): { ok: true; body: Buffer } | { ok: fals
   if (typeof call !== 'object' || call === null || Array.isArray(call)) return { ok: false, reason: 'Claude API body refused: not a JSON object' };
   const problem = callProblem(call as Record<string, unknown>);
   // ponytail: scanned, parsed, walked and serialised again whole: ~40 ms of the event loop for a 4.3 MiB call (measured),
-  // ~1 ms for a run's usual ~50 KB, ~150 ms at the 16 MiB cap. If calls grow there, check duplicate keys in a parse of
-  // one's own and send the bytes as they came.
+  // ~1 ms for a run's usual ~50 KB, ~120 ms at the 16 MiB cap, ~600 ms for the worst call under `CLAUDE_BODY_VALUES`. If
+  // calls grow there, check duplicate keys in a parse of one's own and send the bytes as they came.
   return problem ? { ok: false, reason: `Claude API body refused: ${problem}` } : { ok: true, body: Buffer.from(JSON.stringify(call)) };
 }
 

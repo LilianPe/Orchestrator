@@ -456,7 +456,7 @@ describe('EgressProxy', () => {
       expect((await journal('run-1')).filter((e) => e.ok === false)).toEqual([]);
     });
 
-    it('refuses a run\'s model calls of millions of empty objects before any parse, in a loop, while another run\'s calls go through (ORC-373)', async () => {
+    it('refuses a run\'s model calls of empty objects past the bound before any parse, in a loop, while another run\'s calls go through (ORC-373)', async () => {
       const hostile = await proxy.open('run-1', { level: 'limited', allow: [] });
       const other = await proxy.open('run-2', { level: 'limited', allow: [] });
       const empties = Buffer.from(`{"model":"claude-haiku-4-5","max_tokens":1,"messages":[${Array(CLAUDE_BODY_VALUES).fill('{}').join(',')}]}`);
