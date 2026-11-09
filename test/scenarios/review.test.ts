@@ -224,6 +224,20 @@ describe('the review → fix loop (ORC-184)', () => {
     expect((await h.ticket()).contested).toBeNull();
   });
 
+  it('criterion 2: a contest with no commit, the same commit reviewed again: both lenses read the finding contested, though the first replaced its findings', async () => {
+    const h = createHarness({ aiReview: true });
+    const contested = [{ finding: 'security-1', justification: 'Not a bug: the list is never empty here.' }];
+    await reviewedThenFixing(h, [blocking], fix('Contested, nothing to commit.', { contested }), { correctness: [minor] });
+    // No commit: the head stays the reviewed one.
+    h.runner.release(fixes(h).at(-1)!.runId);
+    await h.orch.drained();
+    const [, , first, second] = reviews(h);
+    for (const r of [first!, second!]) {
+      expect(r.prompt).toContain(`Commit: ${SHA}`);
+      expect(r.prompt).toContain('**Contested by the implementer**: Not a bug: the list is never empty here.');
+    }
+  });
+
   it('criterion 3: past its 2 rounds, a review that still finds starts no fix and blocks the run, its findings on the PR', async () => {
     const h = createHarness({ aiReview: true });
     await reviewedThenFixing(h, [blocking], fix('Tried.', { fixed: [{ finding: 'security-1', commit: 'abc1234' }] }), { security: [blocking] });

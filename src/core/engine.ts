@@ -11,6 +11,7 @@ import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
 import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
+import { isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { higherRisk, type Blocker, type ClarifyQuestion, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
@@ -291,7 +292,7 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   // count it wrote itself, on a commit reviewed again.
   const kept = ticket?.reviewBlocking;
   const earlier = publishes && kept?.sha === sha && kept.lens !== lens ? kept.count : 0;
-  const blocking = earlier + findings.filter((f) => f.severity === 'blocking').length;
+  const blocking = earlier + findings.filter(isBlocking).length;
   // What the fix contested of the previous round, its lenses have read now: the findings standing are this review's.
   out.events.push({ type: 'ticket.patched', patch: { reviewBlocking: { sha, lens, count: blocking }, ...(publishes && ticket?.contested ? { contested: null } : {}) } });
   const fix = job.onBlocking && workflow.jobs[job.onBlocking.run];
@@ -914,7 +915,9 @@ const REPLIES = new Set<EventType>(['session.prompted', 'ticket.commented']);
 function resumedJob(rule: Rule, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): JobSpec | undefined {
   if (!workflow.blockComment || !REPLIES.has(event.type) || !rule.run || rule.debounceMs || !ticket?.blocked || !ticket.blockedJob) return undefined;
   const job = workflow.jobs[ticket.blockedJob];
-  return job && (!job.input || job.input === 'feedback') ? job : undefined;
+  // The fix of the review loop resumes itself on the reply, then goes back through the review (ORC-184): reading its findings
+  // again, it would leave the reply aside.
+  return job && (!job.input || job.input === 'feedback' || job.input === 'findings') ? job : undefined;
 }
 
 /**
@@ -964,7 +967,10 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   // A resumed job reads the inbox whatever its own input says: judged on the taint it will start with, or the ticket would lose its block for a run refused (I12).
   // A block on a stranded pending job stays until the debounce fires: it is what tells that reply to start that job (ORC-339).
   const keepsBlock = !!rule.debounceMs && !!strandedPending(ticket, workflow);
-  if (job && !keepsBlock && !refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input)) && ticket?.blocked) unblock(out, event, ticket);
+  const refused = !job || !!refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input));
+  if (!refused && !keepsBlock && ticket?.blocked) unblock(out, event, ticket);
+  // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
+  else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });

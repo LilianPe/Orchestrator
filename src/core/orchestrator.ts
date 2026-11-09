@@ -95,6 +95,8 @@ import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+/** The contested findings as the first lens of a round read them (ORC-184): its own end replaces its findings on the commit, which the ids name by rank. */
+const contestedKey = (projectId: string, ticketId: string): string => `contested-input:${projectId}:${ticketId}`;
 /** Set while a fresh worktree is not set up and sealed (ORC-211): a daemon killed before the end leaves it, and the next launch makes the worktree anew. */
 const setupPendingKey = (path: string): string => `setup-pending:${path}`;
 
@@ -1862,6 +1864,18 @@ export class Orchestrator {
    * `OutputPolicy`, a refused one replaced by its notice. Keyed: a replay finds its review by the effect's id, and the check by
    * the commit's. Any failure throws, and the outbox retries it: its move to Human Review waits behind it, and a dead one blocks the ticket.
    */
+  /** What the lenses of a round read of the contested findings (ORC-184), resolved on the commit they were found on, kept for the round. */
+  private async contestedText(projectId: string, ticketId: string, contested: NonNullable<TicketState['contested']>): Promise<string | undefined> {
+    const { store } = this.d;
+    const id = JSON.stringify(contested);
+    const kept = await store.getMeta(contestedKey(projectId, ticketId));
+    const was = kept ? (JSON.parse(kept) as { id: string; text: string | null }) : undefined;
+    if (was?.id === id) return was.text ?? undefined;
+    const text = contestedInput(await store.findingsOf(projectId, ticketId, contested.sha), contested.items);
+    await store.setMeta(contestedKey(projectId, ticketId), JSON.stringify({ id, text: text ?? null }));
+    return text;
+  }
+
   private async review(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'review' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const { store, clock } = this.d;
     await store.putFindings({ projectId: project.id, ticketId: t.ticketId, sha: c.sha, lens: c.lens, runId: c.runId, at: clock.now(), findings: c.findings });
@@ -2337,13 +2351,14 @@ export class Orchestrator {
       if (from) {
         input = from.input;
       } else if (kind === 'diff') {
-        // The findings the fix contested stay open (ORC-184): the lens judges them again on this commit.
-        const open = t.contested && contestedInput(await store.findingsOf(project.id, ticketId, t.contested.sha), t.contested.items);
+        // The findings the fix contested stay open (ORC-184): the lens judges them again on this commit. Resolved once per contest,
+        // so that the second lens reads what the first did, even when the first replaced its findings on the same commit.
+        const open = t.contested && (await state(this.contestedText(project.id, ticketId, t.contested)));
         input = { kind, text: open ? `${ws.diff ?? ''}\n\n## Contested findings\n${open}` : (ws.diff ?? '') };
       } else if (kind === 'findings') {
         // The fix of the review loop (ORC-184): the review's blocking findings, then the PR's unresolved threads as they are.
         const sha = t.reviewBlocking?.sha ?? t.verifiedSha ?? '';
-        const findings = findingsInput(sha, blockingFindings(sha ? await store.findingsOf(project.id, ticketId, sha) : []));
+        const findings = findingsInput(sha, blockingFindings(sha ? await state(store.findingsOf(project.id, ticketId, sha)) : []));
         input = { kind, text: threads.length ? `${findings}\n\n## Unresolved review threads\n${formatFeedback(threads)}` : findings };
       } else if (kind === 'feedback') {
         input = { kind, text: read.length ? formatFeedback(read) : '(no written feedback: read the PR and the Linear thread again)' };

@@ -830,6 +830,19 @@ describe('decide — built-ins', () => {
       expect(timer.events).toEqual([{ type: 'ticket.unblocked' }]);
     });
 
+    it('a human who starts work gives the bound back, blocked or not: one count per run (ORC-184)', () => {
+      const back = decide(inReview({ ciFixAttempts: 2 }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
+      expect(back.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
+      expect(back.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev-feedback' }));
+    });
+
+    it('a reply on the review loop blocked resumes fix-review itself, on the reply, which then goes back through the review (ORC-184)', () => {
+      const blocked = ticket({ logical: 'ai_review', ciFixAttempts: 2, blocked: true, blockKind: 'limit', blockedJob: 'fix-review', linearSessionId: 's1' });
+      const out = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'The finding is right, fix it this way.', author: 'L' }), workflow);
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'fix-review', input: 'feedback' }));
+      expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
+    });
+
     it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {
       expect(decide(ticket({ logical: 'dev', ciFixAttempts: 1 }), red, workflow)).toEqual(decision());
       const merged = decide(inReview({ prState: 'MERGED', ciFixAttempts: 1 }), red, workflow);

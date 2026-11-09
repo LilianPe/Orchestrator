@@ -31,9 +31,12 @@ export async function capDiff(diff: string | undefined, stat: () => Promise<stri
 
 const LABEL: Record<FindingSeverity, string> = { blocking: 'Blocking', minor: 'Minor', out_of_scope: 'Out of scope' };
 
+/** The one definition of a blocking finding: what fails `factory/review` (ORC-183) and starts the fix of the review loop (ORC-184). */
+export const isBlocking = (f: Pick<Finding, 'severity'>): boolean => f.severity === 'blocking';
+
 export function reviewVerdict(findings: readonly Pick<Finding, 'severity'>[]): { conclusion: 'success' | 'failure'; summary: string } {
   const count = (s: FindingSeverity) => findings.filter((f) => f.severity === s).length;
-  const blocking = count('blocking');
+  const blocking = findings.filter(isBlocking).length;
   return {
     conclusion: blocking ? 'failure' : 'success',
     summary: `${blocking} blocking finding${blocking === 1 ? '' : 's'}, ${count('minor')} minor, ${count('out_of_scope')} out of scope`,
@@ -91,7 +94,7 @@ export type BlockingFinding = ReviewFinding & { id: string };
 export function blockingFindings(findings: readonly ReviewFinding[]): BlockingFinding[] {
   const rank = new Map<string, number>();
   return findings
-    .filter((f) => f.severity === 'blocking')
+    .filter(isBlocking)
     .map((f) => {
       const n = (rank.get(f.lens) ?? 0) + 1;
       rank.set(f.lens, n);
