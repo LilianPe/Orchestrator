@@ -38,11 +38,6 @@ export function summarizeChecks(checks: { name: string; bucket: string }[]): Che
   };
 }
 
-/**
- * `gh pr checks` exits 1 with an empty stdout both for a PR without any check and for a failure (network,
- * auth); only this stderr line tells the first apart. Checks that fail or are pending still come as JSON.
- */
-const NO_CHECKS = /^no checks reported on the '.*' branch$/m;
 /** A gh older than 2.50 has no `--json` on `pr checks`: it answers this, then its usage, exit 1. */
 const NO_JSON_FLAG = /^unknown flag: --json$/m;
 
@@ -110,7 +105,7 @@ export class GhCliForge implements Forge, RepoPermissions {
     const out = await mustExec(
       this.exec,
       'gh',
-      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,headRefName,headRefOid,mergeCommit,mergedAt', '--limit', '1'],
+      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,headRefName,headRefOid,mergeCommit,mergedAt,statusCheckRollup', '--limit', '1'],
       { cwd: repoPath },
     );
     const [pr] = JSON.parse(out) as {
@@ -121,17 +116,18 @@ export class GhCliForge implements Forge, RepoPermissions {
       headRefOid?: string;
       mergeCommit?: { oid?: string } | null;
       mergedAt?: string | null;
+      statusCheckRollup?: unknown;
     }[];
     if (!pr) return undefined;
     let summary = summarizeChecks([]);
-    if (pr.state === 'OPEN') {
+    // No check on its head, as the PR's own fields say (ORC-348): `gh pr checks` would exit 1 with nothing on stdout, as on
+    // a failure, and only its words in stderr would tell them apart. A failure that prints nothing is a failure then.
+    if (pr.state === 'OPEN' && !(Array.isArray(pr.statusCheckRollup) && pr.statusCheckRollup.length === 0)) {
       const args = ['pr', 'checks', String(pr.number), '--json', 'name,bucket'];
       const r = await this.exec('gh', args, { cwd: repoPath });
       if (r.code !== 0 && r.stdout.trim() === '') {
-        if (!NO_CHECKS.test(r.stderr)) {
-          if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
-          throw execFailure('gh', args, r);
-        }
+        if (NO_JSON_FLAG.test(r.stderr)) throw new Error(`gh ${args.join(' ')}: this gh has no --json on pr checks, gh 2.50 or later is required`);
+        throw execFailure('gh', args, r);
       } else {
         summary = summarizeChecks(parseChecks(args, r).filter((c) => !isFactoryCheck(c.name)));
       }

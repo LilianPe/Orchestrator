@@ -1,9 +1,10 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
+import { VERIFY_TIMEOUT_MS } from '../../src/core/verify.js';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { TRUSTED, type EventPayloads } from '../../src/core/types.js';
 import { causeOf } from '../../src/core/block-cause.js';
@@ -309,8 +310,16 @@ describe('a disposable sandbox per attempt', () => {
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
-    h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 });
-    await delegate(h);
+    // The factory's clock past the cap while the command runs: an expiry, as the factory sees one (ORC-348).
+    h.sandboxes.execResult = (argv) => {
+      if (argv[0] === 'timeout') vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
+      return { stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 };
+    };
+    try {
+      await delegate(h);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(h.runner.requests).toEqual([]);
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Launch error: The worktree setup failed: npm ci (timed out after 15 min)');

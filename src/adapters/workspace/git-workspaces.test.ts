@@ -596,6 +596,22 @@ describe('GitWorkspaces', () => {
     expect((await ws.prepare(req(repo))).fresh).toBe(true);
   });
 
+  it("makes the agent's repository in the ref storage its head is read from, whatever the host's git defaults to (ORC-348)", async () => {
+    const { repo, root } = fixtureRepo();
+    const inits: (Record<string, string> | undefined)[] = [];
+    const ws = new GitWorkspaces({
+      root,
+      exec: async (cmd, args, opts) => {
+        if (args.includes('init')) inits.push(opts?.env);
+        return execCmd(cmd, args, opts);
+      },
+    });
+    const w = await ws.prepare(req(repo));
+    // Files, not reftable (git 3's default): `agentHead` reads `HEAD`, the loose refs and `packed-refs` as data. An older git ignores the variable.
+    expect(inits).toEqual([expect.objectContaining({ GIT_DEFAULT_REF_FORMAT: 'files' })]);
+    expect(await ws.head(w.path)).toBe(git(repo, 'rev-parse', 'HEAD'));
+  });
+
   it("starts from a branch only the repository has, and the agent's unpushed commits go with its worktree", async () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { POSTGRES_DUMP, RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
+import { VERIFY_TIMEOUT_MS } from './verify.js';
 
 const SECRET = 's3cr3t-value/with+chars';
 const NOW = new Date('2026-11-04T12:00:00.000Z');
@@ -178,8 +179,22 @@ describe('runSealedSetup', () => {
 
   it('a command over its cap fails as a timeout', async () => {
     const sandboxes = new FakeSandboxProvider();
+    // The factory's clock past the cap while the command runs: an expiry, as the factory sees one (ORC-348).
+    sandboxes.execResult = (argv) => {
+      if (argv[0] === 'timeout') vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
+      return { stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 };
+    };
+    try {
+      await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (timed out after 15 min)');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a command that exits 124 itself, before its cap, fails as itself, not as a timeout (ORC-348)', async () => {
+    const sandboxes = new FakeSandboxProvider();
     sandboxes.execResult = (argv) => ({ stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 });
-    await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (timed out after 15 min)');
+    await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow(/^The worktree setup failed: npm ci$/);
   });
 
   it('fails when its container cannot be destroyed: a process that holds the secret could still write it', async () => {

@@ -3,7 +3,7 @@ import { availableParallelism } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { EgressProxy } from '../../network/proxy.js';
-import { execCmd, mustExec, type Exec, type ExecResult } from '../exec.js';
+import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
 import {
   SANDBOX_HOME,
   WORKSPACE_TARGET,
@@ -17,7 +17,10 @@ import {
 } from './types.js';
 
 export interface ContainerSandboxOptions {
-  /** `docker` or `podman`, by name or path: Docker Desktop in WSL is not rootless, the CI and the server run rootless Podman. */
+  /**
+   * `docker` or `podman`, by name or path: Docker Desktop in WSL is not rootless, the CI and the server run rootless Podman.
+   * Which one it is, the CLI says itself (`podmanCli`): a `docker` that is Podman's (podman-docker) takes Podman's flags.
+   */
   cli: string;
   image: string;
   exec?: Exec;
@@ -57,9 +60,22 @@ export function defaultLimits(cpus = availableParallelism()): SandboxLimits {
   return { pids: 512, memory: '4g', cpus: Math.min(2, cpus) };
 }
 
-/** By name or path, as the daemon and the isolation tests both tell the engines apart. */
-export function isPodman(cli: string): boolean {
-  return basename(cli).startsWith('podman');
+/**
+ * Whether `cli` is Podman's, by what it reports of itself, never its name (ORC-348): `version`'s client in JSON, whose
+ * `OsArch` only Podman's has (Docker's has `Os` and `Arch`). Docker prints its client and exits 1 when its daemon does not
+ * answer: the client is read all the same. An answer that is no client throws.
+ */
+export async function podmanCli(exec: Exec, cli: string): Promise<boolean> {
+  const args = ['version', '--format', '{{json .Client}}'];
+  const r = await exec(cli, args);
+  let client: unknown;
+  try {
+    client = JSON.parse(r.stdout);
+  } catch {
+    // Said below.
+  }
+  if (typeof client !== 'object' || client === null) throw execFailure(cli, args, r);
+  return 'OsArch' in client;
 }
 
 const ATTEMPT = 'factory.attempt';
@@ -168,7 +184,9 @@ interface Service {
 /** L3 of the MVP doc: one container per attempt, driven by the engine's CLI. */
 export class ContainerSandboxProvider implements SandboxProvider {
   private readonly run: Exec;
-  private readonly podman: boolean;
+  /** Asked of the CLI before its first command, then kept: `spawnCommand`, sync, only comes after one (`known`). */
+  private podman = false;
+  private engineKind: Promise<void> | undefined;
   /**
    * Ids seen through create, findByAttempt or list, with their run: `spawnCommand` is sync and checks
    * against them (after a restart, list() first), `destroy` closes the run's egress from it, and looks for
@@ -178,7 +196,19 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   constructor(private readonly opts: ContainerSandboxOptions) {
     this.run = opts.exec ?? execCmd;
-    this.podman = isPodman(opts.cli);
+  }
+
+  /** Once, or again after a failure: a CLI not yet installed or not answering is asked again at the next command. */
+  private kind(): Promise<void> {
+    return (this.engineKind ??= podmanCli(this.run, this.opts.cli).then(
+      (podman) => {
+        this.podman = podman;
+      },
+      (err: unknown) => {
+        this.engineKind = undefined;
+        throw err;
+      },
+    ));
   }
 
   unprovided(services: readonly string[]): string[] {
@@ -405,11 +435,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return this.podman ? ['--log-level=error'] : [];
   }
 
-  private engine(args: string[], opts?: { env?: Record<string, string> }): Promise<ExecResult> {
+  private async engine(args: string[], opts?: { env?: Record<string, string> }): Promise<ExecResult> {
+    await this.kind();
     return this.run(this.opts.cli, [...this.global(), ...args], opts);
   }
 
-  private must(args: string[]): Promise<string> {
+  private async must(args: string[]): Promise<string> {
+    await this.kind();
     return mustExec(this.run, this.opts.cli, [...this.global(), ...args]);
   }
 

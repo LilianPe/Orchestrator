@@ -59,8 +59,11 @@ const STATE_TYPES: Record<LogicalState, string> = {
 
 export { teamOf };
 
-/** Linear's answer for an issue it does not have: `Entity not found: Issue`, shown as `Could not find referenced Issue.` */
-const isNotFound = (e: LinearGqlError) => /Entity not found: Issue\b|Could not find referenced Issue\b/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);
+/**
+ * Linear's answer for an issue it does not have, read on its fields, not its words (ORC-348): an `invalid input` on the
+ * `issue` field itself, whose only input is the identifier. A refusal below it (`issue.team`) is about something else.
+ */
+const isNotFound = (e: LinearGqlError) => e.extensions?.type === 'invalid input' && e.path?.length === 1 && e.path[0] === 'issue';
 
 /**
  * The id a comment or an activity of an outbox effect is created with (ORC-162): Linear takes a

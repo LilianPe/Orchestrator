@@ -155,6 +155,12 @@ function usageLimitOf(raw: { type?: string; is_error?: boolean; result?: unknown
   return at ? { resetAt: Number(at) * 1000 } : undefined;
 }
 
+/**
+ * The result subtypes of a limit the CLI enforces itself (`--max-turns`, `--max-budget-usd`): by name, never a word in it
+ * (ORC-348). Any other error, a new one included, is a failure.
+ */
+const LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
+
 /** How often the stream file is read for what the attempt wrote since: the relay (SSE, Linear) needs no better. */
 const POLL_MS = 250;
 
@@ -424,7 +430,7 @@ export class ClaudeCodeRunner implements Runner {
           }
         }
         watchLoops(raw);
-        if (raw?.type === 'result' && typeof raw.subtype === 'string' && raw.subtype.includes('max')) limited = true;
+        if (raw?.type === 'result' && typeof raw.subtype === 'string' && LIMIT_SUBTYPES.has(raw.subtype)) limited = true;
         for (const ev of parseStreamLine(line)) {
           if (ev.kind === 'text' && ev.text.trim()) lastText = ev.text;
           if (ev.kind === 'result') result = ev;

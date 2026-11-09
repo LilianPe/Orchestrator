@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync } fr
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { HARDENING, systemEnv } from '../adapters/exec.js';
+import { HARDENING, systemEnv, TIMED_OUT } from '../adapters/exec.js';
 import { ANSI } from '../checks/log-excerpt.js';
 import type { VerifyFailure } from './types.js';
 
@@ -67,6 +67,14 @@ export const VERIFY_TIMEOUT_MS = 15 * 60_000;
 /** `command` in a sandbox under the same cap, or `seconds`, by coreutils' `timeout` in the image: 124 is its exit on expiry. */
 export function cappedCommand(command: string, seconds = VERIFY_TIMEOUT_MS / 1000): string[] {
   return ['timeout', String(seconds), 'bash', '--norc', '-c', command];
+}
+
+/**
+ * The exit of a capped command started at `startedAt`, `null` when it met its cap (ORC-348): 124, which the command can
+ * exit with itself, is the cap's only once the factory's own clock has seen the cap pass.
+ */
+export function cappedExit(code: number, startedAt: number, seconds = VERIFY_TIMEOUT_MS / 1000): number | null {
+  return code === TIMED_OUT && Date.now() - startedAt >= seconds * 1000 ? null : code;
 }
 
 export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS, env = {}, warn) => {
