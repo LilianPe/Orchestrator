@@ -310,7 +310,7 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   }
   const version = (ticket?.spec?.version ?? 0) + 1;
   out.events.push({ type: 'ticket.patched', patch: { spec: { job: job.name, version, spec, at: event.at }, ...(ticket?.specCheckReturns ? { specCheckReturns: 0 } : {}) } });
-  out.effects.push({ kind: 'activity', type: 'response', body: publishedSpec(spec, { version, risk: ticket?.risk }) });
+  out.effects.push({ kind: 'activity', type: 'response', body: publishedSpec(spec, { version, risk: ticket?.risk ?? undefined }) });
   out.trace.push(`spec_review: version ${version} published, waiting for a validator`);
   return out;
 }
