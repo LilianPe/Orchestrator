@@ -259,6 +259,8 @@ export interface OrchestratorDeps {
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
+  /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
+  configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
   claudeAccount?: () => string | undefined;
   newId?: () => string;
@@ -1358,6 +1360,11 @@ export class Orchestrator {
     return (await this.usageLimitedUntil()) !== undefined;
   }
 
+  /** What holds every launch: an invalid configuration (ORC-350), the pause, the account's usage limit (ORC-340). */
+  private async launchesHeld(): Promise<boolean> {
+    return !!this.d.configProblems?.length || (await this.isPaused()) || (await this.usageLimited());
+  }
+
   private log(level: 'info' | 'warn' | 'error', message: string): void {
     this.d.bus.publish({ kind: 'log', level, message, at: this.d.clock.now() });
   }
@@ -1649,7 +1656,7 @@ export class Orchestrator {
     const leaseMs = this.d.effectLeaseMs ?? LEASE_MS;
     const n = (await this.d.store.listQueue()).filter((q) => q.queue === queue).length;
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || (await this.usageLimited()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if ((await this.launchesHeld()) || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -2384,7 +2391,7 @@ export class Orchestrator {
       await this.apply(t, { type: 'pending.set', job: start });
       return 'deferred';
     }
-    if (this.stopping || (await this.isPaused()) || (await this.usageLimited())) return requeue();
+    if (this.stopping || (await this.launchesHeld())) return requeue();
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];

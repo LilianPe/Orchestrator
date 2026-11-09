@@ -40,7 +40,7 @@ const EXEC_NETWORK =
 
 function transientHere(e: unknown): boolean {
   if (e instanceof GitHubApiError) return e.rateLimited || retryableStatus(e.status);
-  if (e instanceof LinearApiError) return (e.status !== undefined && retryableStatus(e.status)) || e.errors.some((g) => g.extensions?.code === 'RATELIMITED');
+  if (e instanceof LinearApiError) return e.rateLimited || (e.status !== undefined && retryableStatus(e.status));
   if (!(e instanceof Error)) return false;
   // undici's `TypeError: fetch failed` says nothing by itself: its cause tells a socket error from a certificate refused (read on the next turn).
   if (e.name === 'TimeoutError') return true;

@@ -842,7 +842,7 @@ describe('the health check and the diagnosis of a ticket (ORC-350)', () => {
       heldRow: { error: 'token [masked] refused' },
       factory: { takingTickets: false, configProblems: ['no Claude token'], paused: false, usageLimitedUntil: null },
     });
-    expect(body.reasons).toContain('the factory takes no ticket, its configuration is invalid: no Claude token');
+    expect(body.reasons).toContain('the factory launches no run, its configuration is invalid: no Claude token');
     expect(JSON.stringify(body)).not.toContain('tok-123');
     // The run's token stays out, as in /api/state.
     expect(body.run).toMatchObject({ id: 'r1', job: 'dev' });

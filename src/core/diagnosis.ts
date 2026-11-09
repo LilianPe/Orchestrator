@@ -50,8 +50,17 @@ const times = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export async function ticketDiagnoses(d: DiagnosisDeps, ticketId: string, projectId?: string): Promise<TicketDiagnosis[]> {
   const { store, mask } = d;
   const mine = <T extends { projectId: string }>(xs: T[]) => xs.filter((x) => projectId === undefined || x.projectId === projectId);
-  const [tickets, letters, queue] = await Promise.all([store.listTickets(), store.deadLetters(ticketId), store.listQueue()]);
-  const tracked = mine(tickets.filter((t) => t.ticketId === ticketId));
+  // One project asked: its ticket alone; otherwise the identifier in every project.
+  const tickets = projectId !== undefined ? store.getTicket(projectId, ticketId).then((t) => (t ? [t] : [])) : store.listTickets();
+  const [all, letters, queue] = await Promise.all([tickets, store.deadLetters(ticketId), store.listQueue()]);
+  const tracked = mine(all.filter((t) => t.ticketId === ticketId));
+  // The ticket's place in each lane, the queue read in its order.
+  const places = (['dev', 'questions'] as const).flatMap((q) =>
+    queue
+      .filter((i) => i.queue === q)
+      .map((item, n) => ({ item, position: n + 1 }))
+      .filter(({ item }) => item.ticketId === ticketId),
+  );
   const held = mine(d.held?.(ticketId) ?? []);
   const open = mine(letters.filter((l) => l.status === 'open'));
   const projects = [...new Set([...tracked, ...held, ...open].map((x) => x.projectId))];
@@ -84,13 +93,9 @@ export async function ticketDiagnoses(d: DiagnosisDeps, ticketId: string, projec
         out.deadLetters.push(letter);
         reasons.push(`event ${letter.eventId} (${letter.type}) set aside: ${letter.error} (repair: factory run repair ${ticketId})`);
       }
-      for (const q of ['dev', 'questions'] as const) {
-        const lane = queue.filter((i) => i.queue === q);
-        lane.forEach((i, n) => {
-          if (i.projectId !== pid || i.ticketId !== ticketId) return;
-          out.queue.push({ queue: q, job: i.job, position: n + 1, enqueuedAt: i.enqueuedAt, ...(i.failedStarts ? { failedStarts: i.failedStarts } : {}) });
-          reasons.push(`queued for ${i.job} (${q}), position ${n + 1}`);
-        });
+      for (const { item: i, position } of places.filter((p) => p.item.projectId === pid)) {
+        out.queue.push({ queue: i.queue, job: i.job, position, enqueuedAt: i.enqueuedAt, ...(i.failedStarts ? { failedStarts: i.failedStarts } : {}) });
+        reasons.push(`queued for ${i.job} (${i.queue}), position ${position}`);
       }
       return out;
     }),

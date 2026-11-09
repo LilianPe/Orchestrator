@@ -173,7 +173,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
     if (!o.fakeRunner && !sandboxes) {
       log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
-      log(env['FACTORY_ALLOW_HOST_VERIFY'] === '1' ? "Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets." : 'Warning: without a sandbox or FACTORY_ALLOW_HOST_VERIFY=1, verify refuses to run: every verified ticket will be blocked.');
+      // Without it, verify refuses to run: one of the `configProblems` below.
+      if (env['FACTORY_ALLOW_HOST_VERIFY'] === '1') log("Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets.");
     }
     // No default cap (ORC-216): the values are to calibrate, any default would be a guess that stops work silently.
     if (yml?.budgets?.perTicketTokens === undefined) log('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
@@ -194,11 +195,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('GitHub forge: gh CLI (migration fallback, read-only: without a GitHub App, the factory neither publishes nor merges)');
     }
     const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
-    if (!publisher) log('Warning: publication impossible (it needs the sandboxes and the GitHub App): a verified ticket will be blocked with this reason.');
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
     const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
     if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
-    // A configuration under which every ticket would be blocked takes none (ORC-350): /health tells why.
+    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health and the diagnosis tell why.
     const hostChecks = !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1';
     const problems = configProblems({
       fakeRunner: !!o.fakeRunner,
@@ -207,7 +207,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       publisher: !!publisher,
       budgets: yml?.budgets,
     });
-    for (const p of problems) log(`Invalid configuration, no ticket is taken until it is fixed and the factory restarted: ${p}`);
+    for (const p of problems) log(`Invalid configuration, no run is launched until it is fixed and the factory restarted: ${p}`);
     const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of config.yaml.
@@ -250,6 +250,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       workspaces,
       verify: runVerify,
       hostChecks,
+      configProblems: problems,
       projects,
       packDir,
       settingsPath: writeRunSettings(packDir, o.home),
@@ -477,12 +478,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       purge();
       purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
       purgeInterval.unref();
-      if (!problems.length) {
-        tickInterval = setInterval(() => {
-          orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
-        }, 60_000);
-        tickInterval.unref();
-      }
+      tickInterval = setInterval(() => {
+        orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
+      }, 60_000);
+      tickInterval.unref();
       // The heartbeat of the attempts (ORC-220): their leases, in the store.
       beatInterval = setInterval(() => {
         orchestrator.supervise().catch((e: unknown) => log(`heartbeat: ${(e as Error).message}`));
@@ -496,8 +495,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
       // every second, for what another process wrote and for leases that expired.
-      // Not on an invalid configuration (ORC-350): the events wait in the inbox, decided at the next start.
-      if (!problems.length) orchestrator.startWorker().catch((e: unknown) => log(`inbox: ${(e as Error).message}`));
+      orchestrator.startWorker().catch((e: unknown) => log(`inbox: ${(e as Error).message}`));
       if (!isUsableWebhookSecret(webhookSecret()))
         log('Warning: no Linear webhook secret configured, every webhook will be refused. Run factory init again to set it.');
       if (!isUsableWebhookSecret(githubSecret))

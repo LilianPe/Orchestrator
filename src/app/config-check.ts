@@ -26,9 +26,8 @@ export function configProblems(c: ConfigFacts): string[] {
   if (!c.sandboxes && !c.hostVerify) problems.push('verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
   if (!c.publisher) problems.push('publication impossible: it needs the sandboxes and the GitHub App');
   if (c.fakeRunner) return problems;
-  // A repository's `.factory/config.yml` may set the ticket's cap, read at each launch: its absence here is no refusal.
-  const unsetTicketCap = c.budgets?.perTicketTokens === undefined;
-  const budgets = checkBudgets(factoryDefault, c.budgets ?? {}).violations.filter((v) => !(unsetTicketCap && v.startsWith('budgets.per_ticket_tokens:')));
-  problems.push(...budgets.map((v) => `factory.yml: ${v}`));
+  // A repository's `.factory/config.yml` may set the ticket's cap, read at each launch: unset here, no cap to exceed.
+  const caps = { ...c.budgets, perTicketTokens: c.budgets?.perTicketTokens ?? Infinity };
+  problems.push(...checkBudgets(factoryDefault, caps).violations.map((v) => `factory.yml: ${v}`));
   return problems;
 }

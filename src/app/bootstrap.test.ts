@@ -275,33 +275,26 @@ describe('bootstrap', () => {
     await expect(startFactory({ home, log: () => {}, env: {} })).rejects.toThrow(/FACTORY_ALLOW_HOST_RUNS=1/);
   });
 
-  it('takes no ticket on a configuration that would block every one, and says why on /health (ORC-350)', async () => {
+  it('launches no run on a configuration that would block every ticket, and says why on /health (ORC-350)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4176, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    const startWorker = vi.spyOn(Orchestrator.prototype, 'startWorker');
-    const tick = vi.spyOn(Orchestrator.prototype, 'tick').mockResolvedValue();
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const logs: string[] = [];
+    // Runs on the host, verify not allowed there, no GitHub App: every verified ticket would be blocked.
+    const app = await startFactory({ home, log: (m) => void logs.push(m), env: { FACTORY_ALLOW_HOST_RUNS: '1' } });
     try {
-      // Runs on the host, verify not allowed there, no GitHub App: every verified ticket would be blocked.
-      const app = await startFactory({ home, log: (m) => void logs.push(m), env: { FACTORY_ALLOW_HOST_RUNS: '1' } });
-      try {
-        vi.advanceTimersByTime(120_000);
-        expect(startWorker).not.toHaveBeenCalled();
-        expect(tick).not.toHaveBeenCalled();
-        const res = await fetch('http://127.0.0.1:4176/health');
-        expect(res.status).toBe(503);
-        const body = await res.json();
-        expect(body).toMatchObject({ ok: false, store: 'ok', takingTickets: false });
-        expect(body.configProblems).toContain('verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
-        expect(logs).toContain('Invalid configuration, no ticket is taken until it is fixed and the factory restarted: verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
-      } finally {
-        await app.stop();
-      }
+      const res = await fetch('http://127.0.0.1:4176/health');
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body).toMatchObject({ ok: false, store: 'ok', takingTickets: false });
+      expect(body.configProblems.slice(0, 2)).toEqual([
+        'verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1',
+        'publication impossible: it needs the sandboxes and the GitHub App',
+      ]);
+      // No budget in factory.yml: refused as `factory validate` refuses it.
+      expect(body.configProblems[2]).toMatch(/^factory\.yml: budgets\.per_step_tokens\./);
+      expect(logs).toContain('Invalid configuration, no run is launched until it is fixed and the factory restarted: verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
     } finally {
-      vi.useRealTimers();
-      startWorker.mockRestore();
-      tick.mockRestore();
+      await app.stop();
     }
   });
 

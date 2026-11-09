@@ -224,15 +224,18 @@ export function createApp(d: ServerDeps): Hono {
     }
   });
 
+  // Read once at the start: a fix of the configuration needs a restart.
+  const configProblems = d.configProblems ?? [];
+  const takingTickets = configProblems.length === 0;
+
   // The health check (ORC-350): the store answers, and the factory takes tickets. 503 otherwise, with why.
   app.get('/health', async (c) => {
     const store = await d.store.getMeta('paused').then(
       () => 'ok' as const,
       () => 'unreachable' as const,
     );
-    const configProblems = d.configProblems ?? [];
-    const ok = store === 'ok' && configProblems.length === 0;
-    return c.json({ ok, store, takingTickets: configProblems.length === 0, configProblems, linearConnected: d.linearConnected() }, ok ? 200 : 503);
+    const ok = store === 'ok' && takingTickets;
+    return c.json({ ok, store, takingTickets, configProblems, linearConnected: d.linearConnected() }, ok ? 200 : 503);
   });
 
   // Why a ticket is stuck (ORC-350), with what holds every ticket: the configuration, the pause, the usage limit.
@@ -240,19 +243,21 @@ export function createApp(d: ServerDeps): Hono {
     const ticketId = c.req.param('id');
     const secrets = d.secrets?.() ?? [];
     const mask = (text: string) => maskTranscriptLine(text, secrets);
-    const found = await ticketDiagnoses({ store: d.store, ...(d.heldRows ? { held: d.heldRows } : {}), mask }, ticketId, c.req.query('project') || undefined);
+    const [found, paused, usageLimitedUntil] = await Promise.all([
+      ticketDiagnoses({ store: d.store, ...(d.heldRows ? { held: d.heldRows } : {}), mask }, ticketId, c.req.query('project') || undefined),
+      d.isPaused(),
+      d.usageLimitedUntil?.(),
+    ]);
     if (found.length === 0) return c.json({ error: `${ticketId}: no such ticket` }, 404);
     if (found.length > 1) return c.json({ error: `${ticketId} is tracked in several projects: ask with ?project=`, projects: found.map((f) => f.projectId).sort() }, 409);
-    const [paused, usageLimitedUntil] = await Promise.all([d.isPaused(), d.usageLimitedUntil?.()]);
-    const configProblems = d.configProblems ?? [];
     const diagnosis = found[0]!;
     const factory: string[] = [];
-    if (configProblems.length) factory.push(`the factory takes no ticket, its configuration is invalid: ${configProblems.join('; ')}`);
+    if (!takingTickets) factory.push(`the factory launches no run, its configuration is invalid: ${configProblems.join('; ')}`);
     if (paused) factory.push('the factory is paused');
     if (usageLimitedUntil !== undefined) factory.push(`the Claude usage limit holds every launch until ${new Date(usageLimitedUntil).toISOString()}`);
     return c.json({
       ...diagnosis,
-      factory: { takingTickets: configProblems.length === 0, configProblems, paused, usageLimitedUntil: usageLimitedUntil ?? null },
+      factory: { takingTickets, configProblems, paused, usageLimitedUntil: usageLimitedUntil ?? null },
       reasons: [...factory, ...diagnosis.reasons],
     });
   });

@@ -19,7 +19,11 @@ export class LinearApiError extends Error {
     readonly retryInMs?: number,
   ) {
     super(message);
+    this.rateLimited = status === 429 || errors.some((e) => e.extensions?.code === 'RATELIMITED');
   }
+
+  /** Linear's rate limit: a 429, or a `RATELIMITED` error, which it answers with a 400 (ORC-343). */
+  readonly rateLimited: boolean;
 }
 
 export interface LinearApiOptions {
@@ -48,8 +52,6 @@ const MAX_WAIT_MS = 60_000;
 const BASE_WAIT_MS = 1_000;
 /** The share of the hour's requests kept for the critical calls. */
 const RESERVE = 0.1;
-
-const isRateLimited = (status: number, errors: LinearGqlError[] | undefined) => status === 429 || !!errors?.some((e) => e.extensions?.code === 'RATELIMITED');
 
 /** An hour without an answer that says when its requests reset: the quota read is no longer known past it. */
 const QUOTA_WINDOW_MS = 3_600_000;
@@ -92,7 +94,7 @@ export class LinearApi {
         this.limitedUntil = 0;
         return data;
       } catch (err) {
-        if (!(err instanceof LinearApiError && err.status !== undefined && isRateLimited(err.status, err.errors))) throw err;
+        if (!(err instanceof LinearApiError && err.rateLimited)) throw err;
         // A reset already past by this clock (a skew) or a `Retry-After: 0` still backs off.
         const wait = Math.min(this.opts.maxWaitMs, err.retryInMs || BASE_WAIT_MS * 2 ** (failure - 1));
         this.limitedUntil = this.opts.now() + wait;
@@ -132,7 +134,8 @@ export class LinearApi {
   private readLimits(headers: { get(name: string): string | null } | undefined): number | undefined {
     const num = (name: string) => {
       const v = headers?.get(name);
-      return v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v);
+      const n = v ? Number(v) : NaN;
+      return Number.isFinite(n) ? n : undefined;
     };
     const now = this.opts.now();
     const limit = num('x-ratelimit-requests-limit');

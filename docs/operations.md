@@ -36,7 +36,7 @@ To stop a single ticket: `relais stop <ID>`, the Stop button, the `agent:stop` l
 
 ## Invalid configuration, health check and diagnosis of a ticket (ORC-350)
 
-**At startup**, the daemon checks that a ticket can reach its end. When it cannot, it starts (interface, webhooks, reconciliation) but **takes no ticket**: the inbox worker and the queue's tick do not start, the events wait in the inbox and are decided at the next start. Each reason is logged, `Invalid configuration, no ticket is taken until it is fixed and the factory restarted: <reason>`:
+**At startup**, the daemon checks that a ticket can reach its end. When it cannot, it starts but **launches no run**, as under a [pause](#pause): the events are decided, the effects (comments, statuses) executed and an attempt that outlived a restart followed to its end, but a delegated ticket waits in the queue, no agent paid for a ticket it would block. Each reason is logged, `Invalid configuration, no run is launched until it is fixed and the factory restarted: <reason>`:
 
 - `verify cannot run`: no sandbox (`FACTORY_CONTAINER_CLI`) and no `FACTORY_ALLOW_HOST_VERIFY=1`;
 - `publication impossible`: no sandbox, or no GitHub App;
