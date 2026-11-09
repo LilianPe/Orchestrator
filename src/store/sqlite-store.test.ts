@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { storeContract } from '../../test/helpers/store-suite.js';
@@ -26,5 +29,27 @@ describe('SqliteStore', () => {
     ).toContain('inbox_pending_ticket');
     expect(plan('SELECT COUNT(*) AS n FROM events WHERE ticket_id IS ?', 'REL-1')).toContain('events_ticket');
     expect(plan("SELECT 1 FROM outbox WHERE event_id = ? AND status IN ('pending', 'running')", 'e1')).toContain('outbox_event');
+  });
+
+  it('drops the commands and request paths a security log of an older file kept, when it opens (ORC-296)', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'factory-sqlite-')), 'relais.db');
+    const old = new SqliteStore(path);
+    const kept = {
+      runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5,
+      egress: [{ at: 1, method: 'GET', host: 'api.example', path: '/bot1:s3cret/send', ok: true, up: 0, down: 0 }],
+      refusals: [{ at: 2, tool: 'Bash', rule: 'push', command: 'git push https://x:s3cret@github.com/o/r' }],
+      skipped: { egress: 0, refusals: 0 },
+    };
+    (old as unknown as { db: DatabaseSync }).db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?)').run('r1', JSON.stringify(kept));
+    await old.close();
+    const s = new SqliteStore(path);
+    const raw = (s as unknown as { db: DatabaseSync }).db.prepare('SELECT data FROM security_logs').all() as { data: string }[];
+    expect(raw.map((r) => r.data).join()).not.toContain('s3cret');
+    expect(await s.securityLog('r1')).toEqual({
+      ...kept,
+      egress: [{ at: 1, method: 'GET', host: 'api.example', ok: true, up: 0, down: 0 }],
+      refusals: [{ at: 2, tool: 'Bash', rule: 'push' }],
+    });
+    await s.close();
   });
 });

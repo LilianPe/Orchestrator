@@ -332,7 +332,6 @@ export const egressRequests = pgTable(
     method: text('method').notNull(),
     host: text('host').notNull(),
     port: integer('port'),
-    path: text('path'),
     ok: boolean('ok').notNull(),
     reason: text('reason'),
     up: bigint('up', { mode: 'number' }).notNull(),
@@ -341,7 +340,7 @@ export const egressRequests = pgTable(
   (t) => [primaryKey({ columns: [t.runId, t.n] }), index('egress_requests_at_idx').on(t.at)],
 );
 
-/** The refusals of the pack's PreToolUse hook (ORC-285), from the agent's log: rule checked, command capped. */
+/** The refusals of the pack's PreToolUse hook (ORC-285), from the agent's log: rule checked, never the command. */
 export const refusals = pgTable(
   'refusals',
   {
@@ -350,7 +349,6 @@ export const refusals = pgTable(
     at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
     tool: text('tool').notNull(),
     rule: text('rule').notNull(),
-    command: text('command').notNull(),
   },
   (t) => [primaryKey({ columns: [t.runId, t.n] }), index('refusals_at_idx').on(t.at)],
 );

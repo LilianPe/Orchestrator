@@ -27,12 +27,25 @@ describe('the security log of a run (ORC-296)', () => {
     expect(log).toEqual({
       ...RUN,
       egress: [
-        { at: Date.parse('2026-11-03T10:00:00.000Z'), method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, up: 10, down: 20 },
+        { at: Date.parse('2026-11-03T10:00:00.000Z'), method: 'GET', host: 'registry.npmjs.org', ok: true, up: 10, down: 20 },
         { at: Date.parse('2026-11-03T10:00:00.000Z'), method: 'CONNECT', host: 'evil.example', port: 22, ok: false, reason: 'port 22 refused', up: 10, down: 20 },
       ],
-      refusals: [{ at: Date.parse('2026-11-03T10:00:01.000Z'), tool: 'Bash', rule: 'force-push', command: 'git push --force' }],
+      refusals: [{ at: Date.parse('2026-11-03T10:00:01.000Z'), tool: 'Bash', rule: 'force-push' }],
       skipped: { egress: 0, refusals: 0 },
     });
+  });
+
+  it('keeps neither the command, the path of a refused read, nor the path of a request: the rule and the host only', () => {
+    const log = readSecurityLog(
+      RUN,
+      files(
+        [egressLine({ path: '/bot123:s3cret/sendMessage' })],
+        [refusalLine({ command: 'git push https://x:ghp_s3cret@github.com/o/r', rule: 'push' }), refusalLine({ tool: 'Read', command: '/work/s3cret-name.ts', rule: 'full-read' })],
+      ),
+    );
+    expect(log.refusals.map((r) => r.rule)).toEqual(['push', 'full-read']);
+    expect(log.egress.map((e) => e.host)).toEqual(['registry.npmjs.org']);
+    expect(JSON.stringify(log)).not.toContain('s3cret');
   });
 
   it('is empty when a journal is missing', () => {
@@ -62,10 +75,10 @@ describe('the security log of a run (ORC-296)', () => {
     expect(log.skipped).toEqual({ egress: 3, refusals: 7 });
   });
 
-  it('caps a long command, and counts what is past the size cap as one skipped line', () => {
+  it('counts what is past the size cap as one skipped line', () => {
     const paths = files(undefined, [refusalLine({ command: 'x'.repeat(5000) }), ...Array.from({ length: 30_000 }, () => refusalLine())]);
     const log = readSecurityLog(RUN, paths);
-    expect(log.refusals[0]!.command).toHaveLength(2000);
+    expect(log.refusals[0]).toEqual({ at: Date.parse('2026-11-03T10:00:01.000Z'), tool: 'Bash', rule: 'force-push' });
     expect(log.refusals.length).toBeLessThan(30_001);
     // The lines read, the cut one and the rest: one skipped line for all that was not read.
     expect(log.refusals.length + log.skipped.refusals).toBeLessThan(30_001);
@@ -87,7 +100,7 @@ describe('the security log of a run (ORC-296)', () => {
     const hook = spawnSync(process.execPath, [HOOK], { input: call, encoding: 'utf8', env });
     expect(hook.stdout).toContain('"permissionDecision":"deny"');
     const log = readSecurityLog(RUN, paths);
-    expect(log.refusals).toEqual([{ at: expect.any(Number), tool: 'Read', rule: 'full-read', command: big }]);
+    expect(log.refusals).toEqual([{ at: expect.any(Number), tool: 'Read', rule: 'full-read' }]);
     expect(log.skipped.refusals).toBe(0);
     expect(refusalSummary(log)).toContain('`full-read`: 1');
     expect(refusalSummary(log)).not.toContain(big);
@@ -112,14 +125,14 @@ describe("the proxy's notes (ORC-337)", () => {
 
 describe('the refusals summary posted in the ticket session (ORC-296)', () => {
   const log = (patch: object = {}) => ({ ...RUN, egress: [], refusals: [], skipped: { egress: 0, refusals: 0 }, ...patch });
-  const refusal = (rule: string) => ({ at: 1, tool: 'Bash', rule, command: 'git push origin main --token=SECRET' });
+  const refusal = (rule: string) => ({ at: 1, tool: 'Bash', rule });
   const refused = (host: string) => ({ at: 1, method: 'GET', host, ok: false, reason: 'host not allowed', up: 0, down: 0 });
 
   it('says nothing for a run without a refusal', () => {
     expect(refusalSummary(log({ egress: [{ ...refused('a.example'), ok: true }] }))).toBeUndefined();
   });
 
-  it('counts the refusals per rule and names the refused hosts, never a command', () => {
+  it('counts the refusals per rule and names the refused hosts', () => {
     const body = refusalSummary(
       log({
         refusals: [refusal('push-trunk'), refusal('pipe-to-shell'), refusal('push-trunk')],
@@ -133,8 +146,6 @@ describe('the refusals summary posted in the ticket session (ORC-296)', () => {
     expect(body).toContain('`x.org` (1)');
     expect(body).toContain('1 other');
     expect(body).toContain('2 log lines');
-    expect(body).not.toContain('SECRET');
-    expect(body).not.toContain('git push');
     expect(body).not.toContain('everyone');
   });
 });

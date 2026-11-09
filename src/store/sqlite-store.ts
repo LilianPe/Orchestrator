@@ -21,6 +21,7 @@ import {
   decidedOn,
   decisionRecord,
   effectResult,
+  keptSecurityLog,
   timerEvent,
   timerRowId,
   type DecisionOutcome,
@@ -156,6 +157,10 @@ export class SqliteStore implements Store {
       const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
       if (!columns.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
+    // A security log an older daemon wrote kept the commands and request paths (ORC-296): they can hold a secret.
+    const older = this.db.prepare(`SELECT run_id, data FROM security_logs WHERE data LIKE '%"command"%' OR data LIKE '%"path"%'`).all() as { run_id: string; data: string }[];
+    const rewrite = this.db.prepare('UPDATE security_logs SET data = ? WHERE run_id = ?');
+    for (const r of older) rewrite.run(JSON.stringify(keptSecurityLog(JSON.parse(r.data) as SecurityLog)), r.run_id);
   }
 
   /** Runs `f` in one transaction (`node:sqlite` is synchronous: nothing interleaves with it). */
@@ -731,7 +736,7 @@ export class SqliteStore implements Store {
   }
 
   async putSecurityLog(log: SecurityLog): Promise<boolean> {
-    const res = this.db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?) ON CONFLICT DO NOTHING').run(log.runId, JSON.stringify(log));
+    const res = this.db.prepare('INSERT INTO security_logs (run_id, data) VALUES (?, ?) ON CONFLICT DO NOTHING').run(log.runId, JSON.stringify(keptSecurityLog(log)));
     return Number(res.changes) === 1;
   }
 
