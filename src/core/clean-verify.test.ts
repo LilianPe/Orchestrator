@@ -9,10 +9,11 @@ import type { ShootRequest, VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, type Exec, type ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxProvider, SandboxRequest } from '../adapters/sandbox/types.js';
+import { FakePackageRegistry } from '../checks/fake-registry.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
-import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
+import { runCleanVerify, verifyCommand, type CleanVerifyRequest, type RegistryOpener } from './clean-verify.js';
 
 const BRANCH = 'factory/orc-1-x';
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -64,6 +65,16 @@ class LocalSandboxes extends FakeSandboxProvider {
       : spawnSync(args[0]!, args.slice(1), { cwd: req.workspacePath, encoding: 'utf8' });
     return { stdout: p.stdout, stderr: p.stderr, code: p.status ?? 1 };
   }
+}
+
+/** The registries `factory/dependances` reaches (ORC-371): each opening and closing recorded. */
+function registries(registry: FakePackageRegistry) {
+  const r = { opened: [] as string[], closed: [] as string[], open: undefined as unknown as RegistryOpener };
+  r.open = async (id) => {
+    r.opened.push(id);
+    return { registry, close: async () => void r.closed.push(id) };
+  };
+  return r;
 }
 
 const identity = (repo: string) => {
@@ -428,7 +439,7 @@ describe('runCleanVerify', () => {
     });
 
     it('package.json#scripts blocks, its dependencies do not', async () => {
-      const { origin, repo, req } = setup({ commands: [] });
+      const { origin, repo, req } = setup({ commands: [], registries: registries(new FakePackageRegistry({ npm: ['a'] })).open }, 'dependencies: { allow: { npm: [a] } }\n');
       const manifest = (o: object) => write(repo, 'package.json', JSON.stringify(o));
       manifest({ dependencies: { a: '1' } });
       commit(repo, 'deps');
@@ -595,6 +606,119 @@ describe('runCleanVerify', () => {
         rmSync(join(repo, 'gone.ts'));
         commit(repo, 'delete');
         expect((await runCleanVerify(setupAgain(req))).failures[0]!.output).toContain('5 lines outside tests, over 4');
+      });
+    });
+
+    describe('factory/dependances (ORC-371)', () => {
+      const ALLOW = 'dependencies: { allow: { npm: [left-pad, zod], pypi: [requests] } }\n';
+      const npm = (repo: string, deps: Record<string, string>) => write(repo, 'package.json', JSON.stringify({ dependencies: deps }));
+
+      it('criterion 1: an added package missing from its registry blocks with its cause, before anything of it runs', async () => {
+        const regs = registries(new FakePackageRegistry({ npm: ['left-pad'] }));
+        const { repo, sandboxes, req } = setup({ registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1', zod: '3' });
+        commit(repo, 'deps');
+        const res = await runCleanVerify(req);
+        expect(res.ok).toBe(false);
+        expect(res.failures).toEqual([{ command: 'factory/dependances', exitCode: 1, output: expect.stringContaining('npm "zod" (package.json): package missing from the npm registry') }]);
+        expect(sandboxes.ran).toEqual([]);
+      });
+
+      it("criterion 2: an added package off the base's allowlist blocks", async () => {
+        const regs = registries(new FakePackageRegistry({ npm: ['left-pad', 'evil'], pypi: ['requests'] }));
+        const { repo, req } = setup({ commands: [], registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1', evil: '1' });
+        write(repo, 'requirements.txt', 'requests==2\n');
+        commit(repo, 'deps');
+        const res = await runCleanVerify(req);
+        expect(res.failures.map((f) => f.command)).toEqual(['factory/dependances']);
+        expect(res.failures[0]!.output).toContain(`npm "evil" (package.json): not on the repository's allowlist.`);
+        expect(res.failures[0]!.output).not.toContain('left-pad');
+      });
+
+      it('without an allowlist on the base, no added package passes', async () => {
+        const { repo, req } = setup({ commands: [], registries: registries(new FakePackageRegistry({ npm: ['left-pad'] })).open });
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        expect((await runCleanVerify(req)).failures[0]!.output).toContain('no npm allowlist for this repository');
+      });
+
+      it('criterion 3: added packages that exist and are allowed pass, npm and PyPI, and the commands run', async () => {
+        const registry = new FakePackageRegistry({ npm: ['left-pad'], pypi: ['requests'] });
+        const { repo, sandboxes, req } = setup({ registries: registries(registry).open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        write(repo, 'requirements.txt', 'Requests>=2\n');
+        commit(repo, 'deps');
+        expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
+        expect(registry.lookups).toEqual([{ ecosystem: 'npm', name: 'left-pad' }, { ecosystem: 'pypi', name: 'requests' }]);
+        expect(sandboxes.ran.map((r) => r.box)).toEqual(['r1-verify']);
+      });
+
+      it('criterion 4: read from the clone by the daemon, the registries reached outside every sandbox, which stay at network none', async () => {
+        const regs = registries(new FakePackageRegistry({ npm: ['left-pad'] }));
+        const { repo, sandboxes, req } = setup({ setup: ['true'], registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        expect(regs.opened).toEqual(['r1-dependencies']);
+        expect(regs.closed).toEqual(['r1-dependencies']);
+        // The sealed setup alone installs, at `limited`, as before; nothing of the check runs in a sandbox.
+        expect(sandboxes.created.filter((c) => c.runId !== 'r1-verify-setup').map((c) => [c.runId, c.network])).toEqual([
+          ['r1-bundle', 'none'],
+          ['r1-prepare', 'none'],
+          ['r1-verify', 'none'],
+        ]);
+      });
+
+      it('a branch that adds no dependency reaches no registry', async () => {
+        const regs = registries(new FakePackageRegistry());
+        const { repo, req } = setup({ commands: [], registries: regs.open });
+        write(repo, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0' }));
+        commit(repo, 'a manifest, no dependency');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        expect(regs.opened).toEqual([]);
+      });
+
+      it('a version bump adds nothing: only what the base did not declare is checked', async () => {
+        const regs = registries(new FakePackageRegistry());
+        const { origin, repo, req } = setup({ commands: [], registries: regs.open });
+        npm(origin, { zod: '3' });
+        commit(origin, 'zod on the base');
+        git(repo, 'pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main');
+        npm(repo, { zod: '4' });
+        commit(repo, 'bump');
+        expect((await runCleanVerify(req)).ok).toBe(true);
+        expect(regs.opened).toEqual([]);
+      });
+
+      it('a registry that does not answer is a breakdown, never sent to the agent, and its way out is closed', async () => {
+        const registry = new FakePackageRegistry();
+        registry.fail('npm', 'left-pad', 'connect ETIMEDOUT');
+        const regs = registries(registry);
+        const { repo, req } = setup({ registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        await expect(runCleanVerify(req)).rejects.toThrow(/registry did not answer \(connect ETIMEDOUT\)/);
+        expect(regs.closed).toEqual(['r1-dependencies']);
+      });
+
+      it('an instance with no way to the registries is a breakdown too, as is a proxy that does not open', async () => {
+        const { repo, req } = setup({}, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        commit(repo, 'deps');
+        await expect(runCleanVerify(req)).rejects.toThrow(/registry did not answer \(no package registry on this instance\)/);
+        const down = { ...setupAgain(req), registries: () => Promise.reject(new Error('egress: proxy unreachable')) };
+        await expect(runCleanVerify(down)).rejects.toThrow(/registry did not answer \(egress: proxy unreachable\)/);
+      });
+
+      it('a branch refused already reaches no registry: a breakdown there would hide its verdict', async () => {
+        const regs = registries(new FakePackageRegistry());
+        const { repo, req } = setup({ registries: regs.open }, ALLOW);
+        npm(repo, { 'left-pad': '1' });
+        write(repo, '.github/workflows/x.yml', 'on: push\n');
+        commit(repo, 'deps and a workflow');
+        expect((await runCleanVerify(req)).failures.map((f) => f.command)).toEqual(['factory/chemins-interdits']);
+        expect(regs.opened).toEqual([]);
       });
     });
 

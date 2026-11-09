@@ -2,6 +2,7 @@ import { parse } from 'yaml';
 import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
+import type { AllowList } from '../checks/deps.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 
@@ -32,6 +33,8 @@ export interface RepoConfig {
   budgets?: { perTicketTokens?: number };
   featureFlags?: { provider: string };
   visualPaths: string[];
+  /** The packages a branch may add (`factory/dependances`, ORC-371): exact names per ecosystem, none allowed where there is no list. */
+  dependencies: { allow: AllowList };
 }
 
 /** The repository picks its level; `full` is reserved to `setup`, never for the agent. */
@@ -73,7 +76,7 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network'];
+const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies'];
 const strings = z.array(z.string().min(1));
 
 const VARIABLE = /^[A-Z][A-Z0-9_]*$/;
@@ -152,6 +155,13 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');
   const featureFlags = read('feature_flags', z.strictObject({ provider: z.string().min(1) }), '`{ provider }` expected');
   const network = networkOf(r['network'], violations);
+  const dependencies = read('dependencies', z.strictObject({ allow: z.strictObject({ npm: strings.optional(), pypi: strings.optional() }) }), '`{ allow: { npm, pypi } }` expected', 'lists of exact package names under `npm` and `pypi` expected');
+  for (const [ecosystem, names] of Object.entries(dependencies?.allow ?? {})) {
+    // A pattern would be a rule of its own, which the MVP doc does not have (ORC-165).
+    names?.forEach((name, i) => {
+      if (name.includes('*')) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is a pattern; exact package names only`);
+    });
+  }
   let maxDiff = resolveMaxDiff();
   try {
     maxDiff = resolveMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);
@@ -176,6 +186,7 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     ...(budgets ? { budgets: budgets.per_ticket_tokens === undefined ? {} : { perTicketTokens: budgets.per_ticket_tokens } } : {}),
     ...(featureFlags ? { featureFlags } : {}),
     visualPaths: visualPaths ?? [],
+    dependencies: { allow: dependencies?.allow ?? {} },
   };
 }
 

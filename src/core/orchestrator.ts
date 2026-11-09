@@ -83,7 +83,7 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type RegistryOpener, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
@@ -206,6 +206,8 @@ export interface OrchestratorDeps {
   hostChecks?: boolean;
   /** `verify` with sandboxes (ORC-151); a test replaces it. */
   cleanVerify?: CleanVerifier;
+  /** The package registries `verify` asks (`factory/dependances`, ORC-371), through the egress proxy. */
+  registries?: RegistryOpener;
   projects: ProjectRuntime[];
   packDir: string;
   /** `--settings` file for runs; defaults to <packDir>/settings.json. */
@@ -1093,6 +1095,7 @@ export class Orchestrator {
         commands: job.verify,
         gitleaks: true,
         semgrep: true,
+        ...(this.d.registries ? { registries: this.d.registries } : {}),
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),

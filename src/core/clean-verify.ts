@@ -5,11 +5,13 @@ import { WIDTHS, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
+import { checkDependencies, DEPENDENCY_CHECK, manifestKind, type ManifestChange } from '../checks/deps.js';
 import { parseDiff, type DiffFile } from '../checks/diff.js';
 import { DIFF_SIZE_CHECK, diffSizeCheck } from '../checks/diff-size.js';
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
+import type { PackageRegistry } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
 import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
@@ -47,6 +49,8 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/semgrep` (ORC-333), by the image's Semgrep. Only an isolation test on a public image without it turns it off. */
   semgrep: boolean;
+  /** `factory/dependances` (ORC-371): the daemon's way to the package registries, never a sandbox's. Absent, a branch that adds a package has no verdict. */
+  registries?: RegistryOpener;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
@@ -63,6 +67,9 @@ export interface CleanVerifyRequest {
   deadlineMs?: number;
   exec?: Exec;
 }
+
+/** The package registries of `factory/dependances`, opened for the check `id` and closed after it: through the egress proxy (ORC-371). */
+export type RegistryOpener = (id: string) => Promise<{ registry: PackageRegistry; close: () => Promise<void> }>;
 
 export interface VisualRequest {
   /** The ticket asked for it at `intake` (ORC-206). */
@@ -137,6 +144,8 @@ export const boxOpener = (sandboxes: Boxes, of: { runId: string; ticketId: strin
  * 3. the base branch fetched into the clone from the forge, and `.factory/config.yml` read on it, never on the agent's
  *    branch nor on a ref of the repository it can write. Every read of the clone happens here, before any code of the
  *    agent has run in it, the checks of the commit included;
+ *    `factory/dependances` (ORC-371) reads the manifests there too, and the daemon asks the registries through the egress
+ *    proxy: no sandbox opens to the network for it;
  * 4. in a new sandbox at network `none`, gitleaks on the commits, then the checkout, and Semgrep on the files the diff adds
  *    lines to (ORC-333), with the factory's rules and the base's, read at step 3;
  * 5. the commands, in a new sandbox on that clone, at network `none`, with nothing else mounted;
@@ -184,6 +193,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config));
+    // Refused already: no registry is asked, as a breakdown would hide the verdict.
+    if (!failures.length) failures.push(...(await checkDeps(git, from, sha, config, req)));
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
     const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
@@ -415,6 +426,30 @@ function checkSize(diff: DiffFile[] | undefined, config: RepoConfig): VerifyFail
   if (!diff) return [];
   const r = diffSizeCheck(diff, { maxDiff: config.maxDiff });
   return r.ok ? [] : [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: r.summary }];
+}
+
+/**
+ * `factory/dependances` (ORC-165, ORC-371) on the manifests the commit changed, as the fork point and the commit hold them,
+ * against the base's allowlist. The registries are opened for a package to look up, and only then: a lookup without an
+ * answer rejects, as a registry down is no fault of the branch.
+ */
+async function checkDeps(git: CloneGit, from: string, sha: string, config: RepoConfig, req: Pick<CleanVerifyRequest, 'registries' | 'runId' | 'log'>): Promise<VerifyFailure[]> {
+  const changes: ManifestChange[] = [];
+  for (const path of zFields(await git.raw('diff', '--name-only', '-z', '--no-renames', from, sha))) {
+    if (manifestKind(path)) changes.push({ path, before: (await show(git, from, path)) ?? null, after: (await show(git, sha, path)) ?? null });
+  }
+  if (!changes.length) return [];
+  const open = req.registries ?? (() => Promise.reject(new Error('no package registry on this instance')));
+  let opened: ReturnType<RegistryOpener> | undefined;
+  const registry: PackageRegistry = { lookup: async (ecosystem, name) => (await (opened ??= open(`${req.runId}-dependencies`))).registry.lookup(ecosystem, name) };
+  try {
+    const r = await checkDependencies({ changes, registry, allowList: config.dependencies.allow });
+    const unanswered = r.findings.filter((f) => f.reason === 'registry_unknown');
+    if (unanswered.length) throw new Error(unanswered.map((f) => f.message).join('\n'));
+    return r.ok ? [] : [{ command: DEPENDENCY_CHECK, exitCode: 1, output: `Dependency the factory does not accept, publication blocked. Remove it, or have a human add it to \`dependencies.allow\` of \`${REPO_CONFIG_PATH}\` on the default branch:\n${r.summary}` }];
+  } finally {
+    await opened?.then((o) => o.close()).catch((err: Error) => req.log(`package registries not closed: ${err.message}`));
+  }
 }
 
 const isRegular = (mode: string) => mode === '100644' || mode === '100755';

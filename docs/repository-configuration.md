@@ -2,13 +2,13 @@
 
 A repository can declare its commands, its sensitive paths and its limits to the factory in `.factory/config.yml`, at the root. The file is optional: without it, the `factory/default` baseline applies as is.
 
-**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). `budgets.per_ticket_tokens` at each launch (ORC-340) and by `factory validate`'s worst case (ORC-216). `visual_paths` on each `verify` of a job that writes the commit (ORC-176). `services` at launch and on each `verify` (ORC-309, see [Services](#services)). `max_diff` on each `verify` (ORC-333), not yet on the publication (ORC-125). Read and validated, but not yet applied: `feature_flags`.
+**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). `budgets.per_ticket_tokens` at each launch (ORC-340) and by `factory validate`'s worst case (ORC-216). `visual_paths` on each `verify` of a job that writes the commit (ORC-176). `services` at launch and on each `verify` (ORC-309, see [Services](#services)). `max_diff` on each `verify` (ORC-333), not yet on the publication (ORC-125). `dependencies.allow` on each `verify` (ORC-371, see [Dependencies](#dependencies)). Read and validated, but not yet applied: `feature_flags`.
 
 ## When and where it is read
 
 - **At the launch of each agent run**, only once, on the forge's default branch, fetched just before into the factory's repository (`git fetch origin`, then `origin/HEAD`): never in the agent's worktree, nor on its branch. The agent cannot write this ref: its git directory is its own (ORC-317). The run takes its `setup`, its variables and its network level from it, and keeps it: whatever checks it afterwards (the red check, `verify` on the host without a sandbox) reuses this read, even if the default branch has changed in the meantime.
 - **The config `fetch` is capped at 2 minutes**, without prompting for credentials: past that delay, git is killed with what it started in its process group (its ssh), on Linux and macOS; on Windows, git alone. The launch is then refused (« Launch error: the forge no longer responds after 120 s »), and it never waits more than a few seconds beyond, even if a process that left that group (an ssh `ControlPersist`, a helper that detaches) keeps git's output open. A `fetch` that ends before the delay gives its own result, never « no longer responds ». Known limit: a Ctrl-C or a daemon stop during this `fetch` does not reach git, which runs in its own process group; it ends on its own, at the latest when the connection drops, filed among infrastructure failures in the Flow, like an unreadable default branch. This `fetch` only happens for a worktree that already exists, and for a knowledge run. For a new worktree or a question, the config is read from what the worktree preparation just fetched. That `fetch`, and the knowledge base's own when a run prepares it, have the same delay and the same message. The refusal message contains neither the repository's path on the server nor the git command: the details are in the daemon's log. It only suggests `git remote set-head origin --auto` when `origin/HEAD` is missing from the factory's repository.
-- **On each `verify`**, on the forge's default branch, fetched at that moment into a separate clone (ORC-151): `commands`, `setup`, `env` and `max_diff`, and the [Semgrep rules](#semgrep-rules) under `.factory/semgrep/`.
+- **On each `verify`**, on the forge's default branch, fetched at that moment into a separate clone (ORC-151): `commands`, `setup`, `env`, `max_diff` and `dependencies`, and the [Semgrep rules](#semgrep-rules) under `.factory/semgrep/`.
 - **An invalid file refuses the launch**: the ticket is blocked with the `factory validate` message (« Repository configuration to fix: .factory/config.yml refused: … »), without a new worktree, without a sandbox or run. No run starts on a half-read config. The Flow files it under « Invalid repository configuration », not among failures. A `.factory` or a `config.yml` that is a symbolic link is refused likewise: git reads nothing through a link. Fix the file on the default branch, then relaunch.
 - **The agent cannot change its run's config.** `.factory/**` is a forbidden path: `verify` blocks a commit that touches it (`factory/chemins-interdits`), and the next run reads the file from the default branch again. A config change goes through a human PR, merged on the default branch.
 
@@ -27,6 +27,7 @@ max_diff: { files: 15, lines: 400 }          # excluding tests; can only tighten
 feature_flags: { provider: openfeature }    # optional
 visual_paths: ["src/components/**", "app/**"]
 network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (default) | custom; `allow` for custom only
+dependencies: { allow: { npm: [zod, "@types/node"], pypi: [requests] } }   # the packages a branch may add; none without a list
 ```
 
 ## Keys
@@ -45,6 +46,7 @@ network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (def
 | `feature_flags.provider` | text | none | Feature flag provider. |
 | `visual_paths` | list of patterns | `[]` | Paths that require visual proof (ORC-176): a diff that touches one makes `verify` take captures before and after ([workflow.md](workflow.md#jobs)). Matched as `sensitive_paths`, from the root. |
 | `network` | `{ level, allow }` | `limited`, `[]` | The agent's network level: `none`, `limited` or `custom`. See [The agent's network](#the-agents-network). |
+| `dependencies.allow` | `{ npm, pypi }`, lists of names | none | The packages a branch may add, exact names (PyPI compared after normalisation, `Typing_Extensions` is `typing-extensions`). An ecosystem without a list allows nothing there. See [Dependencies](#dependencies). |
 
 ## Variables and secrets
 
@@ -94,11 +96,18 @@ A configuration **adds** checks or prohibitions, it never **removes** any from t
 - a negative pattern (`!…`) in `sensitive_paths` or `visual_paths`: it would remove a path;
 - a `max_diff` wider than the baseline (15 files, 400 lines);
 - `network.level: full`, reserved for `setup`, never for the agent; in `network.allow`, anything that is not a hostname (`*`, `*.com`, `0.0.0.0/0`): a wildcard or a range would amount to `full`; and an `allow` list under a level other than `custom`, which would open nothing;
+- a pattern in `dependencies.allow` (`@org/*`): exact names only;
 - a preset other than `factory/default@1.0`.
 
 The baseline's forbidden paths (`.github/**`, `CODEOWNERS`, `.env`, `.envrc`, `.env.*` but `.env.example`, `.env.sample` and `.env.template`, `.factory/**`, `.claude/**`, `.git/hooks/**`, `.git/config`, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc*`, `.yarn/releases/**`, `.yarn/plugins/**`, `.pnpmfile.cjs`, `setup.py`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`, `claims/**`, outgoing symbolic links) always remain forbidden to the agent, whatever the file declares. `factory/chemins-interdits` blocks them in `verify` and on the publication, at any depth, except `.github/**` and `claims/**`, read at the root (ORC-151, ORC-338).
 
 `custom` is `limited` plus the repository's hosts: it is the `limited` ceiling against which the preset's steps are checked; `none` is the `none` ceiling.
+
+## Dependencies
+
+`verify` runs `factory/dependances` (ORC-165, ORC-371) on the dependencies a branch adds to its manifests: `package.json` (its dependency sections, `overrides`, `resolutions`, `pnpm.overrides`), `pyproject.toml` and the requirements files (`*requirements*.txt`, `constraints*.txt`, `requirements/*.txt`, `.in` too). A package is added when no manifest declared it at the fork point; a version bump, a move between sections or files, or a removal adds nothing. Each added package must exist in its registry (npm, PyPI) and be on `dependencies.allow` of the default branch, read as the rest of this file is, never on the agent's branch. Otherwise the publication is blocked, with the cause. A source outside the registry (git, URL, a path outside the repository), another package index, and a changed file that steers installs without being read (`setup.cfg`, `Pipfile`, `uv.toml`…) block too. A path inside the repository (`workspace:`, `-e .`) is code of the branch: it does not block. Lockfiles are not read.
+
+The manifests are read from the clone's objects, before any code of the branch has run, and the registries are asked by the daemon through the egress proxy, at `limited`, reads only: the sandboxes of `verify` stay without network. A registry that does not answer stops `verify` as a breakdown, without a verdict: a registry down is no fault of the branch.
 
 ## Semgrep rules
 
