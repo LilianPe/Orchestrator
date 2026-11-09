@@ -33,6 +33,12 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc', output }]);
   });
 
+  it('carries the visual proof verify journaled to the check it publishes (ORC-176)', () => {
+    const visualProof = { decision: 'not_applicable' as const, triggers: [] };
+    const out = decide(verifying(), ev('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc', visualProof }), workflow);
+    expect(out.effects).toEqual([{ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc', visualProof }]);
+  });
+
   it('the ticket stays held while it publishes: no next run starts beside it, and a stop fences its result', () => {
     const event = passed();
     const t = after(verifying(), event, decide(verifying(), event, workflow));

@@ -37,6 +37,7 @@ import {
   type QueueRetry,
   type QueueItem,
   type RunRecord,
+  type Artifact,
   type FindingsRecord,
   type SecurityLog,
   type SecurityStats,
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS decision_trace (event_id TEXT PRIMARY KEY, data TEXT 
 CREATE TABLE IF NOT EXISTS dead_letter (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, status TEXT NOT NULL, failures INTEGER NOT NULL, error TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, resolved_by TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS dead_letter_ticket ON dead_letter (ticket_id, status);
 CREATE TABLE IF NOT EXISTS security_logs (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ticket_id TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 `;
 
@@ -741,6 +743,15 @@ export class SqliteStore implements Store {
   async securityLog(runId: string): Promise<SecurityLog | undefined> {
     const row = this.db.prepare('SELECT data FROM security_logs WHERE run_id = ?').get(runId) as { data: string } | undefined;
     return row && (JSON.parse(row.data) as SecurityLog);
+  }
+
+  async putArtifact(a: Artifact): Promise<boolean> {
+    const res = this.db.prepare('INSERT INTO artifacts (id, ticket_id, data) VALUES (?, ?, ?) ON CONFLICT DO NOTHING').run(a.id, a.ticketId, JSON.stringify(a));
+    return Number(res.changes) === 1;
+  }
+
+  async artifacts(ticketId: string): Promise<Artifact[]> {
+    return (this.db.prepare('SELECT data FROM artifacts WHERE ticket_id = ? ORDER BY seq').all(ticketId) as { data: string }[]).map((r) => JSON.parse(r.data) as Artifact);
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {

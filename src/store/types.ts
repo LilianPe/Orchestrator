@@ -358,6 +358,20 @@ export interface SecurityLog {
   skipped: { egress: number; refusals: number };
 }
 
+/**
+ * A file the factory made and kept for a ticket (ORC-176: a visual-proof capture), on the daemon's disk out of any mount of
+ * the agent's runner, known by its hash. `attemptId`: the run it was made for.
+ */
+export interface Artifact {
+  id: string;
+  ticketId: string;
+  attemptId?: string;
+  kind: string;
+  path: string;
+  sha256: string;
+  createdAt: number;
+}
+
 /** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
 export interface FindingsRecord {
   projectId: string;
@@ -630,6 +644,10 @@ export interface Store {
   putSecurityLog(log: SecurityLog): Promise<boolean>;
   /** The security log of a run (ORC-296), its entries in journal order. */
   securityLog(runId: string): Promise<SecurityLog | undefined>;
+  /** Keeps an artifact (ORC-176), once by its id: false, and nothing written, when it is kept already. */
+  putArtifact(a: Artifact): Promise<boolean>;
+  /** A ticket's artifacts, oldest first. */
+  artifacts(ticketId: string): Promise<Artifact[]>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */

@@ -1695,11 +1695,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (pending?.input === 'verify_failures') out.events.push({ type: 'pending.cleared', job: pending });
       if (job.red) freeze(out, ticket, event.payload.frozen);
       if (toPublish) {
-        const { runId, output, commands } = event.payload;
+        const { runId, output, commands, visualProof } = event.payload;
         out.events.push({ type: 'verify.started', runId });
         // A rebase rewrites the branch (ORC-146): its commit may replace the head the factory published, and that head only.
         const rewrite = job.step === REBASE ? { rewrite: true as const } : {};
-        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...rewrite });
+        out.effects.push({ kind: 'publish', runId, job: job.name, sha: toPublish, ...(output ? { output } : {}), ...(commands ? { commands } : {}), ...rewrite, ...(visualProof ? { visualProof } : {}) });
         return out;
       }
       return success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
