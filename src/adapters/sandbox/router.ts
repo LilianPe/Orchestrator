@@ -9,13 +9,18 @@ export interface SandboxBackend {
 
 const RANK: Record<IsolationLevel, number> = { L3: 3, L4: 4, L5: 5 };
 
+/** The services `b` does not start, of `services`: `create`'s rule, and `unprovided`'s (ORC-282). */
+function lacking(b: SandboxBackend, services: readonly string[]): string[] {
+  return services.filter((s) => !b.capabilities.services.includes(s));
+}
+
 /** What `b` lacks of `req`, in the words of the refusal; empty when it satisfies all of it. */
 function unmet(b: SandboxBackend, req: SandboxRequirements): string[] {
-  const { level, browser, services } = b.capabilities;
+  const { level, browser } = b.capabilities;
   return [
     ...(RANK[level] < RANK[req.minLevel] ? [`level >= ${req.minLevel}`] : []),
     ...(req.browser && !browser ? ['browser'] : []),
-    ...req.services.filter((s) => !services.includes(s)).map((s) => `service ${s}`),
+    ...lacking(b, req.services).map((s) => `service ${s}`),
   ];
 }
 
@@ -31,8 +36,7 @@ export class SandboxRouter implements SandboxProvider {
 
   /** As `create` picks (ORC-282): one backend gives them all, or those the closest one lacks; all of them without a backend. */
   unprovided(services: readonly string[]): string[] {
-    const lacks = this.backends.map((b) => services.filter((s) => !b.capabilities.services.includes(s)));
-    return lacks.reduce((best, l) => (l.length < best.length ? l : best), [...services]);
+    return this.backends.map((b) => lacking(b, services)).reduce((best, l) => (l.length < best.length ? l : best), [...services]);
   }
 
   async create(req: SandboxRequest): Promise<Sandbox> {

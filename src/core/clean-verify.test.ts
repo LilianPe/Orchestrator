@@ -896,6 +896,13 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     }
   });
 
+  it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {
+    const { req, sandboxes } = setup({ commands: ['true'] }, 'services: [redis]\n');
+    await expect(runCleanVerify(req)).rejects.toThrow('The service redis is not available');
+    expect(sandboxes.ran).toEqual([]);
+    expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-verify');
+  });
+
   it("a repository with services: a required proof is unavailable, naming them, as the shots get none of them (ORC-282)", async () => {
     const { req, shooter, sandboxes } = visual({ page: 'new page\n', config: `${VISUAL}services: [postgres]
 ` });

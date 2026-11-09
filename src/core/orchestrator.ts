@@ -83,7 +83,7 @@ import {
   TRUSTED,
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
-import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
+import { checkBranchPaths, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
@@ -399,13 +399,6 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
-/** A launch refused for the repository's `services` this factory does not provide (ORC-282): said in the ticket's session. */
-function servicesUnavailable(missing: readonly string[], sandboxed: boolean): string {
-  const [which, it] = missing.length === 1 ? [`The service ${missing[0]} is`, 'it'] : [`The services ${missing.join(', ')} are`, 'them'];
-  const why = sandboxed ? `no sandbox backend of this factory provides ${it}` : 'this factory runs without sandboxes (FACTORY_CONTAINER_CLI), which provide none';
-  return `${which} not available: .factory/config.yml declares ${it} under \`services\`, and ${why}. No run starts without ${it}: take ${it} out of \`services\` or give the factory a backend that provides ${it}, then reply here.`;
-}
-
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
 const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
