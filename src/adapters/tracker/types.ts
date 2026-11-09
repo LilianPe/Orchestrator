@@ -17,6 +17,8 @@ export interface TrackerIssue {
   updatedAt?: number;
   /** The issues this one is « blocked by » in the tracker (ORC-363), with their status type. Absent: none read. */
   blockedBy?: (Blocker & { stateType: string })[];
+  /** Who created the issue, its requester (ORC-197): `url`, their profile, which mentions them in a Linear text. Absent: no one to mention. */
+  creator?: { id: string; name: string; url: string };
 }
 
 export type ActivityInput =

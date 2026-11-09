@@ -114,6 +114,17 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
     expect((await result()).deduplicated).toBeUndefined();
   });
 
+  it('After the merge (ORC-197): a replayed after_merge finds its changelog entry and its mention, and writes neither twice', async () => {
+    const { h, settled, result } = replaying('after_merge');
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
+    await settled();
+    expect(await h.store.changelog(0, Number.MAX_SAFE_INTEGER)).toHaveLength(1);
+    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response' && a.body.startsWith('Delivered'))).toEqual([{ type: 'response', body: 'Delivered: [PR #3](https://gh/pr/3) is merged.' }]);
+    expect(await result()).toMatchObject({ kind: 'after_merge', deduplicated: true });
+  });
+
   it('Labels: the final state of the group holds whatever the labels read when the effect is replayed', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', labels: ['agent:attente', 'bug'] });

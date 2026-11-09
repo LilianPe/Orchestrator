@@ -19,7 +19,7 @@ export const rawRuleSchema = z
     move: logical.optional(),
     labels: z.object({ add: z.array(z.string()).default([]), remove: z.array(z.string()).default([]) }).optional(),
     comment: z.string().optional(),
-    do: z.enum(['stop', 'cleanup']).optional(),
+    do: z.enum(['stop', 'cleanup', 'after_merge']).optional(),
   })
   .strict();
 
@@ -150,8 +150,11 @@ export interface Rule {
   move?: LogicalState;
   labels?: { add: string[]; remove: string[] };
   comment?: string;
-  /** `propose_delegate`: the answer to `fais-le`, only in versions frozen before ORC-193, which decide as they did. */
-  do?: 'stop' | 'cleanup' | 'propose_delegate';
+  /**
+   * `after_merge` (ORC-197): the step of a merged PR, on `pr.merged` only: the requester told, the changelog entry, then `cleanup`.
+   * `propose_delegate`: the answer to `fais-le`, only in versions frozen before ORC-193, which decide as they did.
+   */
+  do?: 'stop' | 'cleanup' | 'propose_delegate' | 'after_merge';
 }
 
 export interface JobSpec {

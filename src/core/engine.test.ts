@@ -184,9 +184,21 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(decide(ticket({ logical: 'dev', delegated: false }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
   });
 
-  it('merge moves to done and cleans up: it starts no run, the memory in writing sleeps (ORC-193)', () => {
+  it('merge moves to done, runs the after_merge step, then cleans up: it starts no run, the memory in writing sleeps (ORC-193, ORC-197)', () => {
     const out = decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
-    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup']);
+    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'after_merge', 'cleanup']);
+    // When GitHub does not say when it merged, the event's time.
+    expect(out.effects[2]).toEqual({ kind: 'after_merge', number: 3, url: 'u', at: 1000 });
+  });
+
+  it('the after_merge step carries the merge as GitHub tells it: its commits and its time (ORC-197)', () => {
+    const out = decide(ticket({ logical: 'done' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b', headSha: 'h', mergeSha: 'm', mergedAt: 900 }), workflow);
+    expect(out.effects.find((e) => e.kind === 'after_merge')).toEqual({ kind: 'after_merge', number: 3, url: 'u', at: 900, headSha: 'h', mergeSha: 'm' });
+  });
+
+  it('a version frozen before ORC-197 cleans up on a merge, with no after_merge step', () => {
+    // As frozen before ORC-193 too: its rule is `{ move: done, do: cleanup, run: learn }`.
+    expect(kinds(decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), beforeOrc193(workflow))).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
   });
 
   it('a PR closed without merge cancels the run: stopped, nothing pending, blocked until a human relaunches (ORC-134)', () => {
@@ -242,13 +254,14 @@ describe('decide — after the merge (ORC-268)', () => {
     expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), noLearn).events).not.toContainEqual({ type: 'ticket.unblocked' });
   });
 
-  it('a merge stops the dev work in flight, pending, queued or debounced, before its rule cleans up', () => {
+  it('a merge stops the dev work in flight, pending, queued or debounced, before the after_merge step and the cleanup of its rule', () => {
     const t = ticket({ logical: 'ready', activeRunId: 'r1', pendingJob: { job: 'dev-feedback' }, verifyingRunId: 'r1' });
     const out = decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow);
     expect(out.events).toEqual([{ type: 'work.cancelled' }]);
     expect(out.effects).toEqual([
       { kind: 'stop_run' },
       { kind: 'move', to: 'done' },
+      { kind: 'after_merge', number: 3, url: 'u', at: 1000 },
       { kind: 'cleanup' },
     ]);
   });

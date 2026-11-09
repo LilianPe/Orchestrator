@@ -160,6 +160,11 @@ on:
       expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']).not.toHaveProperty('tools');
     });
 
+    it('takes the after_merge step on a merge only: no other event carries a merged PR (ORC-197)', () => {
+      expect(loadWorkflow({ packDir }).on['pr.merged']).toEqual([{ move: 'done', do: 'after_merge' }]);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  pr.closed:\n    - { do: after_merge }\n') })).toThrow(/on\.pr\.closed\[0\]\.do: after_merge/);
+    });
+
     it("refuses a read-only step anywhere but a clone of its own: never the ticket's worktree (ORC-367)", () => {
       for (const ws of ['worktree', 'knowledge']) {
         expect(() => loadWorkflow({ packDir, projectFile: projectFile(`version: 1\njobs:\n  intake: { workspace: ${ws} }\n`) }), ws).toThrow(/jobs\.intake\.workspace/);

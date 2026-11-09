@@ -57,6 +57,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /api/security?since=&until=` | Security log over `[since, until)` in ms (the last 7 days by default): requests per host (those not a plain host name together), refusals per rule, the 50 most refused runs with their counts and how many are left out (ORC-300) | password |
 | `GET /api/security/runs/:id` | A run's refusals (time, tool, rule) counted per rule, its hosts with their refused requests; never a command, a path nor a host that is not a plain name (ORC-300) | password |
 | `GET /api/blocks?since=&until=` | Pareto of the block causes over `[since, until)`: moves into Blocked per cause, most frequent first (ORC-300) | password |
+| `GET /api/changelog?since=&until=&project=` | The changelog entries over `[since, until)` in ms, the last 7 days by default, of one project with `project`, the most recent first: what each merged PR delivered, where, its captures by their artifact id (never a path on the disk) and its links (ORC-197). Read-only: only the `after_merge` step appends to it | password |
 | `GET /api/events`, `GET /api/events/recent` | SSE stream, last 100 events | password |
 | `GET /api/runs/:id` | A run's detail: timeline, gates and decisions, findings, checks, cost per step, output, transcript or why there is none (without the run token nor the agent's last text) | password |
 | `GET /api/runs/:id/transcript` | A run's transcript | password |

@@ -46,9 +46,10 @@ on:
   # During another step, the rebase waits for that work to end: the agent at work never resolves the conflict.
   pr.conflicted:
     - { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }
-  # The memory in writing sleeps (ORC-193): a merge starts no run.
+  # The `after_merge` step (ORC-197): the requester mentioned in the ticket's session with the merged PR's link, the changelog
+  # entry with the captures `verify` took, then the cleanup. It starts no run: the memory in writing sleeps (ORC-193).
   pr.merged:
-    - { move: done, do: cleanup }
+    - { move: done, do: after_merge }
 jobs:
   # The `intake` step of factory/default (ORC-206): reads the ticket and the code, returns size, risk, completeness and
   # screen through `submit_result`. Its end is the guard before In Progress: a complete ticket starts `dev`, an
