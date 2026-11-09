@@ -440,8 +440,13 @@ jobs:
     });
 
     it('keeps refusing a negation that leaves some of the real branches in', async () => {
-      const result = await doctor([workflow(pushOn('    branches: ["**", "!factory/[a-m]*"]'))]);
-      expect(result.code).toBe(1);
+      for (const negation of ['!factory/[a-m]*', '!factory/[amoz]*', '!**[a-z]']) {
+        expect((await doctor([workflow(pushOn(`    branches: ["**", "${negation}"]`))])).code, negation).toBe(1);
+      }
+    });
+
+    it('refuses a filter that reaches only the branches whose title ends in a digit', async () => {
+      expect((await doctor([workflow(pushOn('    branches: ["**[0-9]"]'))])).code).toBe(1);
     });
   });
 

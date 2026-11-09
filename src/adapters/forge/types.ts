@@ -77,8 +77,8 @@ export interface GitAccess {
  * Apps are known (ORC-353): another App may name a check as the factory names its own. By their `factory/` prefix otherwise,
  * as the `gh` fallback, which reads no App, knows them.
  */
-export const isFactoryCheck = (check: { name: string; appId?: string | number }, factoryAppId?: string | number): boolean =>
-  factoryAppId !== undefined && check.appId !== undefined ? String(check.appId) === String(factoryAppId) : check.name.startsWith('factory/');
+export const isFactoryCheck = (check: { name: string; app?: { id?: unknown } | null }, factoryAppId?: string): boolean =>
+  factoryAppId !== undefined && typeof check.app?.id === 'number' ? String(check.app.id) === factoryAppId : check.name.startsWith('factory/');
 
 /** A check run the factory publishes on a sha (ORC-162): `externalId` is the id of the effect that created it (ORC-138, point 5). */
 export type CheckRunRequest = {

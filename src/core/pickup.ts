@@ -18,6 +18,8 @@ const LIST_ITEM = /^\s*([-*+]|\d+[.)])\s/;
 /** A line that opens an example: « Given » or « Étant donné », after a list mark, an emphasis or a `Scenario:` line's indent. */
 const GIVEN = /^\s*(([-*+]|\d+[.)])\s+)?(\*\*|__)?\s*(given|[ée]tant donn[ée]e?s?)(?=[\s,:*_]|$)/i;
 const THEN = /(^|[\s,;:*_(])(then|alors)(?=[\s,:*_]|$)/i;
+/** A list item that goes on with the example: its next step, `- When …`, `2. Alors …`. */
+const STEP_ITEM = /^\s*([-*+]|\d+[.)])\s+(\*\*|__)?\s*(when|then|and|but|quand|lorsque|alors|et|mais)(?=[\s,:*_]|$)/i;
 const CHECKBOX = /^\s*[-*+]\s+\[[ xX]\]\s+\S/m;
 
 /** A heading's text: its `#`, its emphasis and its trailing colon taken off. */
@@ -39,8 +41,8 @@ export function hasAcceptanceCriteria(description: string): boolean {
       return body !== -1 && !lines[i + 1 + body]!.trim().startsWith('#');
     }
     if (!GIVEN.test(line)) return false;
-    // The example's lines: this one, then the ones of its item, up to a blank line or the next item.
-    const end = lines.slice(i + 1).findIndex((l) => l.trim() === '' || LIST_ITEM.test(l));
+    // The example's lines: this one, then the ones of its item and the items of its next steps, up to a blank line or another item.
+    const end = lines.slice(i + 1).findIndex((l) => l.trim() === '' || (LIST_ITEM.test(l) && !STEP_ITEM.test(l)));
     return lines.slice(i, end === -1 ? undefined : i + 1 + end).some((l) => THEN.test(l));
   });
 }

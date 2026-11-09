@@ -12,11 +12,14 @@ import { effectiveInstance } from '../config/instance.js';
 import { branchName } from '../core/naming.js';
 
 /**
- * Branches as the factory names them (`branchName`, ORC-353): team keys and titles of every shape, enough to decide whether
- * a filter reaches the factory's branches, or leaves every one of them out.
+ * Branches as the factory names them (`branchName`, ORC-353): a team key for every initial (one with a digit too), numbers
+ * of every length, titles that start and end with a letter or a digit, the longest slug and the empty title's. Enough to
+ * decide whether a filter reaches the factory's branches, or leaves every one of them out; a sample all the same, not
+ * every branch (docs/github.md).
  */
-const FACTORY_PROBES = ['A-1', 'MZ-42', 'ORC-353', 'ZZ9-70000'].flatMap((id) =>
-  ['', 'Fix the login', '2026 : Été', 'x'.repeat(60), 'a-b c'].map((title) => branchName(id, title)),
+const PROBE_TITLES = ['', 'Fix the login', '2026 : Été', 'x'.repeat(60), 'a-b c', 'Upgrade to v2', '42'];
+const FACTORY_PROBES = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'].flatMap((key, i) =>
+  PROBE_TITLES.map((title, j) => branchName(`${key}-${[1, 42, 353, 70000][(i + j) % 4]}`, title)),
 );
 
 export interface DoctorApi {

@@ -713,7 +713,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       this.allPages(`${base}/status`, 'statuses', 'a list of commit statuses', isStatus, token),
     ]);
     return summarizeChecks([
-      ...runs.filter((run) => !isFactoryCheck({ name: run.name, ...(run.app ? { appId: run.app.id } : {}) }, this.appId)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
+      ...runs.filter((run) => !isFactoryCheck(run, this.appId)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
       ...statuses.map((status) => ({ name: status.context, bucket: statusBucket(status.state) })),
     ]);
   }

@@ -36,6 +36,8 @@ describe('pickupFailures', () => {
     it('numbered or bulleted « Given / Étant donné … then / alors » examples, on one line or several', () => {
       passes('Exporter la liste.\n\n1. Étant donné une liste de 3 lignes, quand j’exporte, alors le CSV a 3 lignes.\n2. Étant donné une liste vide, quand j’exporte, alors le CSV n’a que l’en-tête.');
       passes('Export the list.\n\n- Given a list of 3 rows\n  When I export it\n  Then the CSV has 3 rows');
+      passes('Export the list.\n\n- Given a list of 3 rows\n- When I export it\n- Then the CSV has 3 rows');
+      passes('Exporter la liste.\n\n1. Étant donné une liste vide\n2. Quand j’exporte\n3. Alors le CSV n’a que l’en-tête');
       passes('Export the list.\n\nScenario: empty list\n  Given an empty list\n  When I export it\n  Then the CSV holds the header only');
     });
 
