@@ -210,6 +210,7 @@ describe('server', () => {
       egress: [
         { at, method: 'GET', host: 'registry.npmjs.org', path: '/pkg?token=s3cret', ok: true, up: 1, down: 1 },
         { at: at + 1, method: 'POST', host: 'evil.example', path: '/upload', ok: false, reason: 'not allowed', up: 0, down: 0 },
+        { at: at + 1, method: 'CONNECT', host: 'ghp_s3cret:x@evil', ok: false, reason: 'not allowed', up: 0, down: 0 },
       ],
       refusals: [
         { at: at + 2, tool: 'Bash', rule: 'push', command: 'git push https://x:ghp_s3cret@github.com/o/r' },
@@ -229,7 +230,7 @@ describe('server', () => {
       expect(JSON.parse(text)).toMatchObject({
         runId: 'r1', ticketId: 'REL-1',
         rules: [{ rule: 'push', refusals: 2 }, { rule: 'force-push', refusals: 1 }],
-        refusedHosts: [{ host: 'evil.example', refused: 1 }],
+        hosts: [{ host: 'evil.example', requests: 1, refused: 1 }, { host: 'registry.npmjs.org', requests: 1, refused: 0 }, { host: '(not a host name)', requests: 1, refused: 1 }],
         skipped: { egress: 0, refusals: 1 },
       });
       expect((await app.request('/api/security/runs/nope')).status).toBe(404);
@@ -242,12 +243,22 @@ describe('server', () => {
       await store.putSecurityLog(log('recent', 'REL-2', 25 * DAY));
       const body = await (await app.request('/api/security')).json();
       expect(body).toMatchObject({ since: 23 * DAY, until: 30 * DAY });
-      expect(body.runs).toEqual([{ runId: 'recent', projectId: 'p', ticketId: 'REL-2', requests: 2, refused: 1, refusals: 3 }]);
+      expect(body.runs).toEqual([{ runId: 'recent', projectId: 'p', ticketId: 'REL-2', requests: 3, refused: 2, refusals: 3 }]);
+      expect(body.runsLeftOut).toBe(0);
       expect(body.rules).toEqual([{ rule: 'push', refusals: 2 }, { rule: 'force-push', refusals: 1 }]);
       const both = await (await app.request(`/api/security?since=${5 * DAY}&until=${30 * DAY}`)).json();
       expect(both.runs.map((r: { runId: string }) => r.runId)).toEqual(['old', 'recent']);
-      expect(both.hosts).toEqual([{ host: 'evil.example', requests: 2, refused: 2 }, { host: 'registry.npmjs.org', requests: 2, refused: 0 }]);
+      expect(both.hosts).toEqual([{ host: 'evil.example', requests: 2, refused: 2 }, { host: 'registry.npmjs.org', requests: 2, refused: 0 }, { host: '(not a host name)', requests: 2, refused: 2 }]);
       expect(JSON.stringify(both)).not.toContain('s3cret');
+    });
+
+    it('serves the 50 most refused runs of the period, and how many it leaves out', async () => {
+      const { app, store } = await setup();
+      for (let i = 0; i < 52; i++) await store.putSecurityLog({ ...log(`r${String(i).padStart(2, '0')}`, 'REL-1', 1), refusals: [] });
+      const body = await (await app.request('/api/security?since=0&until=10')).json();
+      expect(body.runs).toHaveLength(50);
+      expect(body.runs[0].runId).toBe('r00');
+      expect(body.runsLeftOut).toBe(2);
     });
 
     it('refuses a period that is not one', async () => {

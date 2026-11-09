@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import {
@@ -963,15 +963,33 @@ export class PgStore implements AsyncStore {
     };
   }
 
+  /** `blockMoves` in SQL: the decisions that moved a ticket into Blocked or found it moved, and the projections blocked since their last decision. */
   async blocksEntered(since: number, until: number): Promise<BlockEntry[]> {
-    const result = await this.db.execute<{ decision: DecisionRecord & { ticket: TicketState; at: number } }>(sql`
-      select decision from decision_trace
-      where (decision->'ticket'->>'blocked')::boolean
-        and not coalesce((decision->'before'->>'blocked')::boolean, false)
-        and (decision->>'at')::numeric >= ${since} and (decision->>'at')::numeric < ${until}
-      order by (decision->>'at')::numeric, created_at, id
+    const within = (at: SQL) => sql`${at} >= ${since} and ${at} < ${until}`;
+    const result = await this.db.execute<{ ticket: TicketState; at: string | number }>(sql`
+      with d as (
+        select decision, lag((decision->'ticket'->>'blocked')::boolean) over (
+          partition by decision->>'projectId', ticket_id order by (decision->>'seq')::int
+        ) as blocked_before
+        from decision_trace where decision ? 'ticket' and decision ? 'at'
+      )
+      select decision->'ticket' as ticket, (decision->>'at')::numeric as at from d
+      where (decision->'ticket'->>'blocked')::boolean and not coalesce((decision->'before'->>'blocked')::boolean, false)
+        and ${within(sql`(decision->>'at')::numeric`)}
+      union all
+      select decision->'before', (decision->'before'->>'updatedAt')::numeric from d
+      where (decision->'before'->>'blocked')::boolean and not coalesce(blocked_before, false)
+        and ${within(sql`(decision->'before'->>'updatedAt')::numeric`)}
+      union all
+      select t.data, (t.data->>'updatedAt')::numeric from tickets t
+      where (t.data->>'blocked')::boolean and ${within(sql`(t.data->>'updatedAt')::numeric`)}
+        and not coalesce((
+          select (x.decision->'ticket'->>'blocked')::boolean from decision_trace x
+          where x.ticket_id = t.id and x.decision->>'projectId' = t.project_id and x.decision ? 'ticket' and x.decision ? 'at'
+          order by (x.decision->>'seq')::int desc limit 1
+        ), false)
     `);
-    return result.rows.map((r) => blockEntry(r.decision));
+    return result.rows.map((r) => blockEntry(r.ticket, Number(r.at))).sort((a, b) => a.at - b.at);
   }
 
   async putTimer(timer: TimerRecord): Promise<void> {

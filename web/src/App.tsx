@@ -78,7 +78,12 @@ function SecurityPage() {
   const [read, setRead] = useState<{ period: SecurityPeriodView; blocks: BlockParetoView }>();
   const [failed, setFailed] = useState(false);
   const [selected, setSelected] = useState<string>();
-  const [run, setRun] = useState<RunSecurityView>();
+  const [run, setRun] = useState<{ runId: string; view?: RunSecurityView; failed?: boolean }>();
+  // Another period lists other runs: the one selected goes with the last one.
+  const choose = (d: (typeof PERIODS)[number]) => {
+    setDays(d);
+    setSelected(undefined);
+  };
   useEffect(() => {
     let live = true;
     const load = () => {
@@ -96,21 +101,22 @@ function SecurityPage() {
       clearInterval(timer);
     };
   }, [days]);
-  useEffect(() => {
-    let live = true;
-    setRun(undefined);
-    if (selected) void fetchRunSecurity(selected).then((r) => live && setRun(r), () => live && setFailed(true));
-    return () => {
-      live = false;
-    };
-  }, [selected]);
+  // Picking a run reads it, picking it again reads it again: a failed read is the run's, not the period's.
+  const select = (runId: string) => {
+    setSelected(runId);
+    setRun({ runId });
+    void fetchRunSecurity(runId).then(
+      (view) => setRun((r) => (r?.runId === runId ? { runId, view } : r)),
+      () => setRun((r) => (r?.runId === runId ? { runId, failed: true } : r)),
+    );
+  };
   return (
     <div className="flow">
       <nav className="periods" aria-label="Period">
-        {PERIODS.map((d) => <button key={d} aria-pressed={d === days} onClick={() => setDays(d)}>Last {d} days</button>)}
+        {PERIODS.map((d) => <button key={d} aria-pressed={d === days} onClick={() => choose(d)}>Last {d} days</button>)}
       </nav>
       {failed && <p className="flow-failed" role="alert">{read ? 'Security log out of date: reading it failed. Retrying within 30 s.' : 'Security log unavailable: reading it failed. Retrying within 30 s.'}</p>}
-      {read ? <Security period={read.period} blocks={read.blocks} run={run} selected={selected} onSelect={setSelected} /> : !failed && <section><p className="empty">Loading the security log…</p></section>}
+      {read ? <Security period={read.period} blocks={read.blocks} run={selected ? run?.view : undefined} runFailed={!!selected && run?.failed} selected={selected} onSelect={select} /> : !failed && <section><p className="empty">Loading the security log…</p></section>}
     </div>
   );
 }

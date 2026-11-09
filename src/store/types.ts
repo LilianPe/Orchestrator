@@ -368,9 +368,12 @@ export interface SecurityStats {
 }
 
 /**
- * A move of a ticket into Blocked (ORC-300): a committed decision whose projection is blocked and was not before (or
- * did not exist). `at`: the decision's clock. `kind`: the projection's typed kind, got back from its reason for a block
- * written before ORC-345 (`upcastTicket`), as the Flow reads it.
+ * A move of a ticket into Blocked (ORC-300), wherever it was made: by a decision (its projection blocked, and not before
+ * it), or outside one by the orchestrator (a launch error, a refused pickup), which journals nothing; such a move is
+ * found by the next decision of the ticket (its `before` blocked, the decision before it left the ticket free) or, when
+ * none came since, by the projection. `at`: the decision's clock, or the blocked ticket's `updatedAt` for a move outside
+ * a decision (a later change outside a decision, a session linked, pushes it back). `kind`: the typed kind, got back
+ * from its reason for a block written before ORC-345 (`upcastTicket`), as the Flow reads it.
  */
 export interface BlockEntry {
   projectId: string;
@@ -383,13 +386,27 @@ export interface BlockEntry {
 export const byMostRefused = (a: SecurityStats['runs'][number], b: SecurityStats['runs'][number]): number =>
   b.refused + b.refusals - (a.refused + a.refusals) || a.runId.localeCompare(b.runId);
 
-/** The move into Blocked a decision record holds, once the store found its projection blocked and not before. */
-export const blockEntry = (d: DecisionRecord & { ticket: TicketState; at: number }): BlockEntry => ({
-  projectId: d.projectId,
-  ticketId: d.ticket.ticketId,
-  at: d.at,
-  kind: upcastTicket(d.ticket).blockKind ?? 'other',
-});
+/** The move into Blocked of a blocked ticket, at `at`. */
+export const blockEntry = (t: TicketState, at: number): BlockEntry => ({ projectId: t.projectId, ticketId: t.ticketId, at, kind: upcastTicket(t).blockKind ?? 'other' });
+
+/**
+ * The moves into Blocked (`BlockEntry`) the decisions and the projections hold: `decisions` in each ticket's order, those
+ * without a projection left out. What SQLite computes in memory; Postgres the same in SQL.
+ */
+export function blockMoves(decisions: DecisionRecord[], tickets: TicketState[]): BlockEntry[] {
+  const key = (projectId: string, ticketId: string) => `${projectId}/${ticketId}`;
+  const blockedAfter = new Map<string, boolean>();
+  const moves: BlockEntry[] = [];
+  for (const d of decisions) {
+    if (!d.ticket || d.at === undefined) continue;
+    const k = key(d.projectId, d.ticket.ticketId);
+    if (d.before?.blocked && !blockedAfter.get(k)) moves.push(blockEntry(d.before, d.before.updatedAt));
+    if (d.ticket.blocked && !d.before?.blocked) moves.push(blockEntry(d.ticket, d.at));
+    blockedAfter.set(k, d.ticket.blocked);
+  }
+  for (const t of tickets) if (t.blocked && !blockedAfter.get(key(t.projectId, t.ticketId))) moves.push(blockEntry(t, t.updatedAt));
+  return moves;
+}
 
 /** The store's id of an armed timer: `key` is per ticket, and each project's copy of the ticket has its own timers (ORC-316). */
 export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string => `${t.projectId}:${t.key}`;

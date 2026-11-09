@@ -125,13 +125,15 @@ export interface MeasuredTicketView extends FlowTicketView {
   measures: TicketMeasuresView | null;
 }
 
-/** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`. */
+/** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */
 export interface SecurityPeriodView {
   since: number;
   until: number;
   hosts: { host: string; requests: number; refused: number }[];
   rules: { rule: string; refusals: number }[];
+  /** The most refused runs, 50 at most: `runsLeftOut` counts the others. */
   runs: { runId: string; projectId: string; ticketId: string; requests: number; refused: number; refusals: number }[];
+  runsLeftOut: number;
 }
 
 /** `GET /api/security/runs/:id` (ORC-300): `RunSecurityView` of src/network/security-log.ts, never a command nor a path. */
@@ -143,7 +145,6 @@ export interface RunSecurityView {
   rules: { rule: string; refusals: number }[];
   refusals: { at: number; tool: string; rule: string }[];
   hosts: { host: string; requests: number; refused: number }[];
-  refusedHosts: { host: string; refused: number }[];
   skipped: { egress: number; refusals: number };
 }
 

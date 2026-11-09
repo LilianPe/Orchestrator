@@ -15,7 +15,7 @@ import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
 import {
   TicketHeldError,
-  blockEntry,
+  blockMoves,
   byMostRefused,
   decidedOn,
   decisionRecord,
@@ -765,13 +765,11 @@ export class SqliteStore implements Store {
     };
   }
 
-  // ponytail: every decision read; SQLite is kept until ORC-178, Postgres filters in SQL.
+  // ponytail: every decision and ticket read; SQLite is kept until ORC-178, Postgres filters in SQL.
   async blocksEntered(since: number, until: number): Promise<BlockEntry[]> {
-    const rows = this.db.prepare("SELECT data FROM decision_trace WHERE json_extract(data, '$.ticket.blocked') = 1 ORDER BY rowid").all() as { data: string }[];
-    return rows
-      .map((r) => JSON.parse(r.data) as DecisionRecord)
-      .filter((d): d is DecisionRecord & { ticket: TicketState; at: number } => d.ticket !== undefined && d.at !== undefined && d.at >= since && d.at < until && !d.before?.blocked)
-      .map(blockEntry)
+    const decisions = (this.db.prepare('SELECT data FROM decision_trace ORDER BY rowid').all() as { data: string }[]).map((r) => JSON.parse(r.data) as DecisionRecord);
+    return blockMoves(decisions, await this.listTickets())
+      .filter((b) => b.at >= since && b.at < until)
       .sort((a, b) => a.at - b.at);
   }
 

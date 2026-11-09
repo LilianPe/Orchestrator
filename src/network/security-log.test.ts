@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SecurityLog } from '../store/types.js';
-import { readSecurityLog, refusalSummary, REFUSAL_RULES, runSecurityView } from './security-log.js';
+import { OTHER_HOSTS, readSecurityLog, refusalSummary, REFUSAL_RULES, runSecurityView, shownHosts } from './security-log.js';
 
 const RUN = { runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5 };
 const HOOK = join(import.meta.dirname, '../../packs/standard/hooks/pre-tool-use.mjs');
@@ -149,6 +149,8 @@ describe('the security log of a run as the dashboard shows it (ORC-300)', () => 
       { at: 12, method: 'POST', host: 'evil.example', path: '/upload', ok: false, reason: 'not allowed', up: 0, down: 0 },
       { at: 13, method: 'GET', host: 'pypi.org', path: '/simple', ok: false, reason: 'not allowed', up: 0, down: 0 },
       { at: 14, method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, up: 1, down: 2 },
+      { at: 15, method: 'CONNECT', host: 'ghp_s3cret:x@evil', ok: false, reason: 'not allowed', up: 0, down: 0 },
+      { at: 16, method: 'GET', host: 'user=s3cret value', ok: false, reason: 'not allowed', up: 0, down: 0 },
     ],
     refusals: [
       { at: 20, tool: 'Bash', rule: 'push', command: 'git push https://x:ghp_s3cret@github.com/o/r' },
@@ -158,7 +160,7 @@ describe('the security log of a run as the dashboard shows it (ORC-300)', () => 
     skipped: { egress: 1, refusals: 2 },
   };
 
-  it('lists its refusals and counts them per rule, and counts the hosts contacted and refused', () => {
+  it('lists its refusals and counts them per rule, and counts the hosts contacted and refused, those not a plain name together', () => {
     expect(runSecurityView(log)).toEqual({
       ...RUN,
       rules: [{ rule: 'push', refusals: 2 }, { rule: 'force-push', refusals: 1 }],
@@ -167,10 +169,23 @@ describe('the security log of a run as the dashboard shows it (ORC-300)', () => 
         { host: 'evil.example', requests: 2, refused: 2 },
         { host: 'registry.npmjs.org', requests: 2, refused: 0 },
         { host: 'pypi.org', requests: 1, refused: 1 },
+        { host: OTHER_HOSTS, requests: 2, refused: 2 },
       ],
-      refusedHosts: [{ host: 'evil.example', refused: 2 }, { host: 'pypi.org', refused: 1 }],
       skipped: { egress: 1, refusals: 2 },
     });
+  });
+
+  it('shownHosts: the counts of the hosts not a plain name merged into one row, last', () => {
+    expect(shownHosts([
+      { host: 'a.example', requests: 5, refused: 0 },
+      { host: 'x y', requests: 2, refused: 2 },
+      { host: 'b.example', requests: 3, refused: 1 },
+      { host: 'k:v@z', requests: 2, refused: 1 },
+    ])).toEqual([
+      { host: 'a.example', requests: 5, refused: 0 },
+      { host: 'b.example', requests: 3, refused: 1 },
+      { host: OTHER_HOSTS, requests: 4, refused: 3 },
+    ]);
   });
 
   it('shows no command, no path and no reason: only the rule and the host', () => {

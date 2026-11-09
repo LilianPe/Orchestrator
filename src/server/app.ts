@@ -12,7 +12,7 @@ import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
-import { runSecurityView } from '../network/security-log.js';
+import { runSecurityView, shownHosts } from '../network/security-log.js';
 import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -58,6 +58,8 @@ type AgentEnv = { Variables: { run: RunRecord } };
 const MEASURED_TICKETS = 50;
 const MEASURES_AT_ONCE = 2;
 
+/** Runs `GET /api/security` serves, the most refused: the others are counted. */
+const SECURITY_RUNS = 50;
 /** The period the security log and the Pareto read when none is asked (ORC-300). */
 const DEFAULT_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -234,11 +236,13 @@ export function createApp(d: ServerDeps): Hono {
   });
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
-  // rules and runs over a period; a run's refusals and hosts. Never a command nor a path: they can hold a secret.
+  // rules and runs over a period; a run's refusals and hosts. Never a command, a path nor a host that is not a plain name:
+  // they can hold a secret.
   app.get('/api/security', async (c) => {
     const period = periodOf(c, d.clock.now());
     if (!period) return c.json({ error: 'since and until: whole ms, since before until' }, 400);
-    return c.json({ ...period, ...(await d.store.securityStats(period.since, period.until)) });
+    const { hosts, rules, runs } = await d.store.securityStats(period.since, period.until);
+    return c.json({ ...period, hosts: shownHosts(hosts), rules, runs: runs.slice(0, SECURITY_RUNS), runsLeftOut: Math.max(0, runs.length - SECURITY_RUNS) });
   });
   app.get('/api/security/runs/:id', async (c) => {
     const log = await d.store.securityLog(c.req.param('id'));

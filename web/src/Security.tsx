@@ -61,7 +61,7 @@ function Run({ run }: { run: RunSecurityView }) {
       <h2>Run {run.runId.slice(0, 8)} · {run.ticketId}</h2>
       <div className="split">
         <Counts title="Refusals per rule" head={['Rule', 'Refusals']} items={run.rules} cells={(r) => [r.rule, r.refusals]} empty="No refusal of the hook." />
-        <Counts title="Hosts refused" head={['Host', 'Refused']} items={run.refusedHosts} cells={(h) => [h.host, h.refused]} empty="No request refused by the proxy." />
+        <Counts title="Hosts contacted" head={['Host', 'Requests', 'Refused']} items={run.hosts} cells={(h) => [h.host, h.requests, h.refused]} empty="No request through the proxy." />
       </div>
       {run.refusals.length > 0 && (
         <ul className="refusals">
@@ -75,9 +75,17 @@ function Run({ run }: { run: RunSecurityView }) {
 
 /**
  * The security log and the Pareto of the block causes (ORC-300), read-only, as the factory computed them: over the
- * period, then the run selected. Only rules and hosts: never a command nor a path, which can hold a secret.
+ * period, then the run selected. Only rules and plain host names: never a command nor a path, which can hold a secret.
  */
-export function Security({ period, blocks, run, selected, onSelect }: { period: SecurityPeriodView; blocks: BlockParetoView; run?: RunSecurityView; selected?: string; onSelect: (runId: string) => void }) {
+export function Security({ period, blocks, run, runFailed, selected, onSelect }: {
+  period: SecurityPeriodView;
+  blocks: BlockParetoView;
+  run?: RunSecurityView;
+  /** The run selected could not be read. */
+  runFailed?: boolean;
+  selected?: string;
+  onSelect: (runId: string) => void;
+}) {
   const quiet = period.runs.length === 0;
   return (
     <div className="measures">
@@ -102,8 +110,9 @@ export function Security({ period, blocks, run, selected, onSelect }: { period: 
                 ))}
               </tbody>
             </table>
+            {period.runsLeftOut > 0 && <p className="note">{plural(period.runsLeftOut, 'run')} less refused not listed.</p>}
           </section>
-          {run && <Run run={run} />}
+          {runFailed ? <section><p className="flow-failed" role="alert">Reading the run failed. Pick it again to retry.</p></section> : run && <Run run={run} />}
           <section>
             <h2>Security log of the period</h2>
             <div className="split">
