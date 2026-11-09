@@ -24,7 +24,8 @@ describe.skipIf(!enabled)(`an attempt's Postgres (${cli}, ORC-309)`, () => {
     const url = await urlOf(setup);
     expect(url).toMatch(/^postgres:\/\/factory:[0-9a-f]{48}@127\.0\.0\.1:5432\/factory$/);
     // The sandbox reaches it on its own loopback.
-    expect((await sh(setup.id, 'exec 3<>/dev/tcp/127.0.0.1/5432 && echo open')).stdout).toBe('open');
+    // bash, not sh: /dev/tcp is bash's, the image's sh (dash) has none.
+    expect((await provider.exec(setup.id, ['bash', '-c', 'exec 3<>/dev/tcp/127.0.0.1/5432 && echo open'])).stdout.trim()).toBe('open');
     expect((await psql(setup, url, 'create table t (v text); insert into t values (1)')).code).toBe(0);
     expect((await psql(setup, url.replace(/:[0-9a-f]{48}@/, ':wrong@'), 'select 1')).code).not.toBe(0);
     // No superuser: nothing the setup starts in the service's container would outlive its own.
