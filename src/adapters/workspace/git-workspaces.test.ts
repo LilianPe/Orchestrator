@@ -281,21 +281,17 @@ describe('GitWorkspaces', () => {
     await expect(ws.branchReader(repo, w.path, { fetch: true })).rejects.toThrow(/forge could not be read/);
   });
 
-  it('prepares the read-only trunk and a knowledge worktree', async () => {
+  it('prepares the read-only trunk', async () => {
     const { repo, root } = fixtureRepo();
-    const kb = fixtureRepo();
-    const ws = new GitWorkspaces({ root, knowledgeRepo: kb.repo });
+    const ws = new GitWorkspaces({ root });
     const trunk = await ws.prepare(req(repo, { kind: 'trunk-readonly' }));
     expect(trunk).toEqual({ path: join(root, 'p', '_trunk', 'abcdef123456') });
     expect(git(trunk.path, 'rev-parse', 'HEAD')).toBe(git(repo, 'rev-parse', 'origin/main'));
     await ws.release('p', 'abcdef123456');
     expect(existsSync(trunk.path)).toBe(false);
-    const k = await ws.prepare(req(repo, { kind: 'knowledge' }));
-    expect(k).toEqual({ path: join(root, '_kb', 'abcdef123456'), branch: 'learn/rel-1-abcdef12' });
-    expect(existsSync(join(k.path, 'README.md'))).toBe(true);
   });
 
-  it.each(['worktree', 'trunk-readonly', 'knowledge'] as const)('%s: gives up on a forge that does not answer, naming neither the path nor the command', async (kind) => {
+  it.each(['worktree', 'trunk-readonly'] as const)('%s: gives up on a forge that does not answer, naming neither the path nor the command', async (kind) => {
     const { base, repo, root } = fixtureRepo();
     // A transport that never answers: the deadline kills it with git.
     const stall = join(base, 'stall.sh');
@@ -303,7 +299,7 @@ describe('GitWorkspaces', () => {
     git(repo, 'config', 'protocol.ext.allow', 'always');
     git(repo, 'remote', 'set-url', 'origin', `ext::${stall}`);
     const logged: string[] = [];
-    const ws = new GitWorkspaces({ root, knowledgeRepo: repo, fetchDeadlineMs: 300, log: (m) => logged.push(m) });
+    const ws = new GitWorkspaces({ root, fetchDeadlineMs: 300, log: (m) => logged.push(m) });
     const started = Date.now();
     await expect(ws.prepare(req(repo, { kind }))).rejects.toThrow(/^the forge no longer responds after 0.3 s$/);
     expect(Date.now() - started).toBeLessThan(5_000);
@@ -314,7 +310,7 @@ describe('GitWorkspaces', () => {
     expect(logged.at(-1)).toContain(`git -C ${repo} fetch`);
   });
 
-  it.each(['worktree', 'trunk-readonly', 'knowledge'] as const)('%s: starts from the remote branch, never a tag of its name, when origin/HEAD is missing', async (kind) => {
+  it.each(['worktree', 'trunk-readonly'] as const)('%s: starts from the remote branch, never a tag of its name, when origin/HEAD is missing', async (kind) => {
     const { repo, root } = fixtureRepo();
     const trunk = git(repo, 'rev-parse', 'origin/main');
     // A tag named like the remote branch, on a commit off the default branch: pushed by anyone who can push to the forge.
@@ -323,7 +319,7 @@ describe('GitWorkspaces', () => {
     git(repo, 'push', '-q', 'origin', 'elsewhere:refs/tags/origin/main');
     git(repo, 'checkout', '-q', 'main');
     git(repo, 'remote', 'set-head', 'origin', '--delete');
-    const w = await new GitWorkspaces({ root, knowledgeRepo: repo }).prepare(req(repo, { kind }));
+    const w = await new GitWorkspaces({ root }).prepare(req(repo, { kind }));
     expect(git(w.path, 'rev-parse', 'HEAD')).toBe(trunk);
   });
 

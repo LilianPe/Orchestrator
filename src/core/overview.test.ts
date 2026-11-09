@@ -72,7 +72,12 @@ describe('overview (ORC-299)', () => {
     expect(o).toMatchObject({ reverted: { yes: 1, known: 2 }, red: { verified: 2, wouldHaveBlocked: 1 } });
   });
 
-  it('says how many tickets it could not measure, and has no baseline before ORC-230', () => {
+  it('says how many tickets it could not measure, and has no baseline until one is computed (ORC-230)', () => {
     expect(overview(PERIOD, [merged('A', 11 * DAY)], 2)).toMatchObject({ unmeasured: 2, baseline: null });
+  });
+
+  it('carries the baseline it is given, to face the measures (ORC-230)', () => {
+    const baseline = { projectId: 'p', since: 0, until: 90 * DAY, computedAt: 1, measures: { delivered: { value: 4, over: 5, leftOut: 1, noSource: false } } };
+    expect(overview(PERIOD, [], 0, baseline).baseline).toEqual(baseline);
   });
 });

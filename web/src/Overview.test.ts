@@ -11,6 +11,15 @@ const view = (patch: Partial<OverviewView> = {}): OverviewView => ({
   ciPerMerged: { mean: 90_000, leftOut: 1 }, red: { verified: 2, wouldHaveBlocked: 1 },
   messages: { count: 5, medianSignOfLifeMs: 4_000, withoutSignOfLife: 1, questions: 3, medianAnswerMs: 90_000, unanswered: 1 }, baseline: null, ...patch,
 });
+const BASELINE = {
+  projectId: 'p', since: Date.UTC(2026, 7, 3), until: Date.UTC(2026, 10, 1), computedAt: 1,
+  measures: {
+    delivered: { value: 12, over: 20, leftOut: 8, noSource: false },
+    lead_time: { value: 3 * 60 * 60 * 1000, over: 10, leftOut: 2, noSource: false },
+    tokens_per_merged: { value: null, over: 0, leftOut: 12, noSource: true },
+    first_try: { value: 0.75, over: 15, leftOut: 0, noSource: false },
+  },
+} satisfies OverviewView['baseline'];
 const tile = (o: OverviewView, label: string) => overviewTiles(o).find((t) => t.label === label);
 
 describe('overviewTiles (ORC-299)', () => {
@@ -36,21 +45,44 @@ describe('overviewTiles (ORC-299)', () => {
     expect(tile(view({ tokensPerMerged: { mean: 1_000, leftOut: 2 } }), 'Tokens per merged ticket')?.detail).toContain('2 merged without');
   });
 
-  it('compares each headline measure with the 90-day baseline, which has no source before ORC-230', () => {
+  it('compares each headline measure with the 90-day baseline, and says when there is none (ORC-230)', () => {
     expect(overviewTiles(view()).filter((t) => t.headline).map((t) => t.label)).toEqual(['Delivered', 'Median lead time', 'Tokens per merged ticket', 'Ready at the first try']);
-    expect(renderToStaticMarkup(createElement(Overview, { overview: view() }))).toContain('— (ORC-230)');
+    expect(overviewTiles(view()).filter((t) => t.headline).map((t) => t.baseline)).toEqual(['no baseline', 'no baseline', 'no baseline', 'no baseline']);
+    expect(overviewTiles(view()).filter((t) => !t.headline).every((t) => t.baseline === undefined)).toBe(true);
+  });
+
+  it('gives each headline measure its baseline value, tokens without a source, and a measure the baseline lacks as none (ORC-230)', () => {
+    const o = view({ baseline: BASELINE });
+    expect(tile(o, 'Delivered')).toMatchObject({ baseline: '12', baselineDetail: 'of 20 issues completed' });
+    expect(tile(o, 'Median lead time')).toMatchObject({ baseline: '3 h 00 min', baselineDetail: '2 delivered without a start' });
+    expect(tile(o, 'Tokens per merged ticket')).toMatchObject({ baseline: 'no source', baselineDetail: 'human work' });
+    expect(tile(o, 'Ready at the first try')).toMatchObject({ baseline: '75%', baselineDetail: '15 merged PRs' });
+    const without = view({ baseline: { ...BASELINE, measures: { delivered: BASELINE.measures.delivered } } });
+    expect(tile(without, 'Median lead time')?.baseline).toBe('no baseline');
+    expect(tile(view({ baseline: { ...BASELINE, measures: { ...BASELINE.measures, lead_time: { value: null, over: 0, leftOut: 0, noSource: false } } } }), 'Median lead time')?.baseline).toBe('—');
   });
 });
 
 describe('Overview (ORC-299)', () => {
   const page = (o: OverviewView) => renderToStaticMarkup(createElement(Overview, { overview: o }));
 
-  it('shows the measures, the baseline as not built yet, and the period', () => {
+  it('shows the measures and the period, and how to compute the baseline while there is none', () => {
     const html = page(view());
     expect(html).toContain('Ready at the first try');
     expect(html).toContain('67%');
-    expect(html).toContain('ORC-230');
     expect(html).toContain('Last 90 days');
+    expect(html).toContain('Baseline (90 days)');
+    expect(html).toContain('no baseline');
+    expect(html).toContain('factory baseline');
+  });
+
+  it('shows the baseline facing the measures, with its period and project (ORC-230)', () => {
+    const html = page(view({ baseline: BASELINE }));
+    expect(html).toContain('Baseline (2026-08-03 → 2026-11-01)');
+    expect(html).toContain('75%');
+    expect(html).toContain('no source');
+    expect(html).toContain('computed for p from Linear and GitHub');
+    expect(html).not.toContain('factory baseline');
   });
 
   it('says plainly which measures have no source yet, and the ticket that brings each', () => {
@@ -59,7 +91,7 @@ describe('Overview (ORC-299)', () => {
       expect(html).toContain(label);
       expect(html).toContain(ticket);
     }
-    expect(NO_SOURCE.map((n) => n.ticket)).toEqual(['ORC-190', 'ORC-230']);
+    expect(NO_SOURCE.map((n) => n.ticket)).toEqual(['ORC-190']);
   });
 
   it('says how many tickets it could not measure', () => {

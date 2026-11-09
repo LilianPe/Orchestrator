@@ -8,7 +8,6 @@ import { PRODUCT_NAME } from '../product.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
-  confirm(q: string, def?: boolean): Promise<boolean>;
   print(s: string): void;
 }
 
@@ -111,22 +110,6 @@ export async function runInit(d: InitDeps): Promise<void> {
   const secrets = loadSecrets(d.home);
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
-
-  if (!cfg.knowledge && (await io.confirm('Create a private GitHub repository "factory-knowledge" for the knowledge base?', true))) {
-    const kbPath = join(d.home, 'knowledge');
-    const created = await d.exec('gh', ['repo', 'create', 'factory-knowledge', '--private', '--add-readme', '--clone'], { cwd: d.home });
-    if (created.code === 0) {
-      mkdirSync(join(kbPath, 'notes'), { recursive: true });
-      writeFileSync(join(kbPath, 'INDEX.md'), `# ${PRODUCT_NAME} knowledge base\n\n`);
-      writeFileSync(join(kbPath, 'notes/.gitkeep'), '');
-      await d.exec('git', ['-C', kbPath, 'add', '.'], {});
-      await d.exec('git', ['-C', kbPath, 'commit', '-m', 'init knowledge base'], {});
-      await d.exec('git', ['-C', kbPath, 'push'], {});
-      cfg.knowledge = { repoPath: kbPath };
-    } else {
-      io.print(`Could not create it: ${created.stderr.trim()}. You can set knowledge.repoPath in ${join(d.home, 'config.yaml')}.`);
-    }
-  }
 
   const wfFile = join(repoPath, '.factory/workflow.yml');
   if (!existsSync(wfFile)) {

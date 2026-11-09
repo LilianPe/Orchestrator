@@ -23,10 +23,10 @@ Check in `~/.relais/relais.db` that no event was rejected for its signature (oth
 Write two remarks in the thread less than a minute apart. Expected: a single resume 3 minutes after the last one, same Claude session (same id in the UI), reply with the commit.
 
 ## 5. AI review then merge (criterion 5)
-Move the ticket to AI Review. Expected: fresh session, summary, status Human Review. Merge the PR on GitHub. Expected in < 1 min: status Done, worktree removed from `~/.relais/workspaces`, learn run started.
+Move the ticket to AI Review. Expected: fresh session, summary, status Human Review. Merge the PR on GitHub. Expected in < 1 min: status Done, worktree removed from `~/.relais/workspaces`, no run started (ORC-193).
 
 ## 6. Questions and memory (criterion 6)
-On another ticket: `@relais où est géré X ?` → read-only answer. `@relais retiens <fait>` → PR in relais-knowledge. Merge it, then ask a related question: the answer cites the note.
+On another ticket: `@relais où est géré X ?` → read-only answer. `@relais retiens <fait>` → no run and no PR: the message is kept in the ticket's inbox as any other (ORC-193).
 
 ## 7. Stop (criterion 7)
 Delegate a ticket, during the run click "Send stop request" in Linear. Expected in < 10 s: « Stopped… », ticket blocked, run `stopped`.

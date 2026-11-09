@@ -1,7 +1,7 @@
 import type { BranchReader } from '../../core/clean-verify.js';
 
 /** `published`: a fresh clone of a commit the factory published, for an AI review (ORC-183). */
-export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'knowledge' | 'published';
+export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'published';
 
 export interface WorkspaceRequest {
   projectId: string;
