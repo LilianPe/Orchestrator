@@ -352,7 +352,21 @@ export const refusals = pgTable(
   (t) => [primaryKey({ columns: [t.runId, t.n] }), index('refusals_at_idx').on(t.at)],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296). */
+/** A project's known flaky tests (ORC-164), a human's list: one row per test, as `verify` names it. */
+export const knownFlakyTests = pgTable(
+  'known_flaky_tests',
+  {
+    projectId: text('project_id').notNull(),
+    test: text('test').notNull(),
+    coversFrozen: boolean('covers_frozen').notNull(),
+    reason: text('reason').notNull(),
+    addedBy: text('added_by').notNull(),
+    addedAt: timestamp('added_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.test] })],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296), then the known flaky tests (ORC-164). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -369,6 +383,7 @@ export const PG_TABLES = {
   securityLogs,
   egressRequests,
   refusals,
+  knownFlakyTests,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -387,6 +402,7 @@ export const PG_TABLE_NAMES = [
   'security_logs',
   'egress_requests',
   'refusals',
+  'known_flaky_tests',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

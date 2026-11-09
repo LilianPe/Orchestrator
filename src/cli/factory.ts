@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { runStatusCommand, runStopCommand } from './control.js';
 import { runInit } from './init.js';
 import { runDoctorCommand } from './doctor.js';
+import { runFlakyCommand } from './flaky.js';
 import { formatPlan, planRows } from './plan.js';
 import { runReplayCommand } from './replay.js';
 import { runRepairCommand } from './repair.js';
@@ -34,7 +35,8 @@ const USAGE = `Usage: factory <command>
   pause | resume     suspend or resume the queue
   stop <ID>          stop a ticket's run
   replay <journal>... replay exported journals (bit-for-bit regression, --what-if <workflow.yml>, --export <ID>)
-  run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)`;
+  run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
+  flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative`;
 
 /** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
 function uiAuth(): Record<string, string> {
@@ -45,6 +47,8 @@ function uiAuth(): Record<string, string> {
 async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
+  // Its own options, on the store alone.
+  if (process.argv[2] === 'flaky') return runFlakyCommand(factoryHome(), process.argv.slice(3));
   // The repository's file and the budgets of factory.yml (ORC-216), its secrets left unresolved: no running instance needed.
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => ({ budgets: loadFactoryBudgets(factoryHome()) }) });
   const { positionals, values } = parseArgs({

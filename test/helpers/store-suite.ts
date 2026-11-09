@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
-import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -310,6 +310,21 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putArtifact({ ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 });
     await s.putArtifact({ ...a, id: 'other', ticketId: 'REL-2' });
     expect(await s.artifacts('REL-1')).toEqual([a, { ...a, id: 'visual:r1:before:1280', sha256: 'b'.repeat(64), createdAt: 1_700_000_000_001 }]);
+  });
+
+  it("keeps a project's known flaky tests, a human's list: replaced by test, listed oldest first, taken off (ORC-164)", async () => {
+    const s = await store();
+    const t: KnownFlakyTest = { projectId: 'p', test: 'src/a.test.ts > cart total', coversFrozen: false, reason: 'times out under load', addedBy: 'armand', addedAt: 1_700_000_000_000 };
+    expect(await s.knownFlakyTests('p')).toEqual([]);
+    await s.putKnownFlakyTest(t);
+    await s.putKnownFlakyTest({ ...t, test: 'tests/t.py::test_it', addedAt: 1_700_000_000_002 });
+    await s.putKnownFlakyTest({ ...t, projectId: 'other' });
+    await s.putKnownFlakyTest({ ...t, coversFrozen: true, reason: 'still', addedAt: 1_700_000_000_001 });
+    expect(await s.knownFlakyTests('p')).toEqual([{ ...t, coversFrozen: true, reason: 'still', addedAt: 1_700_000_000_001 }, { ...t, test: 'tests/t.py::test_it', addedAt: 1_700_000_000_002 }]);
+    expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(true);
+    expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(false);
+    expect((await s.knownFlakyTests('p')).map((k) => k.test)).toEqual(['tests/t.py::test_it']);
+    expect(await s.knownFlakyTests('other')).toEqual([{ ...t, projectId: 'other' }]);
   });
 
   it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {
