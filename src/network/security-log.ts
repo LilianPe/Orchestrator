@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readCapped } from '../adapters/read-capped.js';
-import type { EgressRecord, RefusalRecord, SecurityLog, SecurityStats } from '../store/types.js';
+import type { SecurityLog, SecurityStats } from '../store/types.js';
 
 /** The rules of the pack's PreToolUse hook (`packs/standard/hooks/pre-tool-use.mjs`): a refusal naming another is forged. */
 export const REFUSAL_RULES = [
@@ -30,23 +30,17 @@ const egressLine = z.object({
   method: text(32),
   host: text(300),
   port: z.number().int().min(0).max(65_535).optional(),
-  path: text(4096).optional(),
+  // Its path, and the reason the proxy gave, which names it, are not read: they can hold a secret.
   ok: z.boolean(),
-  reason: text(1000).optional(),
   up: bytes,
   down: bytes,
 });
 
-/** A command, or the path of a refused read, is kept for the maintainers, capped: it may be long, and is never posted (it can hold a secret). */
-const COMMAND_MAX = 2000;
+/** The command a line names, or the path of a refused read, is not read: it can hold a secret. */
 const refusalLine = (ticketId: string) =>
   z.object({
     at,
     tool: z.enum(['Bash', 'WebSearch', 'Read']),
-    command: z
-      .string()
-      .refine((s) => !s.includes('\0'))
-      .transform((s) => s.slice(0, COMMAND_MAX)),
     rule: z.enum(REFUSAL_RULES),
     // The hook writes the run's FACTORY_TICKET: another ticket is a forged line.
     ticket: z.literal(ticketId),
@@ -89,11 +83,10 @@ function parse<T>(path: string | undefined, cap: number, line: z.ZodType<T>, asi
 /** A note of the proxy's journal (`EgressNote`): a beta dropped, a model call throttled or cut, its client gone. */
 const isNote = (raw: unknown) => typeof raw === 'object' && raw !== null && (raw as { kind?: unknown }).kind === 'note';
 
-const drop = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
-
 /**
  * A run's security log (ORC-296), from the proxy's journal (`egress`, absent without a proxy) and the
- * hook's refusals log. Never throws on what a journal holds: a bad line is skipped and counted.
+ * hook's refusals log: the rule and the host, never a command nor a path. Never throws on what a journal
+ * holds: a bad line is skipped and counted.
  */
 export function readSecurityLog(
   run: Pick<SecurityLog, 'runId' | 'projectId' | 'ticketId' | 'at'>,
@@ -101,10 +94,11 @@ export function readSecurityLog(
 ): SecurityLog {
   const egress = parse(paths.egress, EGRESS_MAX_BYTES, egressLine, isNote);
   const refusals = parse(paths.refusals, REFUSALS_MAX_BYTES, refusalLine(run.ticketId));
+  // The lines' fields not declared above, a command, a path, the proxy's reason, are already left out by the parse.
   return {
     ...run,
-    egress: egress.entries.map((e) => drop(e) as EgressRecord),
-    refusals: refusals.entries.map(({ at, tool, rule, command }): RefusalRecord => ({ at, tool, rule, command })),
+    egress: egress.entries,
+    refusals: refusals.entries.map(({ at, tool, rule }) => ({ at, tool, rule })),
     skipped: { egress: egress.skipped, refusals: refusals.skipped },
   };
 }

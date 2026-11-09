@@ -209,14 +209,14 @@ describe('server', () => {
     const log = (runId: string, ticketId: string, at: number): SecurityLog => ({
       runId, projectId: 'p', ticketId, at: at + 100,
       egress: [
-        { at, method: 'GET', host: 'registry.npmjs.org', path: '/pkg?token=s3cret', ok: true, up: 1, down: 1 },
-        { at: at + 1, method: 'POST', host: 'evil.example', path: '/upload', ok: false, reason: 'not allowed', up: 0, down: 0 },
-        { at: at + 1, method: 'CONNECT', host: 'ghp_s3cret:x@evil', ok: false, reason: 'not allowed', up: 0, down: 0 },
+        { at, method: 'GET', host: 'registry.npmjs.org', ok: true, up: 1, down: 1 },
+        { at: at + 1, method: 'POST', host: 'evil.example', ok: false, up: 0, down: 0 },
+        { at: at + 1, method: 'CONNECT', host: 'ghp_s3cret:x@evil', ok: false, up: 0, down: 0 },
       ],
       refusals: [
-        { at: at + 2, tool: 'Bash', rule: 'push', command: 'git push https://x:ghp_s3cret@github.com/o/r' },
-        { at: at + 3, tool: 'Bash', rule: 'push', command: 'git push origin HEAD' },
-        { at: at + 4, tool: 'Bash', rule: 'force-push', command: 'git push --force' },
+        { at: at + 2, tool: 'Bash', rule: 'push' },
+        { at: at + 3, tool: 'Bash', rule: 'push' },
+        { at: at + 4, tool: 'Bash', rule: 'force-push' },
       ],
       skipped: { egress: 0, refusals: 1 },
     });
