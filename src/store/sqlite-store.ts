@@ -192,10 +192,11 @@ export class SqliteStore implements Store {
 
   /** The inbox (ORC-147): `seq` keeps the arrival order, the unique id dedups. */
   async appendInbox(e: FactoryEvent | StoredEvent): Promise<boolean> {
+    const paused = pauseAcceptedValue(e);
+    if (paused === undefined) return this.appendResult(e);
     return this.atomically(() => {
       const fresh = this.appendResult(e);
-      const paused = pauseAcceptedValue(e);
-      if (fresh && paused !== undefined) this.writeMeta(PAUSE_ACCEPTED, paused);
+      if (fresh) this.writeMeta(PAUSE_ACCEPTED, paused);
       return fresh;
     });
   }

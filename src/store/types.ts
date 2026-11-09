@@ -445,7 +445,7 @@ export const timerRowId = (t: Pick<TimerRecord, 'projectId' | 'key'>): string =>
 export const PAUSE_ACCEPTED = 'pause-accepted';
 
 /** The value `appendInbox` writes under `PAUSE_ACCEPTED` for an event: undefined for one that neither pauses nor resumes. */
-export function pauseAcceptedValue(e: FactoryEvent | StoredEvent): string | undefined {
+export function pauseAcceptedValue(e: FactoryEvent | StoredEvent): '1' | '0' | undefined {
   return e.type === 'control.pause' ? '1' : e.type === 'control.resume' ? '0' : undefined;
 }
 

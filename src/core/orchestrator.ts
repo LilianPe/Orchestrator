@@ -1288,7 +1288,8 @@ export class Orchestrator {
 
   /** Paused by `set_paused`, or by a pause accepted whose `set_paused` has not run yet (`PAUSE_ACCEPTED`, ORC-335): its lane and a ticket's go side by side. */
   async isPaused(): Promise<boolean> {
-    return (await this.d.store.getMeta('paused')) === '1' || (await this.d.store.getMeta(PAUSE_ACCEPTED)) === '1';
+    const flags = await Promise.all([this.d.store.getMeta('paused'), this.d.store.getMeta(PAUSE_ACCEPTED)]);
+    return flags.includes('1');
   }
 
   private account(): string {
