@@ -1,3 +1,4 @@
+import type { Baseline } from './baseline.js';
 import type { Rework, TicketMeasures } from './measures.js';
 import { totalTokens } from './types.js';
 
@@ -28,11 +29,12 @@ export interface Overview {
   red: { verified: number; wouldHaveBlocked: number };
   /** The human messages of the period: sign of life over all, answer over the questions and commands. */
   messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
-  /** The state of reference over 90 days: nothing computes it before ORC-230. */
-  baseline: null;
+  /** The state of reference over 90 days the measures above face (ORC-230): null until `factory baseline` computes one. */
+  baseline: Baseline | null;
 }
 
-function median(values: readonly number[]): number | null {
+/** The median of `values`; null without one. */
+export function median(values: readonly number[]): number | null {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -48,8 +50,8 @@ function meanOf(tickets: readonly TicketMeasures[], value: (m: TicketMeasures) =
   return { mean: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, leftOut: tickets.length - values.length };
 }
 
-/** The overview of `measured` over the period; `unmeasured` tickets were read but their measures could not be. Pure. */
-export function overview(period: { since: number; until: number }, measured: readonly TicketMeasures[], unmeasured = 0): Overview {
+/** The overview of `measured` over the period, facing `baseline`; `unmeasured` tickets were read but their measures could not be. Pure. */
+export function overview(period: { since: number; until: number }, measured: readonly TicketMeasures[], unmeasured = 0, baseline: Baseline | null = null): Overview {
   const within = (at: number) => at >= period.since && at < period.until;
   const delivered = measured.filter((m) => m.mergedAt !== null && within(m.mergedAt));
   const causes = new Map<Rework['cause'], number>();
@@ -79,6 +81,6 @@ export function overview(period: { since: number; until: number }, measured: rea
       medianAnswerMs: median(answers),
       unanswered: questions.length - answers.length,
     },
-    baseline: null,
+    baseline,
   };
 }
