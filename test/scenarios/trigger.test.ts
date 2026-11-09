@@ -263,6 +263,15 @@ describe('the trigger (ORC-171)', () => {
     expect(h.runner.requests).toEqual([]);
   });
 
+  it('launches no run on an invalid configuration: the delegation is decided and waits in the queue (ORC-350)', async () => {
+    const h = createHarness({ configProblems: ['publication impossible: it needs the sandboxes and the GitHub App'] });
+    h.tracker.addIssue(CLEAR);
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.orch.tick();
+    expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['dev']);
+    expect(h.runner.requests).toEqual([]);
+  });
+
   it('criterion 3: a delegation on a team with no repo is blocked under the first project, whoever signs it, and no work starts', async () => {
     const h = authorized();
     h.tracker.addIssue({ identifier: 'ZZZ-1', title: 'Ailleurs', description: 'Un ticket dans une équipe que rien ne rattache à un dépôt.' });

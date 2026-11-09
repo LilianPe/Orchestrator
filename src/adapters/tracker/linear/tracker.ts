@@ -343,7 +343,8 @@ export class LinearTracker implements Tracker, TeamDirectory {
     }
     if (a.ephemeral) input['ephemeral'] = true;
     if (effectId !== undefined) input['id'] = effectUuid('activity', effectId);
-    await this.api.gql(Q.activityCreate, { input });
+    // The live feed's ephemeral activities yield Linear's quota to every other call (ORC-350).
+    await this.api.gql(Q.activityCreate, { input }, { background: !!a.ephemeral });
   }
 
   async findActivity(sessionId: string, effectId: string): Promise<string | undefined> {
