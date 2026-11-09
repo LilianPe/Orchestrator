@@ -336,7 +336,11 @@ export interface EventPayloads {
   'timer.fired': TimerFired;
   'control.pause': Record<string, never>;
   'control.resume': Record<string, never>;
-  'control.stop': Record<string, never>;
+  /**
+   * `runId`: the run the dashboard's inspection stops (ORC-301), nothing once it has ended; absent, the ticket's work
+   * (the CLI, a row journaled before). `pause`: a pause of that run, a stop that says so.
+   */
+  'control.stop': { runId?: string; pause?: true };
   /** An outbox effect carried out (ORC-150). */
   'effect.done': EffectResultPayload;
   /** An outbox effect that failed on its last attempt (ORC-150): the ticket is blocked. */

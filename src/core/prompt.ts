@@ -26,6 +26,8 @@ export interface PromptInput {
   activeWork?: string;
   /** The existing code `intake` found close to the request (`formatReuse`, ORC-207): `build`'s leads to reuse. */
   reuse?: string;
+  /** `learn` after a merge: what the factory ingested of the ticket's conversation (`ingestedConversation`, ORC-361). */
+  conversation?: readonly FeedbackItem[];
   /** An AI review's lens, and the published commit it reads (ORC-183). */
   lens?: ReviewLens;
   commit?: string;
@@ -40,6 +42,9 @@ const HEADINGS: Record<InputKind, string> = {
   thread: 'Message',
   diff: 'Diff to review',
 };
+
+const CONVERSATION_HEADING = 'What the factory received on this ticket';
+const NO_CONVERSATION = '(no message: the ticket and the merged diff are all there is)';
 
 export function buildPrompt(p: PromptInput): string {
   const lines = [`/${p.skill}`, '', `## Ticket ${p.issue.identifier} — ${p.issue.title}`, `URL: ${p.issue.url}`];
@@ -74,6 +79,7 @@ export function buildPrompt(p: PromptInput): string {
   }
   if (p.reuse) lines.push('## Existing code to reuse', 'Leads intake found in the repository, close to what the ticket asks: read them before writing anything new, and reuse what fits.', p.reuse, '');
   if (p.input) lines.push(`## ${HEADINGS[p.input.kind]}`, p.input.text, '');
+  if (p.conversation) lines.push(`## ${CONVERSATION_HEADING}`, p.conversation.length ? formatFeedback(p.conversation) : NO_CONVERSATION, '');
   if (p.resumedAfterCut) {
     lines.push('## Resumed after a cut', "Your previous attempt was cut (a factory restart or a silent runner), through no fault of yours. The worktree is as it left it: read it again, pick up where you were, do not redo what is done.", '');
   }
@@ -136,7 +142,7 @@ function utc(ts: number): string {
   return new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 }
 
-export function formatFeedback(items: FeedbackItem[]): string {
+export function formatFeedback(items: readonly FeedbackItem[]): string {
   return items.map((i) => `- **${i.author}** (${utc(i.at)}): ${i.body}`).join('\n');
 }
 

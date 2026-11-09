@@ -5,7 +5,7 @@ import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
-import { AGENT_QUESTION, CLARIFY_EXPIRED, NO_ASSESSMENT, STOPPED, type BlockKind } from './block-cause.js';
+import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, NO_ASSESSMENT, PAUSED, STOPPED, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { awaitsAgent, commandOf, forAgent, STOP_COMMAND } from './human-message.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -54,6 +54,24 @@ const CONTENT_EVENTS: ReadonlySet<EventType> = new Set<EventType>(['ticket.deleg
  */
 export function historyTaint(events: readonly FactoryEvent[]): Taint {
   return events.some((e) => e.taint === 'untrusted' && CONTENT_EVENTS.has(e.type) && !silentReview(e)) ? 'untrusted' : 'trusted';
+}
+
+/**
+ * The Linear messages whose text `ingestedConversation` gives. A command is control, not knowledge; a review is GitHub's,
+ * untrusted whoever wrote it (ORC-160), so never given.
+ */
+const CONVERSATION: ReadonlySet<EventType> = new Set<EventType>(['session.prompted', 'session.mentioned', 'ticket.commented']);
+
+/**
+ * What `learn` after a merge is given of the ticket's conversation, in place of reading the PR itself (ORC-361): the Linear
+ * messages the factory ingested, in their order, as it would hand them to an agent (`keepMessage`, `forAgent`). Only trusted
+ * ones, never one the matrix refused (`refused`, the ids of those events): untrusted content is never read as knowledge,
+ * whatever `historyTaint` lets through. What the forge holds that was never ingested (a comment on the PR's conversation, any
+ * review with GitHub webhooks off) is not in the journal, so not here either.
+ */
+export function ingestedConversation(events: readonly FactoryEvent[], refused: ReadonlySet<string> = new Set()): FeedbackItem[] {
+  const given = events.filter((e): e is HumanMessage => e.taint !== 'untrusted' && CONVERSATION.has(e.type) && !refused.has(e.id));
+  return forAgent(given.map((e) => messageItem(e, 'session'))).filter((i) => i.body.trim());
 }
 
 /** A review without a word (an approval, most often): it brings nothing a run reads. */
@@ -747,9 +765,14 @@ const commandText = (event: FactoryEvent<'command'>): string => `${event.payload
 
 /** Records a human message: it waits in humanInbox for the next run that consumes it (I6), its taint with it (I12). */
 function keepMessage(out: Decision, event: HumanMessage, source: 'session' | 'thread'): void {
+  out.events.push({ type: 'feedback.appended', item: messageItem(event, source) });
+}
+
+/** A human message as an agent is handed it: kept in humanInbox (`keepMessage`), or given to `learn` (`ingestedConversation`). */
+function messageItem(event: HumanMessage, source: 'session' | 'thread'): FeedbackItem {
   const { author, kind } = event.payload;
   const body = event.type === 'command' && kind ? commandText(event) : event.payload.body;
-  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) } });
+  return { author, authorId: event.actor, body, at: event.at, source, taint: event.taint, ...(kind ? { kind } : {}) };
 }
 
 /**
@@ -833,6 +856,8 @@ function classifiedReply(out: Decision, event: FactoryEvent<'session.prompted'>,
 
 /** Prefix of the trace of a refused action (ORC-186): the orchestrator logs it. */
 export const AUTHZ_REFUSED = 'authz: refused ';
+/** The trace of a decision the authorization matrix refused (ORC-186): its refusal line, else undefined. */
+export const authzRefusal = (trace: readonly string[]): string | undefined => trace.find((t) => t.startsWith(AUTHZ_REFUSED));
 
 /**
  * Checks the matrix on the event's signed actor and the roles journaled with it (ORC-186). A refusal is
@@ -847,6 +872,8 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
   const verdict = allowed({ action, channel }, event.actor, ticket, matrix, event.roles);
   if (verdict.ok) return true;
   out.trace.push(`${AUTHZ_REFUSED}${action} to ${event.actor ?? 'an unsigned actor'} (${verdict.reason}, roles: ${event.roles.join(', ') || 'none'})`);
+  // The dashboard is no Linear thread (ORC-301): its refusal is only traced, and logged, which its log shows.
+  if (channel === 'dashboard') return false;
   const body = refusalMessage(action, matrix, verdict.reason);
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (sessionId) out.effects.push({ kind: 'activity', type: 'response', body, linearSessionId: sessionId });
@@ -1250,7 +1277,7 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
 /** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
-  return ticket.blocked && ticket.blockKind === 'stopped' ? 'stopped' : undefined;
+  return ticket.blocked && causeOf(ticket.blockKind) === 'stopped' ? 'stopped' : undefined;
 }
 
 /**
@@ -1519,8 +1546,16 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'control.resume':
       out.effects.push({ kind: 'set_paused', paused: false });
       return out;
-    case 'control.stop':
-      return stop(out, workflow);
+    case 'control.stop': {
+      const { runId, pause } = event.payload;
+      if (!authorize(out, event, ticket, pause ? 'pause_run' : 'stop_run', 'dashboard', matrix)) return out;
+      // Aimed at a run (the dashboard's inspection, ORC-301): once it has ended, another may be at work, which this stops not.
+      if (runId && ticket?.activeRunId !== runId) {
+        out.trace.push(`control.stop: run ${runId} is no longer the ticket's, nothing stopped`);
+        return out;
+      }
+      return pause ? stop(out, workflow, PAUSED, `Paused from the dashboard. ${relaunch(workflow)}`, 'paused') : stop(out, workflow);
+    }
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
       const job = workflow.jobs[jobName];

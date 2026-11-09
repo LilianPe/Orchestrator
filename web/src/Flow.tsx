@@ -32,6 +32,9 @@ export function formatDuration(ms: number): string {
 /** `1 turn`, `2 turns`. */
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** The time of a line of the log or of a run's feed. */
+export const clockTime = (at: number): string => new Date(at).toLocaleTimeString('en-US');
+
 export function formatTokens(n: number): string {
   if (n < 1_000) return String(n);
   // Rounded before the unit is chosen: 999 950 reads 1.0 M, not 1000.0 k.

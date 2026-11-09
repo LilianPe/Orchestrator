@@ -4,7 +4,8 @@
 // only exists here. src/pack-guard.test.ts checks that every Bash deny of settings.json is refused.
 // A guard against an agent's mistakes, not a barrier: a command written otherwise gets past it. A push fails for want
 // of means, a sandbox without token, or on the host a git config that sends every push nowhere (ORC-349).
-// It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead.
+// It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead. And, in a knowledge run, any
+// `gh` but the merged diff (ORC-361): that run is given what the factory ingested of the ticket.
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -110,6 +111,10 @@ function git(words) {
 /** The ref a push refspec writes: `+HEAD:refs/heads/main` → `main`. */
 const dest = (spec) => spec.replace(/^\+/, '').split(':').pop().replace(/^(refs\/)?heads\//, '');
 
+/** Set by the factory on a run of a `knowledge` job (`learn`, `remember`): of the forge, it reads its ticket's merged diff only. */
+const KNOWLEDGE_RUN = process.env.FACTORY_KNOWLEDGE_RUN === '1';
+const PR_URL = process.env.FACTORY_PR_URL || null;
+
 const SHELL_NAMES = 'sh|bash|zsh|dash|ksh';
 const FETCH_NAMES = 'curl|wget';
 const SHELLS = new RegExp(`^(${SHELL_NAMES})$`);
@@ -138,9 +143,15 @@ function rule(tool, command) {
     if (prog === 'rm' && (args.includes('--no-preserve-root')
       || (args.some((a) => /^-[^-]*[rR]/.test(a) || a === '--recursive') && args.some((a) => a === '/' || a === '/*')))) return 'rm-root';
     if (prog === 'gh') {
-      const sub = args.filter((a, i) => !a.startsWith('-') && !/^(-R|--repo)$/.test(args[i - 1])).slice(0, 2).join(' ');
+      const repo = (a) => /^(-R|--repo)(=|$)/.test(a);
+      const pos = args.filter((a, i) => !a.startsWith('-') && !repo(args[i - 1] ?? ''));
+      const sub = pos.slice(0, 2).join(' ');
       if (sub === 'pr merge') return 'merge';
       if (/^(pr (create|edit)|run rerun)$/.test(sub)) return 'gh-write';
+      // A knowledge run is given what the factory ingested of the ticket (ORC-361): a comment it never ingested has no taint.
+      // Of the forge it reads `gh pr diff <its ticket's PR URL>` alone: no other PR, no other repository.
+      const ownDiff = sub === 'pr diff' && pos.length === 3 && pos[2] === PR_URL && !args.some(repo);
+      if (KNOWLEDGE_RUN && !ownDiff) return 'forge-read';
     }
     if (prog !== 'git') continue;
     const [sub, ...rest] = git(words);
@@ -233,8 +244,10 @@ const command = String(input.command ?? input.query ?? input.file_path ?? '');
 const hit = tool === 'Read' ? fullRead(input) : rule(tool, command);
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
-  const permissionDecisionReason = hit === 'full-read'
-    ? `Refused by the factory (rule ${hit}): this file is longer than ${READ_MAX_LINES} lines. Find what you need with grep, then read the useful range with offset and limit.`
-    : `Refused by the factory (rule ${hit}): this command is forbidden in a run.`;
+  const why = {
+    'full-read': `this file is longer than ${READ_MAX_LINES} lines. Find what you need with grep, then read the useful range with offset and limit.`,
+    'forge-read': 'a knowledge job reads only what the factory gives it, and of the forge the merged diff of its PR (`gh pr diff <PR url>`).',
+  }[hit] ?? 'this command is forbidden in a run.';
+  const permissionDecisionReason = `Refused by the factory (rule ${hit}): ${why}`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }
