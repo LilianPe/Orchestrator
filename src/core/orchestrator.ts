@@ -1059,7 +1059,7 @@ export class Orchestrator {
       if (sha && sha === green) return { ok: true, failures: [], sha };
       // As on the clone, before any command: a refused branch runs nothing.
       const paths = await this.checkPathsOnHost(project, t, run);
-      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env);
+      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
       const blocking = [...paths, ...frozen];
