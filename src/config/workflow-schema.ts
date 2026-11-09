@@ -36,7 +36,7 @@ export const rawJobSchema = z
     session: z.enum(['new', 'resume']).optional(),
     skill: z.string().optional(),
     lens: z.enum(['correctness', 'security']).optional(),
-    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures']).optional(),
+    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures', 'findings']).optional(),
     verify: z.array(z.string()).optional(),
     pickup: z.boolean().optional(),
     structured_output: z.boolean().optional(),
@@ -49,6 +49,7 @@ export const rawJobSchema = z
       .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis', 'review']).optional(), run: z.string().optional() })
       .strict()
       .optional(),
+    on_blocking: z.object({ run: z.string() }).strict().optional(),
   })
   .strict();
 
@@ -187,6 +188,12 @@ export interface JobSpec {
   /** `run`: the job started once this one succeeded (ORC-123: `tests` then `dev`). */
   /** `post: review`: the findings of the ticket's AI review lenses, on the published commit, as a GitHub review and `factory/review` (ORC-183). */
   onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis' | 'review'; run?: string };
+  /**
+   * The lens that publishes the review (ORC-184): a blocking finding on the commit starts `run`, the fix of the review loop, in
+   * place of `on_success`, on the counter of the review and CI loop; past it, the ticket is blocked. Absent from versions frozen
+   * before it, whose review goes to Human Review whatever it found.
+   */
+  onBlocking?: { run: string };
 }
 
 export type ReviewLens = 'correctness' | 'security';

@@ -760,7 +760,7 @@ describe('decide — built-ins', () => {
     });
   });
 
-  describe('red CI loop bounded by limits.ci_fix_attempts (I5, ORC-270)', () => {
+  describe('red CI loop bounded by limits.ci_fix_attempts (I5, ORC-270, ORC-184)', () => {
     const red = ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test', 'lint'] });
     const inReview = (patch: Partial<TicketState> = {}) => ticket({ logical: 'human_review', ...patch });
 
@@ -792,21 +792,21 @@ describe('decide — built-ins', () => {
       expect(kinds(decide(inReview(), red, wf))).toEqual({ events: ['ticket.blocked'], effects: ['block_comment', 'labels'], timers: [] });
     });
 
-    it('a green CI resets the count, and records nothing when it is already 0', () => {
+    it('a green CI keeps the count: one count per run, shared with the review loop (ORC-184)', () => {
       const green = ev('pr.checks_passed', { number: 3, url: 'u', branch: 'b' });
-      expect(decide(inReview({ ciFixAttempts: 2 }), green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      expect(decide(inReview({ ciFixAttempts: 2 }), green, workflow).events).toEqual([]);
       expect(decide(inReview(), green, workflow).events).toEqual([]);
     });
 
     it('a green CI lifts the block of the red-CI bound, and only that block', () => {
       const green = ev('pr.checks_passed', { number: 3, url: 'u', branch: 'b' });
       const ciBlocked = inReview({ ciFixAttempts: 2, blocked: true, blockKind: 'ci_bound', blockReason: 'CI still failing after 2 attempts of fix-ci.' });
-      expect(decide(ciBlocked, green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }, { type: 'ticket.unblocked' }]);
+      expect(decide(ciBlocked, green, workflow).events).toEqual([{ type: 'ticket.unblocked' }]);
       // Blocked before ORC-331, by a reason written in French: lifted all the same.
       const before = upcastTicket(inReview({ ciFixAttempts: 2, blocked: true, blockReason: 'CI toujours en échec après 2 tentatives de fix-ci.' }));
-      expect(decide(before, green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }, { type: 'ticket.unblocked' }]);
+      expect(decide(before, green, workflow).events).toEqual([{ type: 'ticket.unblocked' }]);
       const otherwise = inReview({ ciFixAttempts: 1, blocked: true, blockKind: 'failed', blockReason: 'The run dev failed.' });
-      expect(decide(otherwise, green, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
+      expect(decide(otherwise, green, workflow).events).toEqual([]);
     });
 
     it('another PR resets the count; the same PR seen again does not', () => {
@@ -828,6 +828,19 @@ describe('decide — built-ins', () => {
       // A timer armed before the block is no human relaunch: it would undo the bound.
       const timer = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } }), workflow);
       expect(timer.events).toEqual([{ type: 'ticket.unblocked' }]);
+    });
+
+    it('a human who starts work gives the bound back, blocked or not: one count per run (ORC-184)', () => {
+      const back = decide(inReview({ ciFixAttempts: 2 }), ev('status.changed', { from: 'human_review', to: 'dev' }), workflow);
+      expect(back.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
+      expect(back.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev-feedback' }));
+    });
+
+    it('a reply on the review loop blocked resumes fix-review itself, on the reply, which then goes back through the review (ORC-184)', () => {
+      const blocked = ticket({ logical: 'ai_review', ciFixAttempts: 2, blocked: true, blockKind: 'limit', blockedJob: 'fix-review', linearSessionId: 's1' });
+      const out = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'The finding is right, fix it this way.', author: 'L' }), workflow);
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'fix-review', input: 'feedback' }));
+      expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
     });
 
     it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {
