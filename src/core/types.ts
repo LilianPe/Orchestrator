@@ -32,8 +32,8 @@ export interface ReuseLead {
 /** The risk of a run, lowest first (ORC-206): the order I4 keeps from going down. */
 export const RISKS = ['low', 'medium', 'high'] as const;
 export type Risk = (typeof RISKS)[number];
-/** The higher of two risks: a proposal never lowers the run's (I4). */
-export const higherRisk = (held: Risk | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
+/** The higher of two risks: a proposal never lowers the run's (I4). A risk cleared by a new run (`null`, ORC-365) is none. */
+export const higherRisk = (held: Risk | null | undefined, proposed: Risk): Risk => (held && RISKS.indexOf(held) > RISKS.indexOf(proposed) ? held : proposed);
 
 export type RunOutcome = 'success' | 'failure' | 'stopped' | 'limit';
 
@@ -583,8 +583,11 @@ export interface TicketState {
   updatedAt: number;
   /** The size `intake` estimated (ORC-206), its last assessment. Absent until one. */
   size?: TicketSize;
-  /** The risk of the run (ORC-206): the highest any step proposed, never lowered (I4). Absent until `intake` assessed it. */
-  risk?: Risk;
+  /**
+   * The risk of the run (ORC-206): the highest any step of it proposed, never lowered within it (I4). Absent until `intake`
+   * assessed it. A delegation that starts a new run clears it (`null`, ORC-365): the new run's intake sets it from its own level.
+   */
+  risk?: Risk | null;
   /**
    * The `clarify` questions waiting for their answers (ORC-210): asked by the guard after `job` (intake) at `at`, the first
    * `answered` of them answered, in order. Not a block: the ticket waits, and whatever moves it on ends the wait (`reduce`).
@@ -593,8 +596,11 @@ export interface TicketState {
   clarify?: { job: string; questions: ClarifyQuestion[]; at: number; answered: number } | null;
   /** The answers accepted to the `clarify` questions (ORC-210): decisions of the ticket, given to its runs and kept with the freeze. */
   decisions?: ClarifyAnswer[];
-  /** Visual proof planned for the ticket (ORC-206): `intake` can only harden it to `required`, never lift it. Absent: undecided until `verify` (ORC-176). */
-  visualProof?: 'required';
+  /**
+   * Visual proof planned for the ticket (ORC-206): within a run, `intake` can only harden it to `required`, never lift it;
+   * a new run plans its own, cleared (`null`) like `risk` (ORC-365). Absent or `null`: undecided until `verify` (ORC-176).
+   */
+  visualProof?: 'required' | null;
   /** The existing code `intake` found close to the request (ORC-207), its last assessment: leads `build` is given to reuse. */
   reuse?: ReuseLead[];
   /** Hash of the workflow version the ticket was decided on first, read for all its later decisions (ORC-149). */

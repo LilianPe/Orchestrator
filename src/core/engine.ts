@@ -116,9 +116,9 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 }
 
 /**
- * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. The risk never goes down
- * (I4) and the visual proof only hardens to `required`. A ticket not complete enough, by intake's judgement or by the
- * deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
+ * The end of `intake` (ORC-206): its assessment is recorded, then the guard before In Progress. Within a run the risk
+ * never goes down (I4) and the visual proof only hardens to `required`; a new run starts from neither (`newRun`). A
+ * ticket not complete enough, by intake's judgement or by the deterministic checks of its launch, does not start: `clarify` asks its questions (ORC-210), and nothing moves to In
  * Progress meanwhile. A complete one « blocked by » a ticket not done waits for it (ORC-363).
  */
 function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, p: EventPayloads['run.finished']): Decision {
@@ -1359,10 +1359,22 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
+  if (event.type === 'ticket.delegated') newRun(out, state, workflow);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
   if (event.type !== 'ticket.commented' || out.events.some((e) => e.type === 'feedback.appended')) noticeMasked(out, event);
   return out;
+}
+
+/**
+ * The boundary of a run (ORC-365): a delegation whose decision starts a dev run starts a new run, which takes its risk and
+ * its visual proof from its own assessment, not from the last run's (I4): they are cleared (`null`) until it assesses.
+ * A delegation that starts nothing (refused, a run active, a blocked ticket, one waiting on its blockers) leaves the run
+ * as it is; a ticket never assessed has nothing to clear, and patches nothing.
+ */
+function newRun(out: Decision, state: TicketState | undefined, workflow: Workflow): void {
+  const starts = out.effects.some((e) => e.kind === 'start_run' && workflow.jobs[e.job]?.queue === 'dev');
+  if ((state?.risk || state?.visualProof) && starts) out.events.push({ type: 'ticket.patched', patch: { risk: null, visualProof: null } });
 }
 
 /** Label put next to the status while the factory waits for a human (ORC-170). */
