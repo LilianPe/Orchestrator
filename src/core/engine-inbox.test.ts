@@ -343,15 +343,28 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     expect(decide(ticket(), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
   });
 
-  it('a ticket waiting on its blockers keeps it for the start their end makes (ORC-363)', () => {
-    const out = decide(ticket({ waitingOn: { blockers: ['REL-0'], start: { job: 'dev' } } }), asked(), workflow);
-    expect(relays(out)).toHaveLength(1);
-    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
-    expect(activities(out)).toEqual([expect.objectContaining({ body: expect.stringContaining('when its blockers are done') })]);
+  it('a human change request waiting beside it makes the start a round of human review: that job reads it (ORC-190)', () => {
+    const bound = workflow.limits.humanReviewRounds!;
+    const feedback = [item(), item({ kind: 'question', body: 'pourquoi ?' })];
+    expect(decide(ticket({ logical: 'human_review', humanInbox: feedback, humanReviewRounds: 0 }), asked(), workflow).events).toContainEqual({ type: 'ticket.patched', patch: { humanReviewRounds: 1 } });
+    const past = decide(ticket({ logical: 'human_review', humanInbox: feedback, humanReviewRounds: bound }), asked(), workflow);
+    expect(past.events.map((e) => e.type)).toContain('ticket.blocked');
+    expect(past.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+    // A question of the session alone, the one relayed maybe, is no change request.
+    expect(decide(ticket({ logical: 'human_review', humanInbox: [feedback[1]!], humanReviewRounds: bound }), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human' })]);
   });
 
-  it('tells the human no answer will come, and keeps nothing, on a blocked ticket or where no reply rule starts a job (ORC-374)', () => {
-    for (const t of [ticket({ blocked: true, blockReason: 'x', blockKind: 'failed' }), ticket({ blocked: true, blockReason: 'x', blockKind: 'failed', activeRunId: 'r1', activeJob: 'dev' }), ticket({ logical: 'ai_review' })]) {
+  it('with no reply rule to start, or waiting on its blockers, keeps it for the launch still to come (ORC-363)', () => {
+    for (const t of [ticket({ waitingOn: { blockers: ['REL-0'], start: { job: 'dev' } } }), ticket({ logical: 'todo', waitingOn: { blockers: ['REL-0'], start: { job: 'dev' } } }), ticket({ logical: 'ai_review' })]) {
+      const out = decide(t, asked(), workflow);
+      expect(relays(out)).toHaveLength(1);
+      expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+      expect(activities(out)).toEqual([expect.objectContaining({ body: expect.stringContaining('when its next step starts') })]);
+    }
+  });
+
+  it('tells the human no answer will come, and keeps nothing, on a blocked ticket (ORC-374)', () => {
+    for (const t of [ticket({ blocked: true, blockReason: 'x', blockKind: 'failed' }), ticket({ blocked: true, blockReason: 'x', blockKind: 'failed', activeRunId: 'r1', activeJob: 'dev' })]) {
       const out = decide(t, asked(), workflow);
       expect(relays(out)).toEqual([]);
       expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
@@ -449,6 +462,13 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
       let after = reduce(t, event);
       for (const e of out.events) after = reduce(after, e);
       expect(after!.relayed).toBeUndefined();
+    });
+
+    it('work cancelled to go on, by a stop, keeps them for the launch that resumes it', () => {
+      const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev', relayed }), ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow);
+      expect(out.events.map((e) => e.type)).toContain('work.cancelled');
+      expect(dropped(out)).toEqual([]);
+      expect(activities(out).filter((a) => a.runId)).toEqual([]);
     });
 
     it('nothing relayed, nothing said nor dropped', () => {
