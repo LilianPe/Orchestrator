@@ -102,12 +102,13 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 
 /**
  * Starts `next` on what waits for the agent that implements: a round of human review when it reads human feedback
- * (`humanRound`, ORC-190), none for relayed questions alone, which it answers: no review (ORC-374).
+ * (`humanRound`, ORC-190), none for relayed questions alone, which it answers: no review (ORC-374). Those start the
+ * workflow's relay job in its place, light (ORC-375); a version frozen before it has none, and starts `next` as it did.
  */
 function resume(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, next: JobSpec, feedback: boolean): void {
-  const start = () => startRun(out, event, ticket, next, { input: next.input });
-  if (feedback) humanRound(out, ticket, workflow, next, start);
-  else start();
+  if (feedback) return humanRound(out, ticket, workflow, next, () => startRun(out, event, ticket, next, { input: next.input }));
+  const job = workflow.relayJob ? workflow.jobs[workflow.relayJob]! : next;
+  startRun(out, event, ticket, job, { input: job.input });
 }
 
 /** The job a reply starts on `ticket`, by the first reply rule that matches: one with no run listed first starts nothing. */
@@ -1974,9 +1975,19 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
         // The answer agent's only: no human question waits on another job of its queue.
         if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket, workflow);
-        if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
+        let checked = job;
+        if (job.name === workflow.relayJob) {
+          // The relay job's answer checks nothing; its commit goes the reply rule's way, from its check on (ORC-375).
+          const reply = event.payload.committed && ticket ? replyJob(event, ticket, workflow) : undefined;
+          if (!reply) {
+            if (event.payload.committed) out.trace.push(`relay: the commit of ${runId} is left unpublished, no reply rule starts a job in this state`);
+            return success(out, { event, ticket, workflow }, job, runId, output);
+          }
+          checked = reply;
+        }
+        if (checked.verify.length === 0 && !checked.repoChecks && !checked.red && !goesThroughFreeze(ticket, checked)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
-        out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
+        out.effects.push({ kind: 'run_verify', runId, job: checked.name, ...(output ? { output } : {}) });
         return out;
       }
       if (job.queue === 'questions') {

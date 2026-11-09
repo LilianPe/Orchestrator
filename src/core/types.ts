@@ -331,6 +331,8 @@ export interface EventPayloads {
     usageLimit?: { resetAt: number; account?: string };
     /** The cap of its budget that stopped it (ORC-216), with `outcome: limit`. Absent on rows written before it, and for its duration cap. */
     overBudget?: OverBudget;
+    /** The workflow's relay job moved the head of its worktree since its launch (ORC-375). Absent for any other job, and when unread. */
+    committed?: true;
   };
   /**
    * `red`: the cause of the `red` check's verdict (ORC-123), for a job checked by it instead of `verify`. `frozen`: the

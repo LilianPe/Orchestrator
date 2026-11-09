@@ -122,6 +122,7 @@ describe('the answer agent (ORC-182)', () => {
 describe('a relayed question when no step runs, and when the work ends (ORC-374)', () => {
   const clean = (angle: string) => ({ output: output({ summary: `${angle} lens.`, findings: [] }) });
   const said = (h: Harness) => h.tracker.activities('ls-1').map((a) => (a as { body: string }).body);
+  const jobsOf = async (h: Harness, from: number) => Promise.all(h.runner.requests.slice(from).map(async (r) => (await h.store.getRun(r.runId))!.job));
 
   /** REL-1 built, published on its PR, reviewed by both lenses with nothing to say: idle in Human Review. */
   async function inHumanReview(h: Harness): Promise<void> {
@@ -132,24 +133,60 @@ describe('a relayed question when no step runs, and when the work ends (ORC-374)
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
   }
 
-  it('criterion 1: idle in Human Review, the agent that implements starts at once, as no round of human review, and its answer comes back', async () => {
-    const h = createHarness({ aiReview: true });
-    await inHumanReview(h);
+  /** A question relayed on REL-1 idle in Human Review: the run that answers it, held, and the question's run. */
+  async function relayed(h: Harness): Promise<{ asked: string; answer: string }> {
     h.runner.enqueue({ hold: true, output: output({ relay: true }) });
     await h.send('session.prompted', question('pourquoi pas du XLSX ?'));
     const asked = h.runner.requests.at(-1)!.runId;
-    h.runner.enqueue({ hold: true, output: output({ summary: 'Répondu.', answers: [{ question: asked, answer: 'Le ticket demande du CSV.' }] }) }, clean('Correctness'), clean('Security'));
+    h.runner.enqueue({ hold: true, output: output({ summary: 'Répondu.', answers: [{ question: asked, answer: 'Le ticket demande du CSV.' }] }) });
     h.runner.release(asked);
     await h.orch.drained();
+    return { asked, answer: h.runner.requests.at(-1)!.runId };
+  }
+
+  it('criterion 1: idle in Human Review, the agent that implements starts at once, as no round of human review, and its answer comes back', async () => {
+    const h = createHarness({ aiReview: true });
+    await inHumanReview(h);
+    const { asked, answer } = await relayed(h);
     const fix = h.runner.requests.at(-1)!;
     expect(fix.prompt).toContain(`[${asked}] pourquoi pas du XLSX ?`);
     expect(said(h).at(-1)).toMatch(/asking the agent that implements now/);
     expect((await h.ticket()).humanReviewRounds ?? 0).toBe(0);
 
-    h.runner.release(fix.runId);
+    h.runner.release(answer);
     await h.orch.drained();
     expect(said(h)).toContain('The agent that implements answers: Le ticket demande du CSV.');
     expect((await h.ticket()).relayed).toBeUndefined();
+  });
+
+  it('ORC-375 criterion 1: answered without a commit, the ticket stays in Human Review, with no AI review nor reply posted', async () => {
+    const h = createHarness({ aiReview: true });
+    await inHumanReview(h);
+    const runs = h.runner.requests.length;
+    const { answer } = await relayed(h);
+    const posted = said(h).length;
+    h.runner.release(answer);
+    await h.orch.drained();
+    // The question's run and the answer's: no lens after them.
+    expect(await jobsOf(h, runs)).toEqual(['ask', 'answer-relayed']);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+    expect((await h.ticket()).humanReviewRounds ?? 0).toBe(0);
+    // The answer, relayed in the question's thread, and no `reply` summary beside it.
+    expect(said(h).slice(posted)).toEqual(['The agent that implements answers: Le ticket demande du CSV.']);
+  });
+
+  it('ORC-375: answered with a commit, the commit goes the reply rule\'s way: checked, published, reviewed, back in Human Review', async () => {
+    const h = createHarness({ aiReview: true });
+    await inHumanReview(h);
+    const runs = h.runner.requests.length;
+    const { answer } = await relayed(h);
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'b'.repeat(40));
+    h.runner.enqueue(clean('Correctness'), clean('Security'));
+    h.runner.release(answer);
+    await h.orch.drained();
+    expect(await jobsOf(h, runs)).toEqual(['ask', 'answer-relayed', 'review', 'review-security']);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifiedSha: 'b'.repeat(40), blocked: false });
+    expect((await h.ticket()).humanReviewRounds ?? 0).toBe(0);
   });
 
   it('criterion 2: undelegated while it is still relayed, the human hears in its thread that no answer will come, once', async () => {

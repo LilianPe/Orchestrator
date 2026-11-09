@@ -787,8 +787,9 @@ export class Orchestrator {
     const rows = await store.listEffects(t.projectId, t.ticketId);
     if (rows.some((r) => (r.effect.kind === 'run_verify' || r.effect.kind === 'publish') && r.effect.runId === runId && (r.status === 'pending' || r.status === 'running'))) return;
     const run = await store.getRun(runId);
-    // A human's push has no run (ORC-159): the effect of its check says under which job, as any check's does.
-    const job = run?.job ?? rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job;
+    // The effect of its check says under which job, as any check's does: a human's push has no run (ORC-159), and the
+    // commit of the relay job is checked under the reply rule's (ORC-375).
+    const job = rows.map((r) => r.effect).find((e): e is Extract<Effect, { kind: 'run_verify' }> => e.kind === 'run_verify' && e.runId === runId)?.job ?? run?.job;
     if (!job) {
       this.log('warn', `verification of ${t.ticketId} names a run never written (${runId}): dropped`);
       await this.apply(t, { type: 'work.cancelled' });
@@ -2845,6 +2846,8 @@ export class Orchestrator {
       };
       const prompt = buildPrompt(promptInput);
       const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
+      // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
+      const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;
 
       const run: RunRecord = {
         id: runId,
@@ -2871,6 +2874,7 @@ export class Orchestrator {
         ...(limits !== job.limits ? { limits } : {}),
         ...(pickup ? { pickup } : {}),
         ...(blockedBy ? { blockedBy } : {}),
+        ...(startHead ? { startHead } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays
@@ -3189,7 +3193,18 @@ export class Orchestrator {
         ...(run.blockedBy ? { blockedBy: run.blockedBy } : {}),
         ...(usageLimit ? { usageLimit } : {}),
         ...(result.overBudget ? { overBudget: result.overBudget } : {}),
+        ...(await this.answerCommitted(run)),
       },
     };
+  }
+
+  /**
+   * The relay job's attempt moved the head of its worktree since its launch (ORC-375): the engine sends that commit the
+   * reply rule's way. Nothing for an attempt launched without a head (any other job), nor for a head it cannot read.
+   */
+  private async answerCommitted(run: RunRecord): Promise<{ committed?: true }> {
+    if (run.startHead === undefined) return {};
+    const head = await this.d.workspaces.head(run.cwd).catch(() => undefined);
+    return head && head !== run.startHead ? { committed: true } : {};
   }
 }

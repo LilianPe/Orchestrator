@@ -104,6 +104,7 @@ export const rawWorkflowSchema = z
       .optional(),
     on: z.record(z.string(), z.array(rawRuleSchema)).optional(),
     jobs: z.record(z.string(), rawJobSchema).optional(),
+    relay_job: z.string().optional(),
   })
   .strict();
 
@@ -247,4 +248,10 @@ export interface Workflow {
   commands: string[];
   on: Partial<Record<EventType, Rule[]>>;
   jobs: Record<string, JobSpec>;
+  /**
+   * The job a question relayed to the agent that implements starts, with no human feedback beside it, where a reply would
+   * start the reply rules' job (ORC-375): it answers, and its end moves, posts and reviews nothing unless it committed.
+   * Absent from versions frozen before it, whose relay starts the reply rules' job (ORC-374): a replay decides as they did.
+   */
+  relayJob?: string;
 }

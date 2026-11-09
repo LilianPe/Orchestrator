@@ -220,6 +220,16 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
     if (j.onBlocking && jobs[j.onBlocking.run]?.input !== 'findings') throw new WorkflowError(`jobs.${j.name}.on_blocking.run: "${j.onBlocking.run}" must be a job that reads the findings (input: findings)`);
   }
 
+  // It asks the agent that implements: a job of the ticket session, resumed, on the feedback input; no round (ORC-375).
+  const relay = raw.relay_job;
+  if (relay) {
+    const answers = jobs[relay];
+    if (!answers) throw new WorkflowError(`relay_job: unknown job "${relay}"`);
+    if (answers.queue !== 'dev' || answers.session !== 'resume' || answers.input !== 'feedback' || answers.counter) {
+      throw new WorkflowError(`relay_job: "${relay}" must resume the ticket session on the feedback input, with no counter (queue: dev, session: resume, input: feedback)`);
+    }
+  }
+
   const on: Partial<Record<EventType, Rule[]>> = {};
   for (const [type, rules] of Object.entries(raw.on ?? {})) {
     if (!EVENT_TYPES.includes(type)) throw new WorkflowError(`on.${type}: unknown event type`);
@@ -292,5 +302,6 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
     commands: [...new Set((on.command ?? []).map((r) => r.say).filter((s): s is string => !!s))],
     on,
     jobs,
+    ...(relay ? { relayJob: relay } : {}),
   };
 }
