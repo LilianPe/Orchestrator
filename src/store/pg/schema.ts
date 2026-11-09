@@ -380,7 +380,27 @@ export const changelog = pgTable(
   (t) => [index('changelog_at_idx').on(t.at)],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, then the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197). */
+/**
+ * A project's baseline over 90 days (ORC-230), frozen by `factory baseline`: one row per measure and period. `value` null
+ * when there is nothing to compute it over, or no source (`no_source`); `over_count` and `left_out`, what it counts and leaves out.
+ */
+export const baselines = pgTable(
+  'baselines',
+  {
+    projectId: text('project_id').notNull(),
+    since: timestamp('since', { withTimezone: true, mode: 'date' }).notNull(),
+    until: timestamp('until', { withTimezone: true, mode: 'date' }).notNull(),
+    measure: text('measure').notNull(),
+    value: doublePrecision('value'),
+    overCount: integer('over_count').notNull(),
+    leftOut: integer('left_out').notNull(),
+    noSource: boolean('no_source').notNull(),
+    computedAt: timestamp('computed_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.since, t.until, t.measure] })],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -399,6 +419,7 @@ export const PG_TABLES = {
   refusals,
   knownFlakyTests,
   changelog,
+  baselines,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -419,6 +440,7 @@ export const PG_TABLE_NAMES = [
   'refusals',
   'known_flaky_tests',
   'changelog',
+  'baselines',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

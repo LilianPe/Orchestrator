@@ -1,8 +1,10 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
+import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
 import { excerpt, summarizeChecks, toRepoPermission, type CheckSummary } from './gh-cli.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
+import { mergedPullRequests } from './merged-prs.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import { isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
@@ -654,6 +656,12 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async recentBranches(repoPath: string): Promise<ForgeBranch[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     return recentRepoBranches(gql, owner, name);
+  }
+
+  /** The repository's PRs merged in `[since, until)` (ORC-230), for `factory baseline`: not part of the `Forge` port the factory runs on. */
+  async mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]> {
+    const { owner, name, gql } = await this.graphQl(repoPath);
+    return mergedPullRequests(gql, owner, name, since, until);
   }
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */

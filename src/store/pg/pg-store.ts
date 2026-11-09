@@ -13,6 +13,7 @@ import {
 } from '../../core/dead-letter.js';
 import type { ReviewLens } from '../../config/workflow-schema.js';
 import type { Finding } from '../../core/agent-output.js';
+import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import type { ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
@@ -996,6 +997,38 @@ export class PgStore implements AsyncStore {
   async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
     const rows = await this.db.execute(sql`delete from known_flaky_tests where project_id = ${projectId} and test = ${test} returning test`);
     return rows.rows.length === 1;
+  }
+
+  async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {
+    const since = new Date(b.since);
+    const until = new Date(b.until);
+    const period = sql`project_id = ${b.projectId} and since = ${since} and until = ${until}`;
+    return this.db.transaction(async (tx) => {
+      // Two computations of the same period at once: the second waits here, then finds the first's rows.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`baseline:${b.projectId}:${b.since}:${b.until}`}))`);
+      if ((await tx.execute(sql`select 1 from baselines where ${period} limit 1`)).rows.length) {
+        if (!replace) return false;
+        await tx.execute(sql`delete from baselines where ${period}`);
+      }
+      const rows = Object.entries(b.measures).map(([measure, v]) => ({
+        projectId: b.projectId, since, until, measure, value: v.value, overCount: v.over, leftOut: v.leftOut, noSource: v.noSource, computedAt: new Date(b.computedAt),
+      }));
+      if (rows.length) await tx.insert(schema.baselines).values(rows);
+      return true;
+    });
+  }
+
+  async latestBaseline(): Promise<Baseline | null> {
+    type Row = { project_id: string; since: string | number; until: string | number; measure: BaselineMeasure; value: number | null; over_count: number; left_out: number; no_source: boolean; at: string | number };
+    const { rows } = await this.db.execute<Row>(sql`
+      select b.project_id, round(extract(epoch from b.since) * 1000) as since, round(extract(epoch from b.until) * 1000) as until, b.measure, b.value,
+        b.over_count, b.left_out, b.no_source, round(extract(epoch from b.computed_at) * 1000) as at
+      from baselines b join (select project_id, since, until from baselines order by computed_at desc limit 1) l using (project_id, since, until)
+    `);
+    const first = rows[0];
+    if (!first) return null;
+    const measures = Object.fromEntries(rows.map((r) => [r.measure, { value: r.value === null ? null : Number(r.value), over: r.over_count, leftOut: r.left_out, noSource: r.no_source }]));
+    return { projectId: first.project_id, since: Number(first.since), until: Number(first.until), computedAt: Number(first.at), measures };
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {
