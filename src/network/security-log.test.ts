@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readSecurityLog, refusalSummary, REFUSAL_RULES } from './security-log.js';
+import type { SecurityLog } from '../store/types.js';
+import { readSecurityLog, refusalSummary, REFUSAL_RULES, runSecurityView } from './security-log.js';
 
 const RUN = { runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5 };
 const HOOK = join(import.meta.dirname, '../../packs/standard/hooks/pre-tool-use.mjs');
@@ -136,5 +137,44 @@ describe('the refusals summary posted in the ticket session (ORC-296)', () => {
     expect(body).not.toContain('SECRET');
     expect(body).not.toContain('git push');
     expect(body).not.toContain('everyone');
+  });
+});
+
+describe('the security log of a run as the dashboard shows it (ORC-300)', () => {
+  const log: SecurityLog = {
+    ...RUN,
+    egress: [
+      { at: 10, method: 'GET', host: 'registry.npmjs.org', path: '/left-pad?token=s3cret', ok: true, up: 1, down: 2 },
+      { at: 11, method: 'CONNECT', host: 'evil.example', port: 22, ok: false, reason: 'port 22 refused: 443 only', up: 0, down: 0 },
+      { at: 12, method: 'POST', host: 'evil.example', path: '/upload', ok: false, reason: 'not allowed', up: 0, down: 0 },
+      { at: 13, method: 'GET', host: 'pypi.org', path: '/simple', ok: false, reason: 'not allowed', up: 0, down: 0 },
+      { at: 14, method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, up: 1, down: 2 },
+    ],
+    refusals: [
+      { at: 20, tool: 'Bash', rule: 'push', command: 'git push https://x:ghp_s3cret@github.com/o/r' },
+      { at: 21, tool: 'Bash', rule: 'force-push', command: 'git push --force' },
+      { at: 22, tool: 'Bash', rule: 'push', command: 'git push origin HEAD' },
+    ],
+    skipped: { egress: 1, refusals: 2 },
+  };
+
+  it('lists its refusals and counts them per rule, and counts the hosts contacted and refused', () => {
+    expect(runSecurityView(log)).toEqual({
+      ...RUN,
+      rules: [{ rule: 'push', refusals: 2 }, { rule: 'force-push', refusals: 1 }],
+      refusals: [{ at: 20, tool: 'Bash', rule: 'push' }, { at: 21, tool: 'Bash', rule: 'force-push' }, { at: 22, tool: 'Bash', rule: 'push' }],
+      hosts: [
+        { host: 'evil.example', requests: 2, refused: 2 },
+        { host: 'registry.npmjs.org', requests: 2, refused: 0 },
+        { host: 'pypi.org', requests: 1, refused: 1 },
+      ],
+      refusedHosts: [{ host: 'evil.example', refused: 2 }, { host: 'pypi.org', refused: 1 }],
+      skipped: { egress: 1, refusals: 2 },
+    });
+  });
+
+  it('shows no command, no path and no reason: only the rule and the host', () => {
+    const shown = JSON.stringify(runSecurityView(log));
+    for (const hidden of ['s3cret', 'git push', '/upload', '/simple', 'not allowed', 'port 22']) expect(shown).not.toContain(hidden);
   });
 });

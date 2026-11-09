@@ -108,6 +108,38 @@ export function readSecurityLog(
   };
 }
 
+/**
+ * A run's security log as the dashboard shows it (ORC-300): its refusals listed and counted per rule, the hosts it
+ * contacted and those the proxy refused. Only the rule and the host: never a command, a path nor the proxy's reason,
+ * which can hold a secret or what the agent wrote.
+ */
+export interface RunSecurityView {
+  runId: string;
+  projectId: string;
+  ticketId: string;
+  at: number;
+  rules: { rule: string; refusals: number }[];
+  refusals: { at: number; tool: string; rule: string }[];
+  hosts: { host: string; requests: number; refused: number }[];
+  refusedHosts: { host: string; refused: number }[];
+  skipped: SecurityLog['skipped'];
+}
+
+export function runSecurityView(log: SecurityLog): RunSecurityView {
+  const refused = new Map(counts(log.egress.filter((e) => !e.ok).map((e) => e.host)));
+  return {
+    runId: log.runId,
+    projectId: log.projectId,
+    ticketId: log.ticketId,
+    at: log.at,
+    rules: counts(log.refusals.map((r) => r.rule)).map(([rule, refusals]) => ({ rule, refusals })),
+    refusals: log.refusals.map(({ at, tool, rule }) => ({ at, tool, rule })),
+    hosts: counts(log.egress.map((e) => e.host)).map(([host, requests]) => ({ host, requests, refused: refused.get(host) ?? 0 })),
+    refusedHosts: [...refused].map(([host, n]) => ({ host, refused: n })),
+    skipped: log.skipped,
+  };
+}
+
 /** A host as the proxy saw it, from the agent's request: posted only when it is a plain host name. */
 const PLAIN_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
 const HOSTS_SHOWN = 10;
