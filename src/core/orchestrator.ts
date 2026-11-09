@@ -854,7 +854,16 @@ export class Orchestrator {
       return;
     }
     // ponytail: a red check's sandbox (`<run>-red`) has no run record: its log is left to the files' purge.
-    await Promise.all(live.filter(({ runId }) => !this.handles.has(runId) && !takenOver.has(runId)).map(async ({ sandbox, runId }) => this.destroySandbox(sandbox.id, runId, await this.d.store.getRun(runId))));
+    const dead = new Map<string, string[]>();
+    for (const { runId, sandbox } of live) if (!this.handles.has(runId) && !takenOver.has(runId)) dead.set(runId, [...(dead.get(runId) ?? []), sandbox.id]);
+    // An attempt's containers, its services among them (ORC-309), one after the other: its security log once they are all gone.
+    await Promise.all(
+      [...dead].map(async ([runId, ids]) => {
+        for (const id of ids) await this.destroySandbox(id, runId);
+        const owner = await this.d.store.getRun(runId);
+        if (owner) await this.ingestSecurityLog(runId, owner);
+      }),
+    );
   }
 
   /**
@@ -898,8 +907,9 @@ export class Orchestrator {
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
    * from writing, as on the host, or for `intake` its tools, `Read`, `Grep` and `Glob` (ORC-367). The network is applied by the egress proxy (ORC-213): the repository's
    * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
+   * The repository's `services` (ORC-309), for the agent: those its setup filled, owned by this sandbox and gone with it.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services: readonly string[] = []): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
@@ -911,7 +921,7 @@ export class Orchestrator {
       workspacePath: ws.path,
       network: policy.level,
       ...(policy.allow.length ? { allow: policy.allow } : {}),
-      requirements: DEFAULT_REQUIREMENTS,
+      requirements: { ...DEFAULT_REQUIREMENTS, services },
       // Its git dir is in its worktree, its own (ORC-317): the repository's, which git reads on the host, is never mounted.
       mounts: [
         { host: claudeDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
@@ -932,16 +942,20 @@ export class Orchestrator {
    * agent's is opened (ORC-211), on the host without sandboxes, where it gets no secret. It throws on a
    * failure; the launch then removes the worktree, so the next attempt runs it again.
    */
-  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables, commands: string[]): Promise<void> {
+  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables, commands: string[], services: readonly string[]): Promise<void> {
     const sandboxes = this.d.sandboxes;
     if (!sandboxes) {
       const res = await this.d.verify(ws.path, commands, undefined, vars.env);
       if (!res.ok) throw new Error(`The worktree setup failed: ${res.failures[0]!.command}`);
       return;
     }
-    // On commits a previous agent wrote, `setup` runs code nobody reviewed: no secret for it. A setup that needs one fails.
-    const secrets = ws.ahead ? {} : vars.setupSecrets;
-    if (ws.ahead && Object.keys(vars.setupSecrets).length) this.log('warn', `setup of ${ticketId}: its branch has commits beyond the default branch, the repository's secrets are withheld`);
+    // On commits a previous agent wrote, or in a worktree an earlier attempt worked in (its services new, ORC-309), `setup`
+    // runs code nobody reviewed: no secret for it. A setup that needs one fails.
+    const unreviewed = ws.ahead || !ws.fresh;
+    const secrets = unreviewed ? {} : vars.setupSecrets;
+    if (unreviewed && Object.keys(vars.setupSecrets).length) {
+      this.log('warn', `setup of ${ticketId}: ${ws.ahead ? 'its branch has commits beyond the default branch' : "its worktree holds an earlier attempt's work"}, the repository's secrets are withheld`);
+    }
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
       ticketId,
@@ -950,6 +964,7 @@ export class Orchestrator {
       commands,
       env: vars.env,
       secrets,
+      services,
       now: new Date(this.d.clock.now()),
     });
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
@@ -2161,7 +2176,11 @@ export class Orchestrator {
       reason = MERGE_PUSHED;
       headMoved = true;
     }
-    else if (pr.checks !== 'pass' && pr.checks !== 'none') reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || pr.checks})`;
+    else if (pr.checks !== 'pass' && pr.checks !== 'none') {
+      // A check in a state the forge does not know is named: a bare `pending` reads as a CI still running (ORC-304).
+      const unknown = pr.unknownChecks?.length ? `; in a state the forge does not know: ${pr.unknownChecks.join(', ')}` : '';
+      reason = `the checks of the reviewed commit are not green (${pr.failedChecks.join(', ') || pr.checks}${unknown})`;
+    }
     else {
       // No check at all: the forge merges only in a repository with no CI (`mergePr`, `unchecked`).
       // GitHub merges no draft: a Done is a merge decision, whatever became of the move's best effort (`prReady`).
@@ -2571,14 +2590,16 @@ export class Orchestrator {
       const sessionRole = roleOf(job, ticketSession);
 
       const vars = await this.repoVariablesOf(project, config);
-      if (!setUp) {
-        await state(store.setMeta(setupPendingKey(ws.path), '1'));
-        await this.runSetup(project, ticketId, ws, runId, vars, setup);
-        await state(store.setMeta(setupPendingKey(ws.path), ''));
+      // A set-up worktree's setup runs again for each attempt's new services (ORC-309), without the secrets (the worktree
+      // is an agent's), unmarked: the worktree stays if it fails.
+      if (!setUp || (this.d.sandboxes && config.services.length && setup.length)) {
+        if (!setUp) await state(store.setMeta(setupPendingKey(ws.path), '1'));
+        await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
+        if (!setUp) await state(store.setMeta(setupPendingKey(ws.path), ''));
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network)));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network), config.services));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);

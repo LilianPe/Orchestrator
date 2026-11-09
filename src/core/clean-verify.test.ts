@@ -299,6 +299,20 @@ describe('runCleanVerify', () => {
       expect(sandboxes.ran.map((r) => r.command)).not.toContain('echo pwned-by-the-ref');
     });
 
+    it("gives verify's setup and commands services of their own, new, gone with the commands' sandbox (ORC-309)", async () => {
+      const { sandboxes, req } = setup({}, `${CONFIG}services: [postgres]\n`);
+      await runCleanVerify(req);
+      const asked = sandboxes.created.map((c) => [c.runId, c.servicesOf, c.requirements.services]);
+      expect(asked).toEqual([
+        ['r1-bundle', undefined, []],
+        ['r1-prepare', undefined, []],
+        ['r1-verify-setup', 'r1-verify', ['postgres']],
+        ['r1-verify', undefined, ['postgres']],
+      ]);
+      expect(sandboxes.activeServices()).toEqual([]);
+      expect(sandboxes.destroyed).toContain('svc-1');
+    });
+
     it('asks the variables of the repository from the base\'s config', async () => {
       const asked: string[][] = [];
       const { req } = setup({ env: async (config) => (asked.push(config.env), { REPO_VAR: 'v' }) }, CONFIG);

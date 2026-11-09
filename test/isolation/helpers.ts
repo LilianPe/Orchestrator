@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,15 @@ export const podman = isPodman(cli);
 // A public image, so the CI need not build docker/runner.Dockerfile: the checks only need sh, perl-base, node and coreutils.
 export const PUBLIC_IMAGE = 'docker.io/library/node:24.22.1-bookworm-slim';
 export const image = process.env['FACTORY_RUNNER_IMAGE'] ?? PUBLIC_IMAGE;
+
+/** `img` pulled unless the engine has it already: an image built here (the runner's, ORC-203) has nowhere to be pulled from. */
+export function ensureImage(img: string): void {
+  try {
+    execFileSync(cli, ['image', 'inspect', img], { stdio: 'ignore', timeout: 60_000 });
+  } catch {
+    execFileSync(cli, ['pull', '-q', img], { stdio: 'ignore', timeout: 300_000 });
+  }
+}
 
 /** What isolation n° 7 searches an image for; isolation-07-secrets.test.ts keeps its own copy until #92 (ORC-211), which edits that file, is merged. */
 export const TOKEN = /ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{10,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}/;

@@ -134,6 +134,15 @@ describe('Done by a human, merge by the factory (ORC-148)', () => {
     expect(lastMove(h)).toBe('Human Review');
   });
 
+  it('merges nothing on a check in a state the forge does not know, and names it (ORC-304)', async () => {
+    const h = await inHumanReview();
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: 'abc123', checks: 'pending', failedChecks: [], unknownChecks: ['deploy'] });
+    await h.send('status.changed', { from: 'human_review', to: 'done' }, 'REL-1', { actor: 'user-lilian' });
+    expect(h.forge.merges).toEqual([]);
+    expect(comments(h).at(-1)).toMatch(/checks of the reviewed commit are not green \(pending; in a state the forge does not know: deploy\)/);
+    expect(lastMove(h)).toBe('Human Review');
+  });
+
   it('a refusal is decided once: its effect replayed after the checks turned green still answers it, never merges', async () => {
     // The refusal's inbox write fails three times: the effect is retried (a replay), and by then the checks are green.
     let failures = 3;
