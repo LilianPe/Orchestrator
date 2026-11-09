@@ -91,6 +91,13 @@ describe('standard pack', () => {
     }
   });
 
+  it('learn reads the conversation the factory gives it, never the PR\'s comments or reviews (ORC-361)', () => {
+    const text = readFileSync(join(pack, 'skills', 'learn', 'SKILL.md'), 'utf8');
+    expect(text).not.toMatch(/gh pr view|gh api|--comments/);
+    expect(text).toMatch(/"What the factory received on this ticket"/);
+    expect(text).toMatch(/`gh pr diff <PR url>`/);
+  });
+
   it("tells the steps that write to rebase on a human's push, never to merge it (ORC-159)", () => {
     for (const name of ['dev', 'feedback']) {
       const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
