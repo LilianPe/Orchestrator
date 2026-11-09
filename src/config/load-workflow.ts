@@ -222,10 +222,12 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   // It asks the agent that implements: a job of the ticket session, resumed, on the feedback input; no round (ORC-375).
   const relay = raw.relay_job;
-  const answers = relay ? jobs[relay] : undefined;
-  if (relay && !answers) throw new WorkflowError(`relay_job: unknown job "${relay}"`);
-  if (answers && (answers.queue !== 'dev' || answers.session !== 'resume' || answers.input !== 'feedback' || answers.counter)) {
-    throw new WorkflowError(`relay_job: "${relay}" must resume the ticket session on the feedback input, with no counter (queue: dev, session: resume, input: feedback)`);
+  if (relay) {
+    const answers = jobs[relay];
+    if (!answers) throw new WorkflowError(`relay_job: unknown job "${relay}"`);
+    if (answers.queue !== 'dev' || answers.session !== 'resume' || answers.input !== 'feedback' || answers.counter) {
+      throw new WorkflowError(`relay_job: "${relay}" must resume the ticket session on the feedback input, with no counter (queue: dev, session: resume, input: feedback)`);
+    }
   }
 
   const on: Partial<Record<EventType, Rule[]>> = {};

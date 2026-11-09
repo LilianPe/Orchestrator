@@ -107,7 +107,7 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
  */
 function resume(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, next: JobSpec, feedback: boolean): void {
   if (feedback) return humanRound(out, ticket, workflow, next, () => startRun(out, event, ticket, next, { input: next.input }));
-  const job = (workflow.relayJob && workflow.jobs[workflow.relayJob]) || next;
+  const job = workflow.relayJob ? workflow.jobs[workflow.relayJob]! : next;
   startRun(out, event, ticket, job, { input: job.input });
 }
 
@@ -1975,11 +1975,17 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
         // The answer agent's only: no human question waits on another job of its queue.
         if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket, workflow);
-        // The relay job's answer checks nothing; its commit goes the reply rule's way, from its check on (ORC-375).
-        const relayed = job.name === workflow.relayJob;
-        const checked = relayed ? (event.payload.committed && ticket ? replyJob(event, ticket, workflow) : undefined) : job;
-        if (relayed && event.payload.committed && !checked) out.trace.push(`relay: the commit of ${runId} is left unpublished, no reply rule starts a job in this state`);
-        if (!checked || (checked.verify.length === 0 && !checked.repoChecks && !checked.red && !goesThroughFreeze(ticket, checked))) return success(out, { event, ticket, workflow }, job, runId, output);
+        let checked = job;
+        if (job.name === workflow.relayJob) {
+          // The relay job's answer checks nothing; its commit goes the reply rule's way, from its check on (ORC-375).
+          const reply = event.payload.committed && ticket ? replyJob(event, ticket, workflow) : undefined;
+          if (!reply) {
+            if (event.payload.committed) out.trace.push(`relay: the commit of ${runId} is left unpublished, no reply rule starts a job in this state`);
+            return success(out, { event, ticket, workflow }, job, runId, output);
+          }
+          checked = reply;
+        }
+        if (checked.verify.length === 0 && !checked.repoChecks && !checked.red && !goesThroughFreeze(ticket, checked)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: checked.name, ...(output ? { output } : {}) });
         return out;
