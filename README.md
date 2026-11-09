@@ -54,6 +54,7 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 ### Use
 - [Command line](docs/cli.md): `relais init|up|plan|status|pause|resume|stop` and `relais-agent`.
 - [Web interface and security](docs/interface-and-security.md): interface, exposed routes, password, CSRF, known limitations.
+- [Threat model](docs/threat-model.md): the five threats, each attack linked to its defense and its test, the open holes, the limitations lifted.
 
 ### Operate
 - [Operations](docs/operations.md): limits reached, blocked tickets, pause, logs and transcripts, restarts, troubleshooting.
