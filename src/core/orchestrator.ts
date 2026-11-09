@@ -897,8 +897,9 @@ export class Orchestrator {
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
    * from writing, as on the host, or for `intake` its tools, `Read`, `Grep` and `Glob` (ORC-367). The network is applied by the egress proxy (ORC-213): the repository's
    * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
+   * The repository's `services` (ORC-309), for the agent: those its setup filled, owned by this sandbox and gone with it.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
+  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services: readonly string[] = []): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
@@ -910,7 +911,7 @@ export class Orchestrator {
       workspacePath: ws.path,
       network: policy.level,
       ...(policy.allow.length ? { allow: policy.allow } : {}),
-      requirements: DEFAULT_REQUIREMENTS,
+      requirements: { ...DEFAULT_REQUIREMENTS, services },
       // Its git dir is in its worktree, its own (ORC-317): the repository's, which git reads on the host, is never mounted.
       mounts: [
         { host: claudeDir, target: `${SANDBOX_HOME}/.claude`, readOnly: false },
@@ -931,7 +932,7 @@ export class Orchestrator {
    * agent's is opened (ORC-211), on the host without sandboxes, where it gets no secret. It throws on a
    * failure; the launch then removes the worktree, so the next attempt runs it again.
    */
-  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables, commands: string[]): Promise<void> {
+  private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables, commands: string[], services: readonly string[]): Promise<void> {
     const sandboxes = this.d.sandboxes;
     if (!sandboxes) {
       const res = await this.d.verify(ws.path, commands, undefined, vars.env);
@@ -949,6 +950,7 @@ export class Orchestrator {
       commands,
       env: vars.env,
       secrets,
+      services,
       now: new Date(this.d.clock.now()),
     });
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
@@ -2569,12 +2571,15 @@ export class Orchestrator {
       const vars = await this.repoVariablesOf(project, config);
       if (!setUp) {
         await state(store.setMeta(setupPendingKey(ws.path), '1'));
-        await this.runSetup(project, ticketId, ws, runId, vars, setup);
+        await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
         await state(store.setMeta(setupPendingKey(ws.path), ''));
+      } else if (this.d.sandboxes && config.services.length && setup.length) {
+        // Each attempt's services are new (ORC-309): the setup fills them again. Its worktree, set up already, stays if it fails.
+        await this.runSetup(project, ticketId, ws, runId, vars, setup, config.services);
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network)));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network), config.services));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);

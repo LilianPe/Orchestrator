@@ -6,7 +6,7 @@ One isolated environment per attempt: a container created for it and destroyed a
 - Implementations:
   - `FakeSandboxProvider` (`src/adapters/sandbox/fake.ts`): the harness's fake, which isolates nothing and returns what is scripted for `exec`;
   - `SandboxRouter` (`src/adapters/sandbox/router.ts`): picks the backend of each sandbox (below);
-  - the container backend (`src/adapters/sandbox/docker-rootless.ts`), driven by the `docker` or `podman` CLI, at level `L3`, without browser or services.
+  - the container backend (`src/adapters/sandbox/docker-rootless.ts`), driven by the `docker` or `podman` CLI, at level `L3`, without browser, with the `postgres` service (ORC-309).
 - Suite: `test/contracts/sandbox.contract.ts`, run by `src/adapters/sandbox/fake.test.ts` and `src/adapters/sandbox/router.test.ts` (the router on a fake).
 
 The ticket gave `WorkspaceManager` → SandboxProvider. ORC-225 introduced `SandboxProvider` alongside, and `WorkspaceManager` (`src/adapters/workspace/types.ts`) remains the worktree port: the worktree is mounted into the sandbox, it is not created there.
@@ -20,8 +20,8 @@ The ticket gave `WorkspaceManager` → SandboxProvider. ORC-225 introduced `Sand
 | `spawnCommand(id, argv, opts?)` | the host command (`command`) that runs `argv` in the sandbox, stdio attached, for a runner that reads its output as it goes, and what the host process must have in its environment (`env`); the values of `opts.env` never appear in the command | same command | throws on an unknown id |
 | `findByAttempt(runId)` | the attempt's live sandbox, by its label | no effect | `undefined` when there is none, or no longer after `destroy` |
 | `reattach(runId)` | the live sandbox of an attempt launched by a previous process, made usable by this one: its egress proxy listens again (ORC-220) | no effect | `undefined` when none is running |
-| `list()` | every live sandbox the provider made, with its `runId`, so that `recover()` destroys those of dead attempts, without touching those it took back | no effect | none |
-| `destroy(id)` | the sandbox no longer exists | no effect | an unknown or already destroyed id is ignored |
+| `list()` | every live sandbox the provider made, with its `runId`, so that `recover()` destroys those of dead attempts, without touching those it took back; the services (below) too, under the key they serve | no effect | none |
+| `destroy(id)` | the sandbox no longer exists; the services it owns neither | no effect | an unknown or already destroyed id is ignored |
 
 After `destroy`, a `create` for the same `runId` gives a new sandbox.
 
@@ -31,7 +31,13 @@ After `destroy`, a `create` for the same `runId` gives a new sandbox.
 
 ## Requirements and refusals
 
-`req.requirements`: a minimum isolation level (`minLevel`, ordered `L3` < `L4` < `L5`), `browser` and a list of `services`. A backend satisfies them all or is not picked: never a silent fallback to a less isolated backend, nor to the host. The refusal is a rejection of `create` whose message names what is missing (`level >= L5`, `browser`, `service postgres`). In the MVP, `L4`, `L5`, a browser and any service are therefore refused.
+`req.requirements`: a minimum isolation level (`minLevel`, ordered `L3` < `L4` < `L5`), `browser` and a list of `services`. A backend satisfies them all or is not picked: never a silent fallback to a less isolated backend, nor to the host. The refusal is a rejection of `create` whose message names what is missing (`level >= L5`, `browser`, `service postgres`). In the MVP, `L4`, `L5`, a browser and any service but `postgres` are therefore refused.
+
+## Services (ORC-309)
+
+A request whose `requirements.services` names some joins the services of `req.servicesOf` (`runId` by default), started at the first such request. The sandbox whose `runId` is that key **owns** them: they are destroyed with it, or when it fails to start. The others only join them: an attempt's `setup` (`<run>-setup`, `servicesOf: <run>`) leaves them to its agent (`<run>`); `verify`'s `setup` (`<run>-verify-setup`, `servicesOf: <run>-verify`) to its commands (`<run>-verify`), whose services are new, never the agent's. `create` gives their container as `Sandbox.services`: a target of `exec` (the factory's `pg_dumpall`, after a `setup` with secrets) and of `destroy` (a failed `setup`, which no agent follows). `list()` gives them under their key, so `recover()` destroys those of dead attempts as it does their sandboxes.
+
+The container backend's `postgres`: the image `FACTORY_POSTGRES_IMAGE` (default `docker.io/library/postgres:16-bookworm`), labelled `factory.services=<key>`, as the image's `postgres` user, `--cap-drop ALL`, `no-new-privileges`, the sandbox's limits, its data in a tmpfs, `--network none`. Each sandbox that joins runs with `--network container:<its id>`: one loopback, no route. Its password, random, is written with `DATABASE_URL` in a `0600` file for the engine's `--env-file`, removed right after: never on the command line. initdb is told `--auth-host=scram-sha-256` (its default trusts the loopback) and `--auth-local=trust`, for its own socket, which no sandbox mounts. A sandbox starts only once Postgres accepts connections on the loopback (`pg_isready`, 60 s at most). A service found stopped is never replaced: its database would be empty where the `setup` filled one; the `create` rejects.
 
 ## The router
 
@@ -40,6 +46,7 @@ After `destroy`, a `create` for the same `runId` gives a new sandbox.
 - `create` first asks each backend for `findByAttempt(runId)`: a replayed `create` returns the existing sandbox, whichever backend holds it, if it has the requested network level and satisfies the requirements (isolation level, capabilities of its backend); otherwise it rejects, never returning it. Otherwise it picks the first backend that satisfies all requirements, or rejects saying, backend by backend, what it lacks.
 - `exec`, `spawnCommand` and `destroy` go to the backend that made the id. The router remembers it in memory; after a daemon restart, `reattach`, `list()` and `findByAttempt` relearn it from the backends. For an id it does not know, `destroy` does nothing, `exec` rejects, `spawnCommand` throws.
 - `list()` concatenates the backends' lists.
+- A sandbox's services (`Sandbox.services`) are remembered as the backend's too.
 
 ## Idempotence
 
@@ -64,5 +71,8 @@ The `exec` case runs `EXEC_PROBE` (`sh -c`, which writes to both outputs and exi
 ## Known gaps
 
 - **Network enforced by the egress proxy (ORC-213).** The container backend always runs with `--network none`. With the factory's proxy, it mounts the run's socket and the egress authority's certificate, and the proxy is what enforces the level; without a proxy, nothing gets out, whatever the level. The returned `Sandbox` carries the requested level (a replayed `create` compares it). A live container whose socket is not held by this process (restarted daemon) is only returned by `reattach`, which reopens the socket at the same path: `create` and `findByAttempt` do not return it, and `create` destroys and remakes it. See [interface-and-security.md](../interface-and-security.md#sandbox-network).
-- `FakeSandboxProvider` does not look at requirements: it always creates an `L3` sandbox. The refusal is checked on the router.
+- `FakeSandboxProvider` does not look at requirements: it always creates an `L3` sandbox. The refusal is checked on the router. It keeps services by their key (`activeServices()`), as the container backend does.
+- **Services under rootless Podman (ORC-309)**: `--network container:` between a service without `--userns=keep-id` and a sandbox with it is checked by `test/isolation/services.test.ts`, in CI only.
+- **No database for the red check nor the visual proof (ORC-309)**: the `<run>-red` sandbox and those of the captures get no services; a red check whose tests need the database sees them fail for that reason.
+- **A replayed `create` through the router** returns the sandbox without `services`: a `setup` replayed so fails rather than leave its database unchecked.
 - `FakeSandboxProvider.create` created a sandbox on each call: it returns the run's one since ORC-189.

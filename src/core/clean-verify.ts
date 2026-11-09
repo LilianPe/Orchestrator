@@ -182,8 +182,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
       ok: !failures.length, failures, sha, tree, commands,
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
-    const setUp = async (suffix: string, workspacePath: string) => {
-      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, now: new Date() });
+    const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
+      if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services, now: new Date() });
     };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
@@ -199,14 +199,16 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     }
     if (failures.length || !runs) return verdict();
 
-    await setUp('verify', cloneDir);
+    // The repository's services (ORC-309), new for this check, never the agent's: filled by the setup, gone with the commands' sandbox.
+    const withServices = { ...DEFAULT_REQUIREMENTS, services: config.services };
+    await setUp('verify', cloneDir, config.services);
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
         const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(command), { env });
         // 124: the cap's, whose failure stays the agent's (a test that hangs), as on the host.
         if (code !== 0) failures.push({ command, exitCode: code === 124 ? null : code, output: stdout + stderr });
       }
-    });
+    }, withServices);
     if (!shooting || failures.length) return verdict();
     const judged = await shootBoth(sandboxes, inBox, shooting, { from, sha, env, cloneDir, beforeDir, setUp });
     failures.push(...judged.failures);

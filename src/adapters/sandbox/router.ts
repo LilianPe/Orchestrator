@@ -47,6 +47,8 @@ export class SandboxRouter implements SandboxProvider {
     }
     const sandbox = await chosen.provider.create(req);
     this.owner.set(sandbox.id, chosen);
+    // A target of `exec` and `destroy` too (ORC-309).
+    if (sandbox.services) this.owner.set(sandbox.services, chosen);
     return sandbox;
   }
 

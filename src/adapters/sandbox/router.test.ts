@@ -35,6 +35,17 @@ describe('SandboxRouter', () => {
     expect(weak.provider.created).toHaveLength(1);
   });
 
+  it("sends exec and destroy of a sandbox's services to the backend that made them (ORC-309)", async () => {
+    const other = backend('other');
+    const pg = backend('pg', { level: 'L3', browser: false, services: ['postgres'] });
+    const router = new SandboxRouter([other, pg]);
+    const box = await router.create({ ...request, requirements: { ...DEFAULT_REQUIREMENTS, services: ['postgres'] } });
+    expect(box.services).toBe('svc-1');
+    expect(await router.exec('svc-1', ['pg_dumpall'])).toEqual(EXEC_PROBE.result);
+    await router.destroy('svc-1');
+    expect(pg.provider.activeServices()).toEqual([]);
+  });
+
   it('refuses instead of falling back to a weaker backend, naming what is missing', async () => {
     const weak = backend('weak');
     const router = new SandboxRouter([weak]);
