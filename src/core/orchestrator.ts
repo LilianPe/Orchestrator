@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
-import { prText, PublishRefused, type Publisher } from '../adapters/publisher/types.js';
+import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
 import type { RunHandle, RunResult, Runner, StagnationBounds } from '../adapters/runner/types.js';
 import {
@@ -43,6 +43,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
+import { describePr, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
@@ -53,6 +54,7 @@ import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } fr
 import { AUTHZ_REFUSED, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
+import { runMeasure } from './measures.js';
 import { openBlockers, pickupFailures } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -84,7 +86,6 @@ import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
-import { mdCode } from '../checks/markdown.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
@@ -1610,8 +1611,10 @@ export class Orchestrator {
         const run = await store.getRun(c.runId);
         if (!run) return;
         const session = run.linearSessionId ?? (await this.sessionFor(t));
-        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary.
-        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style) }, key);
+        // Composed from what the run submitted, never from its last text (ORC-214): a reply is its summary, a build's end
+        // its recap with the work of the ticket's attempts (ORC-195).
+        const runs = c.style === 'summary' && c.output ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
+        return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style, runs) }, key);
       }
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
@@ -1791,7 +1794,11 @@ export class Orchestrator {
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
         const [mark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
         const untrusted = mark ? { untrusted: mark } : {};
-        const text = await this.policy.pr(prText(t));
+        const facts = { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
+        const described = describePr(c.output, facts);
+        // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
+        const open = t.prNumber !== undefined && t.prState === 'OPEN';
+        const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
@@ -1828,14 +1835,8 @@ export class Orchestrator {
     if (!writer) return;
     const { sha, commands } = c;
     const frozen = Object.keys(t.frozenTests?.files ?? {}).length;
-    const verify =
-      commands === undefined
-        ? ({ conclusion: 'success', summary: `${sha.slice(0, 12)} already found green by an earlier verification.` } as const)
-        : commands.length
-          ? ({ conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((cmd) => `- ${mdCode(cmd)}`).join('\n')}` } as const)
-          : ({ conclusion: 'neutral', summary: 'No verification command declared: nothing ran.' } as const);
     const checks = [
-      { name: VERIFY_CHECK, ...verify },
+      { name: VERIFY_CHECK, ...verifySummary(sha, commands) },
       { name: FREEZE_CHECK, conclusion: frozen ? 'success' : 'neutral', summary: frozen ? `${frozen} frozen file(s) intact.` : 'No frozen test for this ticket.' },
       { name: ANTI_CHEAT_CHECK, conclusion: 'success', summary: ANTI_CHEAT_OK },
     ] as const;

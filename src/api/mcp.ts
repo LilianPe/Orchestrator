@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { saveAgentOutput, agentOutputSchema, parseAgentOutput } from '../core/agent-output.js';
+import { saveAgentOutput, agentOutputSchema, parseSubmittedResult } from '../core/agent-output.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -35,7 +35,7 @@ const text = (t: string, isError?: true) => ({ content: [{ type: 'text', text: t
 
 async function callTool(name: unknown, args: Record<string, unknown>, run: RunRecord, d: McpDeps) {
   if (name === 'submit_result') {
-    const parsed = parseAgentOutput(args);
+    const parsed = parseSubmittedResult(args);
     if (!parsed.ok) return text(`Result refused, to fix: ${parsed.error}`, true);
     await saveAgentOutput(d.store, run.id, parsed.output);
     return text('Result recorded.');
