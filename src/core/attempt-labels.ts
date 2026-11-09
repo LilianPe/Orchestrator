@@ -95,6 +95,7 @@ export function promptTemplate(p: PromptInput): string {
     conventions: p.conventions && '<CONVENTIONS>',
     activeWork: p.activeWork && '<TRAVAUX>',
     reuse: p.reuse && '<REUTILISER>',
+    commit: p.commit && '<COMMIT>',
     input: p.input && { kind: p.input.kind, text: '<ENTREE>' },
   });
 }

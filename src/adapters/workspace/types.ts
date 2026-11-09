@@ -1,6 +1,7 @@
 import type { BranchReader } from '../../core/clean-verify.js';
 
-export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'knowledge';
+/** `published`: a fresh clone of a commit the factory published, for an AI review (ORC-183). */
+export type WorkspaceKind = 'worktree' | 'trunk-readonly' | 'knowledge' | 'published';
 
 export interface WorkspaceRequest {
   projectId: string;
@@ -11,6 +12,8 @@ export interface WorkspaceRequest {
   slot: number;
   portBase: number;
   runId: string;
+  /** The published commit a `published` workspace is on (ORC-183). */
+  sha?: string;
 }
 
 export interface Workspace {
@@ -21,6 +24,8 @@ export interface Workspace {
   fresh?: boolean;
   /** True when a fresh worktree came on commits beyond the default branch, a previous agent's: its `setup` then runs code nobody reviewed, and gets no secret (ORC-211). */
   ahead?: boolean;
+  /** A `published` workspace's diff against the trunk, capped (`capDiff`): what the AI review is given to read (ORC-183). */
+  diff?: string;
 }
 
 /** What a step's commits changed, read on the factory's repository (ORC-123): the `red` check's view of the step. */
@@ -39,7 +44,7 @@ export interface StepDiff {
 export interface WorkspaceManager {
   prepare(req: WorkspaceRequest): Promise<Workspace>;
   cleanup(projectId: string, ticketId: string): Promise<void>;
-  /** The trunk a run asked for (a question's), once its sandbox is gone. A run that had none: nothing to do. */
+  /** The trunk a run asked for (a question's, or an AI review's clone), once its sandbox is gone. A run that had none: nothing to do. */
   release(projectId: string, runId: string): Promise<void>;
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */

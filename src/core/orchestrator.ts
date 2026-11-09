@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { Forge, ForgeWriter, MergeResult } from '../adapters/forge/types.js';
+import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -83,6 +83,7 @@ import { runSealedSetup } from './sealed-setup.js';
 import { checkBranchPaths, runCleanVerify, untrustedCheck, type CleanVerifier, type UntrustedMark } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
+import { inlineComment, onItsLine, REVIEW_CHECK, REVIEW_TOOLS, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -344,6 +345,11 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (ticketSession) return 'implementer';
   if (job.queue === 'dev') return 'reviewer';
   return job.workspace === 'trunk-readonly' ? 'answerer' : undefined;
+}
+
+/** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
+function checksPermission(err: { status?: number }): string {
+  return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
 }
 
 /** The inbox id of an attempt's result, and its key among the results kept (`deliver`). */
@@ -1614,6 +1620,8 @@ export class Orchestrator {
         const runs = c.style === 'summary' && c.output ? (await store.ticketRuns(t.projectId, ticketId)).map(runMeasure) : [];
         return this.activityOnce(session, { type: 'response', body: composeResult(c.output, c.style, runs) }, key);
       }
+      case 'review':
+        return this.review(project, t, c, key);
       case 'link_pr':
         if (t.linearSessionId) await tracker.addExternalUrl(t.linearSessionId, 'Pull request', c.url);
         // Seen during the run (the agent opened it), the PR waits for the end of the work: the move to Human Review closes the plan.
@@ -1841,11 +1849,46 @@ export class Orchestrator {
     await Promise.all(
       checks.map(({ name, conclusion, summary }) =>
         writer.upsertCheckRun(project.repoPath, { sha, name, externalId: `${name}@${sha}`, status: 'completed', conclusion, summary }).catch((err: Error & { status?: number }) => {
-          const hint = err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
+          const hint = checksPermission(err);
           this.log('warn', `check ${name} of ${t.ticketId} not published on ${sha.slice(0, 12)}${hint}: ${err.message}`);
         }),
       ),
     );
+  }
+
+  /**
+   * The `review` effect (ORC-183): a lens's findings kept on the commit it read, in place of what that lens kept there before.
+   * The publishing one then posts every lens's findings on that commit as one GitHub review, each on its line, or listed in its
+   * text when GitHub cannot place one, and `factory/review`, failed on a blocking finding. Every text through the
+   * `OutputPolicy`, a refused one replaced by its notice. Keyed: a replay finds its review by the effect's id, and the check by
+   * the commit's. Any failure throws, and the outbox retries it: its move to Human Review waits behind it, and a dead one blocks the ticket.
+   */
+  private async review(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'review' }>, key: EffectKey): Promise<EffectOutcome | void> {
+    const { store, clock } = this.d;
+    await store.putFindings({ projectId: project.id, ticketId: t.ticketId, sha: c.sha, lens: c.lens, runId: c.runId, at: clock.now(), findings: c.findings });
+    if (!c.publish) return;
+    const writer = this.d.forgeWriter;
+    if (!writer || t.prNumber === undefined) {
+      this.log('warn', `AI review of ${t.ticketId} on ${c.sha.slice(0, 12)} not published: ${writer ? 'the ticket has no PR' : 'this instance has no GitHub App (docs/github.md)'}`);
+      return;
+    }
+    const findings = await store.findingsOf(project.id, t.ticketId, c.sha);
+    const placed = findings.filter(onItsLine);
+    const verdict = reviewVerdict(findings);
+    const [body, summary, ...texts] = await this.policy.comments([reviewBody(c.sha, findings, { inline: true }), `${verdict.summary}.`, ...placed.map(inlineComment)]);
+    const post = (review: { body: string; comments: { path: string; line: number; body: string }[] }) => writer.postReview(project.repoPath, t.prNumber!, { sha: c.sha, ...review, externalId: `review:${key.id}` });
+    const posted = await post({ body: body!, comments: placed.map((f, i) => ({ path: f.file, line: f.line, body: texts[i]! })) }).catch(async (err: unknown) => {
+      if (!(err instanceof ReviewLinesRefused)) throw err;
+      this.log('info', `AI review of ${t.ticketId}: a finding is on a line the PR does not show, all listed in the review's text`);
+      return post({ body: await this.policy.comment(reviewBody(c.sha, findings, { inline: false })), comments: [] });
+    });
+    await writer
+      .upsertCheckRun(project.repoPath, { sha: c.sha, name: REVIEW_CHECK, externalId: `${REVIEW_CHECK}@${c.sha}`, status: 'completed', conclusion: verdict.conclusion, title: verdict.summary, summary: summary! })
+      .catch((err: Error & { status?: number }) => {
+        err.message += checksPermission(err);
+        throw err;
+      });
+    return posted.deduplicated ? { deduplicated: true } : undefined;
   }
 
   /**
@@ -2183,7 +2226,9 @@ export class Orchestrator {
         }
         return undefined;
       }
-      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId };
+      // An AI review reads the commit the factory published, the one `verify` found green (ORC-183): never the agent's worktree.
+      const reviewed = job.workspace === 'published' ? t.verifiedSha : undefined;
+      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
       // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
@@ -2192,11 +2237,11 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, activeWork: search?.activeWork };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, reviewed, activeWork: search?.activeWork };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
-    const { issue, ws, pickup, blockedBy, activeWork } = head;
+    const { issue, ws, pickup, blockedBy, reviewed, activeWork } = head;
     // Read again before the first write: the workspace took time.
     let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -2208,7 +2253,7 @@ export class Orchestrator {
     try {
       // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
       // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
-      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' });
+      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
       const setup = config.setup ? [config.setup] : wf.workspace.setup;
       setUp ||= !setup.length;
       const cap = ticketTokenCap(this.d.perTicketTokens, config);
@@ -2222,7 +2267,8 @@ export class Orchestrator {
         setUp = true;
         return await lose(t);
       }
-      if (job.queue === 'dev') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch }));
+      // The ticket's own worktree only: a review's clone is the run's, gone with it.
+      if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch }));
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move);
       t = await state(this.ticket(project.id, ticketId));
 
@@ -2233,7 +2279,9 @@ export class Orchestrator {
       t = await state(this.ticket(project.id, ticketId));
       // The feedback the run reads, taken at the launch whoever started it (a decision, settle, the queue):
       // its taint completes the one the start was decided with (I12, ORC-274).
-      const kind = from ? undefined : (opts.input ?? job.input);
+      // An AI review reads the diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
+      // An AI review reads the published commit's diff alone, whatever relaunched it (ORC-183): a reply that lifted its block waits for the implementer.
+      const kind = from ? undefined : job.lens ? 'diff' : (opts.input ?? job.input);
       // The implementer's run (a `dev` from scratch or a resume) runs the ticket session: resumed when the
       // ticket has one, else made here and taken by the ticket. A review or a question never does (ORC-217).
       // A relaunch runs the session the lost attempt ran. Cut before Claude wrote it, that session does not
@@ -2286,7 +2334,7 @@ export class Orchestrator {
       }
       setUp = true;
       // Opened after the cheap exits above and after the setup, whose container is gone by now (ORC-211).
-      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config)));
+      sandbox = this.d.sandboxes && (await this.openSandbox(this.d.sandboxes, project, ticketId, ws, runId, ticketSession, agentPolicy(config, job.network)));
       // In each run's prompt, not the system prompt: read again at each attempt, never frozen at a resume
       // (ORC-128). The reset below keeps `.claude/CLAUDE.md`: the order does not matter.
       const conventions = readConventions(ws.path);
@@ -2300,6 +2348,8 @@ export class Orchestrator {
       let input: { kind: InputKind; text: string } | undefined;
       if (from) {
         input = from.input;
+      } else if (kind === 'diff') {
+        input = { kind, text: ws.diff ?? '' };
       } else if (kind === 'feedback') {
         input = { kind, text: read.length ? formatFeedback(read) : '(no written feedback: read the PR and the Linear thread again)' };
       } else if (kind === 'verify_failures') {
@@ -2323,7 +2373,8 @@ export class Orchestrator {
         activeWork,
         // intake's leads to existing code (ORC-207), for the dev work that follows it.
         reuse: job.queue === 'dev' && job.step !== 'intake' && t.reuse?.length ? formatReuse(t.reuse) : undefined,
-        reviewRounds: wf.limits.reviewRounds,
+        ...(job.lens ? { lens: job.lens } : {}),
+        ...(reviewed ? { commit: reviewed } : {}),
         resumedAfterCut: !!opts.relaunchOf && resume,
       };
       const prompt = buildPrompt(promptInput);
@@ -2404,6 +2455,8 @@ export class Orchestrator {
         pluginDir: sandbox ? PACK_TARGET : this.d.packDir,
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         readOnly: job.workspace === 'trunk-readonly',
+        // An AI review reads and searches, nothing else: no write tool, no shell (ORC-183).
+        ...(job.lens ? { tools: REVIEW_TOOLS } : {}),
         limits,
         env: {
           // First: a variable of the repository never replaces one of the factory. Never its secrets (ORC-211).

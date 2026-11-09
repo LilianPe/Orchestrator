@@ -102,6 +102,20 @@ export type MergeResult =
   | { merged: false; reason: 'checks_missing' }
   | { merged: false; reason: 'not_mergeable'; message: string };
 
+/**
+ * A review the factory posts on a PR (ORC-183): its text, and comments on lines of `sha`, the commit it read. `externalId` finds
+ * it again on a replay, as a check run's does.
+ */
+export interface ReviewRequest {
+  sha: string;
+  body: string;
+  comments: readonly { path: string; line: number; body: string }[];
+  externalId: string;
+}
+
+/** The forge cannot place a review's comment on its line (a line the PR's diff does not show): the review goes out without them. */
+export class ReviewLinesRefused extends Error {}
+
 export interface ForgeWriter {
   /**
    * Merges the PR if its head is still `sha`, the commit shown to the human reviewer: GitHub checks it in the same
@@ -118,4 +132,9 @@ export interface ForgeWriter {
   gitAccess(repoPath: string): Promise<GitAccess>;
   /** Creates the check run, or updates the one of the sha that carries `externalId`. */
   upsertCheckRun(repoPath: string, req: CheckRunRequest): Promise<{ id: number; deduplicated: boolean }>;
+  /**
+   * Posts the review on the PR, a comment that changes nothing of its state (the check carries the verdict), or finds the one
+   * that carries `externalId`. `ReviewLinesRefused` when a comment cannot go on its line.
+   */
+  postReview(repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }>;
 }
