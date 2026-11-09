@@ -11,10 +11,13 @@ What it shows, live:
   - **Needs you**: what is waiting for a human. Blocked tickets, grouped by cause (agent question, contested ticket, unverified red, infrastructure failure, cap, loop, failed run, pickup refused, event set aside, PR closed without merge, stop, other cause), each with its reason; PRs in Human Review; pending gates (`ready`, for a workflow that still declares it; the spec gate will come with ORC-212). Oldest first, by the ticket's last activity. A PR the agent is still working on, or whose run is waiting for a slot, is not there; a question asked to the agent leaves it there. A blocked ticket whose run is still running appears in both places.
   - **Working**: every run in progress and every verification in progress, with its step (the run's job), its duration and the ticket's tokens; **Stop** button on a ticket's active run. Clicking an identifier opens its run. Queued tickets are listed below.
   - **Done**: finished tickets whose last activity is less than 7 days old, 20 at most, then the other unfinished tickets, collapsed (**Other tracked tickets**).
+- **Overview** (ORC-299, the **Overview** link of the header, `#overview`), read from `GET /api/overview` on opening and every 5 minutes while shown (each read measures every ticket updated in the period), over the last 90 days:
+  - the tickets delivered (first merge in the period), their median lead time (delegation, or first attempt, to merge), tokens per merged ticket with the mean share of the ticket budget (ORC-216), and the rate ready at the first try with the causes of rework; then the median delays to the first sign of life and to the answer of the human messages received in the period, the reverts within 14 days, the CI time per merged ticket and the verdicts of the `red` check. A mean leaves out the tickets without its source and says how many; a figure without a value is a dash, never a zero.
+  - each of the four headline measures faces the **baseline over 90 days**, which has no source until ORC-230: its cell says so.
+  - **No source yet**: minutes of human review (the ORC-190 loop times how long a PR waited for a human, not how long one read it: to be decided) and the baseline (ORC-230). A ticket whose measures cannot be read is counted apart.
 - **Measures** (ORC-223, the **Measures** link of the header, `#measures`), read from `GET /api/measures` on opening and every 30 s while shown, for the 50 most recently updated tickets:
-  - **Overview**: merged tickets, median lead time, tokens per merged ticket (those that reported none are counted apart), ready at the first try, median delays to the first sign of life and to the answer of the human messages. No baseline to compare with yet (ORC-230).
   - **Tickets**: each ticket's state (a blocked ticket with its cause, from its typed kind as in the Flow), duration (delegation to merge, or so far), work time (its attempts' own durations), tokens (as in the Flow), review rounds (AI reviewer attempts, handovers to Human Review by the factory) and attempts. Clicking an identifier lists its **attempts**: step, role, status, duration, tokens, dollars and turns, with its first try, CI time and revert. Clicking a step opens that attempt's **Run detail**.
-  - **No source yet**: the measures nothing in the factory feeds yet and the ticket that brings each (usage limit share, ORC-216; minutes of human review, ORC-190; baseline, ORC-230). Every figure is computed by the factory from its journal and run records ([operations](operations.md#measures-orc-235)), never from what an agent wrote; a ticket whose measures cannot be read says so instead of showing zeros.
+  - Every figure is computed by the factory from its journal and run records ([operations](operations.md#measures-orc-235)), never from what an agent wrote; a ticket whose measures cannot be read says so instead of showing zeros.
 - **Run detail** (ORC-298, `#run/<id>`), read from `GET /api/runs/<id>` when opened, read-only:
   - the run: step, status and closed outcome (ORC-188), duration, tokens, turns, labels (ORC-226);
   - **Timeline**: every event of the ticket's journal in order, said in the factory's words from its structured fields; the events of this run (its end, its checks, its publication) stand out;
@@ -49,6 +52,7 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /` and static files | Interface | password (except loopback) |
 | `GET /api/state` | State: tickets, queue, active runs (without their tokens), cost, capacity | password |
 | `GET /api/flow` | Flow: Needs you, Working, Done (without run tokens or queue contents) | password |
+| `GET /api/overview?since=&until=` | The reduced overview over `[since, until)` in ms, the last 90 days by default (ORC-299); 400 for a period that is not one | password |
 | `GET /api/measures` | Measures of the 50 most recently updated tickets: their attempts' cost, duration and review rounds (without run tokens nor agent text) | password |
 | `GET /api/security?since=&until=` | Security log over `[since, until)` in ms (the last 7 days by default): requests per host (those not a plain host name together), refusals per rule, the 50 most refused runs with their counts and how many are left out (ORC-300) | password |
 | `GET /api/security/runs/:id` | A run's refusals (time, tool, rule) counted per rule, its hosts with their refused requests; never a command, a path nor a host that is not a plain name (ORC-300) | password |
@@ -106,7 +110,7 @@ Each run receives a random `RELAIS_RUN_TOKEN`. The `/agent/*` API only accepts i
 
 - only reads **the run's ticket** (`/agent/issue/<other ticket>` → 403);
 - can search tickets, search the knowledge base and ask a question in the ticket's session;
-- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/measures`, nor in `/api/runs/:id`, nor in `/api/security`, nor in `/api/events` and `/api/events/recent`.
+- appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/measures`, nor in `/api/overview`, nor in `/api/runs/:id`, nor in `/api/security`, nor in `/api/events` and `/api/events/recent`.
 
 On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk to the daemon locally. In a sandbox, it points to `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (by default `host.docker.internal`): a name the container does not resolve, which the egress proxy recognizes and relays to the server dedicated to the agent API.
 
