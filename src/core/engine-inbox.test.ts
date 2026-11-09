@@ -331,10 +331,32 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     expect(relays(out)).toEqual([{ type: 'relay.added', question: { runId: 'q1', at: 5000 } }]);
   });
 
-  it('says so when nothing runs: the question waits for the next step, not the end of this one', () => {
-    const out = decide(ticket({ logical: 'human_review' }), asked(), workflow);
-    expect(activities(out)).toEqual([expect.objectContaining({ body: expect.stringContaining('when its next step starts (nothing runs on this ticket now)') })]);
+  it('starts the reply rule\'s job when nothing runs, a question and not a round of human review (ORC-374)', () => {
+    // At its bound of rounds, still: the relay answers a question, it is no review.
+    const out = decide(ticket({ logical: 'human_review', humanReviewRounds: workflow.limits.humanReviewRounds }), asked(), workflow);
+    expect(relays(out)).toEqual([{ type: 'relay.added', question: { runId: 'q1', at: 5000 } }]);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
+    expect(activities(out)).toEqual([expect.objectContaining({ runId: 'q1', body: expect.stringContaining('I am asking the agent that implements now') })]);
+    expect(out.events.map((e) => e.type)).not.toContain('ticket.patched');
+    expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
+    // In In Progress with no step at work, the rule there.
+    expect(decide(ticket(), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+  });
+
+  it('a ticket waiting on its blockers keeps it for the start their end makes (ORC-363)', () => {
+    const out = decide(ticket({ waitingOn: { blockers: ['REL-0'], start: { job: 'dev' } } }), asked(), workflow);
     expect(relays(out)).toHaveLength(1);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+    expect(activities(out)).toEqual([expect.objectContaining({ body: expect.stringContaining('when its blockers are done') })]);
+  });
+
+  it('tells the human no answer will come, and keeps nothing, on a blocked ticket or where no reply rule starts a job (ORC-374)', () => {
+    for (const t of [ticket({ blocked: true, blockReason: 'x', blockKind: 'failed' }), ticket({ blocked: true, blockReason: 'x', blockKind: 'failed', activeRunId: 'r1', activeJob: 'dev' }), ticket({ logical: 'ai_review' })]) {
+      const out = decide(t, asked(), workflow);
+      expect(relays(out)).toEqual([]);
+      expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+      expect(activities(out)).toEqual([expect.objectContaining({ runId: 'q1', body: expect.stringContaining('no answer will come') })]);
+    }
   });
 
   it('relays nothing for a ticket no agent implements: not delegated, or delivered', () => {
@@ -381,6 +403,66 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     const out = decide(t, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'failure', costUsd: 0, turns: 1, lastText: '', usageLimit: { resetAt: 9000 } }), workflow);
     expect(relays(out)).toEqual([]);
     expect(activities(out).filter((a) => a.runId === 'q1')).toEqual([]);
+  });
+
+  it('the end of a step with no message waiting but a question relayed meanwhile resumes the agent, as no round (ORC-374)', () => {
+    // The AI review was at work when the question came: its end, in Human Review, is the step boundary that asks it.
+    const frozen = beforeOrc183(workflow);
+    const passed = ev('verify.passed', { runId: 'r1', job: 'review' });
+    const t = ticket({ logical: 'ai_review', verifyingRunId: 'r1', relayed: [handed('q1')], humanReviewRounds: workflow.limits.humanReviewRounds });
+    const out = decide(t, passed, frozen);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
+    expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
+  });
+
+  it('the end of the step the questions were handed to starts nothing for them: they are answered', () => {
+    const quick = { ...workflow, jobs: { ...workflow.jobs, 'dev-feedback': { ...workflow.jobs['dev-feedback']!, verify: [], repoChecks: false } } };
+    const end = ev('run.finished', { runId: 'r1', job: 'dev-feedback', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output });
+    const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1')] }), end, quick);
+    expect(relays(out)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
+    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+    // One relayed since that launch is still to ask.
+    const later = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, quick);
+    expect(later.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+  });
+
+  describe('the questions still relayed when the work ends (ORC-374)', () => {
+    const relayed = [handed('q1', 'r1'), handed('q2')];
+    const dropped = (d: ReturnType<typeof decide>) => d.events.filter((e) => e.type === 'relay.dropped');
+    const merged = ev('pr.merged', { number: 7, url: 'u' } as EventPayloads['pr.merged']);
+    const cancelled = ev('status.changed', { from: 'dev', to: null, cancelled: true });
+    const undelegated = ev('ticket.undelegated', {});
+
+    it.each([
+      ['merged', ticket({ activeRunId: 'r1', activeJob: 'dev', prNumber: 7, prState: 'OPEN', relayed }), merged],
+      ['cancelled', ticket({ activeRunId: 'r1', activeJob: 'dev', relayed }), cancelled],
+      ['undelegated', ticket({ activeRunId: 'r1', activeJob: 'dev', relayed }), undelegated],
+      // Blocked, an undelegation cancels no work: the questions go all the same.
+      ['undelegated while blocked', ticket({ blocked: true, blockReason: 'x', blockKind: 'failed', relayed }), undelegated],
+    ])('%s: each human hears no answer will come, in the thread of the question, and they leave', (_what, t, event) => {
+      const out = decide(t, event, workflow);
+      expect(activities(out).filter((a) => a.runId)).toEqual([
+        { kind: 'activity', type: 'response', body: expect.stringContaining('no answer will come'), runId: 'q1' },
+        { kind: 'activity', type: 'response', body: expect.stringContaining('no answer will come'), runId: 'q2' },
+      ]);
+      expect(dropped(out)).toEqual([{ type: 'relay.dropped' }]);
+      let after = reduce(t, event);
+      for (const e of out.events) after = reduce(after, e);
+      expect(after!.relayed).toBeUndefined();
+    });
+
+    it('nothing relayed, nothing said nor dropped', () => {
+      expect(dropped(decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), cancelled, workflow))).toEqual([]);
+    });
+
+    it('the stopped run that held them says nothing more', () => {
+      const t = ticket({ activeRunId: 'r1', activeJob: 'dev', relayed });
+      const out = decide(t, cancelled, workflow);
+      let after = reduce(t, cancelled);
+      for (const e of out.events) after = reduce(after, e);
+      const stopped = decide(after, ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'stopped', costUsd: 0, turns: 1, lastText: '' }), workflow);
+      expect(activities(stopped)).toEqual([]);
+    });
   });
 
   it('reduce adds, hands and removes them by run, whatever else came in meanwhile', () => {

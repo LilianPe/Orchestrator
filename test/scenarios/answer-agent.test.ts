@@ -118,3 +118,48 @@ describe('the answer agent (ORC-182)', () => {
     expect(h.runner.requests).toHaveLength(2);
   });
 });
+
+describe('a relayed question when no step runs, and when the work ends (ORC-374)', () => {
+  const clean = (angle: string) => ({ output: output({ summary: `${angle} lens.`, findings: [] }) });
+  const said = (h: Harness) => h.tracker.activities('ls-1').map((a) => (a as { body: string }).body);
+
+  /** REL-1 built, published on its PR, reviewed by both lenses with nothing to say: idle in Human Review. */
+  async function inHumanReview(h: Harness): Promise<void> {
+    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'a'.repeat(40));
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, clean('Correctness'), clean('Security'));
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
+  }
+
+  it('criterion 1: idle in Human Review, the agent that implements starts at once, as no round of human review, and its answer comes back', async () => {
+    const h = createHarness({ aiReview: true });
+    await inHumanReview(h);
+    h.runner.enqueue({ hold: true, output: output({ relay: true }) });
+    await h.send('session.prompted', question('pourquoi pas du XLSX ?'));
+    const asked = h.runner.requests.at(-1)!.runId;
+    h.runner.enqueue({ hold: true, output: output({ summary: 'Répondu.', answers: [{ question: asked, answer: 'Le ticket demande du CSV.' }] }) }, clean('Correctness'), clean('Security'));
+    h.runner.release(asked);
+    await h.orch.drained();
+    const fix = h.runner.requests.at(-1)!;
+    expect(fix.prompt).toContain(`[${asked}] pourquoi pas du XLSX ?`);
+    expect(said(h).at(-1)).toMatch(/asking the agent that implements now/);
+    expect((await h.ticket()).humanReviewRounds ?? 0).toBe(0);
+
+    h.runner.release(fix.runId);
+    await h.orch.drained();
+    expect(said(h)).toContain('The agent that implements answers: Le ticket demande du CSV.');
+    expect((await h.ticket()).relayed).toBeUndefined();
+  });
+
+  it('criterion 2: undelegated while it is still relayed, the human hears in its thread that no answer will come, once', async () => {
+    const h = createHarness();
+    await atWork(h);
+    h.runner.enqueue({ output: output({ relay: true }) });
+    await h.send('session.prompted', question('pourquoi pas du XLSX ?'));
+    await h.send('ticket.undelegated', {});
+    await h.orch.drained();
+    expect(said(h).filter((b) => /no answer will come|without answering/.test(b))).toEqual([expect.stringContaining('The work on this ticket ended before the agent that implements answered your question')]);
+    expect((await h.ticket()).relayed).toBeUndefined();
+  });
+});

@@ -452,6 +452,8 @@ export type DecidedEvent =
   | { type: 'relay.added'; question: RelayedQuestion }
   /** The end of the run the relayed questions were handed to (ORC-182): they leave the run inbox, answered or not. */
   | { type: 'relay.done'; runId: string }
+  /** The work on the ticket ended, merged, cancelled or undelegated, with questions still relayed (ORC-374): they leave unanswered. */
+  | { type: 'relay.dropped' }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
   | { type: 'work.cancelled' }
   | { type: 'verify.started'; runId: string }

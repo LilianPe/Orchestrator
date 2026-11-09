@@ -84,18 +84,35 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  * is resumed on them by the job the workflow answers a reply with, on the ticket as this end leaves it, once its
  * outputs are posted. The boundary with a step behind it carries them itself (`Orchestrator.launch`). Not on a job of
  * the questions queue, whose end is no step of the ticket; not behind a pending job, which the end of the run starts.
+ * A question relayed while a step that does not resume the session ran (the AI review) resumes it too, as no round of
+ * human review: it answers a question (ORC-374).
  */
 function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec): void {
   const { event, ticket, workflow } = at;
-  if (job.queue !== 'dev' || !ticket?.delegated || heldInbox(ticket)) return;
+  if (job.queue !== 'dev' || !ticket?.delegated) return;
+  const held = heldInbox(ticket);
+  const relay = held === NOTHING_TO_HAND_OVER && relayWaits(out, ticket);
+  if (held && !relay) return;
   // A move owed by an earlier job is made by this end too (`publish.done`).
   const after = { ...ticket, logical: job.onSuccess.move ?? ticket.owedMove ?? ticket.logical };
-  // The first rule that matches, as a reply would pick it: one with no run listed first starts nothing.
-  const rule = workflow.on['session.prompted']?.[firstRule('session.prompted', event, after, workflow)];
-  const next = rule?.run ? workflow.jobs[rule.run] : undefined;
+  const next = replyJob(event, after, workflow);
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);
-  humanRound(out, after, workflow, next, () => startRun(out, event, after, next, { input: next.input }));
+  const start = () => startRun(out, event, after, next, { input: next.input });
+  if (relay) start();
+  else humanRound(out, after, workflow, next, start);
+}
+
+/** The job a reply starts on `ticket`, by the first reply rule that matches: one with no run listed first starts nothing. */
+function replyJob(event: FactoryEvent, ticket: TicketState, workflow: Workflow): JobSpec | undefined {
+  const rule = workflow.on['session.prompted']?.[firstRule('session.prompted', event, ticket, workflow)];
+  return rule?.run ? workflow.jobs[rule.run] : undefined;
+}
+
+/** A relayed question no run of this decision answers (ORC-374): the end of the run it was handed to answers it (`relayAnswers`). */
+function relayWaits(out: Decision, ticket: TicketState): boolean {
+  const done = new Set(out.events.flatMap((e) => (e.type === 'relay.done' ? [e.runId] : [])));
+  return (ticket.relayed ?? []).some((r) => !r.handedTo || !done.has(r.handedTo));
 }
 
 /**
@@ -960,8 +977,10 @@ function heldInbox(ticket: TicketState | undefined): string | undefined {
   // The block first: a pending job a dead settle left on a blocked ticket is no work in flight (ORC-339).
   if (ticket?.blocked) return 'held by the block';
   if (ticket && workInFlight(ticket)) return 'held for the end of the work in flight';
-  return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over';
+  return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : NOTHING_TO_HAND_OVER;
 }
+
+const NOTHING_TO_HAND_OVER = 'nothing left to hand over';
 
 /** A review that asks for something (ORC-190): with words, and not an approval. */
 const asksForFix = (p: EventPayloads['pr.reviewed']): boolean => !!p.body.trim() && p.state?.toUpperCase() !== 'APPROVED';
@@ -1043,24 +1062,49 @@ function stopQuestion(out: Decision, sessionId: string): Decision {
 /**
  * A question the answer agent could not answer from what it read (ORC-182): into the run inbox, for the agent that implements
  * at its next step boundary (`Orchestrator.launch`), the human told so where they asked. The agents never speak to each other:
- * the engine routes. A ticket no agent implements, not delegated or delivered, has nobody to ask.
+ * the engine routes. A ticket no agent implements, not delegated or delivered, has nobody to ask. When nothing is at work, the
+ * reply rule's job starts at once to ask it, as no round of human review (ORC-374); a blocked ticket, or one no reply rule
+ * resumes, will not ask it: the human hears no answer will come.
  */
-function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticket: TicketState | undefined): Decision {
+function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { runId } = event.payload;
+  const tell = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, runId });
   if (!ticket?.delegated || settledTicket(ticket) === 'delivered') {
-    out.effects.push({ kind: 'activity', type: 'response', body: RELAY_NOBODY, runId });
+    tell(RELAY_NOBODY);
+    return out;
+  }
+  const busy = workInFlight(ticket);
+  const next = ticket.blocked || busy ? undefined : replyJob(event, ticket, workflow);
+  if (ticket.blocked || (!busy && !next)) {
+    out.trace.push(`relay: the question of ${runId} has no step to ask it`);
+    tell(`The transcript and the code do not answer this, and ${ticket.blocked ? 'this ticket is blocked' : 'no step resumes the agent that implements now'}: no answer will come. Ask again here once its work resumes.`);
     return out;
   }
   out.trace.push(`relay: the question of ${runId} waits for the agent that implements`);
   out.events.push({ type: 'relay.added', question: { runId, at: event.at } });
-  // The run at work does not get it: the next launch of the ticket session does, which may be far off when nothing runs.
-  const when = workInFlight(ticket) ? 'at the end of its current step' : 'when its next step starts (nothing runs on this ticket now)';
-  out.effects.push({ kind: 'activity', type: 'response', body: `The transcript and the code do not answer this: I am asking the agent that implements ${when}, and will relay its answer here.`, runId });
+  // The run at work does not get it: the next launch of the ticket session does, at its end, at once when nothing runs, or as
+  // the start a wait on blockers makes (ORC-363).
+  const waits = next && heldByWait(ticket, next);
+  if (next && !waits) startRun(out, event, ticket, next, { input: next.input });
+  const when = busy ? 'at the end of its current step' : waits ? 'when its blockers are done and its step starts' : 'now';
+  tell(`The transcript and the code do not answer this: I am asking the agent that implements ${when}, and will relay its answer here.`);
   return out;
+}
+
+/**
+ * The work on the ticket ends (ORC-374): merged, cancelled or no longer delegated, the questions still relayed leave, each
+ * human told in the thread of the question. The run stopped with them then answers none (`relayAnswers`).
+ */
+function dropRelayed(out: Decision, state: TicketState | undefined, event: FactoryEvent): void {
+  if (!state?.relayed?.length) return;
+  if (event.type !== 'pr.merged' && event.type !== 'ticket.undelegated' && !out.events.some((e) => e.type === 'work.cancelled')) return;
+  for (const r of state.relayed) out.effects.push({ kind: 'activity', type: 'response', body: RELAY_DROPPED, runId: r.runId });
+  out.events.push({ type: 'relay.dropped' });
 }
 
 const RELAY_NOBODY = 'No agent implements this ticket: there is nobody to ask what the transcript and the code do not answer.';
 const RELAY_UNANSWERED = 'The agent that implements ended its step without answering your question. Ask it again here if it still matters.';
+const RELAY_DROPPED = 'The work on this ticket ended before the agent that implements answered your question: no answer will come. Ask again here if it still matters.';
 
 /**
  * The end of a run the relayed questions were handed to (ORC-182): each answer in the thread of its question, then they leave
@@ -1686,6 +1730,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
     out.effects.push(blockedLabelChange(true, false)!);
   }
   if (event.type === 'ticket.delegated') newRun(out, state, workflow);
+  dropRelayed(out, state, event);
   endTakeOver(out, state, event);
   acknowledge(out, event, state);
   // A comment decide did not read (no reply awaited, refused) is not the factory's to answer.
@@ -1918,7 +1963,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         const review = ticket?.reviewBlocking;
         if (job.input === 'findings' && review && output?.contested?.length) out.events.push({ type: 'ticket.patched', patch: { contested: { sha: review.sha, items: output.contested } } });
         // The answer agent's only: no human question waits on another job of its queue.
-        if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket);
+        if (isAnswerer(job) && output?.relay) return relayQuestion(success(out, { event, ticket, workflow }, job, runId, output), event, ticket, workflow);
         if (job.verify.length === 0 && !job.repoChecks && !job.red && !goesThroughFreeze(ticket, job)) return success(out, { event, ticket, workflow }, job, runId, output);
         out.events.push({ type: 'verify.started', runId });
         out.effects.push({ kind: 'run_verify', runId, job: jobName, ...(output ? { output } : {}) });
