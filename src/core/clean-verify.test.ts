@@ -781,7 +781,8 @@ describe('runCleanVerify', () => {
       git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
       const files = pythonRepoFiles();
       const frozen = await freezeTests(['tests/test_export.py'], { head: 'freeze', changed: [], filesAtHead: async () => Object.keys(files), showAtHead: async (p) => files[p] });
-      s.sandboxes.answer = (command) => (command.startsWith('uv ') ? { stdout: '', stderr: '', code: 0 } : undefined);
+      // pytest's line comes after the path of its report (ORC-164).
+      s.sandboxes.answer = (command) => (/^(?:f=.*\n)?uv /.test(command) ? { stdout: '', stderr: '', code: 0 } : undefined);
       return { ...s, req: { ...s.req, frozen } };
     }
 
@@ -793,9 +794,10 @@ describe('runCleanVerify', () => {
     it('runs its setup, then the commands init proposes for it: green', async () => {
       const { sandboxes, req } = await python();
       expect(await runCleanVerify(req)).toMatchObject({ ok: true, failures: [] });
-      const ran = sandboxes.ran.map((r) => r.command);
+      // Without the reads of pytest's report (ORC-164).
+      const ran = sandboxes.ran.map((r) => r.command).filter((c) => !c.startsWith('[ -f '));
       expect(ran).toContain('uv sync --frozen');
-      expect(ran.slice(-3)).toEqual(COMMANDS);
+      expect(ran.slice(-3)).toEqual([COMMANDS[0], COMMANDS[1], expect.stringMatching(/\nuv run --frozen pytest --junitxml="\$f" -o junit_family=xunit1$/)]);
     });
 
     it('criterion 3: a conftest.py the agent changed after the freeze blocks as factory/tests-gelés', async () => {
