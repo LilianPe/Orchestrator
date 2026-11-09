@@ -8,6 +8,8 @@ export function devCapacity(concurrency: number | undefined, parallelSessions: n
 
 export class Scheduler {
   private held = new Map<string, { queue: QueueName; slot: number }>();
+  /** Who waits for a slot (`acquire`), first come first served: a freed slot goes to them before any new launch. */
+  private waits: { queue: QueueName; key: string; resolve: (slot: number | null) => void }[] = [];
 
   constructor(
     private store: Store,
@@ -16,6 +18,7 @@ export class Scheduler {
 
   setCapacity(capacity: Record<QueueName, number>): void {
     this.capacity = capacity;
+    this.serve();
   }
 
   tryAcquire(queue: QueueName, key: string): number | null {
@@ -30,10 +33,34 @@ export class Scheduler {
     return null;
   }
 
+  /**
+   * A slot of `queue` for `key`, now or as soon as one frees (ORC-353): what holds a slot without a launch, the sandbox of a
+   * `verify`, waits for it instead of going back in line. `null` once `cancelWaits` gave up the wait.
+   */
+  acquire(queue: QueueName, key: string): Promise<number | null> {
+    const slot = this.tryAcquire(queue, key);
+    if (slot !== null) return Promise.resolve(slot);
+    return new Promise((resolve) => this.waits.push({ queue, key, resolve }));
+  }
+
+  /** Every wait of `acquire` given up, with `null`: a daemon that stops starts nothing more. */
+  cancelWaits(): void {
+    for (const w of this.waits.splice(0)) w.resolve(null);
+  }
+
   release(key: string): QueueName | undefined {
     const h = this.held.get(key);
     this.held.delete(key);
+    if (h) this.serve();
     return h?.queue;
+  }
+
+  private serve(): void {
+    this.waits = this.waits.filter((w) => {
+      const slot = this.tryAcquire(w.queue, w.key);
+      if (slot !== null) w.resolve(slot);
+      return slot === null;
+    });
   }
 
   inUse(queue: QueueName): number {

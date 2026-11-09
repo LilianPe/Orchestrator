@@ -99,6 +99,18 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('check_run', checkRunBody('failure', { name: 'factory/verify' }), ctx(tracked({ prNumber: 3 })))).toEqual([]);
   });
 
+  it("knows the factory's check runs by the App that created them, not by their name, once it knows its App (ORC-353)", async () => {
+    const byApp = (name: string, appId: number) => {
+      const body = checkRunBody('failure', { name });
+      return { ...body, check_run: { ...body.check_run, app: { id: appId } } };
+    };
+    const ours: GithubMapContext = { ...ctx(tracked({ prNumber: 3 })), factoryAppId: '123' };
+    // Another App's run named as the factory names its own is CI all the same.
+    expect(await mapGithubWebhook('check_run', byApp('factory/verify', 999), ours)).toMatchObject([{ type: 'pr.checks_failed', payload: { failures: ['factory/verify'] } }]);
+    // The factory's run is its own whatever its name.
+    expect(await mapGithubWebhook('check_run', byApp('verify', 123), ours)).toEqual([]);
+  });
+
   it('takes the verdict and the failed checks the forge reads on that head, and no red it reads otherwise', async () => {
     const t = tracked({ prNumber: 3 });
     const pr = (checks: PrInfo['checks'], failedChecks: string[] = []): PrInfo => ({ number: 3, url: 'https://pr/3', state: 'OPEN', branch: BRANCH, headSha: 'head1', checks, failedChecks });

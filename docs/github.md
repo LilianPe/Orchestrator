@@ -75,7 +75,7 @@ The factory publishes (ORC-125), through the outbox's `publish` effect, which `d
 3. checks the diff since the base, blocking: `factory/chemins-interdits` (outgoing symbolic links and `package.json#scripts` included), `factory/binaires`, `factory/anti-triche`, `factory/secrets`;
 4. pushes **forward only**, with `--force-with-lease` on the head it read: if the branch carries a commit absent from the work (a human push, or rewritten history), nothing is pushed, nothing is forced: the agent rebases its work on a human's push (ORC-159), and `verify` refuses a commit that does not carry it (`factory/commits-humains`);
 5. opens the **draft** PR, looked up by branch before creation (a normal PR if the repository's plan has no drafts). It leaves draft when the ticket moves to *Human Review*: GitHub does not merge a draft. At that move the factory also labels it `revue: requise`, `revue: échantillon` or `revue: auto` (ORC-198, [preset](preset.md#the-class-of-the-diff-and-the-review-label-orc-198)), one label of that group at a time, created by GitHub on first use (*Pull requests* write is enough); best effort, like the move out of draft;
-6. publishes on the pushed commit the checks `factory/verify` (the commands that ran; `neutral` with no declared command), `factory/tests-gelés` (`neutral` with no freeze) and `factory/anti-triche` (ORC-151), identified by `external_id` = `<check>@<sha>`: a replay, or a second publication of the same commit, updates them, without duplicates. Best effort: a refused check (App without *Checks* write) is logged and does not block the ticket. A red verdict is never pushed, so it has no check. These `factory/*` checks never count as the commit's CI (check reading, polling, webhook): on their own, they do not make a head green.
+6. publishes on the pushed commit the checks `factory/verify` (the commands that ran; `neutral` with no declared command), `factory/tests-gelés` (`neutral` with no freeze) and `factory/anti-triche` (ORC-151), identified by `external_id` = `<check>@<sha>`: a replay, or a second publication of the same commit, updates them, without duplicates. Best effort: a refused check (App without *Checks* write) is logged and does not block the ticket. A red verdict is never pushed, so it has no check. These `factory/*` checks never count as the commit's CI (check reading, polling, webhook), known by the App that created them, not by their name (ORC-353): another App's check named `factory/…` counts as CI; through `gh`, which reads no App, by their `factory/` prefix: on their own, they do not make a head green.
 
 A refusal is an answer: the ticket is blocked with the reason (`publish.refused`), decided once; the retry that publishes takes it where it was meant to go (`owedMove`). A failure is replayed by the outbox, then blocks the ticket. A run with no commit beyond the base ends without a PR.
 
@@ -198,22 +198,22 @@ It requires the GitHub App (`github.*` or `GH_APP_*`): no `gh` fallback for this
 
 ### Rule
 
-A workflow **with secrets** (`secrets.*`, `${{ secrets.X }}`, `secrets: inherit` or a `secrets:` key) is refused if it can run on a factory branch:
+Each workflow is read as YAML. A workflow **with secrets** (a `secrets.X`, `secrets['X']` or the whole `secrets` context in an expression, `${{ … }}` or an `if:`, or `secrets: inherit` on a reusable workflow call) or **with a writable `GITHUB_TOKEN`** is refused if it can run on a factory branch. A shell text that names a secret outside an expression references none; `secrets.GITHUB_TOKEN` is the token, judged by its rights. The token's rights come from `permissions:`, the job's or else the workflow's: `read-all`, `{}` or scopes at `read`/`none` are read only; `write-all` or a scope at `write` can write. Without `permissions:`, the token has the repository's default rights, which the App cannot read (that read needs the *Administration* permission, which the App does not have): doctor counts it as writable, and says to declare `permissions:` (ORC-353). The triggers that reach a factory branch:
 
 - `pull_request` and `pull_request_target`: always considered risky, because a PR from `factory/*` can trigger them; a pull request's `branches` filter applies to the base branch, not the head branch;
 - `push` without a filter: all branches;
-- `push` whose `branches` filter can reach `factory/*` (`factory/**`, `*/*`, `**`…) or whose `branches-ignore` does not fully exclude it;
+- `push` whose `branches` filter can reach `factory/*` (`factory/**`, `*/*`, `**`…) or whose `branches-ignore` does not fully exclude it. The filters are tried on branch names the factory's own naming makes (`factory/<id>-<slug>`, `branchName`, ORC-353): a pattern under `factory/` always counts as reaching (it may name a team key no example has), and a negation excludes the factory's branches when it matches every one of them (`!factory/*-*` does);
 - `workflow_run` without a filter, or with a filter that reaches `factory/*` (extra protection against the same family of risk).
 
 Conversely, a `push` limited to non-factory branches (`main`, `release/*`) or to tags only does not see secrets on a `factory/*` branch.
 
 Accepted:
 
-1. a dedicated CI **without secrets** on these branches;
-2. a workflow with secrets where **every job that sees a secret** is attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer: human approval blocks the job before it reads the secret;
+1. a dedicated CI **without secrets**, its `GITHUB_TOKEN` read only, on these branches;
+2. a workflow with secrets or a writable token where **every job that sees one** is attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer: human approval blocks the job before it reads the secret;
 3. a workflow with secrets that only runs on non-factory branches, or only on tags.
 
-When in doubt, `doctor` refuses: invalid or ambiguous YAML (multi-document, dynamic `on`, mistyped filters), environment not found or without required reviewers, `secrets:` key (reusable workflow) without a protected environment, GitHub API error, unreadable API response (never read as "no workflow", "no environment", "no reviewer" or "protected"), more than 1000 environments. A 404 on `.github/workflows` means "no CI"; a 404 on the App's installation or on its token is a configuration error: `doctor` refuses. `GITHUB_TOKEN` counts as a secret.
+When in doubt, `doctor` refuses: invalid or ambiguous YAML (multi-document, dynamic `on`, mistyped filters), environment not found or without required reviewers, `secrets: inherit` without a protected environment, `permissions:` it cannot read, a `GITHUB_TOKEN` without `permissions:`, GitHub API error, unreadable API response (never read as "no workflow", "no environment", "no reviewer" or "protected"), more than 1000 environments. A 404 on `.github/workflows` means "no CI"; a 404 on the App's installation or on its token is a configuration error: `doctor` refuses.
 
 ### Examples
 
@@ -225,12 +225,14 @@ GitHub Actions workflows: 1
 
 .github/workflows/ci.yml
   triggers: pull_request
+  factory branches: reached
   secrets: yes
+  GITHUB_TOKEN: test (repository default)
   environments: none
   protected environment: no
-  verdict: refused — secrets exposed on the factory's branches (pull_request can run the CI on a `factory/*` branch) without human approval
+  verdict: refused — secrets and a writable GITHUB_TOKEN exposed on the factory's branches (pull_request can run the CI on a `factory/*` branch) without human approval
   ...
-Result: refused — 1 workflow(s) of 1 can expose secrets to the factory's branches.
+Result: refused — 1 workflow(s) of 1 can expose secrets or a writable GITHUB_TOKEN to the factory's branches.
 ```
 
 Acceptance with human approval (`ci-protected` has a `required_reviewers` rule):
@@ -249,7 +251,7 @@ jobs:
 
 `factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`.
 
-`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, environments, protected, verdict, reasons }] }`, without any secret value.
+`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
 
 ### Limitations
 

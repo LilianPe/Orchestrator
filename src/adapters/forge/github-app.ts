@@ -65,6 +65,8 @@ interface CheckRunDto {
   status: string;
   conclusion: string | null;
   external_id?: string | null;
+  /** The App that created it (ORC-353): the factory's own checks are its App's. */
+  app?: { id: number } | null;
 }
 
 interface WorkflowDto {
@@ -159,11 +161,12 @@ function statusBucket(state: string): string {
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** What the verdict reads of a check run, and all it checks: never its `id`. */
-const isCheckRun = (r: unknown): r is Pick<CheckRunDto, 'name' | 'status' | 'conclusion'> =>
+const isCheckRun = (r: unknown): r is Pick<CheckRunDto, 'name' | 'status' | 'conclusion' | 'app'> =>
   isRecord(r) &&
   typeof r.name === 'string' &&
   typeof r.status === 'string' &&
-  (r.conclusion === null || typeof r.conclusion === 'string');
+  (r.conclusion === null || typeof r.conclusion === 'string') &&
+  (r.app == null || (isRecord(r.app) && typeof r.app.id === 'number'));
 
 const isPull = (p: unknown): p is PullRequestDto =>
   isRecord(p) &&
@@ -567,7 +570,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
-    const query = new URLSearchParams({ check_name: req.name, filter: 'all' });
+    const query = new URLSearchParams({ check_name: req.name, app_id: this.appId, filter: 'all' });
     const runs = await this.allPages(`${base}/commits/${encodeURIComponent(req.sha)}/check-runs`, 'check_runs', 'a list of check runs', isCheckRunRef, token, query);
     const existing = runs.find((r) => r.external_id === req.externalId);
     const body = {
@@ -710,7 +713,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
       this.allPages(`${base}/status`, 'statuses', 'a list of commit statuses', isStatus, token),
     ]);
     return summarizeChecks([
-      ...runs.filter((run) => !isFactoryCheck(run.name)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
+      ...runs.filter((run) => !isFactoryCheck(run, this.appId)).map((run) => ({ name: run.name, bucket: checkRunBucket(run) })),
       ...statuses.map((status) => ({ name: status.context, bucket: statusBucket(status.state) })),
     ]);
   }
