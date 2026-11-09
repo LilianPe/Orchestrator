@@ -10,6 +10,9 @@ export function slugify(s: string, max = 40): string {
   return slug || 'ticket';
 }
 
+/** The prefix of every branch the factory makes for a ticket: what `not_started` and the duplicate search look for (ORC-207). */
+export const ownBranchPrefix = (identifier: string): string => `factory/${identifier.toLowerCase()}-`;
+
 export function branchName(identifier: string, title: string): string {
-  return `factory/${identifier.toLowerCase()}-${slugify(title)}`;
+  return `${ownBranchPrefix(identifier)}${slugify(title)}`;
 }

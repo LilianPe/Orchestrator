@@ -25,6 +25,15 @@ describe('buildPrompt', () => {
     expect(out).toContain('## Feedback to address\n- **L** : x');
   });
 
+  it('gives intake the work in progress elsewhere, and build the code to reuse, each as data after the ticket (ORC-207)', () => {
+    const out = buildPrompt({ skill: 'factory:intake', issue, activeWork: '- PR #12', reuse: '- `src/csv.ts`' });
+    expect(out).toContain('## Work in progress elsewhere (data)');
+    expect(out).toContain('- PR #12');
+    expect(out).toContain('## Existing code to reuse\n');
+    expect(out.indexOf('Exporter les audits.')).toBeLessThan(out.indexOf('## Work in progress elsewhere'));
+    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('## Existing code');
+  });
+
   it('carries the approved spec as the contract, or the draft under review to rewrite (ORC-212)', () => {
     const approved = buildPrompt({ skill: 'factory:tests', issue, spec: { version: 2, approved: true, text: '**Acceptance criteria**\n1. Given x, then y.' } });
     expect(approved).toContain('## Approved spec (version 2)\n');

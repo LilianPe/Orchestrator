@@ -52,10 +52,11 @@ import { repairedEvent } from './dead-letter.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { authzRefusal, blockedLabelChange, goesThroughFreeze, historyTaint, HUMAN_EVENTS, ingestedConversation, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, taintedKnowledge, waitingBody, waitingOn } from './engine.js';
-import { codeRunTokens } from './measures.js';
+import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
-import { runMeasure } from './measures.js';
-import { openBlockers, pickupFailures } from './pickup.js';
+import { formatReuse, ownWork } from './intake-checks.js';
+import { ownBranchPrefix } from './naming.js';
+import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { pendingOf, reduce, samePending } from './reduce.js';
@@ -2314,7 +2315,15 @@ export class Orchestrator {
       // except that they make the job wait instead of blocking it.
       const intake = job.step === 'intake';
       const guarded = (intake || job.pickup) && !t.claudeSessionId;
-      const failures = guarded ? await pickupFailures(wf.tracker.pickup.checks, issue, project.repoPath, workspaces) : [];
+      const checks = wf.tracker.pickup.checks;
+      // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together.
+      const [search, ownBranches] = guarded
+        ? await Promise.all([
+            intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined,
+            checks.includes('not_started') ? forge.branches(project.repoPath, ownBranchPrefix(issue.identifier)) : undefined,
+          ])
+        : [];
+      const failures = guarded ? pickupFailures(checks, issue, ownBranches && ownWork(issue.identifier, ownBranches, search?.prs ?? [])) : [];
       const blockers = guarded ? openBlockers(issue) : [];
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
@@ -2351,11 +2360,11 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, reviewed };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, reviewed, activeWork: search?.activeWork };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
-    const { issue, ws, pickup, blockedBy, reviewed } = head;
+    const { issue, ws, pickup, blockedBy, reviewed, activeWork } = head;
     // Read again before the first write: the workspace took time.
     let t: TicketState;
     // A fresh worktree is not set up until its setup succeeds: a launch ending before removes it, or
@@ -2493,6 +2502,9 @@ export class Orchestrator {
         decisions: job.queue === 'dev' && job.step !== 'intake' && t.decisions?.length ? t.decisions : undefined,
         conventions,
         input,
+        activeWork,
+        // intake's leads to existing code (ORC-207), for the dev work that follows it.
+        reuse: job.queue === 'dev' && job.step !== 'intake' && t.reuse?.length ? formatReuse(t.reuse) : undefined,
         // A knowledge job without an input (`learn` after a merge) is given what the factory ingested of the ticket, and reads
         // nothing else of the forge but the merged diff (ORC-361): a comment never ingested carries no taint.
         conversation: journal && !input ? ingestedConversation(journal.events, journal.refused) : undefined,
