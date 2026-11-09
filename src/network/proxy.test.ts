@@ -193,8 +193,12 @@ describe('EgressProxy', () => {
 
   it('refuses a request target that is not a path inside a tunnel: an absolute URL could name another host than the one checked (ORC-219)', async () => {
     const sock = await proxy.open('run-1', docs);
-    for (const target of ['https://evil.example/x', '*']) expect((await viaTls(sock, 'docs.test', 'OPTIONS', target)).status).toBe(403);
-    expect(await journal('run-1')).toContainEqual(expect.objectContaining({ method: 'OPTIONS', host: 'docs.test', ok: false, reason: expect.stringMatching(/not a path/) as string }));
+    for (const target of ['https://evil.example/x', '*', 'https://x-access-token:s3cr3t@evil.example/y']) expect((await viaTls(sock, 'docs.test', 'OPTIONS', target)).status).toBe(403);
+    const entries = await journal('run-1');
+    expect(entries).toContainEqual(expect.objectContaining({ method: 'OPTIONS', host: 'docs.test', path: 'https://evil.example/x', ok: false, reason: expect.stringMatching(/not a path/) as string }));
+    // Its credentials, as a query's, never journaled.
+    expect(entries).toContainEqual(expect.objectContaining({ path: 'https://evil.example/y', ok: false }));
+    expect(JSON.stringify(entries)).not.toContain('s3cr3t');
   });
 
   it('speaks HTTP/1.1 alone: an h2-only client is refused, and journaled', async () => {
