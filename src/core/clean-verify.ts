@@ -46,7 +46,7 @@ export interface CleanVerifyRequest {
   /** `factory/secrets`, by the image's gitleaks. Only an isolation test on a public image without it turns it off. */
   gitleaks: boolean;
   /** `factory/semgrep` (ORC-333), by the image's Semgrep. Only an isolation test on a public image without it turns it off. */
-  semgrep?: boolean;
+  semgrep: boolean;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
   frozen?: FrozenTests;
   /** The branch took untrusted content (ORC-338): what its agent commits changed since the mark in the repository's `sensitive_paths` is refused. */
@@ -184,7 +184,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));
     const diff = await readDiff(git, from, sha);
     failures.push(...checkSize(diff, config));
-    const added = req.semgrep && diff ? addedLines(diff) : new Map<string, Set<number>>();
+    // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
+    const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     if (shooting) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
@@ -198,13 +199,12 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     };
     // Something runs on the commit: its commands, or the application for its captures.
     const runs = commands.length > 0 || !!shooting;
-    if (req.gitleaks || added.size || (runs && !failures.length)) {
+    if (req.gitleaks || ((runs || added.size) && !failures.length)) {
       const mounts = rules.length ? [{ host: rulesDir, target: REPO_RULES_TARGET, readOnly: true }] : [];
       await inBox('prepare', cloneDir, mounts, async (id) => {
         if (req.gitleaks) failures.push(...(await scanSecrets(sandboxes, id, from, sha)));
         // Refused already: nothing of it is installed or run. A forbidden `.npmrc` would be read by the install it forbids, and a breakdown of that install would hide the verdict.
-        // Semgrep reads the files whatever the verdict: a checkout runs nothing of the commit.
-        if (!added.size && (failures.length || !runs)) return;
+        if (failures.length || (!runs && !added.size)) return;
         // `-c`: the clone's config is ours, and from the first command on it is no longer to be trusted.
         const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
         if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
@@ -406,9 +406,9 @@ async function readDiff(git: CloneGit, from: string, sha: string): Promise<DiffF
   return read === undefined ? undefined : parseDiff(read);
 }
 
-/** `factory/taille-du-diff` (ORC-145, ORC-333) against the base's `max_diff`. */
+/** `factory/taille-du-diff` (ORC-145, ORC-333) against the base's `max_diff`. A diff too large to read is `factory/anti-triche`'s already, read with more context. */
 function checkSize(diff: DiffFile[] | undefined, config: RepoConfig): VerifyFailure[] {
-  if (!diff) return [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: `Diff too large to measure (over ${MAX_PATCH_BYTES / 2 ** 20} MB), publication blocked. Split the work.` }];
+  if (!diff) return [];
   const r = diffSizeCheck(diff, { maxDiff: config.maxDiff });
   return r.ok ? [] : [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: r.summary }];
 }
@@ -435,11 +435,30 @@ async function repoRules(git: CloneGit, dir: string): Promise<string[]> {
   return rules;
 }
 
+/** What Semgrep scans: the regular files the diff adds lines to, with those lines. A link's target is not code of the branch, nor is a submodule. */
+async function scanned(git: CloneGit, from: string, sha: string, diff: readonly DiffFile[]): Promise<Map<string, Set<number>>> {
+  const added = addedLines(diff);
+  for (const { path, mode } of parseRawDiff(await git.raw('diff', '--raw', '--no-renames', '-z', from, sha))) {
+    if (!/^100(644|755)$/.test(mode)) added.delete(path);
+  }
+  return added;
+}
+
+/** Paths per run of Semgrep: test files do not count in `max_diff`, and a command line has a cap. */
+const SCAN_BATCH = 500;
+
 /** `factory/semgrep` (ORC-333) on the checkout in sandbox `id`: the factory's rules and the repository's (`rules`), on the lines the diff adds. */
 async function scanCode(sandboxes: Boxes, id: string, added: ReadonlyMap<string, ReadonlySet<number>>, rules: readonly string[]): Promise<VerifyFailure[]> {
   const configs = [FACTORY_RULES, ...rules.map((r) => `${REPO_RULES_TARGET}/${r}`)];
-  const argv = semgrepArgv(configs, [...added.keys()], { maxBytes: MAX_READ_BYTES, timeoutS: VERIFY_TIMEOUT_MS / 1000 });
-  const r = semgrepCheck(semgrepFindings(await sandboxes.exec(id, argv), added));
+  const targets = [...added.keys()];
+  const read: ReturnType<typeof semgrepFindings> = { found: [], unread: [] };
+  for (let i = 0; i < targets.length; i += SCAN_BATCH) {
+    const argv = semgrepArgv(configs, targets.slice(i, i + SCAN_BATCH), { maxBytes: MAX_READ_BYTES, timeoutS: VERIFY_TIMEOUT_MS / 1000 });
+    const { found, unread } = semgrepFindings(await sandboxes.exec(id, argv), added);
+    read.found.push(...found);
+    read.unread.push(...unread);
+  }
+  const r = semgrepCheck(read);
   return r.ok ? [] : [{ command: r.check, exitCode: 1, output: r.summary }];
 }
 

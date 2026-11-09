@@ -4,8 +4,9 @@
 //
 // What the branch could write to silence it is not read: a `nosemgrep` comment (`--disable-nosem`), a `.semgrepignore`
 // (each file is named on the command line, which Semgrep 1.182.1 scans whatever its ignore files say), a `.gitignore`
-// (`--no-git-ignore`), a file padded past Semgrep's default size cap or slow enough to time out (no cap and no timeout
-// per file: the sandbox's own cap ends the run, a breakdown, never a green).
+// (`--no-git-ignore`), a file slow enough to time out (no timeout per file: the sandbox's own cap ends the run, a
+// breakdown, never a green). Its size cap per file is the caller's read cap, past which a file blocks as a binary anyway.
+// A part of an added line Semgrep could not parse blocks too: what it does not read, it does not judge.
 import type { ExecResult } from '../adapters/exec.js';
 import type { DiffFile } from './diff.js';
 import { mdCode } from './markdown.js';
@@ -47,43 +48,55 @@ export interface SemgrepFinding {
   message: string;
 }
 
+/** A part of a file Semgrep could not parse, on lines the branch adds. */
+export interface SemgrepUnread {
+  path: string;
+  message: string;
+}
+
+type Span = { start: { line: number }; end: { line: number } };
+
 interface Report {
-  results: { check_id: string; path: string; start: { line: number }; end: { line: number }; extra?: { message?: string } }[];
-  errors?: { message?: string; long_msg?: string; short_msg?: string }[];
+  results: ({ check_id: string; path: string; extra?: { message?: string } } & Span)[];
+  errors?: { message?: string; long_msg?: string; short_msg?: string; path?: string; spans?: Span[] }[];
 }
 
 /**
  * What Semgrep found on the lines the branch adds (`added`): a finding on a line it did not write is the base's, not the
- * branch's. Anything but a clean exit with a readable report is a breakdown, never a green: it throws.
+ * branch's; so is a part of a file it could not parse. Anything but a clean exit with a readable report is a breakdown,
+ * never a green: it throws.
  */
-export function semgrepFindings({ code, stdout, stderr }: ExecResult, added: ReadonlyMap<string, ReadonlySet<number>>): SemgrepFinding[] {
+export function semgrepFindings({ code, stdout, stderr }: ExecResult, added: ReadonlyMap<string, ReadonlySet<number>>): { found: SemgrepFinding[]; unread: SemgrepUnread[] } {
   let report: Report | undefined;
   try {
     report = JSON.parse(stdout) as Report;
   } catch {
     // Read below: no report at all.
   }
-  if (code !== 0) {
-    const said = report?.errors?.map((e) => e.long_msg ?? e.message ?? e.short_msg).filter(Boolean).join('; ') || stderr.trim().slice(-2000);
-    throw new Error(`semgrep could not run (code ${code}): ${said}`);
-  }
+  const said = (e: NonNullable<Report['errors']>[number]) => e.long_msg ?? e.message ?? e.short_msg ?? '';
+  if (code !== 0) throw new Error(`semgrep could not run (code ${code}): ${report?.errors?.map(said).filter(Boolean).join('; ') || stderr.trim().slice(-2000)}`);
   if (!Array.isArray(report?.results)) throw new Error(`semgrep returned no readable report (code ${code})`);
+  // The first added line in `span`, if any.
+  const addedIn = (path: string, span: Span) => [...(added.get(path) ?? [])].filter((l) => l >= span.start.line && l <= span.end.line).sort((a, b) => a - b)[0];
   const found: SemgrepFinding[] = [];
   for (const r of report.results) {
-    const lines = added.get(r.path);
-    const at = [...(lines ?? [])].filter((l) => l >= r.start.line && l <= r.end.line);
-    if (at.length) found.push({ path: r.path, line: Math.min(...at), rule: r.check_id, message: r.extra?.message ?? '' });
+    const line = addedIn(r.path, r);
+    if (line !== undefined) found.push({ path: r.path, line, rule: r.check_id, message: r.extra?.message ?? '' });
   }
-  return found;
+  // An error with no span on a scanned file blocks: where it did not read is unknown.
+  const unread = (report.errors ?? [])
+    .filter((e) => e.path !== undefined && added.has(e.path) && (!e.spans?.length || e.spans.some((s) => addedIn(e.path!, s) !== undefined)))
+    .map((e) => ({ path: e.path!, message: said(e).split('\n')[0]! }));
+  return { found, unread };
 }
 
 /** The `factory/semgrep` check run on what was found. */
-export function semgrepCheck(found: readonly SemgrepFinding[]): CheckResult {
-  if (!found.length) return { check: SEMGREP_CHECK, ok: true, summary: 'No security rule broken on the lines the branch adds.' };
-  const lines = found.map((f) => `- ${mdCode(f.path)}:${f.line} (${f.rule}): ${f.message}`);
-  return {
-    check: SEMGREP_CHECK,
-    ok: false,
-    summary: `Security rule broken on lines the branch adds, publication blocked. Fix the code: a \`nosemgrep\` comment is not read.\n${lines.join('\n')}`,
-  };
+export function semgrepCheck({ found, unread }: { found: readonly SemgrepFinding[]; unread: readonly SemgrepUnread[] }): CheckResult {
+  if (!found.length && !unread.length) return { check: SEMGREP_CHECK, ok: true, summary: 'No security rule broken on the lines the branch adds.' };
+  const parts = [];
+  if (found.length) {
+    parts.push('Security rule broken on lines the branch adds, publication blocked. Fix the code: a `nosemgrep` comment is not read.', ...found.map((f) => `- ${mdCode(f.path)}:${f.line} (${f.rule}): ${f.message}`));
+  }
+  if (unread.length) parts.push('Lines the branch adds that Semgrep could not parse, publication blocked: what it does not read, it cannot judge. Write them so they parse.', ...unread.map((u) => `- ${mdCode(u.path)}: ${u.message}`));
+  return { check: SEMGREP_CHECK, ok: false, summary: parts.join('\n') };
 }

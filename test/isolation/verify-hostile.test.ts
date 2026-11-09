@@ -99,6 +99,7 @@ describe.skipIf(!enabled)(`a hostile verify command (${cli})`, () => {
       workDir,
       // The public image has none; the suite below has it.
       gitleaks: false,
+      semgrep: false,
       setup: ['echo setup-ran > .setup-ran'],
       commands: ['bash attack.sh'],
       env: async () => ({ REPO_VISIBLE: 'repo-variable', AGENT_WORKTREE: worktree }),
@@ -196,6 +197,7 @@ describe.skipIf(!enabled)(`gitleaks in verify (${cli})`, () => {
       originUrl: origin,
       workDir,
       gitleaks: true,
+      semgrep: false,
       setup: [],
       commands: [],
       env: async () => ({}),

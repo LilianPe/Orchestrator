@@ -19,10 +19,25 @@ describe('semgrep (ORC-333)', () => {
 
   it('keeps a finding only when one of its lines is added, at the first of them', () => {
     const added = new Map([['a.js', new Set([3, 4])]]);
-    const found = semgrepFindings(ran([result('a.js', 1), result('a.js', 2, 4), result('b.js', 3)]), added);
-    expect(found).toEqual([{ path: 'a.js', line: 3, rule: 'r', message: 'm' }]);
-    expect(semgrepCheck(found)).toMatchObject({ check: 'factory/semgrep', ok: false, summary: expect.stringContaining('- `a.js`:3 (r): m') });
-    expect(semgrepCheck([]).ok).toBe(true);
+    const read = semgrepFindings(ran([result('a.js', 1), result('a.js', 2, 4), result('b.js', 3)]), added);
+    expect(read).toEqual({ found: [{ path: 'a.js', line: 3, rule: 'r', message: 'm' }], unread: [] });
+    expect(semgrepCheck(read)).toMatchObject({ check: 'factory/semgrep', ok: false, summary: expect.stringContaining('- `a.js`:3 (r): m') });
+    expect(semgrepCheck({ found: [], unread: [] }).ok).toBe(true);
+  });
+
+  it('takes an error on added lines, or with no place, as a part it could not read; the rest of its errors are not the branch\'s', () => {
+    const added = new Map([['a.js', new Set([3])]]);
+    const span = (line: number) => ({ start: { line }, end: { line } });
+    const errors = [
+      { message: 'Syntax error at line a.js:3:\n detail', path: 'a.js', spans: [span(3)] },
+      { message: 'Syntax error at line a.js:1', path: 'a.js', spans: [span(1)] },
+      { message: 'Timeout on a.js', path: 'a.js' },
+      { message: 'a rule warning' },
+      { message: 'Syntax error in b.js', path: 'b.js', spans: [span(3)] },
+    ];
+    const read = semgrepFindings({ stdout: JSON.stringify({ results: [], errors }), stderr: '', code: 0 }, added);
+    expect(read.unread).toEqual([{ path: 'a.js', message: 'Syntax error at line a.js:3:' }, { path: 'a.js', message: 'Timeout on a.js' }]);
+    expect(semgrepCheck(read).summary).toContain('could not parse');
   });
 
   it("throws on anything but a clean exit with a report, with Semgrep's own errors", () => {

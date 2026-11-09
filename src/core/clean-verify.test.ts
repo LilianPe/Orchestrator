@@ -109,6 +109,7 @@ function setup(over: Partial<CleanVerifyRequest> = {}, config?: string) {
     originUrl: origin,
     workDir,
     gitleaks: false,
+    semgrep: false,
     setup: [],
     commands: ['grep committed a.txt'],
     env: async () => ({}),
@@ -644,15 +645,14 @@ describe('runCleanVerify', () => {
         expect((await runCleanVerify(req)).failures[0]!.output).toContain('`src/a.js`:3');
       });
 
-      it("adds the repository's rules as its default branch holds them, mounted read-only, never the branch's", async () => {
+      it("adds the repository's rules as its default branch holds them, mounted read-only", async () => {
         const base = setup({ semgrep: true, commands: [] });
         write(base.origin, '.factory/semgrep/house.yml', 'rules: base\n');
         write(base.origin, '.factory/semgrep/notes.md', 'not a rule\n');
         commit(base.origin, 'house rules');
         git(base.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
-        write(base.repo, '.factory/semgrep/house.yml', 'rules: []\n');
         write(base.repo, 'b.js', 'x\n');
-        commit(base.repo, 'the agent empties the rules');
+        commit(base.repo, 'work');
         let seen: { argv: readonly string[]; mounts: SandboxRequest['mounts']; content: string } | undefined;
         base.sandboxes.semgrep = (argv, box) => {
           const mount = box.mounts[0]!;
@@ -664,8 +664,37 @@ describe('runCleanVerify', () => {
         expect(seen!.content).toBe('rules: base\n');
         const configs = seen!.argv.flatMap((a, i) => (seen!.argv[i - 1] === '--config' ? [a] : []));
         expect(configs).toEqual(['/usr/local/share/factory/semgrep', '/factory/semgrep/house.yml']);
-        // The branch's change to them is refused on its own.
-        expect(res.failures.map((f) => f.command)).toEqual(['factory/chemins-interdits']);
+        expect(res.ok).toBe(true);
+      });
+
+      it('a commit the other checks refused is not scanned: a breakdown of the scan would hide the verdict', async () => {
+        const { repo, sandboxes, req } = appended();
+        write(repo, '.factory/semgrep/house.yml', 'rules: []\n');
+        commit(repo, 'the agent empties the rules');
+        sandboxes.semgrep = () => ({ stdout: '', stderr: 'boom', code: 2 });
+        expect((await runCleanVerify(req)).failures.map((f) => f.command)).toEqual(['factory/chemins-interdits']);
+      });
+
+      it.skipIf(process.platform === 'win32')('a symbolic link is not scanned: its target is no code of the branch', async () => {
+        const { repo, sandboxes, req } = setup({ semgrep: true, commands: [] });
+        symlinkSync('a.txt', join(repo, 'link.js'));
+        commit(repo, 'link');
+        const scans: (readonly string[])[] = [];
+        sandboxes.semgrep = (argv) => (scans.push(argv), report([]));
+        await runCleanVerify(req);
+        expect(scans[0]!.slice(scans[0]!.indexOf('--'))).toEqual(['--', 'a.txt']);
+      });
+
+      it('an added line Semgrep could not parse blocks: what it does not read, it cannot judge', async () => {
+        const { sandboxes, req } = appended();
+        const errors = [
+          { level: 'warn', type: 'PartialParsing', message: 'Syntax error at line src/a.js:3:\n `x` was unexpected', path: 'src/a.js', spans: [{ file: 'src/a.js', start: { line: 3 }, end: { line: 3 } }] },
+          { level: 'warn', type: 'PartialParsing', message: 'Syntax error at line src/a.js:1', path: 'src/a.js', spans: [{ file: 'src/a.js', start: { line: 1 }, end: { line: 1 } }] },
+        ];
+        sandboxes.semgrep = () => ({ stdout: JSON.stringify({ results: [], errors }), stderr: '', code: 0 });
+        const { output } = (await runCleanVerify(req)).failures[0]!;
+        expect(output).toContain('- `src/a.js`: Syntax error at line src/a.js:3:');
+        expect(output).not.toContain('src/a.js:1');
       });
 
       it('a branch that adds no line runs no scan', async () => {
