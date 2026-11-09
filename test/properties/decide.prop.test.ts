@@ -588,7 +588,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
      * The human review loop (ORC-190), bounded by `limits.human_review_rounds` (the preset's `human_review`), apart from the
      * review and CI loop. Between two resets (another PR, a human relaunch), the rounds started are at most that many: `fix-human`
      * started by a decision, a relaunch of a lost attempt (`relaunchOf`), a return of the verify loop (`verify_failures`, on its own
-     * counter) or the start of a job already pending (`pending.cleared`, counted when it was decided) aside. The ticket's `humanReviewRounds` agrees with the model after every step; a round past
+     * counter) or the start of a job already pending (`pending.cleared`, counted when it was decided) aside. The ticket's
+     * `humanReviewRounds` agrees with the model after every step; a round past
      * the bound starts nothing and blocks; and no round moves the count of the review and CI loop up.
      */
     const HUMAN_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
@@ -600,7 +601,8 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           expect(HUMAN_RESETS, 'reset of the human review loop').toContain(step.event.type);
           rounds = 0;
         }
-        const pendingStart = events.some((e) => e.type === 'pending.cleared');
+        // A pending start was counted when it was decided, unless a human relaunch starts it: that gave the rounds back, it is the first.
+        const pendingStart = events.some((e) => e.type === 'pending.cleared') && !HUMAN_RESETS.includes(step.event.type);
         const started = effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-human' && !e.relaunchOf && e.input !== 'verify_failures' && !pendingStart);
         rounds += started.length;
         expect(rounds, 'rounds of human review feedback').toBeLessThanOrEqual(bound);
@@ -613,7 +615,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       }
     };
     const humanBound = wf.limits.humanReviewRounds!;
-    const reviewed = (n: number) => ext('pr.reviewed', { ...pr, kind: 'review', author: 'octo', body: `Round ${n}.`, state: 'COMMENTED' }, 'untrusted');
+    const reviewed = (n: number): Entry => {
+      const e = ext('pr.reviewed', { ...pr, kind: 'review', author: 'octo', body: `Round ${n}.`, state: 'COMMENTED' }, 'untrusted');
+      return { kind: 'external', event: { ...(e as { event: FactoryEvent }).event, actor: 'github:octo', roles: ['repo_writer'] } };
+    };
     const humanCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),

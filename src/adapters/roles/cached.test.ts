@@ -48,6 +48,15 @@ describe('CachedRoleResolver (ORC-186)', () => {
     expect(await roles.rolesOf('p', 'github:stranger')).toEqual([]);
   });
 
+  it('maps a GitHub actor to its Linear user whatever the case of its login, and reads no team for a login configured for no one', async () => {
+    const { roles, tracker } = setup();
+    expect(await roles.rolesOf('p', 'github:Dev-GH')).toContain('team_member');
+    const reads = tracker.calls.filter((c) => c.method === 'teamMembers').length;
+    tracker.setTeamMembers('REL', []);
+    await roles.rolesOf('p', 'github:nobody-configured');
+    expect(tracker.calls.filter((c) => c.method === 'teamMembers')).toHaveLength(reads);
+  });
+
   it('reads no GitHub right for a Linear user without a configured login', async () => {
     const { roles, forge } = setup();
     forge.setRepoPermission('u-maint', 'admin');

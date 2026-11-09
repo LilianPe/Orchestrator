@@ -530,7 +530,8 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
 
 /**
  * Events a human sends: unblocking the ticket, they give the review and CI loop its whole bound back (ORC-270, ORC-184). A review
- * on the PR, authorized, starts work as a reply does (ORC-190); it never unblocks.
+ * on the PR never unblocks (ORC-190): authorized, in Human Review, it starts work as a reply does, and gives that bound back
+ * when it arms its round (`applyRule`).
  */
 const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
 
@@ -825,27 +826,39 @@ function heldInbox(ticket: TicketState | undefined): string | undefined {
   return awaitsAgent(ticket?.humanInbox ?? []) ? undefined : 'nothing left to hand over';
 }
 
+/** A review that asks for something (ORC-190): with words, and not an approval. */
+const asksForFix = (p: EventPayloads['pr.reviewed']): boolean => !!p.body.trim() && p.state?.toUpperCase() !== 'APPROVED';
+
 /**
  * A review written on the PR (ORC-190): human review feedback, read through the reply rules as a session message is. On the
- * ticket's open PR, with words (an approval or a silent review asks nothing), from a writer of the repository (`review_feedback`,
- * on its GitHub login): kept in the inbox, untrusted as GitHub's content is, then the first reply rule whose `when` matches
- * the ticket. In Human Review that is `fix-human`, debounced, a round of human feedback; during other work, it waits for the end
- * of that work (`handOver`). A blocked ticket keeps it: only a reply in Linear relaunches.
+ * ticket's open PR, asking for something (`asksForFix`), from a writer of the repository (`review_feedback`, on its signed
+ * GitHub login; a review whose author was not resolved is not read, as a PR is open to anyone): kept in the inbox, untrusted
+ * as GitHub's content is. In Human Review, the first reply rule whose `when` matches: `fix-human`, debounced, a round of human
+ * feedback. Elsewhere it waits for the end of the work in flight (`handOver`) or the next step's launch; a blocked ticket keeps
+ * it, as only a reply in Linear relaunches. A version frozen before ORC-190, with no bound on these rounds, only traces it.
  */
 function humanReview(out: Decision, event: FactoryEvent<'pr.reviewed'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
-  const { number, kind, author, body, state } = event.payload;
+  const { number, kind, author, body } = event.payload;
+  if (workflow.limits.humanReviewRounds === undefined) {
+    out.trace.push('pr.reviewed: no reaction in a version frozen before ORC-190');
+    return out;
+  }
   if (!ticket?.delegated || ticket.prNumber !== number || ticket.prState !== 'OPEN') {
     out.trace.push(`pr.reviewed: PR #${number} is not the open PR of a ticket at work`);
     return out;
   }
-  if (!body.trim() || state?.toUpperCase() === 'APPROVED') {
+  if (!asksForFix(event.payload)) {
     out.trace.push('pr.reviewed: no feedback to fix (an approval, or no words)');
     return out;
   }
+  if (event.roles === undefined || !event.actor) {
+    out.trace.push('pr.reviewed: no resolved GitHub author, not read');
+    return out;
+  }
   if (!authorize(out, event, ticket, 'review_feedback', 'pr', matrix)) return out;
-  out.events.push({ type: 'feedback.appended', item: { author, ...(event.actor ? { authorId: event.actor } : {}), body, at: event.at, source: 'review', taint: event.taint, kind: 'instruction', ...(kind === 'comment' ? { thread: true as const } : {}) } });
-  if (ticket.blocked) {
-    out.trace.push('pr.reviewed: kept, a review relaunches no blocked ticket');
+  out.events.push({ type: 'feedback.appended', item: { author, authorId: event.actor, body, at: event.at, source: 'review', taint: event.taint, kind: 'instruction', ...(kind === 'comment' ? { thread: true as const } : {}) } });
+  if (ticket.blocked || ticket.logical !== 'human_review') {
+    out.trace.push(`pr.reviewed: kept, ${ticket.blocked ? 'a review relaunches no blocked ticket' : 'a round starts in Human Review only'}`);
     return out;
   }
   const index = firstRule('session.prompted', event, ticket, workflow);
@@ -962,6 +975,8 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
  */
 export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && event.payload.noRepo)) return false;
+  // A review that asks nothing (an approval, no words) is decided without the matrix: no read of Linear or GitHub for it (ORC-190).
+  if (event.type === 'pr.reviewed') return asksForFix(event.payload as EventPayloads['pr.reviewed']);
   if (event.type !== 'label.changed' && event.type !== 'status.changed') return true;
   // A move to Done may merge (ORC-148): its actor is always checked.
   if (event.type === 'status.changed' && event.payload.to === 'done') return true;
@@ -1018,6 +1033,8 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
   startAs(out, event, ticket, job, pending);
+  // Counted when it was decided; a human reply gave the human rounds back (`unblock`): this start is the first of the new ones (ORC-190).
+  if (job.counter === 'human_review' && workflow.limits.humanReviewRounds !== undefined && HUMAN_RELAUNCH.has(event.type)) out.events.push({ type: 'ticket.patched', patch: { humanReviewRounds: 1 } });
   return out;
 }
 
@@ -1872,6 +1889,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const waits = heldByWait(ticket, job);
       if (waits) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${waits}`);
+        return out;
+      }
+      // Armed in Human Review, a round of human feedback starts there only: the ticket moved since (Done, In Progress) keeps the feedback.
+      if (job.counter === 'human_review' && ticket?.logical !== 'human_review') {
+        out.trace.push(`timer.fired debounce: ${job.name} not started, the ticket left Human Review`);
         return out;
       }
       if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);

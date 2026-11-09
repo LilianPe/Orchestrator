@@ -156,6 +156,9 @@ describe('decide — authorization matrix (ORC-186)', () => {
     // A move back to In Progress starts nothing since ORC-190: the feedback does, a review on the PR checked on its author.
     expect(mayCheck(e('status.changed', { from: 'human_review', to: 'dev' }), workflow)).toBe(false);
     expect(mayCheck(e('pr.reviewed', { number: 3, url: 'u', branch: 'b', kind: 'review', author: 'octo', body: 'x' }), workflow)).toBe(true);
+    // A review that asks nothing waits on no read of Linear or GitHub.
+    expect(mayCheck(e('pr.reviewed', { number: 3, url: 'u', branch: 'b', kind: 'review', author: 'octo', body: 'LGTM', state: 'APPROVED' }), workflow)).toBe(false);
+    expect(mayCheck(e('pr.reviewed', { number: 3, url: 'u', branch: 'b', kind: 'review', author: 'octo', body: ' ' }), workflow)).toBe(false);
     expect(mayCheck(e('status.changed', { from: 'dev', to: 'human_review' }), workflow)).toBe(false);
     expect(mayCheck(e('session.stopped', {}), workflow)).toBe(false);
   });

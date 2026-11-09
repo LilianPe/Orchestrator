@@ -251,6 +251,8 @@ const FROM_LINEAR: ReadonlySet<EventType> = new Set<EventType>([
 const external = (draft: fc.Arbitrary<Draft>): fc.Arbitrary<DraftEntry> =>
   fc.record({ draft, roll: fc.integer({ min: 0, max: 4 }), signed: signedBy }).map(({ draft: d, roll, signed }): DraftEntry => {
     const untrusted = ALWAYS_UNTRUSTED.has(d.type) || (roll === 0 && !FACTORY_PRODUCED.has(d.type));
+    // A review on the PR is signed by its GitHub login whatever its taint (ORC-190).
+    if (signed && d.type === 'pr.reviewed') return { kind: 'external', draft: d, untrusted, signed };
     if (!signed || !HUMAN.has(d.type)) return { kind: 'external', draft: d, untrusted };
     // An untrusted event has no signed actor (ORC-160): its roles, resolved for nobody, are none.
     return { kind: 'external', draft: d, untrusted, signed: untrusted ? { roles: [] } : signed };

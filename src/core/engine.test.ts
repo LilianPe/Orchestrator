@@ -219,7 +219,7 @@ describe('decide — YAML rules of the standard pack', () => {
 
   it('a review goes through the reply rules (ORC-190), never its own `on` rules; a conflict goes through the rules (ORC-146)', () => {
     const pr = { number: 3, url: 'u', branch: 'b' };
-    const reviewed = { ...ev('pr.reviewed', { ...pr, kind: 'review' as const, author: 'L', body: 'renomme' }), taint: 'untrusted' as const };
+    const reviewed = { ...ev('pr.reviewed', { ...pr, kind: 'review' as const, author: 'L', body: 'renomme' }), taint: 'untrusted' as const, actor: 'github:L', roles: ['repo_writer' as const] };
     const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }] } };
     const out = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), reviewed, wf);
     expect(out.timers).toEqual([{ kind: 'debounce', slot: 'fix-human', ms: 180_000, payload: { job: 'fix-human', inbox: true } }]);

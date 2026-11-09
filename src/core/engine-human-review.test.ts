@@ -16,9 +16,9 @@ function event<T extends EventType>(type: T, payload: EventPayloads[T], more: Pa
   return { id: `e-${n}`, type, at: 1000 * n, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload, ...more } as FactoryEvent;
 }
 const pr = { number: 3, url: 'https://github.com/o/r/pull/3', branch: 'agent/rel-1' };
-/** A review on the PR, as the GitHub webhook maps it: untrusted, signed by the GitHub login of its author. */
-function reviewed(body: string, more: Partial<EventPayloads['pr.reviewed']> = {}, roles?: Role[]): FactoryEvent {
-  return event('pr.reviewed', { ...pr, kind: 'review', author: 'octo', body, state: 'COMMENTED', ...more }, { taint: 'untrusted', actor: 'github:octo', ...(roles ? { roles } : {}) });
+/** A review on the PR, as the GitHub webhook maps it: untrusted, signed by the GitHub login of its author, a writer of the repository by default. */
+function reviewed(body: string, more: Partial<EventPayloads['pr.reviewed']> = {}, roles: Role[] = ['repo_writer', 'repo_merger']): FactoryEvent {
+  return event('pr.reviewed', { ...pr, kind: 'review', author: 'octo', body, state: 'COMMENTED', ...more }, { taint: 'untrusted', actor: 'github:octo', roles });
 }
 const fired = (job = 'fix-human') => event('timer.fired', { kind: 'debounce', payload: { job, inbox: true } });
 const fold = (t: TicketState | undefined, events: Decision['events']) => events.reduce<TicketState | undefined>((s, x) => reduce(s, x), t)!;
@@ -80,6 +80,48 @@ describe('human review feedback goes back through fix → verify → AI review �
     expect(out.effects).toEqual([]);
     const ok = decide(inHumanReview(), reviewed('Rename it.', {}, ['repo_writer']), workflow);
     expect(ok.timers).toHaveLength(1);
+  });
+
+  it('a review whose author was not resolved is not read: a PR is open to anyone', () => {
+    const { actor: _a, roles: _r, ...unchecked } = reviewed('Add my script.');
+    for (const e of [unchecked as FactoryEvent, { ...unchecked, actor: 'github:octo' } as FactoryEvent]) {
+      const out = decide(inHumanReview(), e, workflow);
+      expect(out.events).toEqual([]);
+      expect(out.timers).toEqual([]);
+      expect(out.trace).toContain('pr.reviewed: no resolved GitHub author, not read');
+    }
+  });
+
+  it('a version frozen before ORC-190 only traces a review, as it did', () => {
+    const frozen = { ...workflow, limits: { ...workflow.limits, humanReviewRounds: undefined } };
+    const out = decide(inHumanReview(), reviewed('Rename it.'), frozen);
+    expect(out).toMatchObject({ events: [], effects: [], timers: [] });
+    expect(out.trace).toContain('pr.reviewed: no reaction in a version frozen before ORC-190');
+  });
+
+  it('out of Human Review a review is kept and starts nothing: no uncounted fix, no fix that skips the AI review', () => {
+    for (const logical of ['dev', 'todo'] as const) {
+      const { out, after } = step(inHumanReview({ logical }), reviewed('Rename it.'));
+      expect(out.timers).toEqual([]);
+      expect(starts(out)).toEqual([]);
+      expect(after.humanInbox).toHaveLength(1);
+    }
+  });
+
+  it('a round armed in Human Review starts nothing once the ticket left it (moved to Done, back to In Progress)', () => {
+    const armed = step(inHumanReview(), reviewed('Rename it.')).after;
+    for (const logical of ['done', 'dev'] as const) {
+      const out = decide({ ...armed, logical }, fired(), workflow);
+      expect(starts(out)).toEqual([]);
+      expect(out.events).toEqual([]);
+    }
+  });
+
+  it('a reply that starts a stranded pending fix-human gives the rounds back and counts that start as the first', () => {
+    const t = inHumanReview({ humanReviewRounds: 3, pendingJob: { job: 'fix-human', input: 'feedback' }, blocked: true, blockKind: 'stuck', blockedJob: 'fix-human', blockReason: 'x' });
+    const { out, after } = step(t, event('session.prompted', { linearSessionId: 's1', body: 'Go.', author: 'Lilian', kind: 'instruction' }));
+    expect(starts(out)).toEqual([expect.objectContaining({ job: 'fix-human' })]);
+    expect(after).toMatchObject({ blocked: false, humanReviewRounds: 1 });
   });
 
   it('during the AI review a review is kept, and the end of the AI review hands it to fix-human as a round', () => {

@@ -71,7 +71,7 @@ describe('human review feedback through fix → verify → AI review → Human R
   });
 
   it('criterion 1: an inline comment reaches the agent once, in its unresolved thread on the PR; one resolved meanwhile not at all', async () => {
-    const h = createHarness({ aiReview: true });
+    const h = withRoles();
     await inHumanReview(h);
     const pr = (await h.ticket()).prNumber!;
     h.forge.setReviewComments(pr, [{ author: 'octo', body: 'src/export.ts:7 — the header row twice', at: 0, source: 'review' }]);
@@ -95,7 +95,7 @@ describe('human review feedback through fix → verify → AI review → Human R
   });
 
   it('criterion 2: the fix goes through verify, publish on the PR and both lenses of the AI review before Human Review again', async () => {
-    const h = createHarness({ aiReview: true });
+    const h = withRoles();
     await inHumanReview(h);
     await round(h, 'Rename the column.', sha('b'));
     expect(fixes(h)).toHaveLength(1);
@@ -107,7 +107,7 @@ describe('human review feedback through fix → verify → AI review → Human R
   });
 
   it('criterion 3: three human rounds, then the fourth feedback blocks the ticket, its feedback kept for the reply', async () => {
-    const h = createHarness({ aiReview: true });
+    const h = withRoles();
     await inHumanReview(h);
     for (const [i, c] of (['b', 'c', 'd'] as const).entries()) await round(h, `Round ${i + 1}.`, sha(c));
     expect(fixes(h)).toHaveLength(3);
@@ -122,7 +122,7 @@ describe('human review feedback through fix → verify → AI review → Human R
   });
 
   it('criterion 4: the human rounds are absent from the counter of the review and CI loop', async () => {
-    const h = createHarness({ aiReview: true });
+    const h = withRoles();
     await inHumanReview(h);
     await round(h, 'Round 1.', sha('b'));
     await round(h, 'Round 2.', sha('c'));
