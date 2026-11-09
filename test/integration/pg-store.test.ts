@@ -414,8 +414,8 @@ describe.skipIf(!url)('PgStore integration', () => {
       `insert into workflow_versions (id, hash, definition) values ('wv1', 'hash-1', '{"version":1}'::jsonb)`,
     );
     await pool.query(
-      `insert into findings (id, attempt_id, kind, severity, body)
-       values ('f1', 'r1', 'review', 'warning', 'body')`,
+      `insert into findings (id, attempt_id, kind, severity, body, project_id, ticket_id, sha, n, file, line, suggestion)
+       values ('f1', 'r1', 'correctness', 'minor', 'body', 'p', 'REL-1', 'abc123', 0, 'src/a.ts', 3, '')`,
     );
     await pool.query(
       `insert into freezes (id, ticket_id, path, hash) values ('fz1', 'REL-1', 'src/a.ts', 'sha')`,

@@ -4,7 +4,7 @@ import type { FeedbackItem } from '../../core/types.js';
 import { aggregateChecks, excerpt, toRepoPermission } from './gh-cli.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { isFactoryCheck, NoCommitsBetween, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest } from './types.js';
+import { isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -185,6 +185,13 @@ const isCheckRunRef = (r: unknown): r is Pick<CheckRunDto, 'id' | 'external_id'>
   isRecord(r) && typeof r.id === 'number' && (r.external_id === undefined || r.external_id === null || typeof r.external_id === 'string');
 
 const isCreated = (r: unknown): r is { id: number } => isRecord(r) && typeof r.id === 'number';
+
+/** A page of a PR's reviews, as `postReview` reads it: each one's id and text (null for a review without one). */
+const isReviews = (v: unknown): v is { id: number; body: string | null }[] =>
+  Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.id === 'number' && (r.body === null || typeof r.body === 'string'));
+
+/** What marks the factory's review in its text: GitHub keeps no external id on a review. An HTML comment, not shown. */
+const reviewMark = (externalId: string): string => `<!-- factory-review:${externalId} -->`;
 
 const isAccessToken = (d: unknown): d is AccessTokenDto =>
   isRecord(d) && typeof d.token === 'string' && d.token !== '' && (d.expires_at === undefined || typeof d.expires_at === 'string');
@@ -567,6 +574,37 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     }
     const created = await this.read('POST', `${base}/check-runs`, token, isCreated, 'a check run', { ...body, head_sha: req.sha });
     return { id: created.id, deduplicated: false };
+  }
+
+  /**
+   * Lists the PR's reviews first (every page, as `upsertCheckRun` lists its runs): one whose text carries the mark of
+   * `externalId` is the replay's. An unreadable list rejects. A 422 on a review with comments is a line GitHub cannot place.
+   */
+  async postReview(repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const path = `${repoApi(repo)}/pulls/${number}/reviews`;
+    const mark = reviewMark(req.externalId);
+    for (let page = 1; ; page++) {
+      if (page > MAX_PAGES + 1) throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} reviews, never read as complete`);
+      const list = await this.read('GET', `${path}?${new URLSearchParams({ per_page: '100', page: String(page) })}`, token, isReviews, 'a list of reviews');
+      const found = list.find((r) => r.body?.includes(mark));
+      if (found) return { id: found.id, deduplicated: true };
+      if (list.length < 100) break;
+    }
+    const body = {
+      commit_id: req.sha,
+      event: 'COMMENT',
+      body: `${req.body}\n\n${mark}`,
+      comments: req.comments.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body })),
+    };
+    try {
+      const created = await this.read('POST', path, token, isCreated, 'a review', body);
+      return { id: created.id, deduplicated: false };
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 422 && req.comments.length) throw new ReviewLinesRefused(err.message);
+      throw err;
+    }
   }
 
   async unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]> {
