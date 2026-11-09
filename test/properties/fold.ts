@@ -3,7 +3,7 @@ import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
 import { decide, historyTaint, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
 import { carriedAtLaunch } from '../../src/core/human-message.js';
-import { SETTLES_RUN } from '../../src/core/decision-plan.js';
+import { settles } from '../../src/core/decision-plan.js';
 import { effectiveEvent } from '../../src/core/dead-letter.js';
 import { reduce } from '../../src/core/reduce.js';
 import { CREATES_TICKET, type FactoryEvent, type InternalEvent, type ShellEvent, type TicketState } from '../../src/core/types.js';
@@ -207,7 +207,7 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
     }
     // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
     const pending = state.pendingJob;
-    if (!SETTLES_RUN.has(effectiveEvent(event).type) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
+    if (!settles(effectiveEvent(event), before, state) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
     const settledFrom = state;
     record({ type: 'pending.cleared' });
     const job = wf.jobs[pending.job];

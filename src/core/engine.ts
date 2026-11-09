@@ -715,6 +715,16 @@ export function refusesDevWork(ticket: TicketState | undefined, job: JobSpec): '
   return ticket.delegated ? undefined : 'undelegated';
 }
 
+/**
+ * A relaunch on the failures of a verify loop that a green check started over since (ORC-362): `verify.passed` resets the
+ * `verifyAttempts` its `verify.failed` counted. Kept pending, `decide` takes it off the ticket with that check (ORC-360);
+ * already in the queue (`settle` or a start found no slot), `Orchestrator.startRun` refuses it at its launch. Not the red
+ * check's returns: a human relaunch resets their count as well.
+ */
+export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKind | undefined): boolean {
+  return input === 'verify_failures' && !job.red && !ticket.verifyAttempts;
+}
+
 /** Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12). */
 function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, taint = runTaint(event, ticket, job.input)): 'merged' | 'taint' | undefined {
   if (refusesDevWork(ticket, job) === 'merged') return 'merged';
