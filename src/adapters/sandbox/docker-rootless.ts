@@ -80,6 +80,8 @@ const EGRESS_ENV = [
   ),
   // Its POST would be refused at every install.
   'npm_config_audit=false',
+  // Corepack fetches Yarn ≥ 2 from repo.yarnpkg.com, off the lists: the npm registry serves the same package (ORC-219).
+  'COREPACK_NPM_REGISTRY=https://registry.npmjs.org',
 ];
 
 /** Where the engines listen. A mount of one of them, or of a directory above one, hands the agent the engine, so root on the host. */
