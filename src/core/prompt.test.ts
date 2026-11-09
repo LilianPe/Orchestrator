@@ -52,6 +52,27 @@ describe('buildPrompt', () => {
     expect(out).toContain('## Diff to review\ndiff --git a/x b/x');
     expect(out).not.toContain('review rounds');
   });
+
+  it('gives the answer agent the run beside the question, before it, the transcript and the tickets as data (ORC-182)', () => {
+    const out = buildPrompt({ skill: 'factory:ask', issue, run: { state: 'State: dev', diff: '+x', transcript: 'Je choisis.', linked: '- REL-2' }, input: { kind: 'thread', text: 'pourquoi ?' } });
+    expect(out).toContain('## Run state\nState: dev\n');
+    expect(out).toContain('## Last diff\n+x\n');
+    expect(out).toContain('## Transcript of the session at work (data)\n');
+    expect(out).toContain('## Linked tickets (data)\n- REL-2\n');
+    expect(out.indexOf('## Run state')).toBeLessThan(out.indexOf('## Message\npourquoi ?'));
+    const bare = buildPrompt({ skill: 'factory:ask', issue, run: { state: 'State: todo' } });
+    expect(bare).toContain('## Last diff\n(no worktree for this ticket: no work on its branch yet)');
+    expect(bare).not.toContain('## Linked tickets');
+    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('## Run state');
+  });
+
+  it('gives the agent that implements the questions relayed to it, each by its id (ORC-182)', () => {
+    const out = buildPrompt({ skill: 'factory:feedback', issue, relayed: [{ id: 'q1', question: 'pourquoi pas du XLSX ?' }] });
+    expect(out).toContain('## Questions relayed from humans\n');
+    expect(out).toContain("`submit_result`'s `answers`");
+    expect(out).toContain('- [q1] pourquoi pas du XLSX ?');
+    expect(buildPrompt({ skill: 'factory:dev', issue, relayed: [] })).not.toContain('## Questions relayed');
+  });
 });
 
 describe('repository conventions (ORC-284)', () => {
