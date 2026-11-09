@@ -183,7 +183,8 @@ describe('the trigger (ORC-171)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }] });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     const closed = h.tracker.plans('ls-1').length;
-    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'L', kind: 'instruction' });
+    await h.advance(180_000);
     expect(h.runner.requests).toHaveLength(2);
     expect(h.tracker.plans('ls-1')).toHaveLength(closed);
   });
@@ -195,7 +196,8 @@ describe('the trigger (ORC-171)', () => {
     await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
     expect(h.tracker.plans('ls-1').some((p) => p.some((s) => s.content === 'Verify' && s.status === 'inProgress'))).toBe(true);
     const closed = h.tracker.plans('ls-1').length;
-    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'L', kind: 'instruction' });
+    await h.advance(180_000);
     expect(h.runner.requests).toHaveLength(2);
     expect(h.tracker.plans('ls-1')).toHaveLength(closed);
   });
@@ -355,7 +357,8 @@ describe('the trigger (ORC-171)', () => {
       h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }] }, { events: [{ kind: 'text', text: 'Corrigé.' }], hold: true });
       await h.send('ticket.delegated', { linearSessionId: 'ls-1', ack: true });
       const closed = h.tracker.plans('ls-1').length;
-      await h.send('status.changed', { from: 'human_review', to: 'dev' });
+      await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'L', kind: 'instruction' });
+      await h.advance(180_000);
       const [run] = await h.store.runsByStatus('running');
       h.runner.forget(run!.id);
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });

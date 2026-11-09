@@ -86,9 +86,10 @@ You can redefine only some of them; after merging, all five must have a name. `r
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
 | `ci_fix_attempts` | integer ≥ 0 | 2 (preset) | Rounds of the review and CI loop in a run: the runs a red CI (`pr.checks_failed`), a conflict with the base (`pr.conflicted`, ORC-146) or an AI review with a blocking finding (`on_blocking`, ORC-184) can launch, together, before the next one blocks the ticket (see below). `0` blocks on the first. |
+| `human_review_rounds` | integer ≥ 0 | 3 (preset) | Rounds of human review feedback (ORC-190): starts of the job with `counter: human_review` (`fix-human` in the pack), apart from `ci_fix_attempts`, before the next feedback blocks the ticket (see below). `0` blocks on the first. |
 | `review_rounds` | integer > 0 | 5 | Accepted, read by nothing since ORC-183, so that a project file that still sets it loads. The review → fix loop is bounded by `ci_fix_attempts`, the preset's `review_ci` (ORC-184). |
 
-The defaults of `verify_attempts` and `ci_fix_attempts` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These two keys remain a possible override until `workflow.yml` is removed (ORC-177).
+The defaults of `verify_attempts`, `ci_fix_attempts` and `human_review_rounds` come from the [`factory/default` preset](preset.md) (ORC-187); the pack no longer declares them. These keys remain a possible override until `workflow.yml` is removed (ORC-177).
 
 `per_run` is the default limit for **all** jobs; each job can replace it field by field with its own `limits`.
 
@@ -99,7 +100,12 @@ What happens when a run hits a limit (`limit`) or fails?
 What happens when CI stays red or the AI review keeps finding (`ci_fix_attempts`)?
 - One count per run for the review and CI loop (ORC-184). Each `pr.checks_failed` rule that launches a run (`fix-ci` in the pack), each `pr.conflicted` one (`rebase`), and each end of the AI review with a blocking finding standing (the `on_blocking` job of the lens that publishes, `fix-review` in the pack) counts that run against the ticket, the merge gate included. Once `ci_fix_attempts` runs have been launched, the next one starts nothing: the ticket is **blocked** and Relais says so in the block comment (« CI still failing after 2 attempts of fix-ci. », plus the failing checks; « The AI review still has 1 blocking finding on <sha>, and the review and CI loop has used its 2 runs: I am not starting fix-review. »). Subsequent red CIs relaunch nothing and do not repeat the message.
 - The count resets to zero when another PR is detected for the ticket (`pr.opened` with another number), or when a human starts work on the ticket, blocked or not (reply in the ticket, project label, status change or delegation that launches a run). A green CI does not reset it (it did before ORC-184): a review that keeps finding would loop between its fix and green CI. It still lifts the block of the red-CI bound. Neither a new push by the agent (that is the loop itself) nor a `debounce` timer armed before the block resets it.
+- A round of human review feedback (`fix-human`, ORC-190) does not count here: it has its own count, `human_review_rounds`. A human who writes feedback starts work, so the count of the review and CI loop starts over with it.
 - Unlike `verify_attempts`, which counts passes (including the first run), `ci_fix_attempts` counts relaunches: with `2`, two `fix-ci` runs, then a block on the third red CI. This is the unit of invariant I5 ([`decisions/ORC-138.md`](decisions/ORC-138.md), point 8), checked as a property on the three sources of the loop (`test/properties/decide.prop.test.ts`).
+
+What happens when human review keeps sending the PR back (`human_review_rounds`)?
+- Each start of the job with `counter: human_review` (`fix-human` in the pack) is a round of human feedback (ORC-190): a review written on the PR or a reply in the ticket's session while it is in Human Review, after the 3-minute grouping, or what waited for the end of other work. A relaunch after a cut, and the returns of `verify`, are no new round. Once `human_review_rounds` rounds have started, the next feedback starts nothing: the ticket is **blocked** (« The 3 rounds of human review feedback are used: I am not starting fix-human on the new feedback. »), the feedback kept in `humanInbox`.
+- A reply in the ticket relaunches `fix-human` on that feedback, and gives the rounds back, as a human relaunch gives every bound back. Another PR starts the count over too.
 
 Durations: a number (milliseconds) or a `<integer><unit>` text with the unit `ms`, `s`, `m` or `h` (`90m`, `30s`, `2h`). Combinations such as `1h30m` are rejected: write `90m`.
 
@@ -141,6 +147,7 @@ A job describes **how** to launch a Claude Code run. Fields:
 | `limits` | `{ turns, duration }`, each optional | `limits.per_run` | Replaces the per-run limits for this job. |
 | `on_start` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
 | `on_success` | `{ move: <logical state>, post: summary \| reply \| synthesis \| review, run: <job> }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message the factory composes from the agent's `submit_result`, never from its last message (ORC-214): `summary` (end of the dev work) posts the recap: its summary, why, risks, untested and points to review when stated, the tests added, and the attempts, turns, tokens and duration of the ticket's work (ORC-195); `reply` (reply to feedback, to a question) and `synthesis` (the review synthesis of a version frozen before ORC-183) post its `summary` alone; `review` posts nothing in Linear: the findings of the ticket's AI review lenses go to the PR as a GitHub review and the `factory/review` check (ORC-183). `run` starts that job next. A run that returned no result posts a fixed sentence saying so. The text then goes through the `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)). |
+| `counter` | `human_review` | — | Each start of the job, a relaunch after a cut and a return of `verify` aside, is a round of human review feedback, counted up to `limits.human_review_rounds`; past it, the ticket is blocked instead (ORC-190). |
 | `on_blocking` | `{ run: <job> }` | — | Only on the job whose `on_success` posts the review (ORC-184): when a blocking finding of either lens stands on the published commit, `run` starts in place of `on_success`, a round of the review and CI loop (`limits.ci_fix_attempts`); past the bound, the ticket is blocked. The job named must read the findings (`input: findings`). |
 
 The values of `input`:
@@ -167,6 +174,7 @@ Pack jobs:
 | `dev-feedback` | dev | sonnet | Extends `dev`: resumes the session to address feedback. |
 | `fix-ci` | dev | sonnet | Extends `dev-feedback`: fixes CI, then goes back through `verify`, publication and the AI review (ORC-184). |
 | `fix-review` | dev | sonnet | Extends `dev-feedback`: the fix of the review loop, on the blocking findings of the last AI review and the PR's unresolved threads; one commit per finding fixed or a justified contest (`fixed`, `contested` of `submit_result`), then `verify`, publication and the AI review again (ORC-184). |
+| `fix-human` | dev | sonnet | Extends `dev-feedback`: the fix of human review feedback in Human Review (the session's replies, the PR's reviews and unresolved threads), then `verify`, publication, the AI review and Human Review again; each start a round of `human_review_rounds` (`counter: human_review`, ORC-190). |
 | `review` | dev | opus | First lens of the AI review (correctness and spec), read-only, on a fresh clone of the published commit; then starts `review-security` ([preset.md](preset.md#review-step-orc-183)). |
 | `review-security` | dev | opus | Extends `review`: the security and tests lens; publishes both lenses' findings (GitHub review, `factory/review` check), then moves the ticket to `human_review`; a blocking finding starts `fix-review` instead (`on_blocking`, ORC-184). |
 | `ask` | questions | sonnet | Answers questions read-only (30 turns, 5 min, $0.50). |
@@ -261,8 +269,9 @@ There is no `post` field in a rule: publishing the result is configured in `jobs
 | Event | Rules (in order) |
 |---|---|
 | `ticket.delegated` | if `state in [todo, dev] && !blocked` → `dev` |
-| `status.changed` | from `human_review` to `dev` → `dev-feedback`; to `ai_review` → `review` (the published commit reviewed again: how a commit `dev-feedback` published gets a review, until ORC-184) |
-| `session.prompted` | if `blocked` → `dev-feedback` immediately; if `state in [dev, human_review]` → 3-minute grouping with no new message, then `dev-feedback` if no work is in progress (otherwise the end of that work hands the messages over); otherwise, the message stays in `humanInbox` |
+| `status.changed` | to `ai_review` → `review` (the published commit reviewed again: how a commit `dev-feedback` published gets a review). A move from Human Review back to In Progress starts nothing since ORC-190: the feedback itself does. |
+| `session.prompted` | if `blocked` → `dev-feedback` immediately; if `state in [human_review]` → 3-minute grouping with no new message, then `fix-human`, a round of human feedback (ORC-190); if `state in [dev]` → the same grouping, then `dev-feedback`. A run in progress is not interrupted: its end hands the messages over. Otherwise, the message stays in `humanInbox` |
+| `pr.reviewed` | no rule of its own: a review written on the open PR, with words and not an approval, by a writer of the repository (`review_feedback`), is kept in `humanInbox` and goes through the `session.prompted` rules, the blocked one aside (ORC-190) |
 | `session.mentioned` | → `ask` |
 | `command` | `retiens` → `remember`; `fais-le` → `propose_delegate` |
 | `ticket.commented` | if `blocked` → the blocked step, or `dev-feedback` if the block has none (ORC-196, [preset](preset.md#resuming-the-blocked-step-orc-196)) |
@@ -413,16 +422,17 @@ Relais only creates the `agent:stop` and `Bloqué` labels: create `agent:review`
 
 You cannot delete a job from the pack, but a job that no rule launches never runs. To remove a behavior, redeclare the list of the event concerned without the rule to remove.
 
-No AI review: `dev` goes straight to Human Review, and moving to AI Review no longer launches anything:
+No AI review: `dev` and the fixes go straight to Human Review, and moving to AI Review no longer launches anything:
 
 ```yaml
 version: 1
 on:
-  status.changed:
-    - { from: human_review, to: dev, run: dev-feedback }
+  status.changed: []
 jobs:
   dev:
     on_success: { move: human_review, post: summary }
+  fix-human:
+    on_success: { move: human_review, post: reply }
 ```
 
 No automatic CI fixing, and no learning after the merge:

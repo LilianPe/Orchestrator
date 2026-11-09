@@ -183,7 +183,8 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(report.replayed).toBe(journal.entries.length);
     // As the journal recorded today has it.
     const today = readJournal(readFileSync(join(dir, 'check-failed-then-feedback.json'), 'utf8'));
-    expect(today.entries.filter((e) => e.event.type === 'timer.fired').map((e) => e.event.payload)).toEqual([{ kind: 'debounce', payload: { job: 'dev-feedback' } }]);
+    // In Human Review, a round of human feedback since ORC-190.
+    expect(today.entries.filter((e) => e.event.type === 'timer.fired').map((e) => e.event.payload)).toEqual([{ kind: 'debounce', payload: { job: 'fix-human' } }]);
   });
 
   it("keeps a signed actor and an untrusted event's taint through the journal, and their decisions (ORC-160)", () => {
@@ -192,7 +193,7 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(by('ticket.delegated').event).toMatchObject({ taint: 'trusted', actor: 'user-lilian' });
     expect(by('session.prompted').event).toMatchObject({ taint: 'untrusted' });
     expect(by('session.prompted').event).not.toHaveProperty('actor');
-    expect(by('timer.fired').decision?.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev-feedback', sensitivePaths: expect.any(Array) })]);
+    expect(by('timer.fired').decision?.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'fix-human', sensitivePaths: expect.any(Array) })]);
     expect(by('command').decision?.trace).toContain('taint: refused remember');
     expect(replayJournal(journal).divergences).toEqual([]);
   });
@@ -235,7 +236,7 @@ describe('recorded journals (test/replay/journals)', () => {
     const prompted = journal.entries.filter((e) => e.event.type === 'session.prompted');
     expect(prompted.map((e) => e.decision?.effects.map((x) => x.kind))).toEqual([['ack'], ['ack', 'start_run']]);
     expect(journal.entries.find((e) => e.event.type === 'timer.fired')!.decision?.effects).toEqual([]);
-    expect(journal.entries.flatMap((e) => e.decision?.effects ?? []).filter((x) => x.kind === 'start_run').map((x) => (x as { job: string }).job)).toEqual(['dev', 'ask', 'dev-feedback']);
+    expect(journal.entries.flatMap((e) => e.decision?.effects ?? []).filter((x) => x.kind === 'start_run').map((x) => (x as { job: string }).job)).toEqual(['dev', 'ask', 'fix-human']);
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
   });
 
@@ -302,9 +303,10 @@ describe('recorded journals (test/replay/journals)', () => {
 
   // Regression replays each decision on the workflow version it was frozen on, kept in the journal: a
   // change of the pack or of a preset shows only against the workflow of today, hence this what-if pass.
-  // Journals kept as an older engine recorded them (before ORC-196, or as main held them before ORC-310): they pin
-  // those versions, today's differ by design.
-  it.each(files.filter((f) => !/\.pre-orc-(196|310)\./.test(f)))('%s decides the same under the standard pack and its preset as they are today', (file) => {
+  // Journals kept as an older engine recorded them (before ORC-196, or as main held them before ORC-310, or the schema
+  // version 2 one, before ORC-161, whose reply in Human Review is a round of `fix-human` since ORC-190): they pin those
+  // versions, today's differ by design.
+  it.each(files.filter((f) => !/\.pre-orc-(196|310)\.|\.v2\.json$/.test(f)))('%s decides the same under the standard pack and its preset as they are today', (file) => {
     const scenario = file.replace(/(\.v\d+)?\.json$/, '');
     expect(Object.keys(SCENARIOS)).toContain(scenario);
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file), { mode: 'what-if', workflow: scenarioWorkflow(scenario) });

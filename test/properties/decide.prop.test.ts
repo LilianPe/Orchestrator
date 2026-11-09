@@ -587,6 +587,69 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       expect(effects(r).filter((e) => e.kind === 'start_run' && (e.job === 'fix-review' || e.job === 'fix-ci'))).toHaveLength(ciBound);
       expect(r.final).toMatchObject({ blocked: true, blockKind: 'limit', blockedJob: 'fix-review', ciFixAttempts: ciBound });
     });
+
+    /**
+     * The human review loop (ORC-190), bounded by `limits.human_review_rounds` (the preset's `human_review`), apart from the
+     * review and CI loop. Between two resets (another PR, a human relaunch), the rounds started are at most that many: `fix-human`
+     * started by a decision, a relaunch of a lost attempt (`relaunchOf`), a return of the verify loop (`verify_failures`, on its own
+     * counter) or the start of a job already pending (`pending.cleared`, counted when it was decided) aside. The ticket's
+     * `humanReviewRounds` agrees with the model after every step; a round past
+     * the bound starts nothing and blocks; and no round moves the count of the review and CI loop up.
+     */
+    const HUMAN_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
+    const humanRoundsBounded = (r: Run, bound: number): void => {
+      let rounds = 0;
+      for (const step of decided(r)) {
+        const { events, effects, trace } = step.decision;
+        if (events.some((e) => e.type === 'ticket.patched' && e.patch.humanReviewRounds === 0)) {
+          expect(HUMAN_RESETS, 'reset of the human review loop').toContain(step.event.type);
+          rounds = 0;
+        }
+        // A pending start was counted when it was decided, unless a human relaunch starts it: that gave the rounds back, it is the first.
+        const pendingStart = events.some((e) => e.type === 'pending.cleared') && !HUMAN_RESETS.includes(step.event.type);
+        const started = effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-human' && !e.relaunchOf && e.input !== 'verify_failures' && !pendingStart);
+        rounds += started.length;
+        expect(rounds, 'rounds of human review feedback').toBeLessThanOrEqual(bound);
+        if (step.after) expect(step.after.humanReviewRounds ?? 0, 'humanReviewRounds').toBe(rounds);
+        if (started.length) expect(step.after?.ciFixAttempts ?? 0, 'ciFixAttempts at a human round').toBeLessThanOrEqual(step.before?.ciFixAttempts ?? 0);
+        if (trace.includes(`human review: fix-human bound ${bound} reached`)) {
+          expect(started).toEqual([]);
+          expect(events.map((e) => e.type), 'a round past the bound blocks').toContain('ticket.blocked');
+        }
+      }
+    };
+    const humanBound = wf.limits.humanReviewRounds!;
+    const reviewed = (n: number): Entry => {
+      const e = ext('pr.reviewed', { ...pr, kind: 'review', author: 'octo', body: `Round ${n}.`, state: 'COMMENTED' }, 'untrusted');
+      return { kind: 'external', event: { ...(e as { event: FactoryEvent }).event, actor: 'github:octo', roles: ['repo_writer'] } };
+    };
+    const humanCounterexample = seq(
+      ...delegated(),
+      ext('status.changed', { from: 'todo', to: 'human_review' }),
+      ext('pr.opened', { ...pr }),
+      ...Array.from({ length: humanBound + 1 }, (_, i) => [reviewed(i + 1), ext('timer.fired', { kind: 'debounce', payload: { job: 'fix-human', inbox: true } })]).flat(),
+    );
+
+    it(
+      'human review feedback starts fix-human at most human_review_rounds times between two resets, apart from the review and CI loop, and past it blocks (ORC-190)',
+      () => {
+        fc.assert(
+          fc.property(sequences, fc.integer({ min: 0, max: 3 }), fc.boolean(), (s, bound, aiReview) => {
+            const base = workflow(2, 2, aiReview);
+            humanRoundsBounded(fold(s.withDuplicates, { ...base, limits: { ...base.limits, humanReviewRounds: bound } }), bound);
+          }),
+          params<[Sequences, number, boolean]>([[humanCounterexample, humanBound, true], [humanCounterexample, humanBound, false], [humanCounterexample, 0, false]]),
+        );
+      },
+      TIMEOUT,
+    );
+
+    it(`the counterexample of the human review loop: ${humanBound} rounds, then the next feedback blocks the ticket`, () => {
+      const r = run(humanCounterexample);
+      expect(effects(r).filter((e) => e.kind === 'start_run' && e.job === 'fix-human')).toHaveLength(humanBound);
+      expect(r.final).toMatchObject({ blocked: true, blockKind: 'limit', blockedJob: 'fix-human', humanReviewRounds: humanBound, ciFixAttempts: 0 });
+      expect(r.final!.humanInbox.map((i) => i.body)).toContain(`Round ${humanBound + 1}.`);
+    });
   });
 
   describe('I6 — no human message is lost', () => {
@@ -874,9 +937,10 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         const pending = (...end: Entry[]) => seq(...delegated('dev'), runStarted(), reply(), ext('timer.fired', DEBOUNCE), reply('untrusted'), ...end);
         const settled = pending(runFinished('success'), ext('verify.passed', { runId: 'r1', job: 'dev' }));
         // Found by fast-check at 10 000 sequences (ORC-180, seed 509541243), shrunk: a run that empties the inbox takes the
-        // taint of all it empties, a command included, though the agent is not given a command. Relayed by a trusted move...
+        // taint of all it empties, a command included, though the agent is not given a command. Relayed by a trusted timer (a move
+        // back to dev did until ORC-190: the human round's debounce, in Human Review, now)...
         const command = () => ext('session.prompted', { linearSessionId: DEV_SESSION, body: 'ok', author: 'lilian', issue, ack: true, kind: 'command' }, 'untrusted');
-        const relayed = seq(ext('ticket.delegated', { linearSessionId: undefined, issue }, 'untrusted'), command(), ext('status.changed', { from: 'human_review', to: 'dev' }));
+        const relayed = seq(ext('ticket.delegated', { linearSessionId: undefined, issue }, 'untrusted'), command(), ext('status.changed', { from: 'dev', to: 'human_review' }), ext('timer.fired', { kind: 'debounce', payload: { job: 'fix-human' } }));
         // ... by a trusted comment that resumes a blocked job, or an untrusted one, which is the taint of the run itself (ORC-196)...
         const comment = (taint?: 'untrusted') => ext('ticket.commented', { body: 'reprends', author: 'lilian', kind: 'instruction' }, taint);
         const resumed = seq(...delegated('dev'), ext('agent.asked', { question: 'Laquelle ?', job: 'dev' }), command(), comment());
