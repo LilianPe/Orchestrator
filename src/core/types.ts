@@ -1,6 +1,7 @@
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
+import type { ClassifiedDiff } from './diff-class.js';
 import type { StoredEvent } from './upcast.js';
 import type { SpecVersion } from './spec.js';
 import type { FlakyTest } from '../checks/flaky.js';
@@ -338,7 +339,8 @@ export interface EventPayloads {
   /** `commands`: what `verify` ran on `sha`, for its check on the forge (ORC-151); absent when it ran nothing again. */
   /** `visualProof`: what `verify` decided and took of the visual proof (ORC-176), the captures by their hash. */
   /** `flaky`: the failing tests `verify` reran (ORC-164), with the cause of each attempt; on a pass, only indicative ones. */
-  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof; flaky?: FlakyTest[] };
+  /** `diffClass`: the class of the diff of `sha` against the default branch (ORC-198); absent on a commit found green again, or before ORC-198. */
+  'verify.passed': { runId: string; job: string; output?: AgentOutput; red?: RedCause; frozen?: FrozenTests; sha?: string; commands?: readonly string[]; visualProof?: VisualProof; flaky?: FlakyTest[]; diffClass?: ClassifiedDiff };
   /** `tree`: fingerprint of the content checked when the check failed: the commit's tree in a clean check, absent outside git (ORC-187). */
   'verify.failed': { runId: string; job: string; failures: VerifyFailure[]; tree?: string; red?: RedCause; frozen?: FrozenTests; flaky?: FlakyTest[] };
   /**
@@ -441,7 +443,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -539,6 +541,8 @@ export interface TicketState {
   verifyingRunId?: string;
   /** The last commit `verify` found green (ORC-151): nothing else is published. Absent before it. */
   verifiedSha?: string;
+  /** The class of the diff of `verifiedSha` against the default branch (ORC-198), as `verify` read it. Absent before ORC-198, null for a commit verified without one. */
+  diffClass?: ClassifiedDiff | null;
   /**
    * The head of the ticket's branch when a run that read untrusted content first started in its worktree (ORC-338),
    * `''` when that head was not read or the run came before the mark existed: from then on, what the agent's commits
