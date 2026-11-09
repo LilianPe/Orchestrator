@@ -1126,8 +1126,9 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
       const { wrap } = settleWindow((method) => (outage && method === 'queuedItems' ? 'throw' : undefined));
       const h = createHarness({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, wrapStore: wrap });
       const first = await heldRun(h);
-      const pendingJob = { job: 'fix-ci', input: 'ci_failures' as const, inputText: 'lint: 3 errors in src/export.ts' };
-      // Blocked by the red-CI bound while the run went on, a relaunch of fix-ci kept pending behind it.
+      // A job kept pending behind the run, then the red-CI bound blocked the ticket: one the lift leaves to do. A green CI
+      // leaves a reply's job; a reply, a relaunch on CI failures.
+      const pendingJob = lift === 'a green CI' ? { job: 'dev-feedback', input: 'feedback' as const, resume: true } : { job: 'fix-ci', input: 'ci_failures' as const, inputText: 'lint: 3 errors in src/export.ts' };
       const reason = 'CI still failing after 2 attempts of fix-ci.';
       await h.store.putTicket({ ...(await h.ticket()), pendingJob, blocked: true, blockKind: 'ci_bound', blockReason: reason, blockedJob: 'fix-ci', prNumber: 7, prUrl: 'https://forge/pr/7' });
       const said = () => [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? String(a.body) : ''))].filter((b) => /could not be started/.test(b));
@@ -1142,7 +1143,7 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
       outage = false;
       if (lift === 'a green CI') {
         await h.send('pr.checks_passed', { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv' });
-        expect(prompts(h)).toEqual(['/factory:dev', '/factory:fix-ci']);
+        expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
       } else {
         // The reply's own job first: the pending one waits behind its run.
         await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'try again', author: 'L', kind: 'instruction' }, 'REL-1', { taint: 'trusted' });
@@ -1151,11 +1152,11 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
         h.runner.release((await h.ticket()).activeRunId!);
         await h.orch.drained();
         expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback', '/factory:fix-ci']);
+        expect(h.runner.requests.at(-1)!.prompt).toContain('lint: 3 errors in src/export.ts');
       }
       const t = await h.ticket();
       expect(t).toMatchObject({ blocked: false });
       expect(t.pendingJob).toBeUndefined();
-      expect(h.runner.requests.at(-1)!.prompt).toContain('lint: 3 errors in src/export.ts');
       // Once: its end starts nothing more.
       const started = prompts(h);
       h.runner.release(t.activeRunId!);

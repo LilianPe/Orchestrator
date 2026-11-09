@@ -206,7 +206,7 @@ export function fold(entries: readonly Entry[], wf: Workflow, inbox: Inbox = mem
     }
     // `settle`: once nothing is in flight, the pending job starts, unless startRun refuses it.
     const pending = state.pendingJob;
-    if (!settles(effectiveEvent(event), decision, state) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
+    if (!settles(effectiveEvent(event), before, state) || !pending || launched || state.activeRunId || state.verifyingRunId) continue;
     const settledFrom = state;
     record({ type: 'pending.cleared' });
     const job = wf.jobs[pending.job];
