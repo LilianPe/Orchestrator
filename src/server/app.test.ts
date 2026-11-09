@@ -5,8 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { EventBus } from '../core/bus.js';
 import { FakeClock } from '../core/clock.js';
-import { newTicketState, TRUSTED, type FactoryEvent } from '../core/types.js';
+import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
+import type { SecurityLog } from '../store/types.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp } from './app.js';
@@ -199,6 +200,114 @@ describe('server', () => {
     it('asks for the password, as the other routes of the interface', async () => {
       const { app } = await setup({ uiPassword: 'secret' });
       expect((await app.request('/api/measures')).status).toBe(401);
+    });
+  });
+
+  describe('the security log and the Pareto of the block causes (ORC-300)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const log = (runId: string, ticketId: string, at: number): SecurityLog => ({
+      runId, projectId: 'p', ticketId, at: at + 100,
+      egress: [
+        { at, method: 'GET', host: 'registry.npmjs.org', path: '/pkg?token=s3cret', ok: true, up: 1, down: 1 },
+        { at: at + 1, method: 'POST', host: 'evil.example', path: '/upload', ok: false, reason: 'not allowed', up: 0, down: 0 },
+        { at: at + 1, method: 'CONNECT', host: 'ghp_s3cret:x@evil', ok: false, reason: 'not allowed', up: 0, down: 0 },
+      ],
+      refusals: [
+        { at: at + 2, tool: 'Bash', rule: 'push', command: 'git push https://x:ghp_s3cret@github.com/o/r' },
+        { at: at + 3, tool: 'Bash', rule: 'push', command: 'git push origin HEAD' },
+        { at: at + 4, tool: 'Bash', rule: 'force-push', command: 'git push --force' },
+      ],
+      skipped: { egress: 0, refusals: 1 },
+    });
+
+    it("lists a run's refusals and refused hosts, counted per rule, without a command nor a path", async () => {
+      const { app, store } = await setup();
+      await store.putSecurityLog(log('r1', 'REL-1', 1_000));
+      const res = await app.request('/api/security/runs/r1');
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      for (const hidden of ['s3cret', 'git push', '/upload', '/pkg', 'not allowed']) expect(text).not.toContain(hidden);
+      expect(JSON.parse(text)).toMatchObject({
+        runId: 'r1', ticketId: 'REL-1',
+        rules: [{ rule: 'push', refusals: 2 }, { rule: 'force-push', refusals: 1 }],
+        hosts: [{ host: 'evil.example', requests: 1, refused: 1 }, { host: 'registry.npmjs.org', requests: 1, refused: 0 }, { host: '(not a host name)', requests: 1, refused: 1 }],
+        skipped: { egress: 0, refusals: 1 },
+      });
+      expect((await app.request('/api/security/runs/nope')).status).toBe(404);
+    });
+
+    it('counts hosts, rules and runs over the period asked, the last 7 days by default', async () => {
+      const clock = new FakeClock(30 * DAY);
+      const { app, store } = await setup({ clock });
+      await store.putSecurityLog(log('old', 'REL-1', 10 * DAY));
+      await store.putSecurityLog(log('recent', 'REL-2', 25 * DAY));
+      const body = await (await app.request('/api/security')).json();
+      expect(body).toMatchObject({ since: 23 * DAY, until: 30 * DAY });
+      expect(body.runs).toEqual([{ runId: 'recent', projectId: 'p', ticketId: 'REL-2', requests: 3, refused: 2, refusals: 3 }]);
+      expect(body.runsLeftOut).toBe(0);
+      expect(body.rules).toEqual([{ rule: 'push', refusals: 2 }, { rule: 'force-push', refusals: 1 }]);
+      const both = await (await app.request(`/api/security?since=${5 * DAY}&until=${30 * DAY}`)).json();
+      expect(both.runs.map((r: { runId: string }) => r.runId)).toEqual(['old', 'recent']);
+      expect(both.hosts).toEqual([{ host: 'evil.example', requests: 2, refused: 2 }, { host: 'registry.npmjs.org', requests: 2, refused: 0 }, { host: '(not a host name)', requests: 2, refused: 2 }]);
+      expect(JSON.stringify(both)).not.toContain('s3cret');
+    });
+
+    it('serves the 50 most refused runs of the period, and how many it leaves out', async () => {
+      const { app, store } = await setup();
+      for (let i = 0; i < 52; i++) await store.putSecurityLog({ ...log(`r${String(i).padStart(2, '0')}`, 'REL-1', 1), refusals: [] });
+      const body = await (await app.request('/api/security?since=0&until=10')).json();
+      expect(body.runs).toHaveLength(50);
+      expect(body.runs[0].runId).toBe('r00');
+      expect(body.runsLeftOut).toBe(2);
+    });
+
+    it('refuses a period that is not one', async () => {
+      const { app } = await setup();
+      for (const q of ['since=abc', 'since=10&until=5', 'until=1.5', 'since=-1']) {
+        expect((await app.request(`/api/security?${q}`)).status, q).toBe(400);
+        expect((await app.request(`/api/blocks?${q}`)).status, q).toBe(400);
+      }
+    });
+
+    it('sorts the causes of the tickets moved into Blocked over the period by frequency', async () => {
+      const clock = new FakeClock(30 * DAY);
+      const { app, store } = await setup({ clock });
+      let n = 0;
+      const blockAt = async (ticketId: string, at: number, patch: Partial<TicketState>) => {
+        const event = { ...TRUSTED, id: `e${++n}`, type: 'ticket.delegated', at, projectId: 'p', ticketId, payload: { linearSessionId: 'ls' } } as FactoryEvent;
+        await store.appendInbox(event);
+        await store.decide({
+          event, workflow: { hash: 'h', definition: {} },
+          decide: (t) => ({ ticket: { ...(t ?? newTicketState('p', ticketId, 'T', 'dev', 1)), ...patch }, effects: [], timers: [], clearTimers: false, at }),
+        });
+      };
+      const red = { blocked: true, blockKind: 'red' as const, blockReason: 'red' };
+      const clear = { blocked: false, blockKind: undefined, blockReason: undefined };
+      await blockAt('REL-1', 10 * DAY, { blocked: true, blockKind: 'loop', blockReason: 'loop' });
+      await blockAt('REL-1', 11 * DAY, clear);
+      await blockAt('REL-1', 24 * DAY, red);
+      await blockAt('REL-1', 25 * DAY, clear);
+      await blockAt('REL-1', 26 * DAY, red);
+      await blockAt('REL-2', 27 * DAY, { blocked: true, blockKind: 'budget', blockReason: 'tokens' });
+      await blockAt('REL-3', 28 * DAY, red);
+
+      const body = await (await app.request('/api/blocks')).json();
+      expect(body).toEqual({
+        since: 23 * DAY,
+        until: 30 * DAY,
+        total: 4,
+        causes: [
+          { cause: 'red', count: 3, share: 0.75, cumulative: 0.75 },
+          { cause: 'limit', count: 1, share: 0.25, cumulative: 1 },
+        ],
+      });
+      const all = await (await app.request(`/api/blocks?since=0&until=${30 * DAY}`)).json();
+      expect(all.causes.map((c: { cause: string; count: number }) => [c.cause, c.count])).toEqual([['red', 3], ['limit', 1], ['loop', 1]]);
+    });
+
+    it('asks for the password, as the other routes of the interface', async () => {
+      const { app } = await setup({ uiPassword: 'secret' });
+      for (const path of ['/api/security', '/api/security/runs/r1', '/api/blocks']) expect((await app.request(path)).status, path).toBe(401);
     });
   });
 

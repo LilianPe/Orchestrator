@@ -64,6 +64,18 @@ export const LABELS: AttemptLabels = {
   },
 };
 
+/** Decides one event of a ticket whose decision applies `patch` to it, at `at`, without an effect: the next one need not wait. */
+async function decideTicket(s: Store, id: string, ticketId: string, at: number, patch: Partial<TicketState>): Promise<void> {
+  const event = delegatedEvent(id, ticketId, at);
+  await s.appendInbox(event);
+  const out = await s.decide({
+    event,
+    workflow: WF,
+    decide: (t) => ({ ticket: { ...(t ?? newTicketState('p', ticketId, 'T', 'todo', 1)), ...patch, updatedAt: at }, effects: [], timers: [], clearTimers: false, at }),
+  });
+  if (out.status !== 'committed') throw new Error(`expected ${id} committed`);
+}
+
 function q(patch: Partial<QueueItem>): QueueItem {
   return { projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', priority: 0, enqueuedAt: 1, ...patch };
 }
@@ -314,8 +326,86 @@ export function storeContract(store: () => Store | Promise<Store>): void {
         { rule: 'push-trunk', refusals: 1 },
         { rule: 'web-search', refusals: 1 },
       ],
+      runs: [
+        { runId: 'r1', projectId: 'p', ticketId: 'REL-1', requests: 4, refused: 2, refusals: 1 },
+        { runId: 'r2', projectId: 'p', ticketId: 'REL-2', requests: 1, refused: 0, refusals: 2 },
+      ],
     });
-    expect(await s.securityStats(115, 205)).toEqual({ hosts: [{ host: 'a.example', requests: 1, refused: 1 }, { host: 'b.example', requests: 1, refused: 0 }], rules: [{ rule: 'force-push', refusals: 1 }, { rule: 'push-trunk', refusals: 1 }] });
+    expect(await s.securityStats(115, 205)).toEqual({
+      hosts: [{ host: 'a.example', requests: 1, refused: 1 }, { host: 'b.example', requests: 1, refused: 0 }],
+      rules: [{ rule: 'force-push', refusals: 1 }, { rule: 'push-trunk', refusals: 1 }],
+      runs: [
+        { runId: 'r1', projectId: 'p', ticketId: 'REL-1', requests: 2, refused: 1, refusals: 1 },
+        { runId: 'r2', projectId: 'p', ticketId: 'REL-2', requests: 0, refused: 0, refusals: 1 },
+      ],
+    });
+  });
+
+  it('counts each run of a period by what its log holds in it, the most refused first (ORC-300)', async () => {
+    const s = await store();
+    const egress = (at: number, host: string, ok = true) => ({ at, method: 'GET', host, ok, up: 0, down: 0 });
+    const refusal = (at: number, rule: string) => ({ at, tool: 'Bash', rule, command: 'secret' });
+    await s.putSecurityLog({ runId: 'quiet', projectId: 'p', ticketId: 'REL-1', at: 500, egress: [egress(100, 'a.example'), egress(110, 'a.example')], refusals: [], skipped: { egress: 0, refusals: 0 } });
+    await s.putSecurityLog({ runId: 'loud', projectId: 'p', ticketId: 'REL-2', at: 500, egress: [egress(100, 'b.example', false), egress(900, 'b.example', false)], refusals: [refusal(120, 'force-push'), refusal(130, 'push')], skipped: { egress: 0, refusals: 0 } });
+    await s.putSecurityLog({ runId: 'later', projectId: 'q', ticketId: 'REL-3', at: 2000, egress: [egress(1500, 'c.example', false)], refusals: [], skipped: { egress: 0, refusals: 0 } });
+    expect((await s.securityStats(0, 900)).runs).toEqual([
+      { runId: 'loud', projectId: 'p', ticketId: 'REL-2', requests: 1, refused: 1, refusals: 2 },
+      { runId: 'quiet', projectId: 'p', ticketId: 'REL-1', requests: 2, refused: 0, refusals: 0 },
+    ]);
+    expect((await s.securityStats(900, 2000)).runs).toEqual([
+      { runId: 'later', projectId: 'q', ticketId: 'REL-3', requests: 1, refused: 1, refusals: 0 },
+      { runId: 'loud', projectId: 'p', ticketId: 'REL-2', requests: 1, refused: 1, refusals: 0 },
+    ]);
+    expect((await s.securityStats(3000, 4000)).runs).toEqual([]);
+  });
+
+  it('lists the moves into Blocked of a period, with their kind, not a block kept nor one outside it (ORC-300)', async () => {
+    const s = await store();
+    const decideAs = (id: string, ticketId: string, at: number, patch: Partial<TicketState>) => decideTicket(s, id, ticketId, at, patch);
+    // Blocked at its first decision: a move into Blocked too.
+    await decideAs('a1', 'REL-1', 100, { blocked: true, blockKind: 'red', blockReason: 'red' });
+    // Still blocked: no new move.
+    await decideAs('a2', 'REL-1', 150, { blocked: true, blockKind: 'red', blockReason: 'red again' });
+    await decideAs('b1', 'REL-2', 110, {});
+    await decideAs('b2', 'REL-2', 200, { blocked: true, blockKind: 'budget', blockReason: 'tokens' });
+    await decideAs('b3', 'REL-2', 300, { blocked: false, blockKind: undefined });
+    // Blocked again: a second move, and one without a kind (written before ORC-345): its kind got back from its reason.
+    await decideAs('b4', 'REL-2', 400, { blocked: true, blockReason: 'Red not verified after 3 attempts' });
+    await decideAs('c1', 'REL-3', 900, { blocked: true, blockKind: 'loop', blockReason: 'loop' });
+    expect(await s.blocksEntered(0, 900)).toEqual([
+      { projectId: 'p', ticketId: 'REL-1', at: 100, kind: 'red' },
+      { projectId: 'p', ticketId: 'REL-2', at: 200, kind: 'budget' },
+      { projectId: 'p', ticketId: 'REL-2', at: 400, kind: 'red' },
+    ]);
+    expect(await s.blocksEntered(150, 1000)).toEqual([
+      { projectId: 'p', ticketId: 'REL-2', at: 200, kind: 'budget' },
+      { projectId: 'p', ticketId: 'REL-2', at: 400, kind: 'red' },
+      { projectId: 'p', ticketId: 'REL-3', at: 900, kind: 'loop' },
+    ]);
+  });
+
+  it('lists the moves into Blocked made outside a decision too: a launch error, a refused pickup (ORC-300)', async () => {
+    const s = await store();
+    const blockOutside = (ticketId: string, at: number, kind: TicketState['blockKind']) =>
+      s.updateTicket('p', ticketId, (t) => ({ ...t, blocked: true, blockKind: kind, blockReason: 'outside', updatedAt: at }));
+    // Blocked between two decisions: the second one finds it blocked, the first left it free.
+    await decideTicket(s, 'd1', 'REL-4', 100, {});
+    await blockOutside('REL-4', 150, 'repo_config');
+    await decideTicket(s, 'd2', 'REL-4', 200, {});
+    // Blocked after its last decision, and still: the projection holds the move.
+    await decideTicket(s, 'e1', 'REL-6', 100, {});
+    await blockOutside('REL-6', 350, 'infra');
+    // Never decided, blocked from the start (a pickup refused before any decision).
+    await s.putTicket({ ...newTicketState('p', 'REL-5', 'T', 'todo', 300), blocked: true, blockKind: 'pickup', blockReason: 'refused' });
+    // Blocked by a decision, then kept blocked: once, at its decision.
+    await decideTicket(s, 'f1', 'REL-7', 120, { blocked: true, blockKind: 'loop', blockReason: 'loop' });
+    expect(await s.blocksEntered(0, 1000)).toEqual([
+      { projectId: 'p', ticketId: 'REL-7', at: 120, kind: 'loop' },
+      { projectId: 'p', ticketId: 'REL-4', at: 150, kind: 'repo_config' },
+      { projectId: 'p', ticketId: 'REL-5', at: 300, kind: 'pickup' },
+      { projectId: 'p', ticketId: 'REL-6', at: 350, kind: 'infra' },
+    ]);
+    expect(await s.blocksEntered(160, 340)).toEqual([{ projectId: 'p', ticketId: 'REL-5', at: 300, kind: 'pickup' }]);
   });
 
   it("keeps each review lens's findings on a ticket's commit, the last run of a lens replacing its earlier one (ORC-183)", async () => {

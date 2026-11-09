@@ -1,4 +1,4 @@
-import type { BlockCause, BlockKind } from '../../src/core/block-cause.js';
+import type { BlockCause, BlockKind, ParetoCause } from '../../src/core/block-cause.js';
 
 export interface RunView {
   id: string;
@@ -129,6 +129,37 @@ export interface MeasuredTicketView extends FlowTicketView {
   /** Of a blocked ticket, from its typed kind as the Flow classes it (ORC-345); null when not blocked. */
   blockCause: BlockCause | null;
   measures: TicketMeasuresView | null;
+}
+
+/** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */
+export interface SecurityPeriodView {
+  since: number;
+  until: number;
+  hosts: { host: string; requests: number; refused: number }[];
+  rules: { rule: string; refusals: number }[];
+  /** The most refused runs, 50 at most: `runsLeftOut` counts the others. */
+  runs: { runId: string; projectId: string; ticketId: string; requests: number; refused: number; refusals: number }[];
+  runsLeftOut: number;
+}
+
+/** `GET /api/security/runs/:id` (ORC-300): `RunSecurityView` of src/network/security-log.ts, never a command nor a path. */
+export interface RunSecurityView {
+  runId: string;
+  projectId: string;
+  ticketId: string;
+  at: number;
+  rules: { rule: string; refusals: number }[];
+  refusals: { at: number; tool: string; rule: string }[];
+  hosts: { host: string; requests: number; refused: number }[];
+  skipped: { egress: number; refusals: number };
+}
+
+/** `GET /api/blocks` (ORC-300): the moves into Blocked of `[since, until)`, their causes most frequent first. */
+export interface BlockParetoView {
+  since: number;
+  until: number;
+  total: number;
+  causes: ParetoCause[];
 }
 
 /**

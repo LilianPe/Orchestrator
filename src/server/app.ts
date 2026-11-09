@@ -9,12 +9,13 @@ import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { causeOf } from '../core/block-cause.js';
+import { blockPareto, causeOf } from '../core/block-cause.js';
 import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { runDetail } from '../core/run-detail.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
+import { runSecurityView, shownHosts } from '../network/security-log.js';
 import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -59,6 +60,23 @@ type AgentEnv = { Variables: { run: RunRecord } };
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;
 const MEASURES_AT_ONCE = 2;
+
+/** Runs `GET /api/security` serves, the most refused: the others are counted. */
+const SECURITY_RUNS = 50;
+/** The period the security log and the Pareto read when none is asked (ORC-300). */
+const DEFAULT_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** `[since, until)` from the query, in ms, `until` now and `since` 7 days before by default; undefined when it is not a period. */
+function periodOf(c: Context, now: number): { since: number; until: number } | undefined {
+  const ms = (name: string, fallback: number) => {
+    const raw = c.req.query(name);
+    if (raw === undefined || raw === '') return fallback;
+    return /^\d{1,15}$/.test(raw) ? Number(raw) : NaN;
+  };
+  const until = ms('until', now);
+  const since = ms('since', until - DEFAULT_PERIOD_MS);
+  return Number.isNaN(since) || Number.isNaN(until) || since >= until ? undefined : { since, until };
+}
 
 function startOfUtcDay(ts: number): number {
   const d = new Date(ts);
@@ -243,6 +261,29 @@ export function createApp(d: ServerDeps): Hono {
     }
     return c.json({ tickets: served });
   });
+
+  // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
+  // rules and runs over a period; a run's refusals and hosts. Never a command, a path nor a host that is not a plain name:
+  // they can hold a secret.
+  // A route over a period: 400 when the query asks for one that is not.
+  const overPeriod = (serve: (c: Context, period: { since: number; until: number }) => Promise<Response>) => (c: Context) => {
+    const period = periodOf(c, d.clock.now());
+    return period ? serve(c, period) : c.json({ error: 'since and until: whole ms, since before until' }, 400);
+  };
+  app.get('/api/security', overPeriod(async (c, period) => {
+    const { hosts, rules, runs } = await d.store.securityStats(period.since, period.until);
+    return c.json({ ...period, hosts: shownHosts(hosts), rules, runs: runs.slice(0, SECURITY_RUNS), runsLeftOut: Math.max(0, runs.length - SECURITY_RUNS) });
+  }));
+  app.get('/api/security/runs/:id', async (c) => {
+    const log = await d.store.securityLog(c.req.param('id'));
+    return log ? c.json(runSecurityView(log)) : c.notFound();
+  });
+
+  // The Pareto of the block causes (ORC-300): the moves into Blocked of the period, by their typed kind's cause (ORC-345).
+  app.get('/api/blocks', overPeriod(async (c, period) => {
+    const blocks = await d.store.blocksEntered(period.since, period.until);
+    return c.json({ ...period, total: blocks.length, causes: blockPareto(blocks.map((b) => b.kind)) });
+  }));
 
   app.get('/api/events/recent', async (c) => c.json(await d.store.recentEvents(100, c.req.query('ticket') || undefined)));
 
