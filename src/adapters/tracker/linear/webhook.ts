@@ -309,11 +309,14 @@ const CLASSIFIED = new Set<string>(['session.prompted', 'session.mentioned', 'ti
 /**
  * What of a mapped event the small model classifies (ORC-336): its message as `mapLinearWebhook` classified it, masked
  * and without its mention; nothing for an event that carries none, or for a command. The same mapping decides routing,
- * commands and which comments are journaled: the model sees only what is about to be written.
+ * commands and which comments are journaled: the model sees only what is about to be written. Only a reply keeps its
+ * mention in its body: a mention's was stripped at the mapping, and stripped twice, `@factory @bob /stop` would be a
+ * command (ORC-355).
  */
 export function messageToClassify(e: FactoryEvent): string | undefined {
   const p = e.payload as { body?: unknown; kind?: string };
-  return CLASSIFIED.has(e.type) && p.kind !== 'command' && typeof p.body === 'string' ? stripMention(p.body) : undefined;
+  if (!CLASSIFIED.has(e.type) || p.kind === 'command' || typeof p.body !== 'string') return undefined;
+  return e.type === 'session.prompted' ? stripMention(p.body) : p.body;
 }
 
 /** The event classified with the model's verdict, by the same `classifyMessage` as the mapping; without one, the fallback rule. */

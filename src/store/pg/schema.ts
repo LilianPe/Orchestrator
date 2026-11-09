@@ -400,7 +400,22 @@ export const baselines = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.since, t.until, t.measure] })],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230). */
+/**
+ * The webhook deliveries answered before they are written to the inbox (ORC-336), out of the meta rows (ORC-355): a few
+ * short-lived rows, pending until written, or set aside (`aside`) for an operator, beside a pending one of the same key.
+ */
+export const deliveries = pgTable(
+  'deliveries',
+  {
+    key: text('key').notNull(),
+    aside: boolean('aside').notNull(),
+    value: text('value').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.key, t.aside] })],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -420,6 +435,7 @@ export const PG_TABLES = {
   knownFlakyTests,
   changelog,
   baselines,
+  deliveries,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -441,6 +457,7 @@ export const PG_TABLE_NAMES = [
   'known_flaky_tests',
   'changelog',
   'baselines',
+  'deliveries',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

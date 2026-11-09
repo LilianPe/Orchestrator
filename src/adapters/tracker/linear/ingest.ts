@@ -5,7 +5,7 @@ import { serial, type Serial } from './labels.js';
 import { deliveryKey, isFresh, issueKeyOf, mapLinearWebhook, mayCarryMessage, messageToClassify, recordIssueLabels, verifyLinearSignature, withVerdict, type MapContext } from './webhook.js';
 
 /** What the store keeps of a delivery answered before the inbox (ORC-336). */
-export type DeliveryStore = Pick<Store, 'receiveDelivery' | 'pendingDeliveries' | 'deleteDelivery' | 'asideDelivery' | 'inboxHas' | 'getMeta'>;
+export type DeliveryStore = Pick<Store, 'receiveDelivery' | 'pendingDeliveries' | 'deleteDelivery' | 'asideDelivery' | 'inboxHas'>;
 
 /** How a kept delivery is tried again: from `baseMs`, doubling up to `maxMs`, until `horizonMs` after its first arrival. */
 export interface RetryPolicy {
@@ -44,8 +44,9 @@ interface Delivery {
   at: number;
 }
 
-/** A kept row that cannot be read back: moved aside, never tried again. */
-function readDelivery(value: string): { delivery: Delivery; body: any } {
+type KeptDelivery = { delivery: Delivery; body: any };
+
+function readDelivery(value: string): KeptDelivery {
   const delivery = JSON.parse(value) as Delivery;
   if (typeof delivery?.raw !== 'string' || typeof delivery.at !== 'number') throw new Error('not a kept delivery');
   return { delivery, body: JSON.parse(delivery.raw) };
@@ -57,7 +58,7 @@ function readDelivery(value: string): { delivery: Delivery; body: any } {
  * carry one (ORC-336) is answered as soon as it is kept in the store, and classified and written after: Linear's
  * answer never waits on the model. A restart writes what was kept and not written (`resume`).
  *
- * ponytail: one daemon delivers the kept rows. Two daemons on one Postgres could both deliver a row (the meta rows
+ * ponytail: one daemon delivers the kept rows. Two daemons on one Postgres could both deliver a row (the deliveries
  * have no lease); the inbox keeps each event once by its id, so the cost is a second model call, never a second
  * event. A claim with an owner goes with ORC-129's leases if several daemons ever share a database.
  */
@@ -154,9 +155,12 @@ export function createLinearIngest(d: IngestDeps) {
       once('inbox lookup', `webhook ${key}: inbox lookup failed, classified anyway: ${err.message}`);
       return false;
     });
-    if (held) return e;
+    // Stopping: no model call to wait for, the fallback rule the mapping applied stands (ORC-355).
+    if (held || closed) return e;
     if (!(await slot(resumed))) return failed(`${MAX_CLASSIFICATIONS} classifications already running`) ?? e;
     try {
+      // Closed while it waited for its slot.
+      if (closed) return e;
       return withVerdict(e, await d.classify(text).catch((err: Error) => failed(err.message)));
     } finally {
       release();
@@ -171,8 +175,18 @@ export function createLinearIngest(d: IngestDeps) {
 
   /** Moves a row that will not be written aside: logged, kept for an operator, no longer tried at each start. */
   async function aside(key: string, why: string): Promise<void> {
-    d.log(`ERROR: webhook ${key} set aside, not written to the inbox (${why}): its row stays under delivery-aside:${key}`);
+    d.log(`ERROR: webhook ${key} set aside, not written to the inbox (${why}): its row stays set aside for an operator`);
     await d.deliveries!.asideDelivery(key).catch((err: Error) => d.log(`ERROR: webhook ${key} not set aside: ${err.message}`));
+  }
+
+  /** A kept row read back, or moved aside when it cannot be read: never tried again (ORC-355: one helper for both). */
+  async function readOrAside(key: string, value: string): Promise<KeptDelivery | undefined> {
+    try {
+      return readDelivery(value);
+    } catch (err) {
+      await aside(key, `unreadable: ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   /**
@@ -180,7 +194,7 @@ export function createLinearIngest(d: IngestDeps) {
    * after the issue's earlier writes, then let go. A webhook with no message waits for the earlier writes before it is
    * mapped, as when it is written before its answer: what it reads (labels known, echoes) is theirs.
    */
-  function deliver(key: string, { delivery: { at }, body }: { delivery: Delivery; body: any }, o: { resumed?: boolean; kept?: Promise<boolean> } = {}): Promise<void> {
+  function deliver(key: string, { delivery: { at }, body }: KeptDelivery, o: { resumed?: boolean; kept?: Promise<boolean> } = {}): Promise<void> {
     const issue = issueKeyOf(body) ?? '';
     const message = mayCarryMessage(body);
     // The events' ids: a reply and the comment Linear writes for it share them, and the inbox keeps the first.
@@ -241,22 +255,16 @@ export function createLinearIngest(d: IngestDeps) {
     if (d.classify && d.deliveries && (mayCarryMessage(body) || written.has(issue))) {
       // Kept by its kind as well: a reply and the comment Linear writes for it share `key`, and neither may drop the other.
       const row = `${body.type}:${key}`;
-      const kept = d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery));
-      void deliver(row, { delivery: { raw, at }, body }, { kept: kept.catch(() => false) });
+      // The value kept already, if any: undefined when this request kept it.
+      const before = d.deliveries.receiveDelivery(row, JSON.stringify({ raw, at } satisfies Delivery));
+      void deliver(row, { delivery: { raw, at }, body }, { kept: before.then((v) => v === undefined, () => false) });
       try {
         // Kept already and no longer being delivered here: delivered again, timed at its first arrival.
         // This request's own `deliver` counts once: another keeps or delivers it when the count is above that.
-        if (!(await kept) && (active.get(row) ?? 0) <= 1) {
-          const value = await d.deliveries.getMeta(`delivery:${row}`);
-          if (value !== undefined) {
-            let read: { delivery: Delivery; body: any } | undefined;
-            try {
-              read = readDelivery(value);
-            } catch (err) {
-              await aside(row, `unreadable: ${(err as Error).message}`);
-            }
-            if (read) void deliver(row, read);
-          }
+        const value = await before;
+        if (value !== undefined && (active.get(row) ?? 0) <= 1) {
+          const read = await readOrAside(row, value);
+          if (read) void deliver(row, read);
         }
       } catch (err) {
         d.log(`webhook not kept: ${(err as Error).message}`);
@@ -284,14 +292,8 @@ export function createLinearIngest(d: IngestDeps) {
     async resume(): Promise<number> {
       const kept = (await d.deliveries?.pendingDeliveries()) ?? [];
       for (const { key, value } of kept) {
-        let row: { delivery: Delivery; body: any };
-        try {
-          row = readDelivery(value);
-        } catch (err) {
-          await aside(key, `unreadable: ${(err as Error).message}`);
-          continue;
-        }
-        void deliver(key, row, { resumed: true });
+        const row = await readOrAside(key, value);
+        if (row) void deliver(key, row, { resumed: true });
       }
       return kept.length;
     },
