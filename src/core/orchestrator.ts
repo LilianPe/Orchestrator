@@ -853,7 +853,7 @@ export class Orchestrator {
    * a fresh context that never sees the ticket's (ORC-217). The run's refusals dir, read-write, so the
    * hook's log outlives the sandbox. The pack and the run settings read-only.
    * A `trunk-readonly` job gets its worktree read-write too: only `--permission-mode plan` keeps it
-   * from writing, as on the host. The network is applied by the egress proxy (ORC-213): the repository's
+   * from writing, as on the host, or for `intake` its tools, `Read`, `Grep` and `Glob` (ORC-367). The network is applied by the egress proxy (ORC-213): the repository's
    * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
    */
   private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy): Promise<Sandbox> {
@@ -2489,7 +2489,7 @@ export class Orchestrator {
         settingsPath: sandbox ? SETTINGS_TARGET : this.settingsPath(),
         // Plan mode, for a question that has every tool. A job held to its tools needs none, and plan mode could refuse its `submit_result`.
         readOnly: job.workspace === 'trunk-readonly' && !tools,
-        // A step that writes nothing reads and searches, nothing else: no write tool, no shell (ORC-183, ORC-367).
+        // A read-only step reads and searches, nothing else: no write tool, no shell (ORC-183, ORC-367).
         ...(tools ? { tools } : {}),
         limits,
         env: {

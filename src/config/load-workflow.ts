@@ -108,7 +108,7 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
   if (!step) throw new WorkflowError(`jobs.${job}.step: ${name} is not an agent step of ${preset.name}`);
   const tools = stepTools(step);
   // Its own clone, gone with its run (ORC-367): a ticket that does not start keeps no worktree made for nothing.
-  if (tools && raw.workspace === 'worktree') throw new WorkflowError(`jobs.${job}.workspace: the ${name} step writes nothing, it runs on a clone of its own, never the ticket's worktree`);
+  if (tools && raw.workspace !== 'trunk-readonly' && raw.workspace !== 'published') throw new WorkflowError(`jobs.${job}.workspace: the ${name} step is read-only, it runs on a clone of its own (trunk-readonly)`);
   const tokens = settings.budgets?.perStepTokens?.[name];
   return {
     network: step.network,
