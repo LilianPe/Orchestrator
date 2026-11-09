@@ -38,6 +38,15 @@ describe('agentPolicy (an agent run, ORC-209 C)', () => {
   it('keeps the Claude API for a repository at none: the agent cannot run without it', () => {
     expect(agentPolicy(repo('network: { level: none }\n'))).toEqual({ level: 'claude-api', allow: [] });
   });
+
+  it("narrows to the step's level: an AI review reaches the Claude API alone, whatever the repository allows (ORC-183)", () => {
+    const review = agentPolicy(repo('network: { level: custom, allow: [docs.exemple.com] }\n'), 'claude-api');
+    expect(review).toEqual({ level: 'claude-api', allow: [] });
+    expect(allowConnect(review, 'api.anthropic.com').ok).toBe(true);
+    for (const host of ['github.com', 'registry.npmjs.org', 'docs.exemple.com']) expect(allowConnect(review, host).ok, host).toBe(false);
+    expect(agentPolicy(repo('network: { level: none }\n'), 'claude-api')).toEqual({ level: 'claude-api', allow: [] });
+    expect(agentPolicy(repo(), 'limited')).toEqual(limited);
+  });
 });
 
 describe('allowConnect (a TLS tunnel: the host only)', () => {

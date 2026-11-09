@@ -1,6 +1,6 @@
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import type { CheckRunRequest, Forge, ForgeWriter, GitAccess, MergeResult, PrInfo, PrRequest } from './types.js';
+import { ReviewLinesRefused, type CheckRunRequest, type Forge, type ForgeWriter, type GitAccess, type MergeResult, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
@@ -106,6 +106,21 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     }
     const id = this.checkRuns.length + 1;
     this.checkRuns.push({ ...req, id });
+    return { id, deduplicated: false };
+  }
+
+  /** The reviews posted on the PRs (ORC-183), with their PR's number, as GitHub keeps them. */
+  reviews: (ReviewRequest & { number: number; id: number })[] = [];
+  /** Lines (`path:line`) GitHub cannot place a comment on, as a test sets them: a review commenting one is refused. */
+  unplaceable = new Set<string>();
+
+  async postReview(_repoPath: string, number: number, req: ReviewRequest): Promise<{ id: number; deduplicated: boolean }> {
+    this.answer();
+    const existing = this.reviews.find((r) => r.number === number && r.externalId === req.externalId);
+    if (existing) return { id: existing.id, deduplicated: true };
+    if (req.comments.some((c) => this.unplaceable.has(`${c.path}:${c.line}`))) throw new ReviewLinesRefused('Line could not be resolved');
+    const id = this.reviews.length + 1;
+    this.reviews.push({ ...req, comments: req.comments.map((c) => ({ ...c })), number, id });
     return { id, deduplicated: false };
   }
 }

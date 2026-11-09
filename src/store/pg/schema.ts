@@ -245,6 +245,10 @@ export const attempts = pgTable(
   ],
 );
 
+/**
+ * The findings of the AI review (ORC-183), one row each: `attempt_id` the lens's run, `kind` its lens, `body` the explanation,
+ * on the ticket's published commit (`sha`), `n` in the lens's order. A lens run again on the commit replaces its rows.
+ */
 export const findings = pgTable(
   'findings',
   {
@@ -254,10 +258,19 @@ export const findings = pgTable(
     severity: text('severity').notNull(),
     body: text('body').notNull(),
     createdAt: createdAt(),
+    projectId: text('project_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    sha: text('sha').notNull(),
+    n: integer('n').notNull(),
+    file: text('file').notNull(),
+    line: integer('line').notNull(),
+    suggestion: text('suggestion').notNull(),
+    fact: text('fact'),
   },
   (t) => [
     index('findings_attempt_id_idx').on(t.attemptId),
     index('findings_severity_idx').on(t.severity),
+    index('findings_commit_idx').on(t.projectId, t.ticketId, t.sha),
   ],
 );
 
