@@ -85,6 +85,19 @@ describe.skipIf(!url)('PgStore integration', () => {
     }
   });
 
+  it('keeps the deliveries in their own table, none in the meta rows (ORC-355)', async () => {
+    expect(await store.receiveDelivery('activity:a', '{"raw":"1"}')).toBeUndefined();
+    expect(await store.receiveDelivery('activity:b', '{"raw":"2"}')).toBeUndefined();
+    await store.asideDelivery('activity:a');
+    const meta = await pool.query<{ n: number }>(`select count(*)::int as n from workflow_versions`);
+    expect(meta.rows[0]?.n).toBe(0);
+    const rows = await pool.query<{ key: string; aside: boolean; value: string }>(`select key, aside, value from deliveries order by key`);
+    expect(rows.rows).toEqual([
+      { key: 'activity:a', aside: true, value: '{"raw":"1"}' },
+      { key: 'activity:b', aside: false, value: '{"raw":"2"}' },
+    ]);
+  });
+
   it('creates the ticket, status, due and availability indexes', async () => {
     const indexes = await pool.query<{ indexname: string }>(
       `select indexname from pg_indexes where schemaname = 'public'`,

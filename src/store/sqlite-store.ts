@@ -910,13 +910,24 @@ export class SqliteStore implements Store {
     this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO UPDATE SET value = excluded.value').run(key, value);
   }
 
-  async receiveDelivery(key: string, value: string): Promise<boolean> {
-    return this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT DO NOTHING').run(`delivery:${key}`, value).changes > 0;
+  async receiveDelivery(key: string, value: string): Promise<string | undefined> {
+    // Read and written with no await between: no other call comes in between.
+    const kept = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(`delivery:${key}`) as { value: string } | undefined;
+    if (!kept) this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run(`delivery:${key}`, value);
+    return kept?.value;
   }
 
   async pendingDeliveries(): Promise<{ key: string; value: string }[]> {
-    const rows = this.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'delivery:%' ORDER BY rowid").all() as { key: string; value: string }[];
-    return rows.map((r) => ({ key: r.key.slice('delivery:'.length), value: r.value }));
+    return this.deliveriesUnder('delivery:');
+  }
+
+  async asideDeliveries(): Promise<{ key: string; value: string }[]> {
+    return this.deliveriesUnder('delivery-aside:');
+  }
+
+  private deliveriesUnder(prefix: string): { key: string; value: string }[] {
+    const rows = this.db.prepare('SELECT key, value FROM meta WHERE key LIKE ? ORDER BY rowid').all(`${prefix}%`) as { key: string; value: string }[];
+    return rows.map((r) => ({ key: r.key.slice(prefix.length), value: r.value }));
   }
 
   async deleteDelivery(key: string): Promise<void> {
