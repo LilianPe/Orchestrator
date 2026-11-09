@@ -514,6 +514,34 @@ describe('Orchestrator', () => {
       expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
     });
 
+    it('a step deferred behind the cut one is kept, and follows its relaunch (ORC-357)', async () => {
+      const { store, tracker, runner, orch, clock } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 }, hold: true });
+      await orch.accept(delegated());
+      await orch.drained();
+      // A reply came in while it ran: its start waits behind the run.
+      await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, pendingJob: { job: 'dev-feedback' } });
+      runner.release(runner.requests[0]!.runId);
+      await orch.drained();
+      expect((await store.listQueue()).map((q) => [q.job, q.relaunchOf])).toEqual([['dev', runner.requests[0]!.runId], ['dev-feedback', undefined]]);
+      clock.set(1_000_000);
+      await orch.tick();
+      await orch.drained();
+      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
+    });
+
+    it('an operator who lowers the recorded hold lifts it (ORC-357)', async () => {
+      const { store, tracker, runner, orch } = setup({ onUsageLimit: 'wait' });
+      tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+      runner.enqueue({ outcome: 'failure', usageLimit: { resetAt: 1_000_000 } });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(await orch.usageLimitedUntil()).toBe(1_000_000);
+      await store.setMeta('usage-limited-until:default', '0');
+      expect(await orch.usageLimitedUntil()).toBeUndefined();
+    });
+
     it("a reset already past waits 5 minutes at least; the hold is the active account's, logged and shown", async () => {
       let account = 'acc-1';
       const { tracker, runner, orch, bus } = setup({ onUsageLimit: 'wait', account: () => account });

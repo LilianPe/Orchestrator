@@ -453,8 +453,6 @@ export type DecidedEvent =
   | { type: 'verify.started'; runId: string }
   /** `job`: only that pending job leaves the ticket, not one set since (ORC-339); absent, whichever is there. */
   | { type: 'pending.cleared'; job?: PendingJob }
-  /** A dev start kept on the ticket: behind a run that holds it, or a step the usage limit cut, as a relaunch of its run (ORC-357). */
-  | { type: 'pending.set'; job: PendingJob }
   /** The ticket's Linear session: the delegation's that chose its repo (ORC-171), or the one a launch opened. */
   | { type: 'session.linked'; linearSessionId: string };
 
@@ -469,6 +467,7 @@ export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
   /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */
   | { type: 'status.recorded'; to: LogicalState; reviewSha?: string }
+  | { type: 'pending.set'; job: PendingJob }
   /**
    * A dev launch takes the ticket before any effect (ORC-359), until `until`: refused while another launch holds it, its
    * hold not expired at `at`, or a run does. Written again by its holder to keep it; its `run.started` ends it. `over`: a hold
@@ -618,6 +617,11 @@ export interface TicketState {
    * at the last one (ORC-220). Only a human relaunch empties it. Absent until the first: journals from before it replay as they were.
    */
   cutRelaunches?: number[];
+  /**
+   * The step the usage limit cut, as a version before ORC-357 recorded it, `null` once the ticket moved on: read only by the `usage.reset`
+   * timer that version armed. A cut step now waits in line as a relaunch, and nothing writes this any more.
+   */
+  usageWait?: { runId: string } | null;
   /** Relaunches at a usage reset of `job` in a row (ORC-340), bounded by `USAGE_RELAUNCHES`; `null` once a run of the step ends without the limit. */
   usageRelaunches?: { job: string; count: number } | null;
   /** Questions asked again at a usage reset in a row (ORC-340), bounded like `usageRelaunches`; `null` once one ends without the limit. */

@@ -606,7 +606,7 @@ describe('decide — built-ins', () => {
       const cut = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'limit', costUsd: 1, turns: 3, lastText: '', attempt: 'timeout', overBudget: 'tokens', usageLimit: { resetAt: 5_000_000 } });
       const out = decide(ticket({ activeRunId: 'r1' }), cut, workflow);
       expect(out.events.some((e) => e.type === 'ticket.blocked')).toBe(false);
-      expect(out.events).toContainEqual({ type: 'pending.set', job: { job: 'dev', relaunchOf: 'r1' } });
+      expect(out.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
     });
   });
 
@@ -895,34 +895,47 @@ describe('decide — built-ins', () => {
 
     it('a cut review waits as a relaunch too, never in the implementer session it does not run', () => {
       const out = decide(ticket({ logical: 'ai_review', activeRunId: 'r1', activeJob: 'review' }), limited({ job: 'review' }), workflow);
-      expect(out.events).toContainEqual({ type: 'pending.set', job: { job: 'review', relaunchOf: 'r1' } });
+      expect(out.effects).toContainEqual({ kind: 'start_run', job: 'review', relaunchOf: 'r1' });
     });
 
-    it('a cut run sets its step pending as a relaunch of what it read, without a block, an attempt or a timer: the hold keeps it until the reset (ORC-357)', () => {
+    it('a cut run starts its step again as a relaunch of what it read, without a block, an attempt or a timer: the hold keeps it in line until the reset (ORC-357)', () => {
       const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), limited({ usageLimit: { resetAt: 61_000, account: 'acc-1' } }), workflow);
       // The ticket is told when it resumes: the stop is seen.
-      expect(out.effects).toEqual([{ kind: 'activity', type: 'thought', body: `Usage limit reached; resuming at ${new Date(61_000).toISOString()}.` }]);
-      expect(out.events).toEqual([
-        { type: 'ticket.patched', patch: { usageRelaunches: { job: 'dev', count: 1 } } },
-        { type: 'pending.set', job: { job: 'dev', relaunchOf: 'r1' } },
+      expect(out.effects).toEqual([
+        { kind: 'activity', type: 'thought', body: `Usage limit reached; resuming at ${new Date(61_000).toISOString()}.` },
+        { kind: 'start_run', job: 'dev', relaunchOf: 'r1' },
       ]);
+      expect(out.events).toEqual([{ type: 'ticket.patched', patch: { usageRelaunches: { job: 'dev', count: 1 } } }]);
       expect(out.timers).toEqual([]);
+      // A reset already past, as recover() may send after a long stop: it resumes now.
+      expect(decide(ticket({ logical: 'dev', activeRunId: 'r1' }), limited({ usageLimit: { resetAt: 500 } }), workflow).effects[0]).toEqual({ kind: 'activity', type: 'thought', body: 'Usage limit reached; resuming now.' });
     });
 
-    it('a usage reset of a code step armed by an earlier version relaunches it: its launch refuses it if the ticket moved on', () => {
-      const out = decide(ticket({ logical: 'dev' }), ev('timer.fired', { kind: 'usage.reset', payload: { job: 'dev', runId: 'r1' } }), workflow);
-      expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', relaunchOf: 'r1' }]);
-      expect(out.events).toEqual([]);
+    it("a cut leaves the ticket's pending job as it is: it follows the relaunch (ORC-357)", () => {
+      const out = decide(ticket({ logical: 'dev', activeRunId: 'r1', pendingJob: { job: 'dev-feedback', input: 'feedback' } }), limited(), workflow);
+      expect(out.events.map((e) => e.type)).toEqual(['ticket.patched']);
+      expect(out.effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
+    });
+
+    it('a usage reset of a code step armed by an earlier version relaunches it while the wait it recorded names its run', () => {
+      const fired = ev('timer.fired', { kind: 'usage.reset', payload: { job: 'dev', runId: 'r1' } });
+      expect(decide(ticket({ logical: 'dev', usageWait: { runId: 'r1' } }), fired, workflow).effects).toEqual([{ kind: 'start_run', job: 'dev', relaunchOf: 'r1' }]);
+      // Moved on before the upgrade (its wait ended), or at work since: nothing.
+      for (const moved of [ticket({ logical: 'dev', usageWait: null }), ticket({ logical: 'dev', usageWait: { runId: 'r1' }, activeRunId: 'r2' })]) {
+        const out = decide(moved, fired, workflow);
+        expect(out.effects).toEqual([]);
+        expect(out.trace).toContain('timer.fired usage.reset: dev not resumed, the ticket moved on');
+      }
     });
 
     it(`blocks a step the limit cut more than ${USAGE_RELAUNCHES} times in a row; a run of it that ends otherwise starts the count again`, () => {
       const cutAgain = decide(ticket({ logical: 'dev', activeRunId: 'r1', usageRelaunches: { job: 'dev', count: USAGE_RELAUNCHES } }), limited(), workflow);
-      expect(cutAgain.events.some((e) => e.type === 'pending.set')).toBe(false);
+      expect(cutAgain.effects.some((e) => e.kind === 'start_run')).toBe(false);
       const blocked = cutAgain.events.reduce<TicketState>((t, e) => reduce(t, e)!, ticket());
       expect(blocked.blockReason).toBe(`The run dev reached a limit: the usage limit stopped it ${USAGE_RELAUNCHES + 1} times in a row.`);
       expect(blocked.blockKind).toBe('limit');
       // Another step's count does not carry over.
-      expect(decide(ticket({ logical: 'dev', activeRunId: 'r1', usageRelaunches: { job: 'review', count: USAGE_RELAUNCHES } }), limited(), workflow).events).toContainEqual({ type: 'pending.set', job: { job: 'dev', relaunchOf: 'r1' } });
+      expect(decide(ticket({ logical: 'dev', activeRunId: 'r1', usageRelaunches: { job: 'review', count: USAGE_RELAUNCHES } }), limited(), workflow).effects).toContainEqual({ kind: 'start_run', job: 'dev', relaunchOf: 'r1' });
       const ended = decide(ticket({ logical: 'dev', activeRunId: 'r1', usageRelaunches: { job: 'dev', count: 2 } }), limited({ usageLimit: undefined }), workflow);
       expect(ended.events).toContainEqual({ type: 'ticket.patched', patch: { usageRelaunches: null } });
     });
@@ -950,7 +963,7 @@ describe('decide — built-ins', () => {
     it('records no wait on a ticket no longer delegated: no step to resume, decided as any other end', () => {
       const out = decide(ticket({ logical: 'dev', activeRunId: 'r1', delegated: false }), limited(), workflow);
       expect(out.timers).toEqual([]);
-      expect(JSON.stringify(out.events)).not.toContain('pending.set');
+      expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
     });
 
     it('a human relaunch of the blocked ticket starts the count of usage relaunches again', () => {

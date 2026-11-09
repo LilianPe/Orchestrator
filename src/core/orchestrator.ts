@@ -471,11 +471,10 @@ export class Orchestrator {
   private admitting: Record<QueueName, number> = { dev: 0, questions: 0 };
   /** Runs of this daemon's launches that ended without letting go of their hold on the ticket (ORC-359): dead, whatever its time. */
   private droppedHolds = new Set<string>();
-  /**
-   * Until when each account's usage limit holds its launches, as this daemon knows it (ORC-357): the limits it heard of, and the store's
-   * hold read again at each drain and each start outside one. A hold the store failed to record still holds this daemon's launches.
-   */
+  /** Until when each account's usage limit holds its launches (ORC-357), as last read from the store or written to it: read again at each drain and each start outside one. */
   private usageHolds = new Map<string, number>();
+  /** The holds the store failed to record (ORC-357): they still hold this daemon's launches. */
+  private unrecordedHolds = new Map<string, number>();
   /** Drains run one at a time. */
   private draining: Promise<void> = Promise.resolve();
   private instance: Promise<string> | undefined;
@@ -1348,19 +1347,16 @@ export class Orchestrator {
    */
   async usageLimitedUntil(): Promise<number | undefined> {
     const account = this.account();
-    this.holdUsage(account, Number((await this.d.store.getMeta(usageHoldKey(account))) ?? 0));
+    // As the store has it: an operator who lowers it lifts the hold.
+    this.usageHolds.set(account, Number((await this.d.store.getMeta(usageHoldKey(account))) ?? 0));
     return this.heldUntil();
   }
 
   /** `usageLimitedUntil` on what this daemon knows already, without reading the store. */
   private heldUntil(): number | undefined {
-    const until = this.usageHolds.get(this.account()) ?? 0;
+    const account = this.account();
+    const until = Math.max(this.usageHolds.get(account) ?? 0, this.unrecordedHolds.get(account) ?? 0);
     return until > this.d.clock.now() ? until : undefined;
-  }
-
-  /** Keeps the latest hold heard of on `account`. */
-  private holdUsage(account: string, until: number): void {
-    if (until > (this.usageHolds.get(account) ?? 0)) this.usageHolds.set(account, until);
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -3063,14 +3059,16 @@ export class Orchestrator {
     if (usageLimit && usageLimit.resetAt > now) {
       const until = new Date(usageLimit.resetAt).toISOString();
       this.log('warn', `usage limit of the Claude account ${account} reached (run ${run.id}): launches held until ${until}`);
-      // The account's limit: every launch on it waits for its reset, the latest one heard of. Held here first: a store that fails to
-      // record it must not hold back the result, and this daemon still holds its launches (`usageHolds`). Only a restart before
-      // the reset loses it then: the next launch meets the limit again, and waits as this one did.
-      this.holdUsage(account, usageLimit.resetAt);
+      // The account's limit: every launch on it waits for its reset, the latest one heard of. A store that fails to record it must not
+      // hold back the result, and this daemon still holds its launches (`unrecordedHolds`). Only a restart before the reset loses it
+      // then: the next launch meets the limit again, and waits as this one did.
       try {
         const key = usageHoldKey(account);
-        await this.d.store.setMeta(key, String(Math.max(Number((await this.d.store.getMeta(key)) ?? 0), usageLimit.resetAt)));
+        const held = Math.max(Number((await this.d.store.getMeta(key)) ?? 0), usageLimit.resetAt);
+        await this.d.store.setMeta(key, String(held));
+        this.usageHolds.set(account, held);
       } catch (err) {
+        this.unrecordedHolds.set(account, Math.max(this.unrecordedHolds.get(account) ?? 0, usageLimit.resetAt));
         this.log('error', `usage hold until ${until} not recorded: ${(err as Error).message}`);
       }
     }
