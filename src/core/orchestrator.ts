@@ -1096,10 +1096,10 @@ export class Orchestrator {
         commands: job.verify,
         gitleaks: true,
         semgrep: true,
-        ...(this.d.registries ? { registries: this.d.registries } : {}),
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
         ...(untrusted ? { untrusted } : {}),
+        ...(this.d.registries ? { registries: this.d.registries } : {}),
         env: async (config) => (await this.repoVariablesOf(project, config)).env,
         log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
       });
