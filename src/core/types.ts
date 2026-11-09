@@ -195,15 +195,16 @@ export interface EffectResultPayload {
  *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
  * - `clarify.remind` / `clarify.expire`: the reminder of the `clarify` questions still open at 24 h, then the block at
  *   72 h (ORC-210), armed when intake's guard asks them; one of a round answered or left since does nothing.
- * - `usage.reset`: the reset of a subscription's usage limit, armed by a `run.finished` the limit stopped
- *   (`on_usage_limit: wait`, ORC-340): `job` starts again then, on the ticket's session.
+ * - `usage.reset`: the reset of a subscription's usage limit, armed by a question's `run.finished` the limit stopped
+ *   (`on_usage_limit: wait`, ORC-340): `job` is asked again then, as a relaunch of `runId`. A code step waits as a pending
+ *   relaunch instead (ORC-357); its timer, armed by an earlier version, relaunches it the same way.
  */
 export interface TimerPayloads {
   debounce: { job: string; inbox?: true };
   /** `at`: when the questions were asked, which tells this round's timers from an earlier one's (`TicketState.clarify`). */
   'clarify.remind': { linearSessionId?: string; at?: number };
   'clarify.expire': { linearSessionId?: string; at?: number };
-  'usage.reset': { account?: string; job?: string; runId?: string };
+  'usage.reset': { job?: string; runId?: string };
   /** The project's reconciliation (ORC-185), every 5 minutes, on its own pseudo-ticket (`reconcileTicket(project)`). */
   reconcile: Record<string, never>;
 }
@@ -444,7 +445,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -630,10 +631,10 @@ export interface TicketState {
    */
   cutRelaunches?: number[];
   /**
-   * The step the usage limit cut, waiting for its reset (`on_usage_limit: wait`, ORC-340): the `usage.reset` timer resumes it only
-   * while this still names its run. Whatever moves the ticket on ends the wait (`reduce`): `null` then. Absent on a ticket that never waited.
+   * The step the usage limit cut, as a version before ORC-357 recorded it, `null` once the ticket moved on: read only by the `usage.reset`
+   * timer that version armed. A cut step now waits in line as a relaunch, and nothing writes this any more.
    */
-  usageWait?: { runId: string; job: string; logical: LogicalState } | null;
+  usageWait?: { runId: string } | null;
   /** Relaunches at a usage reset of `job` in a row (ORC-340), bounded by `USAGE_RELAUNCHES`; `null` once a run of the step ends without the limit. */
   usageRelaunches?: { job: string; count: number } | null;
   /** Questions asked again at a usage reset in a row (ORC-340), bounded like `usageRelaunches`; `null` once one ends without the limit. */

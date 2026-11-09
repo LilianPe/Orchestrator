@@ -232,7 +232,7 @@ export function isOwnMoveEcho(t: TicketState | undefined, e: FactoryEvent | Inte
 }
 
 /**
- * Whether `event` moved the ticket on, and so ends its wait on the usage limit (ORC-340): its `usage.reset` timer then resumes nothing.
+ * Whether `event` moved the ticket on, and so ends its `clarify` round (ORC-210): its timers then find nothing to do.
  * Only what changes its work: a block, an undelegation or a delegation again, a new code run, a move to another state or a cancel. An event that starts no
  * work (a move recorded to the state it is in, a `work.cancelled` of a failed effect) leaves the wait as it is.
  */
@@ -276,11 +276,10 @@ export function reduce(state: TicketState | undefined, event: FactoryEvent | Int
 }
 
 /**
- * A ticket's waits and what ends each: the usage limit's (ORC-340) and `clarify`'s answers (ORC-210) end when the ticket
- * moves on, their timers then finding nothing to do; the wait on blockers (ORC-363) only on what `endsWait` names.
+ * A ticket's waits and what ends each: `clarify`'s answers (ORC-210) end when the ticket moves on, its timers then finding
+ * nothing to do; the wait on blockers (ORC-363) only on what `endsWait` names.
  */
-const WAITS: ReadonlyArray<readonly ['usageWait' | 'clarify' | 'waitingOn', (state: TicketState, next: TicketState, event: FactoryEvent | InternalEvent) => boolean]> = [
-  ['usageWait', movesOn],
+const WAITS: ReadonlyArray<readonly ['clarify' | 'waitingOn', (state: TicketState, next: TicketState, event: FactoryEvent | InternalEvent) => boolean]> = [
   ['clarify', movesOn],
   ['waitingOn', (_state, _next, event) => endsWait(event)],
 ];
