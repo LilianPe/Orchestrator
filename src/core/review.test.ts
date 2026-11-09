@@ -19,7 +19,9 @@ describe('capDiff (ORC-183)', () => {
     expect(out).toMatch(/more than 60000 characters.*read the changed files in the clone/s);
     expect(out).not.toContain('++++');
     // A reading stopped past the cap: the same.
-    expect(await capDiff(undefined, async () => ' src/a.ts | 2 +-')).toMatch(/more than 60000 characters/);
+    expect(await capDiff(undefined, async () => ' src/a.ts | 2 +-')).toMatch(/more than 60000 characters: read the changed files in the clone/);
+    // A clone without the changes says so (ORC-182).
+    expect(await capDiff(undefined, async () => 'src/a.ts', { past: 'the clone holds none of them' })).toMatch(/characters: the clone holds none of them\./);
   });
 
   it('says when the commit changes nothing against the trunk', async () => {

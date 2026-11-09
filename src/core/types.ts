@@ -448,6 +448,10 @@ export type DecidedEvent =
       patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
+  /** A question the answer agent relays to the agent that implements, into the run inbox (ORC-182). */
+  | { type: 'relay.added'; question: RelayedQuestion }
+  /** The end of the run the relayed questions were handed to (ORC-182): they leave the run inbox, answered or not. */
+  | { type: 'relay.done'; runId: string }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
   | { type: 'work.cancelled' }
   | { type: 'verify.started'; runId: string }
@@ -509,6 +513,8 @@ export type ShellEvent =
   | { type: 'feedback.consumed'; items?: readonly FeedbackItem[] }
   /** The active run is gone without a `run.finished` (launch failure, or a launch cut before its run was written). */
   | { type: 'run.cleared' }
+  /** The relayed questions given to a launch of the ticket session (ORC-182), by the answer agent's runs: its end answers them. */
+  | { type: 'relay.handed'; runIds: readonly string[]; to: string }
   /**
    * What a ticket's run records said, read once, of a branch the mark has not seen yet (ORC-338): `''` when an untrusted
    * worktree run came before the mark existed (its whole branch is read), `null` when none did.
@@ -516,6 +522,15 @@ export type ShellEvent =
   | { type: 'untrusted.read'; since: '' | null };
 
 export type InternalEvent = DecidedEvent | ShellEvent;
+
+/** A question relayed to the agent that implements (ORC-182): the answer agent's run, whose input is the question and whose thread hears the answer. */
+export interface RelayedQuestion {
+  runId: string;
+  /** When the answer agent relayed it. */
+  at: number;
+  /** The implementer's run that was given it. */
+  handedTo?: string;
+}
 
 export interface TicketState {
   projectId: string;
@@ -654,6 +669,12 @@ export interface TicketState {
    * written (`feedback.consumed`), or by a cancellation (ORC-170).
    */
   humanInbox: FeedbackItem[];
+  /**
+   * The questions the answer agent could not answer (ORC-182), by its run, for the agent that implements: handed to its next
+   * launch of the ticket session (`handedTo`, a relaunch of that attempt takes them again), answered at that run's end in the
+   * thread they were asked in. Absent when none waits.
+   */
+  relayed?: RelayedQuestion[];
   priority: number;
   costUsd: number;
   updatedAt: number;

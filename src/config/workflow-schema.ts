@@ -25,6 +25,8 @@ export const rawRuleSchema = z
 
 // No `usd` (ORC-216): a budget counts tokens and turns, `budgets` of factory.yml.
 const rawLimits = z.object({ turns: z.number().int().positive(), duration }).partial();
+/** A job's own: its tokens too, only for a job out of the preset (ORC-182); a step's come from `budgets.per_step_tokens`. */
+const rawJobLimits = rawLimits.extend({ tokens: z.number().int().positive() }).partial();
 
 export const rawJobSchema = z
   .object({
@@ -43,7 +45,11 @@ export const rawJobSchema = z
     repo_checks: z.boolean().optional(),
     verify_failure: z.literal('block').optional(),
     red: z.object({ command: z.string().min(1), mode: z.enum(['measure', 'blocking']) }).partial().strict().optional(),
-    limits: rawLimits.optional(),
+    limits: rawJobLimits.optional(),
+    // A job out of the preset says these itself (ORC-182): a step's job takes them from its step.
+    effort: z.enum(['low', 'medium', 'high']).optional(),
+    network: z.enum(['none', 'claude-api', 'limited', 'full']).optional(),
+    read_only: z.boolean().optional(),
     on_start: z.object({ move: logical.optional() }).strict().optional(),
     on_success: z
       .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis', 'review']).optional(), run: z.string().optional() })
@@ -163,7 +169,7 @@ export interface JobSpec {
   model: string;
   /** The preset step the job runs (`step`, ORC-136), named by its block's comment (ORC-196). Absent from the jobs out of the preset and from versions frozen before it. */
   step?: string;
-  /** `claude --effort`, of the preset step the job names (`step`, ORC-136). Absent from the jobs out of the preset and from versions frozen before it: the CLI's default. */
+  /** `claude --effort`, of the preset step the job names (`step`, ORC-136), or the job's own out of the preset (ORC-182). Absent: the CLI's default. */
   effort?: Effort;
   /**
    * `published`: a fresh clone of the commit the factory published, detached, gone with the run (ORC-183): what an AI review
@@ -176,11 +182,11 @@ export interface JobSpec {
   skill: string;
   /** The angle of an AI review job (ORC-183): correctness and the spec, or security and the tests. Only a job of the `review` step has one. */
   lens?: ReviewLens;
-  /** The network level of the job's preset step (ORC-183), narrowed by the repository's at the launch. Absent from the jobs out of the preset. */
+  /** The network level of the job's preset step (ORC-183), or the job's own out of the preset (ORC-182), narrowed by the repository's at the launch. Absent: the repository's. */
   network?: NetworkLevel;
   /**
    * The built-in tools of the job's preset step when the step is read-only (`stepTools`, ORC-367): `Read`, `Grep` and `Glob`,
-   * refused anything else by the run itself, whatever its skill says. Absent: every tool.
+   * refused anything else by the run itself, whatever its skill says; a job out of the preset by its `read_only` (ORC-182). Absent: every tool.
    */
   tools?: readonly string[];
   input?: InputKind;
