@@ -61,7 +61,7 @@ import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox } from './prompt.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
-import { heldByOther, pendingOf, reduce, samePending } from './reduce.js';
+import { branchAnew, heldByOther, pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
@@ -1208,13 +1208,15 @@ export class Orchestrator {
 
   /**
    * `factory/chemins-interdits` without sandboxes (ORC-338): `checkBranchPaths`, as on the clone, on the worktree's branch read
-   * on the factory's repository against the forge's default branch. As on the clone, what gives no verdict throws, an
-   * infrastructure or config failure the agent is not sent: no worktree, a read that fails, a config the default branch refuses.
+   * on the factory's repository against the default branch: the forge's, fetched, for a marked branch; without a mark, the
+   * repository's as the launch last fetched it, so that a slow forge holds back no ticket that does not need it (ORC-358).
+   * As on the clone, what gives no verdict throws, an infrastructure or config failure the agent is not sent: no worktree,
+   * a read that fails, a config the default branch refuses.
    */
   private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<{ failures: VerifyFailure[]; diffClass: ClassifiedDiff }> {
-    const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd);
-    if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
     const untrusted = await this.untrustedMark(project, t);
+    const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd, { fetch: !!untrusted });
+    if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
     const config = parseRepoConfig(await reader.baseConfig());
     // The class of the diff (ORC-198), read as the clone's.
     const [failures, diffClass] = await Promise.all([checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, config)), classOfBranch(reader, config)]);
@@ -2027,8 +2029,8 @@ export class Orchestrator {
     else {
       try {
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
-        const [mark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
-        const untrusted = mark ? { untrusted: mark } : {};
+        const [untrustedMark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
+        const untrusted = untrustedMark ? { untrusted: untrustedMark } : {};
         const facts = { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
         const described = describePr(c.output, facts);
         // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
@@ -2660,8 +2662,10 @@ export class Orchestrator {
         setUp = true;
         return await lose(t);
       }
-      // The ticket's own worktree only: a review's clone is the run's, gone with it.
-      if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch }));
+      // The ticket's own worktree only: a review's clone is the run's, gone with it. Made anew on the default branch, its
+      // branch holds nothing of the old one's: the old mark and human pushes end (ORC-358).
+      const newBranch = ws.fresh && !ws.ahead && branchAnew(t) !== t;
+      if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch, ...(newBranch ? { newBranch } : {}) }));
       if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move, undefined, state);
       t = await state(this.ticket(project.id, ticketId));
 
@@ -2692,7 +2696,7 @@ export class Orchestrator {
       if (kind === 'feedback') read.push(...forAgent(t.humanInbox).filter((i) => !threadsOf || !i.thread));
       const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.repoPath, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
-      const held = ticketSession ? t.claudeSessionId : undefined;
+      const held = ticketSession && !t.newSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
       const consumes = kind === 'feedback' || stepInbox.length > 0;
