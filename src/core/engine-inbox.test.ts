@@ -383,3 +383,62 @@ describe('ingestedConversation: what learn is given of the ticket instead of rea
     expect(ingestedConversation([refused, kept], new Set(['m-refused'])).map((i) => i.body)).toEqual(['garde le séparateur ;']);
   });
 });
+
+describe('the relay of a question the answer agent cannot answer (ORC-182)', () => {
+  const output = { status: 'done' as const, summary: 'Je ne trouve pas.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [] };
+  const asked = (patch: Record<string, unknown> = {}) =>
+    ev('run.finished', { runId: 'q1', job: 'ask', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { ...output, relay: true }, ...patch }, { at: 5000 });
+  const relayedOf = (d: ReturnType<typeof decide>) => d.events.flatMap((e) => (e.type === 'ticket.patched' && 'relayed' in e.patch ? [e.patch.relayed] : []));
+  const activities = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'activity');
+
+  it('posts its answer, tells the human the question goes to the agent that implements, and keeps it in the run inbox', () => {
+    const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), asked(), workflow);
+    expect(out.effects.map((e) => e.kind)).toEqual(['post_output', 'activity']);
+    expect(activities(out)).toEqual([{ kind: 'activity', type: 'response', body: expect.stringContaining('at the end of its current step'), runId: 'q1' }]);
+    expect(relayedOf(out)).toEqual([[{ runId: 'q1', at: 5000 }]]);
+    // Added to the questions already waiting, never in place of them.
+    const more = decide(ticket({ activeRunId: 'r1', relayed: [{ runId: 'q0', at: 1 }] }), asked(), workflow);
+    expect(relayedOf(more)).toEqual([[{ runId: 'q0', at: 1 }, { runId: 'q1', at: 5000 }]]);
+  });
+
+  it('relays nothing for a ticket no agent implements: not delegated, or delivered', () => {
+    for (const t of [ticket({ delegated: false }), ticket({ prState: 'MERGED', logical: 'done' })]) {
+      const out = decide(t, asked(), workflow);
+      expect(relayedOf(out)).toEqual([]);
+      expect(activities(out)).toEqual([expect.objectContaining({ type: 'response', body: expect.stringContaining('No agent implements this ticket') })]);
+    }
+  });
+
+  it('an answer without relay, or that did not finish, relays nothing', () => {
+    const t = ticket({ activeRunId: 'r1' });
+    expect(relayedOf(decide(t, asked({ output }), workflow))).toEqual([]);
+    expect(relayedOf(decide(t, asked({ outcome: 'failure' }), workflow))).toEqual([]);
+  });
+
+  it("relays the implementer's answer to each question it was handed, where it was asked, then forgets them", () => {
+    const t = ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [{ runId: 'q1', at: 1, handedTo: 'r1' }, { runId: 'q2', at: 2, handedTo: 'r1' }, { runId: 'q3', at: 3 }] });
+    const end = ev('run.finished', { runId: 'r1', job: 'dev-feedback', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { ...output, answers: [{ question: 'q1', answer: 'Le ticket demande du CSV.' }] } });
+    const out = decide(t, end, workflow);
+    expect(activities(out)).toEqual([
+      { kind: 'activity', type: 'response', body: 'The agent that implements answers: Le ticket demande du CSV.', runId: 'q1' },
+      { kind: 'activity', type: 'response', body: expect.stringContaining('without answering your question'), runId: 'q2' },
+    ]);
+    // The one not handed yet waits for the next step.
+    expect(relayedOf(out)).toEqual([[{ runId: 'q3', at: 3 }]]);
+  });
+
+  it('a stopped or failed step answers none of its questions: the humans are told, the questions forgotten', () => {
+    const t = ticket({ activeRunId: 'r1', activeJob: 'dev', relayed: [{ runId: 'q1', at: 1, handedTo: 'r1' }] });
+    for (const outcome of ['stopped', 'failure'] as const) {
+      const out = decide(t, ev('run.finished', { runId: 'r1', job: 'dev', outcome, costUsd: 0, turns: 1, lastText: '' }), workflow);
+      expect(activities(out), outcome).toContainEqual(expect.objectContaining({ runId: 'q1', body: expect.stringContaining('without answering your question') }));
+      expect(relayedOf(out), outcome).toEqual([null]);
+    }
+  });
+
+  it('reduce keeps the run inbox of relayed questions', () => {
+    const relayed = [{ runId: 'q1', at: 1 }];
+    expect(reduce(ticket(), { type: 'ticket.patched', patch: { relayed } } as never)!.relayed).toEqual(relayed);
+    expect(reduce(ticket({ relayed }), { type: 'ticket.patched', patch: { relayed: null } } as never)!.relayed).toBeNull();
+  });
+});

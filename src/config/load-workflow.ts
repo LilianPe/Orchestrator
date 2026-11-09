@@ -5,7 +5,7 @@ import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset, isAgentStep, stepTools, type Effort, type Preset, type Step } from '../presets/preset.js';
+import { compilePreset, isAgentStep, READ_TOOLS, stepTools, type Effort, type Preset, type Step } from '../presets/preset.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -105,7 +105,9 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
   if (raw.on_success?.post === 'review' && name !== 'review') throw new WorkflowError(`jobs.${job}.on_success.post: review publishes the findings of a job of the review step`);
   if (raw.on_blocking && raw.on_success?.post !== 'review') throw new WorkflowError(`jobs.${job}.on_blocking: only the lens that publishes the review (on_success.post: review) answers its blocking findings`);
   if ((name === 'review') !== (raw.workspace === 'published')) throw new WorkflowError(`jobs.${job}.workspace: published is the AI review's, and only a job of the review step has it`);
-  if (name === undefined) return { ...(settings.effort?.default ? { effort: settings.effort.default } : {}), limits: own };
+  if (name === undefined) return ownFields(job, raw, own, settings);
+  for (const k of ['effort', 'network', 'read_only'] as const) if (raw[k] !== undefined) throw new WorkflowError(`jobs.${job}.${k}: a job of the step ${name} takes it from its step`);
+  if (raw.limits?.tokens !== undefined) throw new WorkflowError(`jobs.${job}.limits.tokens: a job of the step ${name} takes it from budgets.per_step_tokens`);
   const step = agentStep(name);
   if (!step) throw new WorkflowError(`jobs.${job}.step: ${name} is not an agent step of ${preset.name}`);
   const tools = stepTools(step);
@@ -117,6 +119,22 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
     ...(tools ? { tools } : {}),
     effort: settings.effort?.perStep?.[name] ?? step.effort,
     limits: { ...own, turns: Math.min(own.turns, step.maxTurns, settings.budgets?.maxTurns?.[name] ?? Infinity), ...(tokens !== undefined ? { tokens } : {}) },
+  };
+}
+
+/**
+ * A job out of the preset (`ask`, `learn`): its own limits, effort and network, factory.yml's default effort for the rest
+ * (ORC-182). `read_only` gives it the read-only steps' tools, only on a clone of its own, as for them; `full` is setup's.
+ */
+function ownFields(job: string, raw: RawJob, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
+  if (raw.network === 'full') throw new WorkflowError(`jobs.${job}.network: full is reserved for setup`);
+  if (raw.read_only && raw.workspace !== 'trunk-readonly') throw new WorkflowError(`jobs.${job}.read_only: a read-only job runs on a clone of its own (trunk-readonly)`);
+  const effort = raw.effort ?? settings.effort?.default;
+  return {
+    ...(effort ? { effort } : {}),
+    ...(raw.network ? { network: raw.network } : {}),
+    ...(raw.read_only ? { tools: READ_TOOLS } : {}),
+    limits: raw.limits?.tokens !== undefined ? { ...own, tokens: raw.limits.tokens } : own,
   };
 }
 

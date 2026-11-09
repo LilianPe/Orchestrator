@@ -168,14 +168,21 @@ jobs:
     lens: security
     on_success: { move: human_review, post: review }
     on_blocking: { run: fix-review }
+  # The answer agent (ORC-182): a question starts it at once in the questions queue, beside the work in flight. It reads the
+  # run's state, its last diff, the transcript of the session at work and the linked tickets; with the Read, Grep and Glob
+  # tools only, on a clone of the trunk, at network claude-api, it writes nothing. What it cannot answer, it relays to the
+  # agent that implements through the run inbox (`submit_result`'s `relay`), at its next step boundary.
   ask:
     queue: questions
     model: sonnet
+    effort: low
+    network: claude-api
+    read_only: true
     workspace: trunk-readonly
     session: new
     skill: "factory:ask"
     input: thread
-    limits: { turns: 30, duration: 5m }
+    limits: { turns: 30, tokens: 200000, duration: 5m }
     on_success: { post: reply }
   learn:
     queue: questions

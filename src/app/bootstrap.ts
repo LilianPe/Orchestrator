@@ -236,6 +236,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       hostChecks: !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1',
       projects,
       packDir,
+      // The answer agent reads the session at work there (ORC-182).
+      transcriptsDir: paths.transcripts,
       settingsPath: writeRunSettings(packDir, o.home),
       ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
       ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),

@@ -439,7 +439,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'relayed'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -494,6 +494,15 @@ export type ShellEvent =
   | { type: 'untrusted.read'; since: '' | null };
 
 export type InternalEvent = DecidedEvent | ShellEvent;
+
+/** A question relayed to the agent that implements (ORC-182): the answer agent's run, whose input is the question and whose thread hears the answer. */
+export interface RelayedQuestion {
+  runId: string;
+  /** When the answer agent relayed it. */
+  at: number;
+  /** The implementer's run that was given it. */
+  handedTo?: string;
+}
 
 export interface TicketState {
   projectId: string;
@@ -622,6 +631,12 @@ export interface TicketState {
    * written (`feedback.consumed`), or by a cancellation (ORC-170).
    */
   humanInbox: FeedbackItem[];
+  /**
+   * The questions the answer agent could not answer (ORC-182), by its run, for the agent that implements: handed to its next
+   * launch of the ticket session (`handedTo`, a relaunch of that attempt takes them again), answered at that run's end in the
+   * thread they were asked in. `null` once all are answered; absent on a ticket that never relayed one.
+   */
+  relayed?: RelayedQuestion[] | null;
   priority: number;
   costUsd: number;
   updatedAt: number;

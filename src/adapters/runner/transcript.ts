@@ -1,9 +1,19 @@
-import { readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Store } from '../../store/types.js';
 
 /** How long a run transcript is kept (ORC-132): the daemon purges older ones. */
 export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** The lines of a run's transcript, a half-written last one included; undefined without a file (never written, or purged). */
+export function transcriptLines(dir: string, runId: string): string[] | undefined {
+  try {
+    return readFileSync(join(dir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`), 'utf8').split('\n').filter(Boolean);
+  } catch {
+    // No file, or the purge removed it meanwhile.
+    return undefined;
+  }
+}
 
 /** What replaces a secret in a transcript; plain text, so a JSON line stays valid. */
 export const MASK = '[masked]';

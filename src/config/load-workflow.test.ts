@@ -76,7 +76,7 @@ on:
     expect(wf.jobs['fix-ci']!.session).toBe('resume');
     expect(wf.jobs['remember']!.workspace).toBe('knowledge');
     // No dollars (ORC-216): a budget is tokens and turns.
-    expect(wf.jobs['ask']!.limits).toEqual({ turns: 30, durationMs: 5 * 60_000 });
+    expect(wf.jobs['ask']!.limits).toEqual({ turns: 30, durationMs: 5 * 60_000, tokens: 200_000 });
     expect(wf.jobs['dev']!.limits.turns).toBe(150);
   });
 
@@ -98,8 +98,26 @@ on:
 
     it('leaves the jobs out of the preset alone: their own limits, no effort', () => {
       const { jobs } = loadWorkflow({ packDir });
-      expect(jobs['ask']!.limits.turns).toBe(30);
-      expect(jobs['ask']).not.toHaveProperty('effort');
+      expect(jobs['learn']!.limits.turns).toBe(40);
+      expect(jobs['learn']).not.toHaveProperty('effort');
+    });
+
+    it('runs the answer agent read-only, at network claude-api, low effort, 30 turns and 200,000 tokens (ORC-182)', () => {
+      const { jobs } = loadWorkflow({ packDir });
+      expect(jobs['ask']).toMatchObject({ queue: 'questions', workspace: 'trunk-readonly', effort: 'low', network: 'claude-api', tools: ['Read', 'Grep', 'Glob'], limits: { turns: 30, tokens: 200_000 } });
+      // Its own effort, not factory.yml's default, which is for the jobs that set none.
+      expect(loadWorkflow({ packDir, settings: { effort: { default: 'high' } } }).jobs['ask']).toMatchObject({ effort: 'low' });
+    });
+
+    it("refuses a job's own effort, network, read_only or tokens on a job of a preset step: the step sets them (ORC-182)", () => {
+      for (const own of ['effort: low', 'network: none', 'read_only: true', 'limits: { tokens: 10 }']) {
+        expect(() => loadWorkflow({ packDir, projectFile: projectFile(`version: 1\njobs:\n  dev: { ${own} }\n`) }), own).toThrow(/jobs\.dev\./);
+      }
+    });
+
+    it('refuses a job of its own at network full, or read-only anywhere but a clone of its own (ORC-182)', () => {
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  ask: { network: full }\n') })).toThrow(/jobs\.ask\.network/);
+      expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  learn: { read_only: true }\n') })).toThrow(/jobs\.learn\.read_only/);
     });
 
     it('asks a submit_result of the build only, until ORC-191 rewrites the other skills', () => {
@@ -136,18 +154,19 @@ on:
       expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\njobs:\n  review-security: { on_blocking: { run: nowhere } }\n') })).toThrow(/jobs\.review-security\.on_blocking\.run/);
     });
 
-    it("gives each job its step's network level, the jobs out of the preset none (ORC-183)", () => {
+    it("gives each job its step's network level, the jobs out of the preset their own or none (ORC-183, ORC-182)", () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['dev']!.network).toBe('limited');
       expect(jobs['dev-feedback']!.network).toBe('limited');
-      expect(jobs['ask']).not.toHaveProperty('network');
+      expect(jobs['ask']!.network).toBe('claude-api');
+      expect(jobs['learn']).not.toHaveProperty('network');
     });
 
     it('gives a read-only step (intake, clarify) and the AI review the read and search tools only; every other job all of them (ORC-367)', () => {
       const { jobs } = loadWorkflow({ packDir });
       expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: ['Read', 'Grep', 'Glob'] });
       for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read', 'Grep', 'Glob']);
-      for (const name of ['dev', 'tests', 'dev-feedback', 'ask', 'learn']) expect(jobs[name], name).not.toHaveProperty('tools');
+      for (const name of ['dev', 'tests', 'dev-feedback', 'learn']) expect(jobs[name], name).not.toHaveProperty('tools');
       // A step that writes no code is not read-only for that: after_merge keeps its shell.
       const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:learn" }\n';
       expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']).not.toHaveProperty('tools');
@@ -196,7 +215,7 @@ on:
       expect(jobs['dev-feedback']).toMatchObject({ effort: 'medium', limits: { turns: 60 } });
       expect(jobs['dev-feedback']!.limits).not.toHaveProperty('tokens');
       // `default` is for what the preset does not set: the jobs out of it.
-      expect(jobs['ask']).toMatchObject({ effort: 'low' });
+      expect(jobs['learn']).toMatchObject({ effort: 'low' });
       expect(jobs['review']).toMatchObject({ effort: 'high' });
     });
 

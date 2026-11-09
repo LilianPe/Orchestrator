@@ -140,6 +140,16 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   throw new Error(`the forge could not be read (git fetch, code ${r.code})`, { cause: failure });
 }
 
+/**
+ * A commit's diff against the trunk, capped (`capDiff`), its external diff drivers and text conversions off. Read up to past
+ * the cap only: a diff that big is given as its changed files, by name.
+ */
+async function trunkDiff(git: CloneGit, trunk: string, head: string): Promise<string> {
+  const range = `${trunk}...${head}`;
+  const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
+  return capDiff(diff, () => git.raw('diff', '--name-only', range));
+}
+
 export class GitWorkspaces implements WorkspaceManager {
   private exec: Exec;
 
@@ -267,12 +277,14 @@ export class GitWorkspaces implements WorkspaceManager {
     if (!req.sha) throw new Error('An AI review needs the published commit, and there is no published commit to review.');
     if (!SHA.test(req.sha)) throw new Error(`Not a commit id: ${req.sha}`);
     const { path, trunk } = await this.runClone(req);
-    const range = `${trunk}...${req.sha}`;
-    const git = gitAt(this.exec, req.repoPath, {});
-    // Read up to past the cap only: a diff that big is given as its changed files, by name.
-    const diff = await git.capped(DIFF_MAX + 1, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', range);
+    const diff = await trunkDiff(gitAt(this.exec, req.repoPath, {}), trunk, req.sha);
     await this.agentRepository(req.repoPath, path, trunk, ['--detach', req.sha]);
-    return { path, diff: await capDiff(diff, () => git.raw('diff', '--name-only', range)) };
+    return { path, diff };
+  }
+
+  async ticketDiff(repoPath: string, path: string): Promise<string | undefined> {
+    const at = await this.worktreeGit(repoPath, path);
+    return at && trunkDiff(at.git, await originHead(this.exec, repoPath), at.head);
   }
 
   private async knowledgeWorkspace(req: WorkspaceRequest): Promise<Workspace> {

@@ -106,11 +106,21 @@ export const agentOutputSchema = z
     fixed: fixedSchema.optional(),
     /** The fix of the review loop (ORC-184): each finding contested, with why; it stays open for the next review. */
     contested: contestedSchema.optional(),
+    /**
+     * The answer agent (ORC-182): what it reads does not answer the question, the agent that implements must. The factory hands
+     * the question over at that agent's next step boundary, through the run inbox; its summary is still posted.
+     */
+    relay: z.boolean().optional(),
+    /** The agent that implements (ORC-182): its answer to each question relayed to it, by the id the prompt gives it. */
+    answers: z.array(z.object({ question: item.min(1), answer: z.string().min(1).max(OUTPUT_LIMITS.field) }).strict()).max(OUTPUT_LIMITS.items).optional(),
   })
   .strict()
   .superRefine((o, ctx) => {
     if (o.status === 'blocked' && !o.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'required when status is blocked' });
     if (o.status === 'done' && o.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'only for a blocked status' });
+    if (o.status !== 'done' && o.relay) ctx.addIssue({ code: 'custom', path: ['relay'], message: 'only for a done status' });
+    const asked = (o.answers ?? []).map((a) => a.question);
+    if (new Set(asked).size !== asked.length) ctx.addIssue({ code: 'custom', path: ['answers'], message: 'each question once' });
     if ((o.reason === 'conflict') !== !!o.conflict) ctx.addIssue({ code: 'custom', path: ['conflict'], message: 'required with reason conflict, and only with it' });
     // One commit per finding fixed (ORC-184): two findings in one commit, or one finding both fixed and contested, are refused.
     const commits = (o.fixed ?? []).map((f) => f.commit);

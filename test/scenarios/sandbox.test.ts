@@ -65,7 +65,7 @@ describe('a disposable sandbox per attempt', () => {
     };
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Une question' });
     await h.send('session.mentioned', { linearSessionId: 'ls-9', body: 'où est calculé le score ?', author: 'L' }, 'REL-2');
-    expect(h.runner.requests.at(-1)).toMatchObject({ readOnly: true });
+    expect(h.runner.requests.at(-1)).toMatchObject({ tools: ['Read', 'Grep', 'Glob'] });
     expect(releasedAtDestroy).toEqual([[]]);
     expect(h.workspaces.released).toEqual([`/tmp/factory-fake/p/_trunk/${h.runner.requests.at(-1)!.runId}`]);
   });

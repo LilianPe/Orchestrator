@@ -45,6 +45,13 @@ export class FakeWorkspaces implements WorkspaceManager {
     return this.heads.get(path);
   }
 
+  /** Each ticket worktree's diff against the trunk, by path, as a test sets it (ORC-182); none by default. */
+  ticketDiffs = new Map<string, string>();
+
+  async ticketDiff(_repoPath: string, path: string): Promise<string | undefined> {
+    return this.ticketDiffs.get(path);
+  }
+
   /**
    * What the commits changed in each worktree, as a test sets it (ORC-123): files at the base and the head by content.
    * Keyed by path, or by `<path>@<base>` for the diff from one base only (the freeze's commit, ORC-131).

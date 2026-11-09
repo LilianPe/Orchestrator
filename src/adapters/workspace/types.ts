@@ -49,6 +49,11 @@ export interface WorkspaceManager {
   remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
   head(path: string): Promise<string | undefined>;
+  /**
+   * A ticket's worktree diff against the trunk, its commits only, capped (`capDiff`): the last diff the answer agent reads
+   * (ORC-182). Read on the factory's repository, as `stepDiff`; none for a path that is no worktree.
+   */
+  ticketDiff(repoPath: string, path: string): Promise<string | undefined>;
   /** What the commits from `base` to a worktree's head changed (ORC-123); none for a path that is no worktree. */
   stepDiff(repoPath: string, path: string, base: string): Promise<StepDiff | undefined>;
   /**

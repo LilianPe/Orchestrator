@@ -1,11 +1,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
-import { TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
+import { TRANSCRIPT_RETENTION_MS, transcriptLines } from '../adapters/runner/transcript.js';
 import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
@@ -150,15 +148,7 @@ function publicRun({ token: _t, ...rest }: RunRecord) {
 export function createApp(d: ServerDeps): Hono {
   const app = new Hono();
 
-  /** The lines of a run's transcript, a half-written last one included; undefined without a file (never written, or purged). */
-  const transcriptLines = (runId: string): string[] | undefined => {
-    try {
-      return readFileSync(join(d.transcriptsDir, `${runId.replace(/[^a-zA-Z0-9_-]/g, '')}.jsonl`), 'utf8').split('\n').filter(Boolean);
-    } catch {
-      // No file, or the purge removed it meanwhile.
-      return undefined;
-    }
-  };
+  const transcriptOf = (runId: string): string[] | undefined => transcriptLines(d.transcriptsDir, runId);
 
   if (d.uiPassword) {
     const password = d.uiPassword;
@@ -346,7 +336,7 @@ export function createApp(d: ServerDeps): Hono {
   );
 
   app.get('/api/runs/:id/transcript', (c) => {
-    const lines = transcriptLines(c.req.param('id'));
+    const lines = transcriptOf(c.req.param('id'));
     if (!lines) return c.notFound();
     const parsed: unknown[] = [];
     for (const l of lines) {
@@ -365,7 +355,7 @@ export function createApp(d: ServerDeps): Hono {
     const run = await d.store.getRun(c.req.param('id'));
     if (!run) return c.notFound();
     const detail = runDetail(run, await d.store.measureFacts(run.projectId, run.ticketId));
-    const lines = transcriptLines(run.id);
+    const lines = transcriptOf(run.id);
     const purged = run.endedAt !== undefined && run.endedAt + TRANSCRIPT_RETENTION_MS <= d.clock.now();
     const transcript = lines ? { status: 'kept', lines: lines.flatMap(parseStreamLine) } : { status: purged ? 'purged' : 'none' };
     return c.json({ ...detail, transcript });
