@@ -57,6 +57,16 @@ describe('standard pack', () => {
     for (const field of ['file', 'line', 'severity', 'explanation', 'suggestion', 'fact']) expect(text).toContain(`\`${field}\``);
   });
 
+  it('the review loop: one commit per finding fixed, or a justified contest, which the next review judges again (ORC-184)', () => {
+    const feedback = readFileSync(join(pack, 'skills/feedback/SKILL.md'), 'utf8');
+    expect(feedback).toContain('Blocking findings to address');
+    expect(feedback).toContain('one commit per finding fixed, never two findings in one commit');
+    for (const field of ['fixed', 'contested', '{ finding, commit }', '{ finding, justification }']) expect(feedback).toContain(`\`${field}\``);
+    const review = readFileSync(join(pack, 'skills/review/SKILL.md'), 'utf8');
+    expect(review).toContain('Contested findings');
+    expect(review).toMatch(/still open: judge each one again on this commit/);
+  });
+
   it('allows the read-only git and CI commands the skills rely on', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.allow).toEqual(

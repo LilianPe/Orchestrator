@@ -56,6 +56,16 @@ export const findingSchema = z
 
 export type Finding = z.infer<typeof findingSchema>;
 
+/** A commit the agent names: a short or full sha. */
+const commitSha = z.string().regex(/^[0-9a-f]{7,40}$/, 'a commit sha (7 to 40 hex characters)');
+
+/**
+ * What the fix of the review loop did with each blocking finding it was given (ORC-184), by its id in the input
+ * (`correctness-1`): fixed by its own commit, or contested with a justification, the finding then staying open for the next review.
+ */
+const fixedSchema = z.array(z.object({ finding: item.min(1), commit: commitSha }).strict()).max(OUTPUT_LIMITS.findings);
+const contestedSchema = z.array(z.object({ finding: item.min(1), justification: z.string().min(1).max(OUTPUT_LIMITS.field) }).strict()).max(OUTPUT_LIMITS.findings);
+
 /**
  * The three conflicts with the default branch the rebase step leaves to a human (ORC-146): the two sides contradict each
  * other, two migrations change the same schema, or the resolution goes beyond the ticket's scope.
@@ -93,12 +103,21 @@ export const agentOutputSchema = z
     intake: intakeAssessmentSchema.optional(),
     /** A review lens's findings (ORC-183), an empty list when it found nothing: the factory publishes them, never its summary alone. */
     findings: z.array(findingSchema).max(OUTPUT_LIMITS.findings).optional(),
+    /** The fix of the review loop (ORC-184): each finding fixed, with the one commit that fixes it. */
+    fixed: fixedSchema.optional(),
+    /** The fix of the review loop (ORC-184): each finding contested, with why; it stays open for the next review. */
+    contested: contestedSchema.optional(),
   })
   .strict()
   .superRefine((o, ctx) => {
     if (o.status === 'blocked' && !o.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'required when status is blocked' });
     if (o.status === 'done' && o.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'only for a blocked status' });
     if ((o.reason === 'conflict') !== !!o.conflict) ctx.addIssue({ code: 'custom', path: ['conflict'], message: 'required with reason conflict, and only with it' });
+    // One commit per finding fixed (ORC-184): two findings in one commit, or one finding both fixed and contested, are refused.
+    const commits = (o.fixed ?? []).map((f) => f.commit);
+    if (commits.some((c, i) => commits.findIndex((d) => d.startsWith(c) || c.startsWith(d)) !== i)) ctx.addIssue({ code: 'custom', path: ['fixed'], message: 'one commit per finding: each fixed finding names its own commit' });
+    const ids = [...(o.fixed ?? []), ...(o.contested ?? [])].map((f) => f.finding);
+    if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['contested'], message: 'each finding once, fixed or contested' });
   });
 
 export type AgentOutput = z.infer<typeof agentOutputSchema>;

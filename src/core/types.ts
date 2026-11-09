@@ -4,6 +4,7 @@ import type { BlockKind } from './block-cause.js';
 import type { StoredEvent } from './upcast.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
+import type { ReviewLens } from '../config/workflow-schema.js';
 
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done'] as const;
 export type LogicalState = (typeof LOGICAL_STATES)[number];
@@ -76,9 +77,15 @@ export type Stagnation =
   | { kind: 'loop'; command: string; failure: string; tree: string; count: number }
   | { kind: 'silent'; silentMs: number };
 
-/** `diff`: the published commit's diff an AI review reads (ORC-183). */
-export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'diff';
+/**
+ * `diff`: the published commit's diff an AI review reads (ORC-183). `findings`: the blocking findings of the last AI review,
+ * which the fix of the review loop reads, with the PR's unresolved threads (ORC-184).
+ */
+export type InputKind = 'feedback' | 'ci_failures' | 'thread' | 'verify_failures' | 'diff' | 'findings';
 export type QueueName = 'dev' | 'questions';
+
+/** A finding of the AI review the fix contests (ORC-184): its id in the fix's input (`correctness-1`), and why it does not apply. */
+export type ContestedFinding = NonNullable<AgentOutput['contested']>[number];
 
 /** What a human message asks for (ORC-180), classified at its arrival and journaled with it. */
 export type MessageKind = 'question' | 'instruction' | 'command';
@@ -414,7 +421,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewSha'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'awaitingRepo' | 'owedMove' | 'usageWait' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'reuse' | 'clarify' | 'decisions' | 'waitingOn' | 'reviewSha' | 'reviewBlocking' | 'contested'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** The ticket's dev work is stopped: nothing pending, no verification awaited. */
@@ -546,11 +553,21 @@ export interface TicketState {
    */
   awaitingRepo?: string[] | null;
   /**
-   * Runs started by red CI (`pr.checks_failed`) or by a conflict with the default branch (`pr.conflicted`, ORC-146) since
-   * the last green CI or human relaunch, bounded by `limits.ciFixAttempts` (I5, ORC-270). The AI review loop does not share it
-   * yet (ORC-184, ORC-187).
+   * Rounds of the review and CI loop of the run, bounded by `limits.ciFixAttempts` (the preset's `review_ci`, I5): runs started
+   * by red CI (`pr.checks_failed`, ORC-270), by a conflict with the default branch (`pr.conflicted`, ORC-146) and by an AI
+   * review with a blocking finding (ORC-184). One count per run: a human relaunch or another PR starts it over, a green CI does not.
    */
   ciFixAttempts: number;
+  /**
+   * The blocking findings each AI review lens kept on the published commit `sha` (ORC-184), counted by lens: the lens that
+   * publishes reads their sum. Absent on a ticket never reviewed since ORC-184.
+   */
+  reviewBlocking?: { sha: string; counts: Partial<Record<ReviewLens, number>> };
+  /**
+   * The findings of the review on `sha` the fix of the review loop contested, with its justification (ORC-184): they stay open,
+   * and the next review's lenses read them. `null` once that review has published; absent when none was contested.
+   */
+  contested?: { sha: string; items: ContestedFinding[] } | null;
   /** Relaunches of an expired lease since an attempt last ended or a human relaunched (ORC-220). Absent before it. */
   leaseRelaunches?: number;
   /**

@@ -41,6 +41,7 @@ const HEADINGS: Record<InputKind, string> = {
   verify_failures: 'Failed checks',
   thread: 'Message',
   diff: 'Diff to review',
+  findings: 'Blocking findings to address',
 };
 
 const CONVERSATION_HEADING = 'What the factory received on this ticket';

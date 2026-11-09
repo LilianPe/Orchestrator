@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Finding } from './agent-output.js';
-import { capDiff, DIFF_MAX, inlineComment, onItsLine, reviewBody, reviewVerdict, type ReviewFinding } from './review.js';
+import { blockingFindings, capDiff, contestedInput, DIFF_MAX, findingsInput, inlineComment, onItsLine, reviewBody, reviewVerdict, type ReviewFinding } from './review.js';
 
 const finding = (patch: Partial<ReviewFinding> = {}): ReviewFinding => ({
   file: 'src/auth.ts', line: 12, severity: 'blocking', explanation: 'The token is compared with ==.', suggestion: 'Use timingSafeEqual.', lens: 'security', runId: 'r2', ...patch,
@@ -87,5 +87,36 @@ describe('the texts of the review (ORC-183)', () => {
   it('takes the findings of the schema unchanged', () => {
     const f: Finding = { file: 'a', line: 1, severity: 'minor', explanation: 'e', suggestion: 's' };
     expect(inlineComment({ ...f, lens: 'correctness', runId: 'r' })).toContain('**Minor**');
+  });
+});
+
+describe('the inputs of the review loop (ORC-184)', () => {
+  const kept: ReviewFinding[] = [
+    finding({ lens: 'correctness', file: 'src/export.ts', line: 7, explanation: 'Header written twice.' }),
+    finding({ lens: 'correctness', severity: 'minor', line: 3 }),
+    finding({ lens: 'correctness', file: 'src/list.ts', line: 9, explanation: 'Off by one.', suggestion: '' }),
+    finding(),
+  ];
+
+  it('names each blocking finding by its lens and its rank among that lens\'s blocking ones', () => {
+    expect(blockingFindings(kept).map((f) => [f.id, f.file])).toEqual([['correctness-1', 'src/export.ts'], ['correctness-2', 'src/list.ts'], ['security-1', 'src/auth.ts']]);
+  });
+
+  it('criterion 1: gives the fix each finding under its id, and asks one commit per finding fixed or a contest', () => {
+    const text = findingsInput('0123456789abcdef', blockingFindings(kept));
+    expect(text).toContain('The AI review of `0123456789ab` left 3 blocking findings.');
+    expect(text).toContain('### correctness-1 · `src/export.ts:7`\nHeader written twice.\n**Suggestion**: Use timingSafeEqual.');
+    expect(text).toContain('### correctness-2 · `src/list.ts:9`\nOff by one.\n\n');
+    expect(text).toContain('in a commit of its own');
+    expect(text).toContain('`fixed`, with the commit that fixes it, or in `contested`');
+    expect(findingsInput('0123456789abcdef', [])).toMatch(/^No blocking finding is kept/);
+  });
+
+  it('criterion 2: gives the next lens the contested findings, still open, with their justification; an unknown id is left out', () => {
+    const text = contestedInput(kept, [{ finding: 'security-1', justification: 'The token is hashed first.' }, { finding: 'security-9', justification: 'Gone.' }])!;
+    expect(text).toContain('Each one is still open');
+    expect(text).toContain('### security-1 · `src/auth.ts:12`\nThe token is compared with ==.\n**Suggestion**: Use timingSafeEqual.\n**Contested by the implementer**: The token is hashed first.');
+    expect(text).not.toContain('Gone.');
+    expect(contestedInput(kept, [{ finding: 'security-9', justification: 'Gone.' }])).toBeUndefined();
   });
 });

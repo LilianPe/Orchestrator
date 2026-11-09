@@ -183,7 +183,7 @@ describe('standard workflow', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
 
-  it('red CI relaunches fix-ci up to limits.ci_fix_attempts, then blocks; a green CI resets the count (ORC-270)', async () => {
+  it('CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run; a green CI keeps the count (ORC-270, ORC-184 criterion 7)', async () => {
     const h = createHarness({ projectYaml: 'version: 1\non:\n  label.changed:\n    - { label: relance, run: dev-feedback }\n' });
     await delegatedAndInReview(h);
     const red = { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv', failures: ['test'] };
@@ -198,13 +198,13 @@ describe('standard workflow', () => {
     expect(h.tracker.comments('REL-1').at(-1)).toContain('- `test`');
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(2);
-    // The human relaunches: a new budget, and a green CI resets it too.
+    // The human relaunches: a new budget; a green CI keeps it, one count per run (ORC-184).
     await h.send('label.changed', { label: 'relance', change: 'added' });
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(3);
     await h.send('pr.checks_passed', { number: 7, url: red.url, branch: red.branch });
-    expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
+    expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 1 });
   });
 
   it('criterion 7: a stop request stops the running session and blocks', async () => {
