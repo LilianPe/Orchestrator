@@ -26,7 +26,7 @@ Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze
 | `verify` fails → `build` (or `verify_fix` → `fix`) | `verify` | 3 | Blocked |
 | AI review or red CI → `fix` | `review_ci` | 2, a single counter per run | Blocked |
 | Conflict with the default branch → `rebase` (ORC-146) | `review_ci`, the same | 2, shared with red CI | Blocked, cause « conflict » |
-| Human feedback → `fix` | `human_review` | 3, separate from AI rounds | Blocked |
+| Human feedback → `fix` | `human_review` | 3, separate from AI rounds | Blocked ([below](#human-review-feedback-orc-190)) |
 | Same command, same failure, diff unchanged | `sameFailure` | 3 | Blocked, cause « boucle » (loop): between two `verify` runs and during the attempt ([stagnation](#attempt-stagnation-orc-136)) |
 | Nothing written to the attempt's stream | `silentRun` | 30 min | Blocked ([stagnation](#attempt-stagnation-orc-136)) |
 
@@ -65,8 +65,9 @@ The network level is chosen per repository (Limited by default); a step can only
 | `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 runs per run of the ticket between `fix-ci` on red CI, `rebase` on a conflict (ORC-146) and `fix-review` on a blocking finding of the AI review (ORC-184); the next red CI, conflict or review that still finds blocks |
 | `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Loop » |
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
+| `counters.human_review` (3) | `limits.humanReviewRounds` = 3 | 3 rounds of human review feedback (`fix-human`, the job with `counter: human_review`, ORC-190), apart from `ciFixAttempts`; the 4th feedback blocks |
 
-`verify_attempts` and `ci_fix_attempts` in `workflow.yml` still override the first two, until the YAML is removed (ORC-177).
+`verify_attempts`, `ci_fix_attempts` and `human_review_rounds` in `workflow.yml` still override them, until the YAML is removed (ORC-177).
 
 ## Resuming the blocked step (ORC-196)
 
@@ -116,6 +117,9 @@ The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the reposit
 | `complete` | whether a developer can build it without asking anything |
 | `missing` | the questions to answer: at least one when not complete, at most 3; each `{ question, options }` (2 to 5 hypotheses), or a bare question when the agent sees none (ORC-210) |
 | `screen` | whether the ticket changes something a user sees |
+| `duplicates` | optional, at most 3: the work in progress elsewhere that does the same, each its link and why ([below](#duplicates-existing-code-and-scope-orc-207)) |
+| `reuse` | optional, at most 10: existing code close to the request (`path`, `symbol`, why), given to `build` |
+| `scope` | optional: `refuse`, why the ticket is out of scope, and `split`, the sub-tickets proposed (a title and a summary each, at most 5) |
 
 Before the ticket's first run (no Claude session yet), the factory runs the deterministic checks of `tracker.pickup.checks` (`src/core/pickup.ts`) and journals the failed ones with the attempt's end (`pickup` of `run.finished`): they no longer block on their own, they are inputs of the guard.
 
@@ -129,7 +133,7 @@ A new run starts again from its own level (ORC-365). A delegation whose decision
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
 `intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
 
@@ -144,7 +148,18 @@ The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer
 
 **The resume comes from the reconciliation**, every 5 minutes ([Linear](linear.md)): it reads each waiting ticket's relations again and, when none is open (blockers done, or a relation taken off), sends `blockers.done`; `decide` makes the start it waited for, and the session hears it, unless a human moved the ticket meanwhile out of Todo and In Progress: then the wait only ends. Not a webhook: the blocker's move to Done comes on another issue, maybe of a team the factory does not follow, and a relation taken off sends no webhook the factory reads; the reconciliation already reads these tickets each pass, so the wait costs no extra call. The price is up to 5 minutes before the resume. `dev` reads the blockers again at its launch: one reopened meanwhile makes it wait again.
 
-**Not yet**: the duplicate, existing code and scope checks, and `not_started` with them (ORC-207); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254). Each job runs at its step's network level narrowed by the repository's (ORC-183): `limited` for intake as for the build, `claude-api` for the review.
+### Duplicates, existing code and scope (ORC-207)
+
+At the launch of `intake`, before its first run, the factory searches for duplicates through the adapters: every open PR of the repository, the most recently updated first, with its first 30 files and their count (the [forge port](ports/forge.md), GraphQL, every page: a list of PRs it cannot read to its end fails the launch, never reads as « no duplicate »), the 100 most recently committed branches but the default one, and the tickets of the team the tracker finds close to the title (`Tracker.search`, its 10 best matches: a ranking, not a list). Then:
+
+- **The ticket's own work** (a `factory/<id>-…` branch, every page of them, named by its open PR when it has one) is a certain duplicate, found without judgement: a failed check, with its link, journaled in `pickup` of `run.finished`. It is the `not_started` check, absorbed into the search: it runs when `pickup.checks` lists it (the pack does), at intake's launch or at a `pickup: true` job's without intake. A PR from a fork names a branch of another repository: it is never the ticket's own, and hides no branch.
+- **The rest** goes to intake as data, in a « Work in progress elsewhere » section of its prompt: the open PRs with their files (30 per PR), the close tickets, then the recent branches without an open PR, capped at 12,000 characters in that order, what is cut counted. Intake judges which is a probable duplicate (same files or same subject, for the same purpose) and names it in `duplicates`.
+- **Existing code**: intake names the functions and modules close to the request in `reuse`. The ticket keeps the last assessment's (`reuse` of its state); `build` gets them in an « Existing code to reuse » section of its prompt.
+- **Scope**: a ticket of performance, of architecture or a large refactor is refused in `scope.refuse`, with the sub-tickets intake proposes in `scope.split`. The factory creates none in Linear and starts none.
+
+A probable duplicate and a refusal of scope are inputs of the guard, as a failed check: they go to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)) as one question that names each with its link, or the explanation and the split, and asks the human to confirm or lift them. Never a silent drop: once answered, intake reads the ticket again with the answer.
+
+**Not yet**: creating the proposed sub-tickets in Linear, not delegated (the ticket leaves it open: refusing with the split in a question is its other branch); handing intake's understanding to `build`, after which `factory:dev`'s « Understand » section can shrink (ORC-254). Each job runs at its step's network level narrowed by the repository's (ORC-183): `limited` for intake as for the build, `claude-api` for the review.
 
 ## `clarify`: questions, reminder and expiry (ORC-210)
 
@@ -222,7 +237,19 @@ Both flag over-engineering (an abstraction with one user, code outside the ticke
 
 **What the factory publishes.** Each lens's findings are kept in the `findings` table, by ticket, commit and lens, a lens run again on the same commit replacing its own. At the end of `review-security` (`on_success.post: review`), every lens's findings on that commit go out as one GitHub review on the PR (a comment, it neither approves nor requests changes), each blocking or minor finding a comment on its line, the out-of-scope ones (on code the diff does not change) listed in the review's text; when GitHub cannot place one (a line the diff does not show), all of them are listed there instead, shortened if they would not fit in one text. The texts are vetted together, one secret scan for them all. Then the `factory/review` check on the commit: failed while a blocking finding stands, green otherwise, its title the count (« 1 blocking finding, 2 minor, 0 out of scope »). Every text goes through the `OutputPolicy`: a refused one is replaced by its notice, its place kept. Nothing goes to Linear. Then the move to Human Review, which records the reviewed commit as before. A review that fails to go out is retried by the outbox; a dead one blocks the ticket, and the move waits.
 
-**Not yet.** A commit `dev-feedback` publishes (human feedback, a reply) gets no review of its own: a human moves the ticket to AI Review to have it reviewed again (ORC-190). A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
+**Not yet.** A commit `dev-feedback` publishes (a reply to a block) gets no review of its own: a human moves the ticket to AI Review to have it reviewed again. Human review feedback does go back through the review (`fix-human`, [below](#human-review-feedback-orc-190)). A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
+
+## Human review feedback (ORC-190)
+
+```
+human_review (gate) → feedback? [ fix → verify_fix → publish → AI review → human_review ]   ≤ 3 rounds
+```
+
+**What starts a round.** In Human Review, a reply in the ticket's session, or a review written on the open PR (`pr.reviewed`, from the GitHub webhook). Nobody moves the ticket: the move from Human Review back to In Progress starts nothing any more. A review must carry words and not be an approval (an approval, or a review with no text, asks for nothing), and its author must have write access to the repository: the matrix checks the GitHub login that signed the webhook (`review_feedback`, `github:<login>`); a refusal is only journaled and logged, never written in the ticket, since a stranger can comment on a public repository's PR. A review whose author was not resolved is not read at all; a ticket frozen on a version before ORC-190 only journals reviews, as it did. The feedback is kept in `humanInbox`, untrusted for a review (I12), and grouped for 3 minutes like any reply. Out of Human Review a review starts nothing: during other work (a fix running, the AI review) it waits for that work's end, which hands it over (`handOver`), else for the next step's launch. A round armed in Human Review does not start once the ticket left it (moved to Done or back to In Progress). A blocked ticket keeps a review in its inbox; only a reply in Linear relaunches.
+
+**The fix.** `fix-human` (step `fix`, skill `factory:feedback`) resumes the ticket's session in its worktree, on the same branch and PR. Its input is the feedback: the session's messages, the reviews' text, and the PR's unresolved review threads, read from GitHub at the launch (an inline comment is read in its thread, not as the inbox kept it, so a thread resolved meanwhile is not sent). Then `verify_fix`, `publish`, both lenses of the AI review and Human Review again, never straight back. The feedback counts as blocking: the review that follows decides on the new commit, and its own blocking findings take the review loop below.
+
+**Counted.** Each start of `fix-human` is a round (`humanReviewRounds` of the ticket, `limits.humanReviewRounds`), apart from `review_ci`: a relaunch after a cut and a return of `verify_fix` are no new round. With 3 rounds started, the next feedback blocks the ticket (kind `limit`, step `fix`) instead of starting `fix-human`, its feedback kept; a reply relaunches `fix-human` on it and gives the rounds back, as a human relaunch gives every bound back. Another PR starts them over too. A human who writes feedback starts work: the count of `review_ci` starts over with it (ORC-184's rule), so each human round gets the review loop's two rounds again.
 
 ## The review → fix loop (ORC-184)
 

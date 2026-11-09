@@ -99,7 +99,7 @@ describe('intake, the first step (ORC-206)', () => {
     h.runner.enqueue(assessment(), DEV);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     // The dev run published its branch; the ticket goes back to In Progress and is delegated again.
-    h.workspaces.remoteBranches.add('factory/rel-1-export-csv');
+    h.forge.branchNames.push('factory/rel-1-export-csv');
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
     await h.orch.drained();
     const before = h.runner.requests.length;

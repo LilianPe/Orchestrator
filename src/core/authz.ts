@@ -15,7 +15,14 @@ export type Role = (typeof ROLES)[number];
 /** Who the actor is to the ticket, read from the ticket itself: the requester is who delegated it (its run's initiator). */
 export type Relation = 'requester';
 
-export const AUTHZ_ACTIONS = ['trigger', 'answer_clarify', 'validate_spec', 'refreeze', 'relaunch_blocked', 'done_merge', 'pause_run', 'stop_run', 'take_over'] as const;
+/**
+ * The signed actor of a GitHub event (ORC-190): the login of the webhook's sender, prefixed so that it never reads as a Linear id.
+ * `githubLogin` reads it back, undefined for any other actor.
+ */
+export const githubActor = (login: string): string => `github:${login}`;
+export const githubLogin = (actor: string): string | undefined => (actor.startsWith('github:') ? actor.slice('github:'.length) : undefined);
+
+export const AUTHZ_ACTIONS = ['trigger', 'answer_clarify', 'validate_spec', 'refreeze', 'relaunch_blocked', 'done_merge', 'review_feedback', 'pause_run', 'stop_run', 'take_over'] as const;
 export type AuthzAction = (typeof AUTHZ_ACTIONS)[number];
 
 /** `linear`: the issue (delegation, mention, label, status); `linear_session`: a reply in an agent session; `pr`: the pull request; `dashboard`: a run's inspection (ORC-301). */
@@ -80,6 +87,13 @@ export const DEFAULT_MATRIX: AuthzMatrix = {
     channels: ['linear'],
     what: 'moving the ticket to Done (merge)',
     who: 'humans with GitHub merge rights on the repository',
+  },
+  // A review written on the PR (ORC-190): signed by its GitHub login (`github:<login>`), whose rights on the repository say who it is.
+  review_feedback: {
+    anyOf: [['repo_writer']],
+    channels: ['pr'],
+    what: 'sending review feedback to the agent on the PR',
+    who: 'humans with write access to the repository',
   },
   // A run's inspection (ORC-301). Stopping from Linear (`agent:stop`, removing the delegation) stays outside the matrix.
   pause_run: dashboardRow('pausing a run'),

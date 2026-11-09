@@ -83,7 +83,9 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     const h = createHarness();
     await inReview(h);
     h.runner.enqueue({ hold: true }, { output: DONE });
-    await h.send('status.changed', { from: 'human_review', to: 'dev' });
+    // Human feedback in Human Review: its fix after the debounce (ORC-190).
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Rename the column.', author: 'L', kind: 'instruction' });
+    await h.advance(180_000);
     const feedback = (await h.ticket()).activeRunId!;
     expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
 

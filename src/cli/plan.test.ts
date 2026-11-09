@@ -44,4 +44,14 @@ describe('plan', () => {
     ]);
     expect(formatPlan(rows)).toContain('REL-3  not taken  Flou — The description is shorter than 30 characters.');
   });
+
+  it('previews not_started on git, the daemon reading it on the forge (ORC-207)', async () => {
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'a' });
+    const workspaces = new FakeWorkspaces();
+    workspaces.remoteBranches.add('factory/rel-1-old');
+    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
+    expect(rows.map((r) => [r.status, r.reasons])).toEqual([['not taken', ['A branch factory/rel-1-… already exists on origin.']]]);
+  });
 });
