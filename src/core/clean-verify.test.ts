@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { copyPythonRepo, pythonRepoFiles } from '../../test/helpers/python-repo.js';
 import { FakeShooter } from '../adapters/browser/fake.js';
 import type { ShootRequest, VisualShooter } from '../adapters/browser/types.js';
@@ -136,6 +136,11 @@ function setup(over: Partial<CleanVerifyRequest> = {}, config?: string, baseFile
   return { base, origin, repo, workDir, sandboxes, req, logs };
 }
 
+// A test that moves the clock past the cap (ORC-348) leaves it as it found it.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('runCleanVerify', () => {
   it('runs the commands at network none, in a sandbox on a clone of the frozen SHA, not on the worktree', async () => {
     const { repo, sandboxes, req } = setup();
@@ -195,12 +200,8 @@ describe('runCleanVerify', () => {
       vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
       return { stdout: 'part', stderr: '', code: 124 };
     };
-    try {
-      const res = await runCleanVerify(req);
-      expect(res.failures).toEqual([{ command: 'slow', exitCode: null, output: 'part' }]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const res = await runCleanVerify(req);
+    expect(res.failures).toEqual([{ command: 'slow', exitCode: null, output: 'part' }]);
   });
 
   it("a command that outlived its cap's TERM, killed after it (137), fails with no exit code too (ORC-348)", async () => {
@@ -209,11 +210,7 @@ describe('runCleanVerify', () => {
       vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
       return { stdout: 'part', stderr: '', code: 137 };
     };
-    try {
-      expect((await runCleanVerify(req)).failures).toEqual([{ command: 'stubborn', exitCode: null, output: 'part' }]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect((await runCleanVerify(req)).failures).toEqual([{ command: 'stubborn', exitCode: null, output: 'part' }]);
   });
 
   it('a command that exits 124 itself, before its cap, keeps its exit code (ORC-348)', async () => {

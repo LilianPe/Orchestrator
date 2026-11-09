@@ -70,12 +70,12 @@ export function cappedCommand(command: string, seconds = VERIFY_TIMEOUT_MS / 100
 }
 
 /**
- * The exit of a capped command started at `startedAt`, `null` when it met its cap (ORC-348), as the factory's own clock
+ * The exit of a command started at `startedAt` under the default cap (`cappedCommand`, `verifyCommand`), `null` when it met it (ORC-348), as the factory's own clock
  * tells it: a failure once the cap has passed, 124 or the 137 of a command killed after ignoring the TERM (`timeout -k`).
  * Before it, any code is the command's, a 124 of its own included.
  */
-export function cappedExit(code: number, startedAt: number, seconds = VERIFY_TIMEOUT_MS / 1000): number | null {
-  return code !== 0 && Date.now() - startedAt >= seconds * 1000 ? null : code;
+export function cappedExit(code: number, startedAt: number): number | null {
+  return code !== 0 && Date.now() - startedAt >= VERIFY_TIMEOUT_MS ? null : code;
 }
 
 export const runVerify: Verifier = async (cwd, commands, timeoutMs = VERIFY_TIMEOUT_MS, env = {}, warn) => {

@@ -4,6 +4,7 @@ import { basename, dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { EgressProxy } from '../../network/proxy.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../exec.js';
+import { isRecord } from '../graphql-pages.js';
 import {
   SANDBOX_HOME,
   WORKSPACE_TARGET,
@@ -74,7 +75,7 @@ export async function podmanCli(exec: Exec, cli: string): Promise<boolean> {
   } catch {
     // Said below.
   }
-  if (typeof client !== 'object' || client === null) throw execFailure(cli, args, r);
+  if (!isRecord(client)) throw execFailure(cli, args, r);
   return 'OsArch' in client;
 }
 

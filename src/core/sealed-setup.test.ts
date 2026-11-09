@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import { POSTGRES_DUMP, RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
@@ -108,6 +108,11 @@ describe('setupEnv', () => {
   });
 });
 
+// A test that moves the clock past the cap (ORC-348) leaves it as it found it.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('runSealedSetup', () => {
   const request = (workspacePath: string, over: Partial<Parameters<typeof runSealedSetup>[1]> = {}) => ({
     runId: 'r1',
@@ -184,11 +189,7 @@ describe('runSealedSetup', () => {
       if (argv[0] === 'timeout') vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
       return { stdout: '', stderr: '', code: argv[0] === 'timeout' ? 124 : 0 };
     };
-    try {
-      await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (timed out after 15 min)');
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(runSealedSetup(sandboxes, request(tree({})))).rejects.toThrow('npm ci (timed out after 15 min)');
   });
 
   it('a command that exits 124 itself, before its cap, fails as itself, not as a timeout (ORC-348)', async () => {
