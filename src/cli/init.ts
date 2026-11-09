@@ -20,11 +20,51 @@ export interface InitDeps {
   exec: Exec;
 }
 
-function detectVerify(repo: string): string[] {
+/** What `init` proposes for a repository: its install, its checks, and the test command the red check appends the new tests to. */
+interface Detected {
+  setup: string[];
+  verify: string[];
+  red?: string;
+}
+
+/**
+ * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has. pnpm
+ * hands a `--` to the script as it is (`vitest run -- x.test.ts` filters nothing, measured on pnpm 10.20): its red
+ * command has none.
+ */
+function detectNode(repo: string): Detected {
   const pkgFile = join(repo, 'package.json');
-  if (!existsSync(pkgFile)) return [];
+  if (!existsSync(pkgFile)) return { setup: [], verify: [] };
   const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
-  return ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `npm ${s === 'test' ? 'test' : `run ${s}`}`);
+  const npmLock = existsSync(join(repo, 'package-lock.json'));
+  const pnpm = !npmLock && existsSync(join(repo, 'pnpm-lock.yaml'));
+  const pm = pnpm ? 'pnpm' : 'npm';
+  const setup = pnpm ? ['pnpm install --frozen-lockfile'] : npmLock ? ['npm ci'] : [];
+  const verify = ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `${pm} ${s === 'test' ? 'test' : `run ${s}`}`);
+  return { setup, verify, red: scripts.test ? (pnpm ? 'pnpm test' : 'npm test --') : undefined };
+}
+
+/**
+ * uv (ORC-172), on its lockfile only, and every command `--frozen`: `uv run` alone locks again first, and drops a lockfile
+ * made under `exclude-newer` (the setup's age cap, which verify does not set) or one the agent's `pyproject.toml` no
+ * longer matches; without the network, it fails (measured on uv 0.13.7). A plain `uv sync` rewrites it too
+ * (docs/repository-configuration.md).
+ */
+function detectPython(repo: string): Detected {
+  if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], verify: [] };
+  return { setup: ['uv sync --frozen'], verify: ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'], red: 'uv run --frozen pytest' };
+}
+
+/** Both when the repository has both: the red check runs one command, Node's, and `init` says what it leaves out. */
+function detect(repo: string): Detected & { note?: string } {
+  const node = detectNode(repo);
+  const python = detectPython(repo);
+  return {
+    setup: [...node.setup, ...python.setup],
+    verify: [...node.verify, ...python.verify],
+    red: node.red ?? python.red,
+    note: node.red && python.red ? `The red check runs "${node.red}": the Python tests a tests step adds are not checked red (jobs.tests.red takes one command).` : undefined,
+  };
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
@@ -90,12 +130,12 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   const wfFile = join(repoPath, '.factory/workflow.yml');
   if (!existsSync(wfFile)) {
-    const detected = detectVerify(repoPath);
+    const { setup, verify: detected, red, note } = detect(repoPath);
+    if (note) io.print(note);
     const verify = (await io.ask('Verification commands after each run (separated by ;)', detected.join('; ')))
       .split(';')
       .map((s) => s.trim())
       .filter(Boolean);
-    const setup = existsSync(join(repoPath, 'package-lock.json')) ? ['npm ci'] : [];
     mkdirSync(join(repoPath, '.factory'), { recursive: true });
     writeFileSync(
       wfFile,
@@ -110,6 +150,7 @@ export async function runInit(d: InitDeps): Promise<void> {
         'jobs:',
         '  dev:',
         `    verify: ${JSON.stringify(verify)}`,
+        ...(red ? ['  tests:', `    red: ${JSON.stringify({ command: red })}`] : []),
         '',
       ].join('\n'),
     );
