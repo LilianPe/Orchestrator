@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { copyPythonRepo, pythonRepoFiles } from '../../test/helpers/python-repo.js';
 import { FakeShooter } from '../adapters/browser/fake.js';
 import type { ShootRequest, VisualShooter } from '../adapters/browser/types.js';
@@ -17,6 +17,7 @@ import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
 import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
+import { VERIFY_TIMEOUT_MS } from './verify.js';
 
 const BRANCH = 'factory/orc-1-x';
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -135,6 +136,11 @@ function setup(over: Partial<CleanVerifyRequest> = {}, config?: string, baseFile
   return { base, origin, repo, workDir, sandboxes, req, logs };
 }
 
+// A test that moves the clock past the cap (ORC-348) leaves it as it found it.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('runCleanVerify', () => {
   it('runs the commands at network none, in a sandbox on a clone of the frozen SHA, not on the worktree', async () => {
     const { repo, sandboxes, req } = setup();
@@ -189,9 +195,29 @@ describe('runCleanVerify', () => {
 
   it("a command over its cap fails with no exit code, as the host's did", async () => {
     const { sandboxes, req } = setup({ commands: ['slow'] });
-    sandboxes.answer = () => ({ stdout: 'part', stderr: '', code: 124 });
+    // The factory's clock past the cap while the command runs: an expiry, as the factory sees one (ORC-348).
+    sandboxes.answer = () => {
+      vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
+      return { stdout: 'part', stderr: '', code: 124 };
+    };
     const res = await runCleanVerify(req);
     expect(res.failures).toEqual([{ command: 'slow', exitCode: null, output: 'part' }]);
+  });
+
+  it("a command that outlived its cap's TERM, killed after it (137), fails with no exit code too (ORC-348)", async () => {
+    const { sandboxes, req } = setup({ commands: ['stubborn'] });
+    sandboxes.answer = () => {
+      vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
+      return { stdout: 'part', stderr: '', code: 137 };
+    };
+    expect((await runCleanVerify(req)).failures).toEqual([{ command: 'stubborn', exitCode: null, output: 'part' }]);
+  });
+
+  it('a command that exits 124 itself, before its cap, keeps its exit code (ORC-348)', async () => {
+    const { sandboxes, req } = setup({ commands: ['exit 124'] });
+    sandboxes.answer = () => ({ stdout: 'part', stderr: '', code: 124 });
+    const res = await runCleanVerify(req);
+    expect(res.failures).toEqual([{ command: 'exit 124', exitCode: 124, output: 'part' }]);
   });
 
   it('a sandbox that no longer answers rejects: an infrastructure failure, its container destroyed', async () => {

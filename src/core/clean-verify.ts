@@ -23,7 +23,7 @@ import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDB
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
-import { VERIFY_TIMEOUT_MS, type VerifyResult } from './verify.js';
+import { cappedExit, VERIFY_TIMEOUT_MS, type VerifyResult } from './verify.js';
 
 /** Its coreutils' grace after the cap: a command that ignores the signal is killed. */
 const KILL_AFTER_S = 10;
@@ -292,7 +292,7 @@ const MAX_REPORT_BYTES = 16 * 1024 * 1024;
 const REPORT_READ_S = 60;
 
 /**
- * Runs a line in sandbox `id` as a command of `verify` (`verifyCommand`), its exit 124 the cap's, whose failure stays the
+ * Runs a line in sandbox `id` as a command of `verify` (`verifyCommand`), its exit 124 past the cap the cap's (`cappedExit`), whose failure stays the
  * agent's (a test that hangs), as on the host. With a runner, the line asks it for its report in a file of the sandbox, read
  * back by an exec of its own, capped: not through the command's output, whose tail alone reaches the daemon.
  */
@@ -301,7 +301,7 @@ function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): R
     const f = `"\${TMPDIR:-/tmp}"/factory-report-${randomUUID()}`;
     const started = Date.now();
     const { code, stdout, stderr } = await sandboxes.exec(id, verifyCommand(runner ? `f=${f}\n${line} ${REPORT_FLAGS[runner]}` : line), { env });
-    const run = { exitCode: code === 124 ? null : code, output: stdout + stderr, ms: Date.now() - started };
+    const run = { exitCode: cappedExit(code, started), output: stdout + stderr, ms: Date.now() - started };
     if (!runner) return run;
     const report = await sandboxes.exec(id, ['bash', '--norc', '-c', `[ -f ${f} ] && timeout ${REPORT_READ_S} head -c ${MAX_REPORT_BYTES} ${f}; rm -f ${f}`], { env });
     return report.stdout ? { ...run, report: report.stdout } : run;

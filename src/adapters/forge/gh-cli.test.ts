@@ -27,9 +27,8 @@ describeForgeContract('GhCliForge (scripted gh)', () => ({
       'gh pr checks 7 ': { stdout: JSON.stringify([{ name: 'test', bucket: 'fail' }, { name: 'lint', bucket: 'pass' }]), code: 1 },
       'gh pr list --head factory/rel-2-y ': { stdout: pr(8, 'factory/rel-2-y') },
       'gh pr checks 8 ': { stdout: 'not json' },
-      // What gh 2.63 and 2.103 answer: exit 1, nothing on stdout, for a PR without checks as for a failure.
-      'gh pr list --head factory/rel-3-z ': { stdout: pr(9, 'factory/rel-3-z') },
-      'gh pr checks 9 ': { stdout: '', stderr: "no checks reported on the 'factory/rel-3-z' branch\n", code: 1 },
+      // No check on its head, as the PR's own fields say (ORC-348): `gh pr checks` is not asked.
+      'gh pr list --head factory/rel-3-z ': { stdout: JSON.stringify([{ number: 9, url: 'https://github.test/pr/9', state: 'OPEN', headRefName: 'factory/rel-3-z', statusCheckRollup: [] }]) },
       'gh pr list --head factory/rel-4-w ': { stdout: pr(10, 'factory/rel-4-w') },
       'gh pr checks 10 ': { stdout: '', stderr: 'Post "https://api.github.com/graphql": dial tcp: connection refused\n', code: 1 },
       'gh pr list --head factory/rel-5-v ': { stdout: pr(11, 'factory/rel-5-v') },
@@ -120,6 +119,21 @@ describe('GhCliForge', () => {
     await expect(
       answeringChecks({ stdout: 'garbage', stderr: "no checks reported on the 'b' branch\n", code: 1 }).findPr('/r', 'b'),
     ).rejects.toThrow(`unreadable output, not a list of checks: "garbage" (exit 1: no checks reported on the 'b' branch)`);
+  });
+
+  it("reads a PR without checks on its own fields, never on gh's words (ORC-348)", async () => {
+    const listing = (rollup: unknown[]) => ({ stdout: JSON.stringify([{ number: 7, url: 'https://gh/7', state: 'OPEN', headRefName: 'b', statusCheckRollup: rollup }]) });
+    // An empty rollup is a PR without checks: nothing else is asked, whatever `gh pr checks` would print.
+    const none = new GhCliForge(fakeExec({ 'gh pr list': listing([]) }));
+    expect(await none.findPr('/r', 'b')).toMatchObject({ checks: 'none' });
+    // Checks in the rollup, and `gh pr checks` printing nothing: a failure, whatever its stderr says.
+    const words = new GhCliForge(
+      fakeExec({
+        'gh pr list': listing([{ __typename: 'CheckRun', name: 'ci' }]),
+        'gh pr checks 7': { stdout: '', stderr: "no checks reported on the 'b' branch\n", code: 1 },
+      }),
+    );
+    await expect(words.findPr('/r', 'b')).rejects.toThrow("gh pr checks 7 --json name,bucket: no checks reported on the 'b' branch");
   });
 
   it("rejects with gh pr checks' own failure when gh answers the PR but not its checks", async () => {

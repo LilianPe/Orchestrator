@@ -103,6 +103,13 @@ describe('the tests step and the red check (ORC-123)', () => {
     expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
   });
+
+  it('in a sandbox, tests that exit 124 themselves, well before the cap, are read on their output, not as the cap (ORC-348)', async () => {
+    const h = harness('measure', true);
+    h.sandboxes.execResult = (argv) => (argv[0] === 'git' ? { stdout: '', stderr: '', code: 0 } : { stdout: 'AssertionError: expected 1 to be 2', stderr: '', code: 124 });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
+  });
 });
 
 describe('the red check on a Python repository (ORC-172)', () => {

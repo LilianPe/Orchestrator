@@ -34,6 +34,8 @@ export function githubMapContext(d: {
   projects: readonly { id: string; repoPath: string }[];
   repoOf: (repoPath: string) => Promise<string | undefined>;
   now: () => number;
+  /** The factory's GitHub App id (ORC-353), when it has one. */
+  factoryAppId?: string;
 }): GithubMapContext {
   const projectOf = (id: string) => d.projects.find((p) => p.id === id);
   const sameRepo = async (projectId: string, repo: string) => {
@@ -63,6 +65,7 @@ export function githubMapContext(d: {
       return project && t.branch ? d.forge.findPr(project.repoPath, t.branch) : undefined;
     },
     now: d.now,
+    factoryAppId: d.factoryAppId,
   };
 }
 

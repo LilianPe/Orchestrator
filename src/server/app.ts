@@ -5,7 +5,7 @@ import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
-import { TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
+import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
 import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
@@ -16,6 +16,7 @@ import { measureTicket, type TicketMeasures } from '../core/measures.js';
 import { BASELINE_DAYS, DAY_MS } from '../core/baseline.js';
 import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
+import { ticketDiagnoses, type HeldRow } from '../core/diagnosis.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
@@ -49,6 +50,12 @@ export interface ServerDeps {
   uiPassword?: string;
   /** A human's take-over of a run (ORC-234), only with sandboxes: absent, there is none. */
   takeOver?: TakeOverDesk;
+  /** Why the configuration lets no ticket reach its end (ORC-350): the daemon then takes none. Empty or absent: it takes them. */
+  configProblems?: readonly string[];
+  /** The failed inbox rows the worker holds for a ticket (ORC-350), for its diagnosis. */
+  heldRows?: (ticketId: string) => HeldRow[];
+  /** The daemon's secret values (`transcriptSecrets`), masked in what the diagnosis tells with the secret shapes; read once per request. */
+  secrets?: () => string[];
 }
 
 export type { TakeOverDesk };
@@ -215,6 +222,44 @@ export function createApp(d: ServerDeps): Hono {
     } catch (err) {
       return c.html(`<p>Could not connect Linear: ${escapeHtml((err as Error).message)}</p>`, 400);
     }
+  });
+
+  // Read once at the start: a fix of the configuration needs a restart.
+  const configProblems = d.configProblems ?? [];
+  const takingTickets = configProblems.length === 0;
+
+  // The health check (ORC-350): the store answers, and the factory takes tickets. 503 otherwise, with why.
+  app.get('/health', async (c) => {
+    const store = await d.store.getMeta('paused').then(
+      () => 'ok' as const,
+      () => 'unreachable' as const,
+    );
+    const ok = store === 'ok' && takingTickets;
+    return c.json({ ok, store, takingTickets, configProblems, linearConnected: d.linearConnected() }, ok ? 200 : 503);
+  });
+
+  // Why a ticket is stuck (ORC-350), with what holds every ticket: the configuration, the pause, the usage limit.
+  app.get('/tickets/:id/diagnosis', async (c) => {
+    const ticketId = c.req.param('id');
+    const secrets = d.secrets?.() ?? [];
+    const mask = (text: string) => maskTranscriptLine(text, secrets);
+    const [found, paused, usageLimitedUntil] = await Promise.all([
+      ticketDiagnoses({ store: d.store, ...(d.heldRows ? { held: d.heldRows } : {}), mask }, ticketId, c.req.query('project') || undefined),
+      d.isPaused(),
+      d.usageLimitedUntil?.(),
+    ]);
+    if (found.length === 0) return c.json({ error: `${ticketId}: no such ticket` }, 404);
+    if (found.length > 1) return c.json({ error: `${ticketId} is tracked in several projects: ask with ?project=`, projects: found.map((f) => f.projectId).sort() }, 409);
+    const diagnosis = found[0]!;
+    const factory: string[] = [];
+    if (!takingTickets) factory.push(`the factory launches no run, its configuration is invalid: ${configProblems.join('; ')}`);
+    if (paused) factory.push('the factory is paused');
+    if (usageLimitedUntil !== undefined) factory.push(`the Claude usage limit holds every launch until ${new Date(usageLimitedUntil).toISOString()}`);
+    return c.json({
+      ...diagnosis,
+      factory: { takingTickets, configProblems, paused, usageLimitedUntil: usageLimitedUntil ?? null },
+      reasons: [...factory, ...diagnosis.reasons],
+    });
   });
 
   app.get('/api/state', async (c) => {

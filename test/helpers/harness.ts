@@ -252,6 +252,8 @@ export function createHarness(
     /** `budgets.per_ticket_tokens` and `budgets.on_usage_limit` of factory.yml (ORC-340, ORC-216). */
     perTicketTokens?: number;
     onUsageLimit?: 'wait';
+    /** Why the configuration lets no ticket reach its end (ORC-350): no launch while any. */
+    configProblems?: readonly string[];
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
     outputPolicy?: OrchestratorDeps['outputPolicy'];
     /** The browser of the visual proof (ORC-176), with sandboxes; its captures kept in a temporary dir. */
@@ -344,6 +346,7 @@ export function createHarness(
     repoConfig: opts.repoConfig,
     perTicketTokens: opts.perTicketTokens,
     onUsageLimit: opts.onUsageLimit,
+    configProblems: opts.configProblems,
     outputPolicy: opts.outputPolicy,
     roles: authz && new CachedRoleResolver({ projects: (id) => (id === 'p' ? authz : undefined), team: gate(tracker), repo: outside.forge, now: () => clock.now() }),
   });

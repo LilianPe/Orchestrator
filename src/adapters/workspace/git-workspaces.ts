@@ -56,7 +56,8 @@ const isDir = (path: string) => {
 /**
  * Where a workspace's HEAD is, read as data: no git runs in a directory the agent writes, whose `.git` it can point at
  * a config of its own (ORC-317). As `rev-parse --abbrev-ref HEAD`, `branch` is `HEAD` when detached. It says what the
- * agent left, as git would: only a verdict on a commit out of its reach (`verify`) is proof.
+ * agent left, as git would: only a verdict on a commit out of its reach (`verify`) is proof. In the files ref storage
+ * `agentRepository` makes it with (ORC-348): an agent that moves it to reftable leaves no head to read.
  */
 function agentHead(work: string): { branch: string; sha?: string } | undefined {
   const gitDir = join(work, '.git');
@@ -227,7 +228,9 @@ export class GitWorkspaces implements WorkspaceManager {
     // Nothing of an agent has run in it: the checkout runs no hook, as `--template=` left none, and reads the daemon's own config.
     const here = (args: string[], env?: Record<string, string>) => mustExec(this.exec, 'git', [...HARDENING.flatMap((c) => ['-c', c]), ...args], { env });
     try {
-      await here(['init', '--quiet', '--template=', making]);
+      // Its refs as files, which `agentHead` reads as data, whatever the host's git makes by default (reftable from git 3,
+      // ORC-348): the variable wins over any config, and a git older than 2.45 ignores it.
+      await here(['init', '--quiet', '--template=', making], { GIT_DEFAULT_REF_FORMAT: 'files' });
       // A key without a value is a boolean's true: `-z --list` gives it without the newline.
       const config = zFields(await this.git(repo, 'config', '--local', '-z', '--list')).map((entry): [string, string] => {
         const at = entry.indexOf('\n');

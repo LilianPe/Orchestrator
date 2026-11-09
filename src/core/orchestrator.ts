@@ -51,6 +51,7 @@ import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
+import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
@@ -91,7 +92,7 @@ import { runSealedSetup } from './sealed-setup.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
-import { cappedCommand, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
+import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from './diff-class.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
@@ -264,6 +265,8 @@ export interface OrchestratorDeps {
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
+  /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
+  configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
   claudeAccount?: () => string | undefined;
   newId?: () => string;
@@ -1061,8 +1064,9 @@ export class Orchestrator {
         if (status.code !== 0) throw new Error(`git status: ${status.stderr.trim()}`);
         uncommitted = parseStatus(status.stdout);
         runTests = async (cmd) => {
+          const started = Date.now();
           const r = await sandboxes.exec(box.id, cappedCommand(cmd), { env });
-          return { exitCode: r.code === 124 ? null : r.code, output: r.stdout + r.stderr };
+          return { exitCode: cappedExit(r.code, started), output: r.stdout + r.stderr };
         };
       }
       const red = await checkRed(command, { ...diff, uncommitted, run: runTests });
@@ -1185,16 +1189,44 @@ export class Orchestrator {
     const job = project.workflow.jobs[c.job];
     // No longer awaited (a newer push, a stop): a replayed effect checks nothing.
     if (!job || t.verifyingRunId !== c.runId) return;
-    const check = async () => {
-      if (!this.d.sandboxes) throw new Error(PUSH_NEEDS_SANDBOXES);
-      try {
-        return await this.cleanCheck(project, t, c.runId, job, { head });
-      } finally {
-        // The check's own folder: no run purges it.
-        if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
-      }
-    };
-    this.track(this.submitVerdict(project, t, c.runId, job, check));
+    // Without sandboxes there is nothing to run, so no slot to wait for: the verdict is the infrastructure failure at once.
+    if (!this.d.sandboxes) return this.track(this.submitVerdict(project, t, c.runId, job, () => Promise.reject(new Error(PUSH_NEEDS_SANDBOXES))));
+    this.withSlot(project, t.ticketId, job.queue, c.runId, (now) =>
+      this.submitVerdict(project, now, c.runId, job, async () => {
+        try {
+          return await this.cleanCheck(project, now, c.runId, job, { head });
+        } finally {
+          // The check's own folder: no run purges it.
+          if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
+        }
+      }),
+    );
+  }
+
+  /**
+   * A check runs the agent's code within the slots of `queue` (ORC-353), as its runs do: `concurrency` bounds both. It waits
+   * for a slot, then checks the ticket as it is by then, nothing if it no longer awaits that check, and drains the queue once
+   * done. A daemon that stops runs its waiting checks without a slot, as before slots counted them, and its shutdown waits
+   * for them: a check dropped would come back at the next start as a cut (`verify.lost`).
+   */
+  private withSlot(project: ProjectRuntime, ticketId: string, queue: QueueName, runId: string, check: (t: TicketState) => Promise<void>): void {
+    const key = `verify:${runId}`;
+    const run = (held: boolean) =>
+      this.track(
+        (async () => {
+          try {
+            const t = await this.ticket(project.id, ticketId);
+            if (t.verifyingRunId === runId) await check(t);
+          } finally {
+            if (held) {
+              this.d.scheduler.release(key);
+              await this.drain(queue);
+            }
+          }
+        })(),
+      );
+    if (this.stopping) return run(false);
+    void this.d.scheduler.acquire(queue, key).then((slot) => run(slot !== null));
   }
 
   /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
@@ -1326,6 +1358,7 @@ export class Orchestrator {
   stopAll(): void {
     this.stopping = true;
     this.worker.stop();
+    this.d.scheduler.cancelWaits();
     for (const runId of [...this.handles.keys()]) {
       // Ended already, its end on its way, or stopped on request: drained() waits for its end, written here.
       if (this.liveRuns.has(runId) && !this.held.get(runId)?.stopped) this.letGo(runId);
@@ -1343,6 +1376,11 @@ export class Orchestrator {
   async isPaused(): Promise<boolean> {
     const flags = await Promise.all([this.d.store.getMeta('paused'), this.d.store.getMeta(PAUSE_ACCEPTED)]);
     return flags.includes('1');
+  }
+
+  /** The failed inbox rows of this process's worker that hold the ticket (ORC-350), for its diagnosis. */
+  heldRows(ticketId: string): HeldRow[] {
+    return this.worker.held(ticketId);
   }
 
   private account(): string {
@@ -1370,6 +1408,11 @@ export class Orchestrator {
     const account = this.account();
     const until = Math.max(this.usageHolds.get(account) ?? 0, this.unrecordedHolds.get(account) ?? 0);
     return until > this.d.clock.now() ? until : undefined;
+  }
+
+  /** An invalid configuration holds every launch, as the pause does (ORC-350). */
+  private configHeld(): boolean {
+    return !!this.d.configProblems?.length;
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -1664,7 +1707,7 @@ export class Orchestrator {
     // Read once per drain: its starts, and a limit heard of meanwhile, are held on what this daemon knows (`heldUntil`).
     if (n > 0) await this.readUsageHold(this.account());
     for (let i = 0; i < n; i++) {
-      if ((await this.isPaused()) || this.heldUntil() !== undefined || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
+      if (this.configHeld() || (await this.isPaused()) || this.heldUntil() !== undefined || this.d.scheduler.free(queue) - this.admitting[queue] <= 0) return;
       const claim = await this.d.scheduler.next(queue, leaseMs);
       if (!claim) return;
       const item = claim.item;
@@ -1774,23 +1817,21 @@ export class Orchestrator {
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
         if (!run || !job || t.verifyingRunId !== c.runId) return;
         if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
-        this.track(
-          (async () => {
-            if (job.red) {
-              const red = await this.checkRed(project, run, job.red.command, !!t.frozenTests);
-              const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
-              const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
-              const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
-              await this.submitResult(
-                red.verified
-                  ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
-                  : { ...base, type: 'verify.failed', payload: { ...common, failures } },
-              );
-              return;
-            }
-            await this.submitVerdict(project, t, run.id, job, () => this.verifyWork(project, t, run, job, c.output), c.output);
-          })(),
-        );
+        this.withSlot(project, t.ticketId, job.queue, c.runId, async (now) => {
+          if (job.red) {
+            const red = await this.checkRed(project, run, job.red.command, !!now.frozenTests);
+            const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
+            const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
+            const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
+            await this.submitResult(
+              red.verified
+                ? { ...base, type: 'verify.passed', payload: { ...common, ...(c.output ? { output: c.output } : {}) } }
+                : { ...base, type: 'verify.failed', payload: { ...common, failures } },
+            );
+            return;
+          }
+          await this.submitVerdict(project, now, run.id, job, () => this.verifyWork(project, now, run, job, c.output), c.output);
+        });
         return;
       }
       case 'move':
@@ -2399,7 +2440,7 @@ export class Orchestrator {
       return 'deferred';
     }
     // The account's usage limit holds every launch on it until its reset (ORC-340), a step it cut too (ORC-357): in line meanwhile.
-    if (this.stopping || (await this.isPaused()) || (fromQueue ? this.heldUntil() : await this.usageLimitedUntil()) !== undefined) return requeue();
+    if (this.stopping || this.configHeld() || (await this.isPaused()) || (fromQueue ? this.heldUntil() : await this.usageLimitedUntil()) !== undefined) return requeue();
     const key = `${ticketId}:${job.queue}`;
     // A start from a decision leaves alone the slots a drain promised to the items it dequeued.
     const promised = admitted ? 0 : this.admitting[job.queue];

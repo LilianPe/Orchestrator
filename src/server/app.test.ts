@@ -10,10 +10,10 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import type { ChangelogEntry, SecurityLog } from '../store/types.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { agentOnly, createApp, type TakeOverDesk } from './app.js';
+import { agentOnly, createApp, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
-async function setup(extra: { uiPassword?: string; usageLimitedUntil?: () => Promise<number | undefined>; perTicketTokens?: number; clock?: FakeClock; takeOver?: TakeOverDesk } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -801,5 +801,58 @@ describe('server', () => {
       const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
       expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic }))).status).toBe(200);
     });
+  });
+});
+
+describe('the health check and the diagnosis of a ticket (ORC-350)', () => {
+  it('serves /health: 200 while it takes tickets, 503 with the reasons when the configuration is invalid or the store does not answer', async () => {
+    const ok = await setup();
+    const res = await ok.app.request('/health');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, store: 'ok', takingTickets: true, configProblems: [], linearConnected: true });
+
+    const invalid = await setup({ configProblems: ['publication impossible: it needs the sandboxes and the GitHub App'] });
+    const refused = await invalid.app.request('/health');
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ ok: false, takingTickets: false, configProblems: ['publication impossible: it needs the sandboxes and the GitHub App'] });
+
+    const down = await setup();
+    down.store.getMeta = async () => {
+      throw new Error('connect ECONNREFUSED postgres://factory:pw@db');
+    };
+    const lost = await down.app.request('/health');
+    expect(lost.status).toBe(503);
+    const body = await lost.json();
+    expect(body).toMatchObject({ ok: false, store: 'unreachable' });
+    expect(JSON.stringify(body)).not.toContain('pw');
+  });
+
+  it('serves the diagnosis of a ticket with what holds the whole factory, 404 for a ticket it knows nothing of, 409 when two projects track it', async () => {
+    const { app, store } = await setup({
+      configProblems: ['no Claude token'],
+      heldRows: (id) => (id === 'REL-1' ? [{ projectId: 'p', eventId: 'e1', type: 'ticket.delegated', error: 'token tok-123 refused', attempts: 3, behind: 0 }] : []),
+      secrets: () => ['tok-123'],
+    });
+    const res = await app.request('/tickets/REL-1/diagnosis');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      projectId: 'p',
+      ticketId: 'REL-1',
+      heldRow: { error: 'token [masked] refused' },
+      factory: { takingTickets: false, configProblems: ['no Claude token'], paused: false, usageLimitedUntil: null },
+    });
+    expect(body.reasons).toContain('the factory launches no run, its configuration is invalid: no Claude token');
+    expect(JSON.stringify(body)).not.toContain('tok-123');
+    // The run's token stays out, as in /api/state.
+    expect(body.run).toMatchObject({ id: 'r1', job: 'dev' });
+    expect(body.run.token).toBeUndefined();
+
+    expect((await app.request('/tickets/REL-404/diagnosis')).status).toBe(404);
+    await store.putTicket(newTicketState('q', 'REL-1', 'Export', 'todo', 1));
+    const twice = await app.request('/tickets/REL-1/diagnosis');
+    expect(twice.status).toBe(409);
+    expect(await twice.json()).toEqual({ error: 'REL-1 is tracked in several projects: ask with ?project=', projects: ['p', 'q'] });
+    expect((await app.request('/tickets/REL-1/diagnosis?project=q')).status).toBe(200);
   });
 });

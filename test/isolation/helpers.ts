@@ -3,13 +3,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
-import { ContainerSandboxProvider, isPodman, type ContainerSandboxOptions } from '../../src/adapters/sandbox/docker-rootless.js';
+import { execCmd } from '../../src/adapters/exec.js';
+import { ContainerSandboxProvider, podmanCli, type ContainerSandboxOptions } from '../../src/adapters/sandbox/docker-rootless.js';
 import { DEFAULT_REQUIREMENTS, type Sandbox, type SandboxRequest } from '../../src/adapters/sandbox/types.js';
 
 /** The isolation suite's knobs; global-setup.ts pulls the image once per run. */
 export const enabled = process.env['FACTORY_ISOLATION'] === '1';
 export const cli = process.env['FACTORY_CONTAINER_CLI'] ?? 'podman';
-export const podman = isPodman(cli);
+/** As the provider tells it, by what the CLI reports (ORC-348); not asked when the suite is off, which may have no engine. */
+export const podman = enabled && (await podmanCli(execCmd, cli));
 // A public image, so the CI need not build docker/runner.Dockerfile: the checks only need sh, perl-base, node and coreutils.
 export const PUBLIC_IMAGE = 'docker.io/library/node:24.22.1-bookworm-slim';
 export const image = process.env['FACTORY_RUNNER_IMAGE'] ?? PUBLIC_IMAGE;

@@ -6,6 +6,8 @@ import type { Store } from './types.js';
 
 /** Read by `factory up` and `factory plan`: the Postgres connection string. Unset keeps SQLite. */
 export const DATABASE_URL_ENV = 'FACTORY_DATABASE_URL';
+/** `sqlite`: SQLite chosen on purpose, the only way to run on it in production (ORC-350). */
+export const STORE_ENV = 'FACTORY_STORE';
 
 export interface OpenStoreOptions {
   env: NodeJS.ProcessEnv;
@@ -27,10 +29,19 @@ export interface OpenedStore {
 /**
  * Opens the store the instance is configured for: Postgres when `FACTORY_DATABASE_URL` is set,
  * after bringing its schema to the latest Drizzle migration (unless `migrate: false`), SQLite otherwise.
+ * In production (`NODE_ENV=production`, the image's), a missing URL refuses to start unless `FACTORY_STORE=sqlite`
+ * chooses SQLite (ORC-350): a variable lost in a deployment never starts the factory on an empty database.
  */
 export async function openStore(o: OpenStoreOptions): Promise<OpenedStore> {
   const url = o.env[DATABASE_URL_ENV]?.trim();
-  if (!url) return { store: new SqliteStore(o.sqlitePath), kind: 'sqlite' };
+  if (!url) {
+    if (o.env['NODE_ENV'] === 'production' && o.env[STORE_ENV] !== 'sqlite') {
+      throw new Error(
+        `${DATABASE_URL_ENV} is not set: in production the factory does not start on an empty SQLite file. Set it to the Postgres URL, or set ${STORE_ENV}=sqlite to choose SQLite.`,
+      );
+    }
+    return { store: new SqliteStore(o.sqlitePath), kind: 'sqlite' };
+  }
   const onError = (err: Error) => (o.log ?? console.error)(`postgres : ${err.message}`);
   if (o.migrate !== false) {
     const pool = new Pool({ connectionString: url, max: 1 });

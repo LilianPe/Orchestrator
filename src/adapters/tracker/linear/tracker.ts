@@ -59,8 +59,11 @@ const STATE_TYPES: Record<LogicalState, string> = {
 
 export { teamOf };
 
-/** Linear's answer for an issue it does not have: `Entity not found: Issue`, shown as `Could not find referenced Issue.` */
-const isNotFound = (e: LinearGqlError) => /Entity not found: Issue\b|Could not find referenced Issue\b/.test(`${e.message} ${e.extensions?.userPresentableMessage ?? ''}`);
+/**
+ * Linear's answer for an issue it does not have, read on its fields, not its words (ORC-348): an `invalid input` on the
+ * `issue` field itself, whose only input is the identifier. A refusal below it (`issue.team`) is about something else.
+ */
+const isNotFound = (e: LinearGqlError) => e.extensions?.type === 'invalid input' && e.path?.length === 1 && e.path[0] === 'issue';
 
 /**
  * The id a comment or an activity of an outbox effect is created with (ORC-162): Linear takes a
@@ -340,7 +343,8 @@ export class LinearTracker implements Tracker, TeamDirectory {
     }
     if (a.ephemeral) input['ephemeral'] = true;
     if (effectId !== undefined) input['id'] = effectUuid('activity', effectId);
-    await this.api.gql(Q.activityCreate, { input });
+    // The live feed's ephemeral activities yield Linear's quota to every other call (ORC-350).
+    await this.api.gql(Q.activityCreate, { input }, { background: !!a.ephemeral });
   }
 
   async findActivity(sessionId: string, effectId: string): Promise<string | undefined> {

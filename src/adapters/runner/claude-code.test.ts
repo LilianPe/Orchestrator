@@ -76,7 +76,7 @@ describe('the settings of the read guard, through the allowlist of a sandbox (OR
     writeFileSync(big, 'x\n'.repeat(200));
     writeFileSync(frozen, 'x\n'.repeat(200));
     writeFileSync(script, ASKS_THE_HOOK);
-    const exec = async (_cmd: string, args: string[]) => ({ stdout: args[0] === 'run' ? 'c1\n' : '', stderr: '', code: 0 });
+    const exec = async (_cmd: string, args: string[]) => ({ stdout: args[0] === 'run' ? 'c1\n' : args[0] === 'version' ? '{"Os":"linux","Arch":"amd64"}' : '', stderr: '', code: 0 });
     const sandboxes = new NoEngine({ cli: 'docker', image: 'factory-runner:1', uid: 1000, gid: 1000, exec });
     await sandboxes.create({ runId: 'r', ticketId: 'ORC-1', workspacePath: '/w', network: 'none', requirements: { minLevel: 'L3', browser: false, services: [] }, mounts: [] });
     const r = new ClaudeCodeRunner({ transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-tr-')), command: [process.execPath, script], sandboxes });
@@ -464,6 +464,17 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });
     const h = r.start(req({ model: '', limits: { turns: 50, durationMs: 200 } }, { FAKE_CLAUDE_SCRIPT: script(init, assistant('m1', { input_tokens: 1_000_000, output_tokens: 0 })), FAKE_CLAUDE_HANG: '1' }));
     expect(await h.done).toMatchObject({ outcome: 'limit', costUsd: 4 });
+  });
+
+  it("a limit of the CLI's own by its exact subtype, never by a word in it: another error stays a failure (ORC-348)", async () => {
+    const { r } = runner();
+    const ended = (subtype: string) => JSON.stringify({ type: 'result', subtype, is_error: true, total_cost_usd: 0, num_turns: 1, result: '' });
+    for (const subtype of ['error_max_turns', 'error_max_budget_usd']) {
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(ended(subtype)) })).done).toMatchObject({ outcome: 'limit' });
+    }
+    for (const subtype of ['error_max_structured_output_retries', 'error_during_execution', 'error_maximum_new']) {
+      expect(await r.start(req({}, { FAKE_CLAUDE_SCRIPT: script(ended(subtype)) })).done).toMatchObject({ outcome: 'failure' });
+    }
   });
 
   describe('the usage limit of the subscription (ORC-340)', () => {

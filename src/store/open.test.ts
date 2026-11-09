@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DATABASE_URL_ENV, openStore } from './open.js';
+import { DATABASE_URL_ENV, openStore, STORE_ENV } from './open.js';
 import { SqliteStore } from './sqlite-store.js';
 
 describe('openStore', () => {
@@ -11,6 +11,16 @@ describe('openStore', () => {
     const { store, kind } = await openStore({ env, sqlitePath, migrationsFolder: '/nowhere' });
     expect(kind).toBe('sqlite');
     expect(store).toBeInstanceOf(SqliteStore);
+    await store.close();
+  });
+
+  it('refuses to start in production without a Postgres URL, unless SQLite is chosen explicitly (ORC-350)', async () => {
+    const sqlitePath = join(mkdtempSync(join(tmpdir(), 'factory-store-')), 'factory.db');
+    await expect(openStore({ env: { NODE_ENV: 'production' }, sqlitePath, migrationsFolder: '/nowhere' })).rejects.toThrow(
+      `${DATABASE_URL_ENV} is not set: in production the factory does not start on an empty SQLite file. Set it to the Postgres URL, or set ${STORE_ENV}=sqlite to choose SQLite.`,
+    );
+    const { store, kind } = await openStore({ env: { NODE_ENV: 'production', [STORE_ENV]: 'sqlite' }, sqlitePath, migrationsFolder: '/nowhere' });
+    expect(kind).toBe('sqlite');
     await store.close();
   });
 

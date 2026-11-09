@@ -6,7 +6,7 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 
 | Limit | Where | Default | When it is reached |
 |---|---|---|---|
-| Concurrent code runs | `concurrency` (`factory.yml`), otherwise `limits.parallel_sessions` (workflow) | 3 | Further runs wait in the `dev` queue (persistent), by ticket priority. |
+| Concurrent code runs | `concurrency` (`factory.yml`), otherwise `limits.parallel_sessions` (workflow) | 3 | Further runs wait in the `dev` queue (persistent), by ticket priority. A check's sandbox (`verify`, `red`) takes a slot too, served before the next launch (ORC-353). |
 | Concurrent question runs | `limits.question_sessions` (workflow) | 2 | Same, `questions` queue. |
 | Turns per run | `limits.per_run.turns` / `jobs.*.limits.turns`, the step's `maxTurns` and `budgets.max_turns` | 150 | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
 | Run duration | `limits.per_run.duration` | `90m` | Run interrupted, result `limit`. |
@@ -33,6 +33,26 @@ To unblock it: **reply in the ticket** (comment, or the agent's session): the bl
 `relais pause` (or the UI button): no run starts any more, requests stay queued; runs in progress finish. `relais resume` resumes. The pause state survives a restart. A pause holds every request accepted after it, from the moment it is recorded: a delegation that follows it at once starts no run, even if it is decided first (ORC-335). Useful before maintenance, an upgrade, or to stop spending without stopping the daemon (webhooks and reconciliation keep going).
 
 To stop a single ticket: `relais stop <ID>`, the Stop button, the `agent:stop` label, or stop in the Linear session.
+
+## Invalid configuration, health check and diagnosis of a ticket (ORC-350)
+
+**At startup**, the daemon checks that a ticket can reach its end. When it cannot, it starts but **launches no run**, as under a [pause](#pause): the events are decided, the effects (comments, statuses) executed and an attempt that outlived a restart followed to its end, but a delegated ticket waits in the queue, no agent paid for a ticket it would block. Each reason is logged, `Invalid configuration, no run is launched until it is fixed and the factory restarted: <reason>`:
+
+- `verify cannot run`: no sandbox (`FACTORY_CONTAINER_CLI`) and no `FACTORY_ALLOW_HOST_VERIFY=1`;
+- `publication impossible`: no sandbox, or no GitHub App;
+- `factory.yml: …`: a budget `factory validate` refuses (a `per_step_tokens` not set, a worst case over `per_ticket_tokens`). A `per_ticket_tokens` left to the repositories' `.factory/config.yml` is not refused here.
+
+The budgets are not checked under `--fake-runner`. Fix the cause, then restart. A missing Claude token stays a warning: the account is read again at each launch, its fix needs no restart.
+
+**`GET /health`** answers 200 `{ ok: true, store: "ok", takingTickets: true, configProblems: [], linearConnected }` while the store answers and the factory takes tickets; 503 otherwise, with `store: "unreachable"` or the reasons in `configProblems`.
+
+**`GET /tickets/<ID>/diagnosis`** (`?project=<id>` when two projects track the identifier, 409 otherwise) tells why a ticket is stuck: its state and block, its active run, the inbox event the worker holds it behind (error, attempts, next try: held in the daemon's memory alone), its last failed effect, its open dead letters, its place in the queues, and what holds every ticket (invalid configuration, pause, usage limit). `reasons` sums them up in sentences, the factory's first. 404 for a ticket neither the store nor the worker knows.
+
+Both are behind the interface's password, as every route but the webhooks, the OAuth callback and `/agent`. No secret in the answers: the daemon's secret values and secret shapes (tokens, keys, a URL's password) are masked in every error and block reason.
+
+## Linear's rate limit (ORC-350)
+
+Every call to Linear's API is bounded (30 s). A rate limit (a 429, or a `RATELIMITED` error) is waited out until Linear's reset when its answer gives one (`Retry-After`, `X-RateLimit-Requests-Reset`), 1 s, 2 s then 4 s otherwise, at most 60 s, then the call is tried again, 3 times; another call made meanwhile waits for the same end before it goes; past them, the effect is retried as a [transient failure](#transient-and-permanent-errors-orc-343). The live feed of a run (the ephemeral activities of its Linear session) yields the quota: while a rate limit is waited out, or once less than a tenth of the hour's requests is left until their reset, its activities are skipped and never retried, so that the comments, statuses and labels keep it.
 
 ## Logs, transcripts and data
 

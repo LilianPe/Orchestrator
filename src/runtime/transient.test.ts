@@ -27,7 +27,8 @@ async function closedPort(): Promise<number> {
 /** What `LinearApi.gql` throws for this answer of Linear. */
 async function linearThrows(status: number, body: string): Promise<unknown> {
   const fetchImpl: FetchLike = async () => ({ ok: status < 400, status, json: async () => JSON.parse(body) as unknown });
-  return new LinearApi(async () => 'token', fetchImpl).gql('query { viewer { id } }').catch((err: unknown) => err);
+  // No wait between its rate-limit retries (ORC-350): what it throws in the end is what is read here.
+  return new LinearApi(async () => 'token', fetchImpl, undefined, { sleep: async () => {} }).gql('query { viewer { id } }').catch((err: unknown) => err);
 }
 
 /** What `fetchOrigin` throws when git ends with this stderr. */

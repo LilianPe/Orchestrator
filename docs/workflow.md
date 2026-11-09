@@ -70,7 +70,7 @@ Accepted for readability (`extends: standard`) but **has no effect**: the pack u
 The checks:
 - `has_description`: the ticket description is at least 30 characters long.
 - `not_started`: no `factory/<ticket-id>-…` branch already exists on the forge (read through the forge port, every page, ORC-207). With `intake` on, its duplicate search makes this check at its launch, whatever the list says, and names the branch's open PR when it has one.
-- `has_acceptance_criteria`: the description contains « critères d'acceptation » (or « critère d'acceptation », « criteres… ») or "acceptance criteria", case-insensitively.
+- `has_acceptance_criteria`: the description holds acceptance criteria, however they are written (ORC-353): the words « critères d'acceptation » (or « critère d'acceptation », « criteres… ») or "acceptance criteria", case-insensitively; or a section of its own with something in it, under a heading such as « Definition of done », « Expected behavior », « Résultat attendu », « Acceptance tests »; or an example « Given … then » / « Étant donné … alors », on one line or the lines of its list item (a Gherkin `Scenario:` included); or a checklist (`- [ ]`). No model reads it: whether the criteria are enough is `intake`'s judgement (`complete`), when a rule runs it.
 
 If a check fails, the ticket is blocked and Relais replies in the Linear session with the list of problems (« I cannot start this ticket… Fix it, then reply in this thread »). `relais plan` shows, for each delegated ticket, whether it would be picked up or not, and why.
 
@@ -90,7 +90,7 @@ You can redefine only some of them; after merging, all five must have a name. `r
 ### `limits`
 | Key | Type | Default | Effect when the limit is reached |
 |---|---|---|---|
-| `parallel_sessions` | integer > 0 | 3 | Number of simultaneous runs in the `dev` queue, if `factory.yml` does not set `concurrency`. Beyond that, runs wait in a persistent queue. Each run in the `dev` queue also receives `PORT = workspace.ports.base + slot number` (0 to `parallel_sessions - 1`). |
+| `parallel_sessions` | integer > 0 | 3 | Number of simultaneous runs in the `dev` queue, if `factory.yml` does not set `concurrency`; the sandbox of a check (`verify`, `red`) counts as one, and waits for a free slot before any new launch (ORC-353). Beyond that, runs wait in a persistent queue. Each run in the `dev` queue also receives `PORT = workspace.ports.base + slot number` (0 to `parallel_sessions - 1`). |
 | `question_sessions` | integer > 0 | 2 | Same for the `questions` queue. |
 | `per_run.turns` | integer > 0 | 150 | Number of assistant messages in a run, a message counting once even if written over several lines of the stream. Beyond that, the run is interrupted; its result is `limit`. A job with `step` never exceeds its step's turns: `per_run` and its `limits` can only lower them. |
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
