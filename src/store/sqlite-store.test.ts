@@ -32,7 +32,7 @@ describe('SqliteStore', () => {
   });
 
   it("drops the commands, request paths and proxy's reasons a security log of an older file kept, once, when it opens (ORC-296)", async () => {
-    const path = join(mkdtempSync(join(tmpdir(), 'factory-sqlite-')), 'relais.db');
+    const path = join(mkdtempSync(join(tmpdir(), 'factory-sqlite-')), 'factory.db');
     const old = new SqliteStore(path);
     const kept = {
       runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 5,
