@@ -129,3 +129,36 @@ describe('the images (ORC-203)', () => {
     expect(read('compose.yaml')).toMatch(/FACTORY_COMMIT: \$\{FACTORY_COMMIT:-\}/);
   });
 });
+
+/** ORC-369: a 504 from GitHub's releases turned the isolation job red, unrelated to the diff. */
+describe('the gitleaks archive of the isolation job (ORC-369)', () => {
+  const runner = read('docker/runner.Dockerfile');
+  type Step = { id?: string; if?: string; uses?: string; with?: Record<string, string>; run?: string };
+  const job = (parse(read('.github/workflows/ci.yml')) as { jobs: Record<string, { env: Record<string, string>; steps: Step[] }> }).jobs['isolation']!;
+  const [, version, sha256] = /gitleaks_([\d.]+)_linux_x64\.tar\.gz[\s\S]*?\b([0-9a-f]{64}) {2}\/tmp\/gitleaks\.tgz/.exec(runner) ?? [];
+  const ARCHIVE = 'docker/gitleaks_${{ env.GITLEAKS_VERSION }}_linux_x64.tar.gz';
+
+  it('caches the archive the runner image pins, keyed on its version and checksum', () => {
+    expect(job.env).toMatchObject({ GITLEAKS_VERSION: version, GITLEAKS_SHA256: sha256 });
+    const restore = job.steps.find((s) => s.uses?.startsWith('actions/cache/restore@'));
+    expect(restore?.with?.['path']).toBe(ARCHIVE);
+    expect(restore?.with?.['key']).toMatch(/\$\{\{ env\.GITLEAKS_VERSION \}\}.*\$\{\{ env\.GITLEAKS_SHA256 \}\}/);
+    // Downloaded on a miss only, retried on a transient failure, checked, then saved.
+    const miss = `steps.${restore?.id}.outputs.cache-hit != 'true'`;
+    const download = job.steps.find((s) => s.run?.includes('releases/download'));
+    expect(download?.if).toBe(miss);
+    expect(download?.run).toMatch(/curl [^\n]*--retry \d+[^\n]*--retry-all-errors/);
+    expect(download?.run).toMatch(/sha256sum -c/);
+    const save = job.steps.find((s) => s.uses?.startsWith('actions/cache/save@'));
+    expect(save).toMatchObject({ if: miss, with: { path: ARCHIVE } });
+    // Before both builds of the archive's image: the runner image's and verify-hostile's.
+    const order = [restore, download, save].map((s) => job.steps.indexOf(s!));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order[2]).toBeLessThan(job.steps.findIndex((s) => s.run?.includes('podman build')));
+  });
+
+  it('takes the archive from the build context when it is there, its checksum checked either way', () => {
+    const install = /^RUN --mount=type=bind,target=\/context \\\n {4}cp \/context\/gitleaks_([\d.]+)_linux_x64\.tar\.gz \/tmp\/gitleaks\.tgz 2>\/dev\/null \\\n \|\| node -e "fetch\([^\n]*\\\n && echo "([0-9a-f]{64}) {2}\/tmp\/gitleaks\.tgz" \| sha256sum -c - \\$/m.exec(runner);
+    expect(install?.slice(1)).toEqual([version, sha256]);
+  });
+});

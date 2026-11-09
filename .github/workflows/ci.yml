@@ -95,10 +95,32 @@ jobs:
       FACTORY_ISOLATION: "1"
       # Whether the secret is set, not the secret: only the step that runs the tests gets it.
       HAS_CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      # The gitleaks of docker/runner.Dockerfile, which takes the archive from its build context when it is there (ORC-369).
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
+      # Downloaded once, not on every run: GitHub's releases have answered 504 (ORC-369). Saved as soon as it is
+      # checked, not at the end of a job a red test would keep from saving.
+      - id: gitleaks
+        uses: actions/cache/restore@v4
+        with:
+          path: docker/gitleaks_${{ env.GITLEAKS_VERSION }}_linux_x64.tar.gz
+          key: gitleaks-${{ env.GITLEAKS_VERSION }}-${{ env.GITLEAKS_SHA256 }}
+      - name: Download gitleaks
+        if: steps.gitleaks.outputs.cache-hit != 'true'
+        run: |
+          f="docker/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            || { rm -f "$f"; echo "::error::downloading gitleaks ${GITLEAKS_VERSION} from GitHub's releases failed after 6 attempts"; exit 1; }
+          echo "${GITLEAKS_SHA256}  $f" | sha256sum -c - || { rm -f "$f"; echo "::error::the gitleaks archive does not have its pinned sha256"; exit 1; }
+      - if: steps.gitleaks.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: docker/gitleaks_${{ env.GITLEAKS_VERSION }}_linux_x64.tar.gz
+          key: ${{ steps.gitleaks.outputs.cache-primary-key }}
       - name: Install rootless Podman
         run: |
           sudo apt-get update

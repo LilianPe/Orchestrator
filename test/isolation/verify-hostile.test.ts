@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -204,12 +204,16 @@ describe.skipIf(!enabled)(`gitleaks in verify (${cli})`, () => {
   };
 
   beforeAll(() => {
-    const dockerfile = readFileSync(join(import.meta.dirname, '../../docker/runner.Dockerfile'), 'utf8');
-    const install = /^RUN node -e "fetch\('https:\/\/github\.com\/gitleaks[\s\S]*?rm \/tmp\/gitleaks\.tgz$/m.exec(dockerfile)?.[0];
-    if (!install) throw new Error('docker/runner.Dockerfile no longer installs gitleaks');
+    const docker = join(import.meta.dirname, '../../docker');
+    const dockerfile = readFileSync(join(docker, 'runner.Dockerfile'), 'utf8');
+    const install = /^RUN --mount=type=bind,target=\/context[\s\S]*?rm \/tmp\/gitleaks\.tgz$/m.exec(dockerfile)?.[0];
+    const archive = /gitleaks_[\d.]+_linux_x64\.tar\.gz/.exec(install ?? '')?.[0];
+    if (!install || !archive) throw new Error('docker/runner.Dockerfile no longer installs gitleaks');
     // A file, not `-f -`: Node hands stdin as a socket, and Podman opens /dev/stdin, which a socket refuses.
     const context = join(base, 'image');
     mkdirSync(context);
+    // The archive CI caches next to the Dockerfile (ORC-369): the line downloads it only without it.
+    if (existsSync(join(docker, archive))) copyFileSync(join(docker, archive), join(context, archive));
     const dockerfilePath = join(context, 'Dockerfile');
     writeFileSync(dockerfilePath, `FROM ${IMAGE}\n${install}\n`);
     execFileSync(cli, ['build', '-q', '-t', TAG, '-f', dockerfilePath, context], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 300_000 });
