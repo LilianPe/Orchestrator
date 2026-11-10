@@ -239,6 +239,8 @@ export interface Workflow {
    * Absent from versions frozen before it, whose tickets keep the free text of their session: a replay decides as they did.
    */
   blockComment?: true;
+  /** `rapide` (ORC-231): the level of `factory/fantome`, no question asked and the spec approved by the preset (`asFantome`). */
+  level?: 'rapide';
   tracker: { kind: 'linear'; team?: string; pickup: { checks: PickupCheck[] } };
   /** `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. */
   states: Record<Exclude<LogicalState, 'ready'>, string> & { ready?: string };

@@ -97,7 +97,8 @@ function Findings({ findings }: Pick<RunDetailView, 'findings'>) {
   );
 }
 
-function Checks({ checks }: Pick<RunDetailView, 'checks'>) {
+/** The factory's checks, each to its run: also the audit sheet's (ORC-229). */
+export function Checks({ checks }: Pick<RunDetailView, 'checks'>) {
   return (
     <section>
       <h2>Checks</h2>
@@ -121,7 +122,8 @@ function Checks({ checks }: Pick<RunDetailView, 'checks'>) {
   );
 }
 
-function Steps({ steps }: Pick<RunDetailView, 'steps'>) {
+/** What each step cost: also the audit sheet's (ORC-229). */
+export function Steps({ steps }: Pick<RunDetailView, 'steps'>) {
   return (
     <section>
       <h2>Cost per step</h2>

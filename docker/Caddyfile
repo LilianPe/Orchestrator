@@ -1,3 +1,6 @@
 {$FACTORY_PUBLIC_HOST} {
+	# The runners' agent API goes through the proxy service, never the public name (ORC-221).
+	@agent path /agent /agent/*
+	respond @agent 404
 	reverse_proxy factoryd:4100
 }

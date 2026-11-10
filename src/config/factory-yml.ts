@@ -34,6 +34,11 @@ export interface FactoryYml {
   repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, string> }[];
   /** Lines past which the pack's hook refuses a whole read (ORC-279); without it, the hook's own 350. */
   readGuard?: { maxLines: number };
+  /**
+   * The definition of a serious defect (ORC-153), as written: until it is set, the audit sheets keep the defects humans enter
+   * but none is counted, and the AI reviewers' miss rate is not computed (ORC-229). A change counts from the next startup.
+   */
+  audit?: { seriousDefect: string };
 }
 
 /** Sealing purges the files that hold a secret: a value this short would be found in many that do not. */
@@ -146,6 +151,7 @@ const SECTIONS: Record<string, string[]> = {
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
   repos: [],
   read_guard: ['max_lines'],
+  audit: ['serious_defect'],
 };
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
@@ -307,6 +313,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   }
   const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'a positive integer is expected');
   if (maxLines !== undefined) out.readGuard = { maxLines };
+  const seriousDefect = leaf('audit.serious_defect', section('audit')?.['serious_defect'], z.string().trim().min(1), 'a non-empty text is expected: the definition');
+  if (seriousDefect !== undefined) out.audit = { seriousDefect };
 
   if (violations.length > 0) throw new FactoryYmlError(violations);
   return out;

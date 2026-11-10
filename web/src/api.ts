@@ -1,4 +1,4 @@
-import type { BlockParetoView, BusMessage, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
+import type { AuditListView, AuditSheetView, BlockParetoView, BusMessage, DefectEntry, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
 
 export async function fetchSnapshot(): Promise<Snapshot> {
   return (await fetch('/api/state')).json();
@@ -22,13 +22,23 @@ export const fetchSecurity = (since: number, until: number) => getJson<SecurityP
 export const fetchBlocks = (since: number, until: number) => getJson<BlockParetoView>(`/api/blocks?since=${since}&until=${until}`);
 export const fetchRunSecurity = (runId: string) => getJson<RunSecurityView>(`/api/security/runs/${encodeURIComponent(runId)}`);
 
-/** The detail of a run (ORC-298); undefined when the server knows no such run. */
-export async function fetchRunDetail(runId: string): Promise<RunDetailView | undefined> {
-  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+/** What `path` serves; undefined when the server knows no such thing (404). */
+async function getJsonOrMissing<T>(path: string): Promise<T | undefined> {
+  const res = await fetch(path);
   if (res.status === 404) return undefined;
-  if (!res.ok) throw new Error(`/api/runs/${runId}: ${res.status}`);
-  return res.json();
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json() as Promise<T>;
 }
+
+/** The detail of a run (ORC-298); undefined when the server knows no such run. */
+export const fetchRunDetail = (runId: string) => getJsonOrMissing<RunDetailView>(`/api/runs/${encodeURIComponent(runId)}`);
+
+/** The audit sheets (ORC-229): the PRs a human reviewed, the sheet of one (undefined for a ticket the server does not know), and a defect entered on it. */
+export const fetchAuditList = () => getJson<AuditListView>('/api/audit');
+const auditPath = (projectId: string, ticketId: string) => `/api/audit/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}`;
+export const fetchAuditSheet = (projectId: string, ticketId: string) => getJsonOrMissing<AuditSheetView>(auditPath(projectId, ticketId));
+export const postDefect = (projectId: string, ticketId: string, entry: DefectEntry) =>
+  fetch(`${auditPath(projectId, ticketId)}/defects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(entry) });
 
 export const post = (path: string) => fetch(path, { method: 'POST' });
 

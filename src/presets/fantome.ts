@@ -1,0 +1,77 @@
+import { presetBound } from '../config/load-workflow.js';
+import type { Workflow } from '../config/workflow-schema.js';
+import { parseCondition } from '../core/conditions.js';
+import { factoryDefault } from './factory-default.js';
+import { compilePreset, type Preset, type Step } from './preset.js';
+
+/** Who approves a spec at the Rapide level (ORC-231): the preset itself, as its approval records it. */
+export const FANTOME_APPROVER = 'factory/fantome';
+
+/** A step of `factory/default`, as it is there: the fantome changes only where a step leads. */
+function stepOf(id: string, over: Partial<Step> = {}): Step {
+  const step = factoryDefault.steps.find((s) => s.id === id);
+  if (!step) throw new Error(`factory/default has no step ${id}`);
+  return { ...step, ...over } as Step;
+}
+
+/**
+ * The `factory/fantome` preset (ORC-231), a variant of `factory/default` for the replay of closed tickets: level Rapide, nobody
+ * answers. No `clarify` (its questions are assumed), no spec gate (the preset approves a spec that passes `spec_check`), and the
+ * run ends at its publication, which the no-effect mode keeps as an artifact: no AI review, no merge gate, no merge.
+ */
+export const fantome: Preset = {
+  ...factoryDefault,
+  name: 'factory/fantome',
+  level: 'rapide',
+  counters: { spec_check: factoryDefault.counters['spec_check']!, red: factoryDefault.counters['red']!, verify: factoryDefault.counters['verify']! },
+  // Never reached: nothing is pushed, so no CI turns red and no conflict arises. Required by the preset's shape.
+  redCi: { goto: 'build', counter: 'verify' },
+  conflict: { goto: 'build', counter: 'verify' },
+  steps: [
+    stepOf('intake', { next: 'spec_draft' }),
+    stepOf('spec_draft'),
+    stepOf('spec_check', { next: 'tests' }),
+    stepOf('tests'),
+    stepOf('red'),
+    stepOf('freeze_tests'),
+    stepOf('build'),
+    stepOf('verify'),
+    stepOf('publish', { next: null }),
+  ],
+};
+
+/** A project's effects (ORC-231): none when it says so, or when it runs the fantome preset, which never has any. */
+export function projectEffects(p: { effects?: 'none' | undefined; preset?: string | undefined }): 'none' | undefined {
+  return p.effects === 'none' || p.preset === fantome.name ? 'none' : undefined;
+}
+
+// Compiled once, at load, as `factory/default` is: a preset that breaks an invariant of the core never drives a workflow.
+compilePreset(fantome);
+
+/**
+ * The workflow the fantome drives, until the engine runs the preset's steps itself (ORC-177). Delegation runs `intake`, then
+ * `intake` the spec, the spec the tests, the tests `dev`, whose publication ends the run (no move, no AI review). Its level and its
+ * bounds are the preset's.
+ */
+export function asFantome(wf: Workflow): Workflow {
+  const job = (name: string) => {
+    const j = wf.jobs[name];
+    if (!j) throw new Error(`the workflow has no job ${name}: the fantome runs intake, spec, tests and dev`);
+    return j;
+  };
+  return {
+    ...wf,
+    level: fantome.level,
+    // Its delegation alone: a replayed ticket is closed (Done), and nothing a human does on the real one starts any job of its run.
+    on: { 'ticket.delegated': [{ when: parseCondition('!blocked'), whenSrc: '!blocked', run: 'intake' }] },
+    jobs: {
+      ...wf.jobs,
+      intake: { ...job('intake'), onSuccess: { run: 'spec' } },
+      spec: { ...job('spec'), onSuccess: { run: 'tests' } },
+      tests: { ...job('tests'), onSuccess: { run: 'dev' } },
+      dev: { ...job('dev'), onStart: {}, onSuccess: {} },
+    },
+    // `verifyAttempts` counts every check: the preset's returns, plus the first one, as `loadWorkflow` counts them.
+    limits: { ...wf.limits, verifyAttempts: presetBound(fantome, 'verify') + 1, specCheckReturns: presetBound(fantome, 'spec_check') },
+  };
+}

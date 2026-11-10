@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchBlocks, fetchFlow, fetchMeasures, fetchOverview, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, refusal, subscribe } from './api.js';
+import { fetchAuditList, fetchAuditSheet, fetchBlocks, fetchFlow, fetchMeasures, fetchOverview, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, postDefect, refusal, subscribe } from './api.js';
+import { AuditList, AuditSheet, auditTicketOf } from './Audit.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
 import { Measures, runIdOf } from './Measures.js';
@@ -8,7 +9,7 @@ import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { FlowView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
+import type { AuditSheetView, DefectEntry, FlowView, ReviewDefectView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -29,9 +30,9 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'overview' | 'measures' | 'run' | 'security';
-const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'measures', '#security': 'security' };
-const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : PAGES[hash] ?? 'flow');
+type View = 'flow' | 'overview' | 'measures' | 'run' | 'security' | 'audit' | 'sheet';
+const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'measures', '#security': 'security', '#audit': 'audit' };
+const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : auditTicketOf(hash) !== undefined ? 'sheet' : PAGES[hash] ?? 'flow');
 
 /**
  * What `read` gives, read now and every `everyMs` (30 s) while the page is shown and its tab visible, again when `deps` change; an
@@ -141,6 +142,58 @@ function RunPage({ runId }: { runId: string }) {
   );
 }
 
+/** The PRs a human reviewed (ORC-229), read when shown and every 5 min while it is: each read is a journal per ticket, and it moves with reviews. */
+function AuditPage() {
+  const { data, failed } = usePolled(fetchAuditList, [], OVERVIEW_POLL_MS);
+  return (
+    <div className="flow">
+      {failed && <p className="flow-failed" role="alert">{data ? 'Reviewed PRs out of date: reading them failed. Retrying within 5 min.' : 'Reviewed PRs unavailable: reading them failed. Retrying within 5 min.'}</p>}
+      {data ? <AuditList list={data} /> : !failed && <section><p className="empty">Loading the reviewed PRs…</p></section>}
+    </div>
+  );
+}
+
+/** The audit sheet of a ticket (ORC-229), read when opened (the page is keyed by its link); a defect entered is added as the server kept it. */
+function SheetPage({ projectId, ticketId }: { projectId: string; ticketId: string }) {
+  const [sheet, setSheet] = useState<AuditSheetView>();
+  const [failed, setFailed] = useState<'missing' | 'error'>();
+  const [notice, setNotice] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    void fetchAuditSheet(projectId, ticketId).then(
+      (s) => live && (s ? setSheet(s) : setFailed('missing')),
+      () => live && setFailed('error'),
+    );
+    return () => {
+      live = false;
+    };
+  }, [projectId, ticketId]);
+  const enter = (entry: DefectEntry) =>
+    postDefect(projectId, ticketId, entry).then(
+      async (res) => {
+        if (!res.ok) {
+          setNotice(await refusal(res, 'defect'));
+          return false;
+        }
+        const { defect } = (await res.json()) as { defect: ReviewDefectView };
+        setSheet((s) => s && { ...s, defects: [...s.defects, defect] });
+        setNotice('Defect entered.');
+        return true;
+      },
+      () => {
+        setNotice('Defect not sent: the server did not answer.');
+        return false;
+      },
+    );
+  return (
+    <div className="flow">
+      <p><a href="#audit">← Reviewed PRs</a></p>
+      {failed && <p className="flow-failed" role="alert">{failed === 'missing' ? `No ticket ${ticketId}.` : 'Audit sheet unavailable: reading it failed. Reload to retry.'}</p>}
+      {sheet ? <AuditSheet sheet={sheet} onDefect={enter} notice={notice} /> : !failed && <section><p className="empty">Loading the audit sheet…</p></section>}
+    </div>
+  );
+}
+
 export function App() {
   const [hash, setHash] = useState(() => window.location.hash);
   const view = viewOf(hash);
@@ -235,6 +288,7 @@ export function App() {
           <a href="#overview" aria-current={view === 'overview' ? 'page' : undefined}>Overview</a>
           <a href="#measures" aria-current={view === 'measures' || view === 'run' ? 'page' : undefined}>Measures</a>
           <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
+          <a href="#audit" aria-current={view === 'audit' || view === 'sheet' ? 'page' : undefined}>Audit</a>
         </nav>
         {snap && (
           <div className="stats">
@@ -252,7 +306,7 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
-      {view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
+      {view === 'sheet' ? <main className="single"><SheetPage key={hash} {...auditTicketOf(hash)!} /></main> : view === 'audit' ? <main className="single"><AuditPage /></main> : view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

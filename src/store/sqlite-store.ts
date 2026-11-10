@@ -11,9 +11,11 @@ import {
 } from '../core/dead-letter.js';
 import type { ReviewLens } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
+import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline, BaselineMeasure, BaselineValue } from '../core/baseline.js';
+import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { OutboxEffect } from '../core/decision.js';
-import type { ReviewFinding } from '../core/review.js';
+import { findingRowId, type ReviewFinding } from '../core/review.js';
 import { claims, holds } from '../core/routing.js';
 import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
@@ -78,8 +80,14 @@ CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id 
 CREATE TABLE IF NOT EXISTS changelog (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS changelog_at ON changelog (at);
 CREATE TABLE IF NOT EXISTS baselines (project_id TEXT NOT NULL, since INTEGER NOT NULL, until INTEGER NOT NULL, measure TEXT NOT NULL, computed_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, since, until, measure));
+CREATE TABLE IF NOT EXISTS ghost_replays (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ghost_tickets (replay_id TEXT NOT NULL, ticket_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (replay_id, ticket_id));
+CREATE TABLE IF NOT EXISTS ghost_judgments (replay_id TEXT NOT NULL, ticket_id TEXT NOT NULL, side TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (replay_id, ticket_id, side));
 CREATE TABLE IF NOT EXISTS known_flaky_tests (project_id TEXT NOT NULL, test TEXT NOT NULL, added_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, test));
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
+CREATE TABLE IF NOT EXISTS review_defects (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS review_defects_at ON review_defects (at);
+CREATE INDEX IF NOT EXISTS review_defects_ticket ON review_defects (project_id, ticket_id);
 `;
 
 interface DeadLetterSqlRow {
@@ -844,6 +852,36 @@ export class SqliteStore implements Store {
     return { projectId: first.project_id, since: Number(first.since), until: Number(first.until), computedAt: Number(first.computed_at), measures };
   }
 
+  async putGhostReplay(r: GhostReplay): Promise<boolean> {
+    return Number(this.db.prepare('INSERT INTO ghost_replays (id, started_at, data) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING').run(r.id, r.startedAt, JSON.stringify(r)).changes) === 1;
+  }
+
+  async ghostReplay(id: string): Promise<GhostReplay | undefined> {
+    const row = this.db.prepare('SELECT data FROM ghost_replays WHERE id = ?').get(id) as { data: string } | undefined;
+    return row && (JSON.parse(row.data) as GhostReplay);
+  }
+
+  async ghostReplays(): Promise<GhostReplay[]> {
+    return (this.db.prepare('SELECT data FROM ghost_replays ORDER BY started_at DESC, id').all() as { data: string }[]).map((r) => JSON.parse(r.data) as GhostReplay);
+  }
+
+  async putGhostTicket(t: GhostTicket): Promise<void> {
+    this.db.prepare('INSERT INTO ghost_tickets (replay_id, ticket_id, data) VALUES (?, ?, ?) ON CONFLICT (replay_id, ticket_id) DO UPDATE SET data = excluded.data').run(t.replayId, t.ticketId, JSON.stringify(t));
+  }
+
+  async ghostTickets(replayId: string): Promise<GhostTicket[]> {
+    return (this.db.prepare('SELECT data FROM ghost_tickets WHERE replay_id = ? ORDER BY ticket_id').all(replayId) as { data: string }[]).map((r) => JSON.parse(r.data) as GhostTicket);
+  }
+
+  async putGhostJudgment(j: GhostJudgment): Promise<boolean> {
+    const insert = this.db.prepare('INSERT INTO ghost_judgments (replay_id, ticket_id, side, at, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT (replay_id, ticket_id, side) DO NOTHING');
+    return Number(insert.run(j.replayId, j.ticketId, j.side, j.at, JSON.stringify(j)).changes) === 1;
+  }
+
+  async ghostJudgments(replayId: string): Promise<GhostJudgment[]> {
+    return (this.db.prepare('SELECT data FROM ghost_judgments WHERE replay_id = ? ORDER BY at, ticket_id, side').all(replayId) as { data: string }[]).map((r) => JSON.parse(r.data) as GhostJudgment);
+  }
+
   async putFindings(r: FindingsRecord): Promise<void> {
     this.atomically(() => {
       this.db.prepare('DELETE FROM findings WHERE project_id = ? AND ticket_id = ? AND sha = ? AND lens = ?').run(r.projectId, r.ticketId, r.sha, r.lens);
@@ -855,6 +893,27 @@ export class SqliteStore implements Store {
   async findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]> {
     const rows = this.db.prepare('SELECT lens, run_id, data FROM findings WHERE project_id = ? AND ticket_id = ? AND sha = ? ORDER BY lens, n').all(projectId, ticketId, sha) as { lens: ReviewLens; run_id: string; data: string }[];
     return rows.map((r) => ({ ...(JSON.parse(r.data) as Finding), lens: r.lens, runId: r.run_id }));
+  }
+
+  async ticketFindings(projectId: string, ticketId: string): Promise<KeptFinding[]> {
+    const rows = this.db
+      .prepare('SELECT sha, lens, n, run_id, at, data FROM findings WHERE project_id = ? AND ticket_id = ? ORDER BY at, lens, n')
+      .all(projectId, ticketId) as { sha: string; lens: ReviewLens; n: number; run_id: string; at: number; data: string }[];
+    return rows.map((r) => ({ ...(JSON.parse(r.data) as Finding), lens: r.lens, runId: r.run_id, id: findingRowId(r.run_id, r.lens, r.n), sha: r.sha, at: Number(r.at) }));
+  }
+
+  async putReviewDefect(d: ReviewDefect): Promise<boolean> {
+    return Number(this.db.prepare('INSERT INTO review_defects (id, project_id, ticket_id, at, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING').run(d.id, d.projectId, d.ticketId, d.at, JSON.stringify(d)).changes) === 1;
+  }
+
+  async ticketDefects(projectId: string, ticketId: string): Promise<ReviewDefect[]> {
+    const rows = this.db.prepare('SELECT data FROM review_defects WHERE project_id = ? AND ticket_id = ? ORDER BY at, id').all(projectId, ticketId) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as ReviewDefect);
+  }
+
+  async reviewDefects(since: number, until: number): Promise<ReviewDefect[]> {
+    const rows = this.db.prepare('SELECT data FROM review_defects WHERE at >= ? AND at < ? ORDER BY at, id').all(since, until) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as ReviewDefect);
   }
 
   // ponytail: every log read and counted in memory; SQLite is kept until ORC-178, Postgres counts in SQL.

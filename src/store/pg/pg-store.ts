@@ -13,9 +13,11 @@ import {
 } from '../../core/dead-letter.js';
 import type { ReviewLens } from '../../config/workflow-schema.js';
 import type { Finding } from '../../core/agent-output.js';
+import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
+import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
 import type { OutboxEffect } from '../../core/decision.js';
-import type { ReviewFinding } from '../../core/review.js';
+import { findingRowId, type ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
 import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
@@ -1020,13 +1022,66 @@ export class PgStore implements AsyncStore {
     return { projectId: first.project_id, since: Number(first.since), until: Number(first.until), computedAt: Number(first.at), measures };
   }
 
+  async putGhostReplay(r: GhostReplay): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.ghostReplays)
+      .values({ id: r.id, projectId: r.projectId, threshold: r.threshold, memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: new Date(r.startedAt), startedBy: r.startedBy })
+      .onConflictDoNothing()
+      .returning({ id: schema.ghostReplays.id });
+    return rows.length === 1;
+  }
+
+  async ghostReplay(id: string): Promise<GhostReplay | undefined> {
+    return (await this.readGhostReplays(sql`where id = ${id}`))[0];
+  }
+
+  async ghostReplays(): Promise<GhostReplay[]> {
+    return this.readGhostReplays(sql`order by started_at desc, id`);
+  }
+
+  private async readGhostReplays(rest: ReturnType<typeof sql>): Promise<GhostReplay[]> {
+    type Row = { id: string; project_id: string; threshold: number; memory: boolean; seed: string; tickets: string[]; started_at: string | number; started_by: string };
+    const { rows } = await this.db.execute<Row>(sql`
+      select id, project_id, threshold, memory, seed, tickets, round(extract(epoch from started_at) * 1000) as started_at, started_by from ghost_replays ${rest}
+    `);
+    return rows.map((r) => ({ id: r.id, projectId: r.project_id, threshold: Number(r.threshold), memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: Number(r.started_at), startedBy: r.started_by }));
+  }
+
+  async putGhostTicket(t: GhostTicket): Promise<void> {
+    // Through JSON: an absent field stays absent, as the SQLite store keeps it.
+    const data = JSON.parse(JSON.stringify(t)) as GhostTicket;
+    await this.db.insert(schema.ghostTickets).values({ replayId: t.replayId, ticketId: t.ticketId, data }).onConflictDoUpdate({ target: [schema.ghostTickets.replayId, schema.ghostTickets.ticketId], set: { data } });
+  }
+
+  async ghostTickets(replayId: string): Promise<GhostTicket[]> {
+    const { rows } = await this.db.execute<{ data: GhostTicket }>(sql`select data from ghost_tickets where replay_id = ${replayId} order by ticket_id`);
+    return rows.map((r) => r.data);
+  }
+
+  async putGhostJudgment(j: GhostJudgment): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.ghostJudgments)
+      .values({ replayId: j.replayId, ticketId: j.ticketId, side: j.side, grade: j.grade, judge: j.judge, at: new Date(j.at) })
+      .onConflictDoNothing()
+      .returning({ side: schema.ghostJudgments.side });
+    return rows.length === 1;
+  }
+
+  async ghostJudgments(replayId: string): Promise<GhostJudgment[]> {
+    type Row = { ticket_id: string; side: GhostSide; grade: GhostGrade; judge: string; at: string | number };
+    const { rows } = await this.db.execute<Row>(sql`
+      select ticket_id, side, grade, judge, round(extract(epoch from at) * 1000) as at from ghost_judgments where replay_id = ${replayId} order by at, ticket_id, side
+    `);
+    return rows.map((r) => ({ replayId, ticketId: r.ticket_id, side: r.side, grade: r.grade, judge: r.judge, at: Number(r.at) }));
+  }
+
   async putFindings(r: FindingsRecord): Promise<void> {
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`delete from findings where project_id = ${r.projectId} and ticket_id = ${r.ticketId} and sha = ${r.sha} and kind = ${r.lens}`);
       if (!r.findings.length) return;
       await tx.insert(schema.findings).values(
         r.findings.map((f, n) => ({
-          id: `${r.runId}:${r.lens}:${n}`, attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
+          id: findingRowId(r.runId, r.lens, n), attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
           projectId: r.projectId, ticketId: r.ticketId, sha: r.sha, n, file: f.file, line: f.line, suggestion: f.suggestion, fact: f.fact ?? null,
         })),
       );
@@ -1040,6 +1095,48 @@ export class PgStore implements AsyncStore {
     `);
     return rows.rows.map((r) => ({
       file: r.file, line: r.line, severity: r.severity, explanation: r.body, suggestion: r.suggestion, ...(r.fact === null ? {} : { fact: r.fact }), lens: r.kind, runId: r.attempt_id,
+    }));
+  }
+
+  async ticketFindings(projectId: string, ticketId: string): Promise<KeptFinding[]> {
+    const rows = await this.db.execute<{ id: string; attempt_id: string; kind: ReviewLens; sha: string; at: string | number; severity: Finding['severity']; body: string; file: string; line: number; suggestion: string; fact: string | null }>(sql`
+      select id, attempt_id, kind, sha, round(extract(epoch from created_at) * 1000) as at, severity, body, file, line, suggestion, fact from findings
+      where project_id = ${projectId} and ticket_id = ${ticketId} order by created_at, kind, n
+    `);
+    return rows.rows.map((r) => ({
+      file: r.file, line: r.line, severity: r.severity, explanation: r.body, suggestion: r.suggestion, ...(r.fact === null ? {} : { fact: r.fact }), lens: r.kind, runId: r.attempt_id,
+      id: r.id, sha: r.sha, at: Number(r.at),
+    }));
+  }
+
+  async putReviewDefect(d: ReviewDefect): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.reviewDefects)
+      .values({
+        id: d.id, projectId: d.projectId, ticketId: d.ticketId, prNumber: d.prNumber, description: d.description, findingId: d.findingId,
+        file: d.file ?? null, line: d.line ?? null, seriousDefect: d.definition, enteredBy: d.enteredBy, enteredAt: new Date(d.at),
+      })
+      .onConflictDoNothing()
+      .returning({ id: schema.reviewDefects.id });
+    return rows.length === 1;
+  }
+
+  async ticketDefects(projectId: string, ticketId: string): Promise<ReviewDefect[]> {
+    return this.defectsWhere(sql`project_id = ${projectId} and ticket_id = ${ticketId}`);
+  }
+
+  async reviewDefects(since: number, until: number): Promise<ReviewDefect[]> {
+    return this.defectsWhere(sql`entered_at >= to_timestamp(${since / 1000}) and entered_at < to_timestamp(${until / 1000})`);
+  }
+
+  private async defectsWhere(where: SQL): Promise<ReviewDefect[]> {
+    const rows = await this.db.execute<{ id: string; project_id: string; ticket_id: string; pr_number: number; description: string; finding_id: string | null; file: string | null; line: number | null; definition: string | null; entered_by: string; at: string | number }>(sql`
+      select id, project_id, ticket_id, pr_number, description, finding_id, file, line, serious_defect as definition, entered_by, round(extract(epoch from entered_at) * 1000) as at
+      from review_defects where ${where} order by entered_at, id
+    `);
+    return rows.rows.map((r) => ({
+      id: r.id, projectId: r.project_id, ticketId: r.ticket_id, prNumber: r.pr_number, description: r.description, findingId: r.finding_id,
+      ...(r.file === null ? {} : { file: r.file }), ...(r.line === null ? {} : { line: r.line }), definition: r.definition, enteredBy: r.entered_by, at: Number(r.at),
     }));
   }
 

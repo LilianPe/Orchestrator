@@ -30,6 +30,11 @@ export interface Preset {
    * Every class takes a human's `done_merge`: the factory never merges on its own.
    */
   approvers: Approvers;
+  /**
+   * `rapide` (ORC-231): nobody answers, as for a closed ticket replayed. No human gate; what `clarify` would ask is assumed and
+   * written in the spec, which the preset approves itself. Reserved to `factory/fantome`.
+   */
+  level?: 'rapide';
 }
 
 export interface FailureEdge {
@@ -127,6 +132,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
     }
     if (s.type === 'agent_step' && !s.writes) violations.push(`${where}: an agent step must declare what it writes`);
     if (s.type === 'agent_step' && s.readOnly && s.writes !== 'nothing') violations.push(`${where}: a read-only step writes nothing`);
+    if (preset.level === 'rapide' && s.type === 'human_gate') violations.push(`${where}: a preset at level rapide has no human gate, nobody answers`);
     if (isAgentStep(s) && !isPositiveInt(s.maxTurns)) {
       violations.push(`${where}: maxTurns must be a positive integer`);
     }

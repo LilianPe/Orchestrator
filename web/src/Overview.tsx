@@ -1,5 +1,5 @@
 import { formatDuration, formatTokens, percent, plural } from './Flow.js';
-import type { BaselineValueView, BaselineView, OverviewView, ReworkCause } from './types.js';
+import type { BaselineValueView, BaselineView, MissRateView, OverviewView, ReworkCause } from './types.js';
 
 /** The measures of the MVP doc that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */
 export const NO_SOURCE = [
@@ -7,7 +7,7 @@ export const NO_SOURCE = [
 ] as const;
 
 /** Why a merged ticket was not ready at the first try, in the dashboard's words (`Rework` of src/core/measures.ts). */
-const REWORK_LABELS: Record<ReworkCause, string> = {
+export const REWORK_LABELS: Record<ReworkCause, string> = {
   'pr.checks_failed': 'CI checks failed',
   'verify.failed': 'factory checks failed',
   'push.human': 'a human pushed',
@@ -40,6 +40,20 @@ function facing(b: BaselineView | null, measure: keyof BaselineView['measures'],
   const v = b?.measures[measure];
   if (!v) return { baseline: 'no baseline' };
   return v.noSource ? { baseline: 'no source', baselineDetail: 'human work' } : show(v);
+}
+
+/**
+ * The AI reviewers' miss rate (ORC-229): no figure at all while no definition of a serious defect is set, only why; then the
+ * share of the defects found in human review that no AI finding saw, over those entered under the definition.
+ */
+function missRateTile(m: MissRateView): Tile {
+  const label = 'AI reviewers’ miss rate';
+  if (!m.counted) return { label, value: 'not counted', detail: m.why };
+  return {
+    label,
+    value: orDash(m.rate, percent),
+    detail: join(`${m.missed} of ${plural(m.defects, 'defect')} found in human review without an AI finding`, m.leftOut ? `${m.leftOut} entered under another definition or none` : ''),
+  };
 }
 
 /** The figures of the overview: the four headline ones face the baseline, then the human messages and the quality signals. */
@@ -78,6 +92,7 @@ export function overviewTiles(o: OverviewView): Tile[] {
     { label: 'Reverted within 14 days', value: o.reverted.known ? `${o.reverted.yes} of ${o.reverted.known}` : '—', detail: 'merged tickets where it is known' },
     { label: 'CI per merged ticket', value: orDash(o.ciPerMerged.mean, formatDuration), detail: without(o.ciPerMerged.leftOut) },
     { label: 'Red check', value: verdicts ? `${o.red.verified} verified` : '—', detail: verdicts ? `would have blocked ${o.red.wouldHaveBlocked}` : 'no verdict' },
+    ...(o.aiReviewMisses ? [missRateTile(o.aiReviewMisses)] : []),
   ];
 }
 

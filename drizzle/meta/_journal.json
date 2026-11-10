@@ -85,6 +85,20 @@
       "when": 1794233334074,
       "tag": "0011_deliveries",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794344725170,
+      "tag": "0012_review_defects",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794349177178,
+      "tag": "0013_ghost_replays",
+      "breakpoints": true
     }
   ]
 }
