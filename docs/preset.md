@@ -86,6 +86,13 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 **Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the `human_review` gate: this needs an engine that executes the steps (ORC-177). `clarify` does not have a job yet; `after_merge` has none either, the factory carries it out itself without an agent (`do: after_merge` on `pr.merged`, ORC-197, [workflow.md](workflow.md#after-the-merge-orc-197)); `intake` and `spec_draft` have one, which a repository turns on ([intake](#intake-step-and-the-guard-before-in-progress-orc-206), [spec](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)); `spec_check` and `spec_review` are decided at its end and on the gate's commands. A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
 
+## `factory/fantome` (ORC-231)
+
+The preset of the replay of closed tickets, at the Rapide level (`level: rapide`): `factory/default` without `clarify`, without
+the spec gate and without anything after the publication. What `clarify` would ask is assumed, written in the spec and counted; the
+spec that passes `spec_check` is approved by the preset; a human gate at that level is refused by the compiler. Code:
+`src/presets/fantome.ts`; see [the replay of closed tickets](ghost-replay.md).
+
 ## `rebase` step (ORC-146)
 
 A conflict of the ticket's PR with its base branch arrives in the inbox as `pr.conflicted` (GitHub webhook, ORC-134). It is the engine that starts the step that handles it; an agent at work on another step never resolves it: the `dev`, `feedback`, `fix-ci` and `review` skills leave the base alone and hand back.
