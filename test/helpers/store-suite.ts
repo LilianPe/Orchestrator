@@ -524,6 +524,34 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.findingsOf('p', 'REL-1', 'sha0')).toHaveLength(1);
   });
 
+  it("reads all of a ticket's kept findings, each by its row id, over its commits (ORC-229)", async () => {
+    const s = await store();
+    const f = (file: string, patch: object = {}) => ({ file, line: 3, severity: 'blocking' as const, explanation: `${file} e`, suggestion: '', ...patch });
+    expect(await s.ticketFindings('p', 'REL-1')).toEqual([]);
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'sha1', lens: 'security', runId: 'r2', at: 200, findings: [f('b.ts', { fact: 'F-1' }), f('a.ts')] });
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'sha0', lens: 'correctness', runId: 'r0', at: 50, findings: [f('old.ts')] });
+    await s.putFindings({ projectId: 'p', ticketId: 'REL-2', sha: 'sha1', lens: 'correctness', runId: 'r9', at: 50, findings: [f('other.ts')] });
+    expect(await s.ticketFindings('p', 'REL-1')).toEqual([
+      { ...f('old.ts'), lens: 'correctness', runId: 'r0', id: 'r0:correctness:0', sha: 'sha0', at: 50 },
+      { ...f('b.ts', { fact: 'F-1' }), lens: 'security', runId: 'r2', id: 'r2:security:0', sha: 'sha1', at: 200 },
+      { ...f('a.ts'), lens: 'security', runId: 'r2', id: 'r2:security:1', sha: 'sha1', at: 200 },
+    ]);
+  });
+
+  it('keeps the defects humans enter from review, once by id, read by ticket and by period (ORC-229)', async () => {
+    const s = await store();
+    const d = (id: string, at: number, patch: object = {}) => ({
+      id, projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: `${id} found`, findingId: null, definition: null, enteredBy: 'dashboard:armand', at, ...patch,
+    });
+    expect(await s.putReviewDefect(d('d2', 200, { findingId: 'r2:security:0', file: 'b.ts', line: 3, definition: 'loses data' }))).toBe(true);
+    expect(await s.putReviewDefect(d('d1', 100))).toBe(true);
+    expect(await s.putReviewDefect({ ...d('d1', 100), description: 'changed' })).toBe(false);
+    expect(await s.putReviewDefect(d('d3', 300, { ticketId: 'REL-2' }))).toBe(true);
+    expect(await s.ticketDefects('p', 'REL-1')).toEqual([d('d1', 100), d('d2', 200, { findingId: 'r2:security:0', file: 'b.ts', line: 3, definition: 'loses data' })]);
+    expect((await s.reviewDefects(100, 300)).map((x) => x.id)).toEqual(['d1', 'd2']);
+    expect((await s.reviewDefects(200, 301)).map((x) => x.id)).toEqual(['d2', 'd3']);
+  });
+
   it('still reads a run stored without labels', async () => {
     const s = await store();
     await s.putRun(run());
