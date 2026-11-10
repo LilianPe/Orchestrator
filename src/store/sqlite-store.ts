@@ -14,7 +14,7 @@ import type { Finding } from '../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline, BaselineMeasure, BaselineValue } from '../core/baseline.js';
 import type { OutboxEffect } from '../core/decision.js';
-import type { ReviewFinding } from '../core/review.js';
+import { findingRowId, type ReviewFinding } from '../core/review.js';
 import { claims, holds } from '../core/routing.js';
 import type { QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../core/upcast.js';
@@ -870,8 +870,7 @@ export class SqliteStore implements Store {
     const rows = this.db
       .prepare('SELECT sha, lens, n, run_id, at, data FROM findings WHERE project_id = ? AND ticket_id = ? ORDER BY at, lens, n')
       .all(projectId, ticketId) as { sha: string; lens: ReviewLens; n: number; run_id: string; at: number; data: string }[];
-    // The id Postgres gives the row (`<run>:<lens>:<n>`), which a defect links to.
-    return rows.map((r) => ({ ...(JSON.parse(r.data) as Finding), lens: r.lens, runId: r.run_id, id: `${r.run_id}:${r.lens}:${r.n}`, sha: r.sha, at: Number(r.at) }));
+    return rows.map((r) => ({ ...(JSON.parse(r.data) as Finding), lens: r.lens, runId: r.run_id, id: findingRowId(r.run_id, r.lens, r.n), sha: r.sha, at: Number(r.at) }));
   }
 
   async putReviewDefect(d: ReviewDefect): Promise<boolean> {

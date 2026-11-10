@@ -279,7 +279,7 @@ describe('server', () => {
       await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 30), prNumber: 4 });
       await store.recordEvent({ ...event('o2', 'pr.opened', 3, { ...pr, number: 4 }), ticketId: 'REL-2' });
       const list = await (await app.request('/api/audit')).json();
-      expect(list).toEqual({ definition: null, sheets: [{ projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'human_review', prUrl: pr.url, mergedAt: null }] });
+      expect(list).toEqual({ sheets: [{ projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'human_review', prUrl: pr.url, mergedAt: null }] });
       const sheet = await (await app.request('/api/audit/p/REL-1')).json();
       expect(sheet).toMatchObject({
         definition: null,

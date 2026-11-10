@@ -1,7 +1,8 @@
 import type { MeasureFacts } from '../store/types.js';
 import { handedToHuman, mergeTime, ticketMeasures, type Rework, type RunMeasure } from './measures.js';
 import type { ReviewFinding } from './review.js';
-import { checkOf, stepCosts, type CheckVerdict, type StepCost } from './run-detail.js';
+import { checkOf, humanReviewOf, stepCosts, type CheckVerdict, type HumanReview, type StepCost } from './run-detail.js';
+import { NO_DEFINITION, type MissRate } from './serious-defect.js';
 import type { Spec } from './spec.js';
 import type { FactoryEvent } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
@@ -32,16 +33,6 @@ export interface ReviewDefect {
   at: number;
 }
 
-/** A human's review on a PR of the ticket, by its GitHub state. */
-export interface HumanReview {
-  id: string;
-  at: number;
-  author: string;
-  pr: number;
-  kind: 'review' | 'comment';
-  state: string | null;
-}
-
 /** A PR of the ticket and where it ended. */
 export interface AuditPr {
   number: number;
@@ -65,7 +56,6 @@ export interface AuditSheet {
   result: {
     prs: AuditPr[];
     reviews: HumanReview[];
-    mergedAt: number | null;
     firstTry: boolean | null;
     reworks: Rework[];
     revertedWithin14Days: boolean | null;
@@ -73,20 +63,10 @@ export interface AuditSheet {
   defects: ReviewDefect[];
 }
 
-/** Why nothing is counted while ORC-153 is open: said wherever a count would be. */
-export const NO_DEFINITION =
-  'No definition of a serious defect is set (audit.serious_defect in factory.yml, ORC-153): the defects of the audit sheets are kept, not counted.';
+export { NO_DEFINITION, type MissRate };
 
-/**
- * The AI reviewers' miss rate (ORC-229): the human defects with no matching AI finding over the defects counted. Nothing is
- * counted while no definition is set. `leftOut`: defects of the period entered under no definition, or another one.
- */
-export type MissRate =
-  | { counted: false; why: string }
-  | { counted: true; definition: string; defects: number; missed: number; rate: number | null; leftOut: number };
-
-/** The PRs of the journal, in the order they were opened, each with where it ended. */
-function prsOf(events: readonly FactoryEvent[]): AuditPr[] {
+/** The PRs of the journal, in the order they were opened, each with where it ended, a merge timed by GitHub when it says. */
+export function prsOf(events: readonly FactoryEvent[]): AuditPr[] {
   const prs = new Map<number, AuditPr>();
   for (const e of events) {
     if (e.type !== 'pr.opened' && e.type !== 'pr.merged' && e.type !== 'pr.closed') continue;
@@ -116,9 +96,6 @@ export function auditSheet(
   const events = facts.events.map((e) => upcast(e as StoredEvent));
   const measures = ticketMeasures(t.projectId, t.ticketId, facts);
   const spec = events.findLast((e): e is FactoryEvent<'run.finished'> => e.type === 'run.finished' && e.payload.output?.spec !== undefined)?.payload.output?.spec ?? null;
-  const reviews = events.flatMap((e): HumanReview[] =>
-    e.type === 'pr.reviewed' ? [{ id: e.id, at: e.at, author: e.payload.author, pr: e.payload.number, kind: e.payload.kind, state: e.payload.state?.toLowerCase() ?? null }] : [],
-  );
   return {
     projectId: t.projectId,
     ticketId: t.ticketId,
@@ -126,8 +103,7 @@ export function auditSheet(
     path: { steps: stepCosts(measures.runs), attempts: measures.runs, checks: events.flatMap((e) => checkOf(e) ?? []), findings: [...findings] },
     result: {
       prs: prsOf(events),
-      reviews,
-      mergedAt: measures.mergedAt,
+      reviews: events.flatMap((e) => (e.type === 'pr.reviewed' ? [humanReviewOf(e)] : [])),
       firstTry: measures.firstTry,
       reworks: measures.reworks,
       revertedWithin14Days: measures.revertedWithin14Days,

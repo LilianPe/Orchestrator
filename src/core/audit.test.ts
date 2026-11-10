@@ -54,7 +54,6 @@ describe('auditSheet (ORC-229)', () => {
     expect(sheet.result).toMatchObject({
       prs: [{ number: 3, url: 'https://gh/pr/3', state: 'merged', mergedAt: 50 }],
       reviews: [{ id: 'rh', author: 'lilian-gh', pr: 3, kind: 'review', state: 'changes_requested' }],
-      mergedAt: 50,
       firstTry: false,
       reworks: [{ cause: 'changes_requested', id: 'rh' }],
       revertedWithin14Days: null,
@@ -74,7 +73,6 @@ describe('auditSheet (ORC-229)', () => {
     }), [], []);
     expect(sheet.task.spec).toBeNull();
     expect(sheet.result.prs).toEqual([{ number: 3, url: 'https://gh/pr/3', state: 'closed', mergedAt: null }, { number: 4, url: 'https://gh/pr/4', state: 'open', mergedAt: null }]);
-    expect(sheet.result.mergedAt).toBeNull();
   });
 
   it('a PR closed then reopened is open again; a merge is timed by GitHub when it names the time', () => {

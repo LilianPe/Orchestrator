@@ -9,7 +9,7 @@ import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { AuditSheetView, DefectEntry, FlowView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
+import type { AuditSheetView, DefectEntry, FlowView, ReviewDefectView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -142,26 +142,24 @@ function RunPage({ runId }: { runId: string }) {
   );
 }
 
-/** The PRs a human reviewed (ORC-229), read when shown and every 30 s while it is. */
+/** The PRs a human reviewed (ORC-229), read when shown and every 5 min while it is: each read is a journal per ticket, and it moves with reviews. */
 function AuditPage() {
-  const { data, failed } = usePolled(fetchAuditList, []);
+  const { data, failed } = usePolled(fetchAuditList, [], OVERVIEW_POLL_MS);
   return (
     <div className="flow">
-      {failed && <p className="flow-failed" role="alert">{data ? 'Reviewed PRs out of date: reading them failed. Retrying within 30 s.' : 'Reviewed PRs unavailable: reading them failed. Retrying within 30 s.'}</p>}
+      {failed && <p className="flow-failed" role="alert">{data ? 'Reviewed PRs out of date: reading them failed. Retrying within 5 min.' : 'Reviewed PRs unavailable: reading them failed. Retrying within 5 min.'}</p>}
       {data ? <AuditList list={data} /> : !failed && <section><p className="empty">Loading the reviewed PRs…</p></section>}
     </div>
   );
 }
 
-/** The audit sheet of a ticket (ORC-229), read when opened and again once a defect is entered. */
+/** The audit sheet of a ticket (ORC-229), read when opened (the page is keyed by its link); a defect entered is added as the server kept it. */
 function SheetPage({ projectId, ticketId }: { projectId: string; ticketId: string }) {
   const [sheet, setSheet] = useState<AuditSheetView>();
   const [failed, setFailed] = useState<'missing' | 'error'>();
   const [notice, setNotice] = useState<string>();
-  const [reads, setReads] = useState(0);
   useEffect(() => {
     let live = true;
-    setFailed(undefined);
     void fetchAuditSheet(projectId, ticketId).then(
       (s) => live && (s ? setSheet(s) : setFailed('missing')),
       () => live && setFailed('error'),
@@ -169,13 +167,18 @@ function SheetPage({ projectId, ticketId }: { projectId: string; ticketId: strin
     return () => {
       live = false;
     };
-  }, [projectId, ticketId, reads]);
+  }, [projectId, ticketId]);
   const enter = (entry: DefectEntry) =>
     postDefect(projectId, ticketId, entry).then(
       async (res) => {
-        setNotice(res.ok ? 'Defect entered.' : await refusal(res, 'defect'));
-        if (res.ok) setReads((n) => n + 1);
-        return res.ok;
+        if (!res.ok) {
+          setNotice(await refusal(res, 'defect'));
+          return false;
+        }
+        const { defect } = (await res.json()) as { defect: ReviewDefectView };
+        setSheet((s) => s && { ...s, defects: [...s.defects, defect] });
+        setNotice('Defect entered.');
+        return true;
       },
       () => {
         setNotice('Defect not sent: the server did not answer.');

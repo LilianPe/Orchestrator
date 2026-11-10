@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
 import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
 import { teamOf, type Tracker } from '../adapters/tracker/types.js';
-import { auditSheet, humanReviewed, type ReviewDefect } from '../core/audit.js';
+import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
@@ -383,14 +383,17 @@ export function createApp(d: ServerDeps): Hono {
       const merged = f.events.find((e): e is FactoryEvent<'pr.merged'> => e.type === 'pr.merged');
       return [{ ...flowTicket(t), logical: t.logical, mergedAt: merged ? mergeTime(merged) : null }];
     });
-    return c.json({ definition, sheets });
+    return c.json({ sheets });
   });
   const defectLimit = bodyLimit({ maxSize: 16 * 1024, onError: (c) => c.json({ error: 'defect over 16 KB' }, 413) });
   const sheetOf = async (projectId: string, ticketId: string) => {
-    const t = await d.store.getTicket(projectId, ticketId);
-    if (!t) return undefined;
-    const [facts, findings, defects] = await Promise.all([d.store.measureFacts(projectId, ticketId), d.store.ticketFindings(projectId, ticketId), d.store.ticketDefects(projectId, ticketId)]);
-    return auditSheet(t, facts, findings, defects);
+    const [t, facts, findings, defects] = await Promise.all([
+      d.store.getTicket(projectId, ticketId),
+      d.store.measureFacts(projectId, ticketId),
+      d.store.ticketFindings(projectId, ticketId),
+      d.store.ticketDefects(projectId, ticketId),
+    ]);
+    return t ? auditSheet(t, facts, findings, defects) : undefined;
   };
   app.get('/api/audit/:projectId/:ticketId', async (c) => {
     const sheet = await sheetOf(c.req.param('projectId'), c.req.param('ticketId'));
@@ -405,15 +408,18 @@ export function createApp(d: ServerDeps): Hono {
       const fields = [...new Set(parsed.error.issues.map((i) => i.path.join('.') || 'body'))];
       return c.json({ error: `expected { prNumber, description, findingId?, file?, line? }: ${fields.join(', ')} at fault` }, 400);
     }
-    const sheet = await sheetOf(c.req.param('projectId'), c.req.param('ticketId'));
-    if (!sheet) return c.json({ error: 'no such ticket' }, 404);
+    // Only what the entry is checked against: the ticket's PRs and its kept findings, not the whole sheet.
+    const projectId = c.req.param('projectId');
+    const ticketId = c.req.param('ticketId');
+    const [t, facts, findings] = await Promise.all([d.store.getTicket(projectId, ticketId), d.store.measureFacts(projectId, ticketId), d.store.ticketFindings(projectId, ticketId)]);
+    if (!t) return c.json({ error: 'no such ticket' }, 404);
     const entry = parsed.data;
-    if (!sheet.result.prs.some((p) => p.number === entry.prNumber)) return c.json({ error: `PR #${entry.prNumber} is not a PR of ${sheet.ticketId}` }, 400);
-    if (entry.findingId !== undefined && !sheet.path.findings.some((f) => f.id === entry.findingId)) return c.json({ error: `no finding ${entry.findingId} on ${sheet.ticketId}` }, 400);
+    if (!prsOf(facts.events).some((p) => p.number === entry.prNumber)) return c.json({ error: `PR #${entry.prNumber} is not a PR of ${ticketId}` }, 400);
+    if (entry.findingId !== undefined && !findings.some((f) => f.id === entry.findingId)) return c.json({ error: `no finding ${entry.findingId} on ${ticketId}` }, 400);
     const defect: ReviewDefect = {
       id: randomUUID(),
-      projectId: sheet.projectId,
-      ticketId: sheet.ticketId,
+      projectId,
+      ticketId,
       prNumber: entry.prNumber,
       description: entry.description,
       findingId: entry.findingId ?? null,

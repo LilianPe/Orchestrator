@@ -16,7 +16,7 @@ import type { Finding } from '../../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
 import type { OutboxEffect } from '../../core/decision.js';
-import type { ReviewFinding } from '../../core/review.js';
+import { findingRowId, type ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
 import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
@@ -1038,7 +1038,7 @@ export class PgStore implements AsyncStore {
       if (!r.findings.length) return;
       await tx.insert(schema.findings).values(
         r.findings.map((f, n) => ({
-          id: `${r.runId}:${r.lens}:${n}`, attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
+          id: findingRowId(r.runId, r.lens, n), attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
           projectId: r.projectId, ticketId: r.ticketId, sha: r.sha, n, file: f.file, line: f.line, suggestion: f.suggestion, fact: f.fact ?? null,
         })),
       );

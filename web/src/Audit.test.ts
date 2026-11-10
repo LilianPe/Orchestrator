@@ -22,7 +22,6 @@ const sheet = (patch: Partial<AuditSheetView> = {}): AuditSheetView => ({
   result: {
     prs: [{ number: 3, url: 'https://gh/pr/3', state: 'merged', mergedAt: 100_000 }],
     reviews: [{ id: 'rh', at: 80_000, author: 'lilian-gh', pr: 3, kind: 'review', state: 'changes_requested' }],
-    mergedAt: 100_000,
     firstTry: false,
     reworks: [{ cause: 'changes_requested', id: 'rh' }],
     revertedWithin14Days: null,
@@ -75,10 +74,10 @@ describe('the audit sheet page (ORC-229)', () => {
   });
 
   it('lists the PRs a human reviewed, each to its sheet', () => {
-    const html = renderToStaticMarkup(createElement(AuditList, { list: { definition: null, sheets: [{ projectId: 'p', ticketId: 'REL-1', title: 'Export CSV', logical: 'done', prUrl: 'https://gh/pr/3', mergedAt: 100_000 }] } }));
+    const html = renderToStaticMarkup(createElement(AuditList, { list: { sheets: [{ projectId: 'p', ticketId: 'REL-1', title: 'Export CSV', logical: 'done', prUrl: 'https://gh/pr/3', mergedAt: 100_000 }] } }));
     expect(html).toContain(`href="${auditHash('p', 'REL-1')}"`);
     expect(html).toContain('Export CSV');
-    expect(renderToStaticMarkup(createElement(AuditList, { list: { definition: null, sheets: [] } }))).toContain('No PR reviewed by a human yet');
+    expect(renderToStaticMarkup(createElement(AuditList, { list: { sheets: [] } }))).toContain('No PR reviewed by a human yet');
   });
 
   it('finds the sheet a link names, and none for a malformed one', () => {

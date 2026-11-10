@@ -1,4 +1,5 @@
 import type { BlockCause, BlockKind, ParetoCause } from '../../src/core/block-cause.js';
+import type { MissRate } from '../../src/core/serious-defect.js';
 
 export interface RunView {
   id: string;
@@ -171,10 +172,8 @@ export interface OverviewView {
   aiReviewMisses?: MissRateView;
 }
 
-/** `MissRate` of src/core/audit.ts (ORC-229). */
-export type MissRateView =
-  | { counted: false; why: string }
-  | { counted: true; definition: string; defects: number; missed: number; rate: number | null; leftOut: number };
+/** `MissRate` of src/core/serious-defect.ts (ORC-229). */
+export type MissRateView = MissRate;
 
 /** `ReviewDefect` of src/core/audit.ts (ORC-229): a defect a human found in review, linked to an AI finding or not. */
 export interface ReviewDefectView {
@@ -202,7 +201,6 @@ export interface DefectEntry {
 
 /** `GET /api/audit` (ORC-229): the PRs a human reviewed among the tickets updated last. */
 export interface AuditListView {
-  definition: string | null;
   sheets: (FlowTicketView & { logical: string; mergedAt: number | null })[];
 }
 
@@ -221,7 +219,6 @@ export interface AuditSheetView {
   result: {
     prs: { number: number; url: string; state: 'open' | 'merged' | 'closed'; mergedAt: number | null }[];
     reviews: { id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }[];
-    mergedAt: number | null;
     firstTry: boolean | null;
     reworks: { cause: ReworkCause; id: string }[];
     revertedWithin14Days: boolean | null;

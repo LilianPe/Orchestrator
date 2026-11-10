@@ -1,13 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import { formatDuration, formatTokens, plural, PrLink, totalTokens } from './Flow.js';
+import { NO_DEFINITION } from '../../src/core/serious-defect.js';
+import { PrLink } from './Flow.js';
 import { runHash } from './Measures.js';
 import { REWORK_LABELS } from './Overview.js';
+import { Checks, Steps } from './RunDetail.js';
 import type { AuditListView, AuditSheetView, DefectEntry, ReviewDefectView } from './types.js';
 
 const time = (at: number) => new Date(at).toLocaleString('en-US');
-
-/** Why nothing is counted while ORC-153 is open: `NO_DEFINITION` of src/core/audit.ts, which the web cannot import. */
-export const NO_DEFINITION = 'No definition of a serious defect is set (audit.serious_defect in factory.yml, ORC-153): the defects entered are kept, not counted.';
 
 /** Where a ticket's audit sheet is (ORC-229): `#audit/<project>/<ticket>`. */
 export const auditHash = (projectId: string, ticketId: string): string => `#audit/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}`;
@@ -70,25 +69,9 @@ function AgentPath({ path }: Pick<AuditSheetView, 'path'>) {
   return (
     <section>
       <h2>The agent’s path</h2>
-      <table>
-        <thead><tr><th>Step</th><th className="num">Attempts</th><th className="num">Tokens</th><th className="num">Turns</th><th className="num">Work</th></tr></thead>
-        <tbody>
-          {path.steps.map((s) => (
-            <tr key={s.job}>
-              <td className="step">{s.job}</td>
-              <td className="num">{s.attempts}</td>
-              <td className="num">{s.tokens ? formatTokens(totalTokens(s.tokens)) : '—'}</td>
-              <td className="num">{plural(s.turns, 'turn')}</td>
-              <td className="num">{formatDuration(s.workMs)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
       <p className="note">Attempts: {path.attempts.length ? path.attempts.map((a) => <a key={a.id} href={runHash(a.id)}>{`${a.job} (${a.status}) `}</a>) : 'none'}</p>
-      <h3>Checks</h3>
-      {path.checks.length ? (
-        <ul>{path.checks.map((c) => <li key={c.id}>{time(c.at)} · {c.check} {c.result}{c.names.length ? `: ${c.names.join(', ')}` : ''}{c.red ? ` (${c.red})` : ''}</li>)}</ul>
-      ) : <p className="empty">No check.</p>}
+      <Steps steps={path.steps} />
+      <Checks checks={path.checks} />
       <h3>AI review findings</h3>
       {path.findings.length ? (
         <ul>
@@ -109,7 +92,7 @@ function Result({ result }: Pick<AuditSheetView, 'result'>) {
         {result.prs.map((p) => <li key={p.number}><a href={p.url}>PR #{p.number}</a>: {p.state}{p.mergedAt === null ? '' : `, ${time(p.mergedAt)}`}</li>)}
       </ul>
       {result.reviews.length ? (
-        <ul>{result.reviews.map((r) => <li key={r.id}>{time(r.at)} · <strong>{r.author}</strong> on PR #{r.pr}: {r.kind === 'review' ? (r.state?.replace(/_/g, ' ') ?? 'review') : 'comment on the diff'}</li>)}</ul>
+        <ul>{result.reviews.map((r) => <li key={r.id}>{time(r.at)} · <strong>{r.author}</strong> on PR #{r.pr}: {r.kind === 'review' ? (r.state ?? 'review') : 'comment on the diff'}</li>)}</ul>
       ) : <p className="empty">No review on GitHub.</p>}
       <p className="note">
         First try: {result.firstTry === null ? 'not merged' : result.firstTry ? 'yes' : `no (${result.reworks.map((r) => REWORK_LABELS[r.cause]).join(', ')})`}
