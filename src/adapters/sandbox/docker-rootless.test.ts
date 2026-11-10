@@ -65,7 +65,7 @@ function fakeEgress(live: string[] = []) {
     },
   };
 }
-const inspectLine = (id: string, running: boolean, runId: string, network: string) => `${id}\t${running}\t${runId}\t${network}\n`;
+const inspectLine = (id: string, running: boolean, runId: string, network: string, allow = '') => `${id}\t${running}\t${runId}\t${network}\t${allow}\n`;
 
 /** An engine with no container yet: `run` prints the new id. */
 const empty = () => engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()));
@@ -238,6 +238,34 @@ describe('ContainerSandboxProvider.create', () => {
     // Twice in one process, the egress is not opened twice.
     await p.reattach('r1');
     expect(egress.opened).toHaveLength(1);
+  });
+
+  it('keeps the hosts of a custom repository on a label, and a resumed run gets them back (ORC-322)', async () => {
+    const made = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec, egress: fakeEgress() }).create(req({ network: 'limited', allow: ['a.example.com', 'b.example.com'] }));
+    const a = runArgs(made.calls);
+    expect(a[a.indexOf('factory.allow=a.example.com,b.example.com') - 1]).toBe('--label');
+
+    const e = engine((x) => {
+      if (x[0] === 'ps') return ok('c9\n');
+      if (x[0] === 'inspect') return ok(inspectLine('c9', true, 'r1', 'limited', 'a.example.com,b.example.com'));
+      throw new Error(`unexpected ${x.join(' ')}`);
+    });
+    const egress = fakeEgress();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress }).reattach('r1');
+    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['a.example.com', 'b.example.com'] } }]);
+  });
+
+  it('puts no allow label on a sandbox without hosts of its own, and reattaches a container without one with none', async () => {
+    const made = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec }).create(req({ network: 'limited' }));
+    expect(runArgs(made.calls).some((x) => x.startsWith('factory.allow='))).toBe(false);
+
+    // Some engines print a missing label as `<no value>`.
+    const e = engine((x) => (x[0] === 'ps' ? ok('c9\n') : ok(inspectLine('c9', true, 'r1', 'limited', '<no value>'))));
+    const egress = fakeEgress();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress }).reattach('r1');
+    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: [] } }]);
   });
 
   it('has nothing to reattach to when the container of the attempt is stopped or gone', async () => {
@@ -525,7 +553,7 @@ describe('ContainerSandboxProvider services (ORC-309)', () => {
         const found = a.slice(3).flatMap((id) => (containers.has(id) ? [[id, containers.get(id)!] as const] : []));
         if (format.startsWith('{{.State.Running}}')) return ok(found.map(([, c]) => `${c.running}${Object.entries(c.env).map(([k, v]) => `\t${k}=${v}`).join('')}\n`).join(''));
         if (format.includes('"factory.services"')) return ok(found.map(([id, c]) => `${id}\t${c.labels['factory.services']}\n`).join(''));
-        return ok(found.map(([id, c]) => inspectLine(id, c.running, c.labels['factory.attempt']!, c.labels['factory.network']!)).join(''));
+        return ok(found.map(([id, c]) => inspectLine(id, c.running, c.labels['factory.attempt']!, c.labels['factory.network']!, c.labels['factory.allow'])).join(''));
       }
       if (a[0] === 'exec' && a.includes('pg_isready')) return { stdout: '', stderr: 'no response', code: over.ready?.() ?? 0 };
       if (a[0] === 'exec' && a[2] === 'sh') return over.role?.() ?? ok();
