@@ -35,7 +35,6 @@ const rows = (html: string, title: string) => html.split(`>${title}<`)[1]!.split
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 describe('the security page (ORC-300)', () => {
-
   it('shows the causes of the blocks of the period, most frequent first, with their share and running share', () => {
     const html = page();
     expect(rows(html, 'Block causes').map(text)).toEqual(['Red not verified 3 75% 75%', 'Limit reached 1 25% 100%']);

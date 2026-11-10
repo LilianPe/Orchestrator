@@ -32,16 +32,13 @@ export interface FlowTicketView {
   prUrl?: string;
 }
 
-export interface WorkingRunView extends FlowTicketView {
+export interface WorkingRunView extends FlowTicketView, Pick<TicketMeasuresView, 'tokens' | 'attemptsWithoutTokens' | 'usageLimitShare'> {
   runId: string;
   step: string;
   verifying: boolean;
   stoppable: boolean;
   durationMs: number;
   measured: boolean;
-  tokens: TokensView | null;
-  attemptsWithoutTokens: number;
-  usageLimitShare: number | null;
   costUsd: number;
 }
 

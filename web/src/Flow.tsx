@@ -60,9 +60,10 @@ export function tokensCell(run: Pick<WorkingRunView, 'measured' | 'tokens' | 'at
   const { input, output, cacheRead, cacheCreation } = run.tokens;
   const missing = run.attemptsWithoutTokens > 0 ? `${plural(run.attemptsWithoutTokens, 'finished attempt')} without a measurement. ` : '';
   const share = run.usageLimitShare === null ? undefined : percent(run.usageLimitShare);
+  const [shareText, shareTitle] = share ? [` · ${share}`, ` ${share} of the ticket’s token budget: its code runs, cache reads left out, against factory.yml’s per_ticket_tokens.`] : ['', ''];
   return {
-    text: `${missing ? '≥ ' : ''}${formatTokens(totalTokens(run.tokens))}${share ? ` · ${share}` : ''}`,
-    title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.${share ? ` ${share} of the ticket’s token budget: its code runs, cache reads left out, against factory.yml’s per_ticket_tokens.` : ''}`,
+    text: `${missing ? '≥ ' : ''}${formatTokens(totalTokens(run.tokens))}${shareText}`,
+    title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.${shareTitle}`,
   };
 }
 
