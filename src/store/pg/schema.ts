@@ -417,7 +417,7 @@ export const deliveries = pgTable(
 
 /**
  * The defects humans found in reviewing a PR of the factory (ORC-229), entered from the dashboard and never changed: linked to
- * the AI finding that saw it (`finding_id`, a `findings` row id) or not, a miss of the AI reviewers. `definition`, the definition
+ * the AI finding that saw it (`finding_id`, a `findings` row id) or not, a miss of the AI reviewers. `serious_defect`, the definition
  * of a serious defect in force at the entry, null without one: only those under the definition in force are counted.
  */
 export const reviewDefects = pgTable(
@@ -431,7 +431,7 @@ export const reviewDefects = pgTable(
     findingId: text('finding_id'),
     file: text('file'),
     line: integer('line'),
-    definition: text('definition'),
+    seriousDefect: text('serious_defect'),
     enteredBy: text('entered_by').notNull(),
     enteredAt: timestamp('entered_at', { withTimezone: true, mode: 'date' }).notNull(),
   },

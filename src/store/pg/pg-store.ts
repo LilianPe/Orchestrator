@@ -1071,7 +1071,7 @@ export class PgStore implements AsyncStore {
       .insert(schema.reviewDefects)
       .values({
         id: d.id, projectId: d.projectId, ticketId: d.ticketId, prNumber: d.prNumber, description: d.description, findingId: d.findingId,
-        file: d.file ?? null, line: d.line ?? null, definition: d.definition, enteredBy: d.enteredBy, enteredAt: new Date(d.at),
+        file: d.file ?? null, line: d.line ?? null, seriousDefect: d.definition, enteredBy: d.enteredBy, enteredAt: new Date(d.at),
       })
       .onConflictDoNothing()
       .returning({ id: schema.reviewDefects.id });
@@ -1088,7 +1088,7 @@ export class PgStore implements AsyncStore {
 
   private async defectsWhere(where: SQL): Promise<ReviewDefect[]> {
     const rows = await this.db.execute<{ id: string; project_id: string; ticket_id: string; pr_number: number; description: string; finding_id: string | null; file: string | null; line: number | null; definition: string | null; entered_by: string; at: string | number }>(sql`
-      select id, project_id, ticket_id, pr_number, description, finding_id, file, line, definition, entered_by, round(extract(epoch from entered_at) * 1000) as at
+      select id, project_id, ticket_id, pr_number, description, finding_id, file, line, serious_defect as definition, entered_by, round(extract(epoch from entered_at) * 1000) as at
       from review_defects where ${where} order by entered_at, id
     `);
     return rows.rows.map((r) => ({

@@ -7,7 +7,7 @@ CREATE TABLE "review_defects" (
 	"finding_id" text,
 	"file" text,
 	"line" integer,
-	"definition" text,
+	"serious_defect" text,
 	"entered_by" text NOT NULL,
 	"entered_at" timestamp with time zone NOT NULL
 );

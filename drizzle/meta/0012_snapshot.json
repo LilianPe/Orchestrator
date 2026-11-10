@@ -1,5 +1,5 @@
 {
-  "id": "5f62717f-cb46-4996-a4f8-204b4d2459d6",
+  "id": "3c2edf14-317f-4350-a0c0-cc83a41a3d58",
   "prevId": "a75dd923-6504-4e2b-bb60-41045d9d3076",
   "version": "7",
   "dialect": "postgresql",
@@ -1596,8 +1596,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "definition": {
-          "name": "definition",
+        "serious_defect": {
+          "name": "serious_defect",
           "type": "text",
           "primaryKey": false,
           "notNull": false
