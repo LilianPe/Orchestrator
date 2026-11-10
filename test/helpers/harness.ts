@@ -328,7 +328,7 @@ export function createHarness(
     };
     // As the daemon's (ORC-376): the replays of the store this life reads, delegated through the orchestrator it builds.
     const replays = opts.replays && new Replays({
-      store: life.store, tracker: outside.tracker, workspaces: outside.workspaces, projects: [project.id], dir: opts.replays.dir, sandboxes: !!opts.sandboxed,
+      store: life.store, tracker: outside.tracker, projects: [project.id], dir: opts.replays.dir, sandboxes: !!opts.sandboxed,
       accept: (e): Promise<boolean> => orch.accept(e), now: () => clock.now(), log: (level, message) => void logs.push({ level, message }), startTime: async () => opts.replays!.startTime,
     });
     return { ...life, outside: { ...outside, ...(replays ? { replays } : {}) } };

@@ -133,6 +133,10 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
   const sandboxes = await o.sandboxes();
   if (sandboxes === undefined) return refuse(o, 'Replay refused: no daemon has started on this instance yet, so whether its runs have sandboxes is unknown; a replay runs with sandboxes only. Start the daemon (`factory up`), then the replay.');
   if (!sandboxes) return refuse(o, `Replay refused: ${HOST_RUNS_REFUSED}`);
+  // A ticket replays once per project (ORC-376): a second run would start on the state of the first, its session and its branch.
+  const earlier = (await o.store.ghostReplays()).filter((r) => r.projectId === projectId && r.id !== values.id);
+  const again = tickets.map((t) => ({ t, r: earlier.find((r) => r.tickets.includes(t.ticketId)) })).find((x) => x.r);
+  if (again) return refuse(o, `${again.t.ticketId}: ${projectId} replayed it already (${again.r!.id}): a ticket replays once per project, its run would start on the state of the first. Replay it on another project on factory/fantome.`);
   // Every PR read before anything is written: a replay is never left half-made by a ticket that cannot be replayed.
   const prs = await Promise.all(tickets.map(async (t) => ({ ...t, read: await o.humanPr(project.repoPath, t.pr) })));
   const unmerged = prs.find((t) => !t.read.mergeSha);

@@ -1506,7 +1506,7 @@ export class Orchestrator {
     if (!found || !ticketId) return found;
     // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was: only a project without effects has any.
     const replayed = found.effects === 'none' ? await this.d.replays?.of(found.id, ticketId) : undefined;
-    const project = replayed ? { ...found, repoPath: replayed.repoPath, replayed: { issue: replayed.issue, ...(replayed.history ? { history: replayed.history } : {}) } } : found;
+    const project = replayed ? { ...found, repoPath: replayed.repoPath, replayed } : found;
     const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);

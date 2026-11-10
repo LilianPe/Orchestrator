@@ -700,6 +700,8 @@ describe('server', () => {
     const search = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
     expect(search.status).toBe(403);
     expect(((await search.json()) as { error: string }).error).toContain('replayed');
+    // Nor the knowledge base of now, which may hold a note learned from the ticket's own PR.
+    expect((await app.request('/agent/kb/search?q=export', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
   });
 
   it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {

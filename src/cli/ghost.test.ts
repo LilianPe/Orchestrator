@@ -105,6 +105,14 @@ describe('factory ghost start (ORC-231)', () => {
     expect(await unknown.store.ghostReplays()).toEqual([]);
   });
 
+  it('ORC-376: a ticket replays once per project: another replay of it there is refused, before anything is written', async () => {
+    const { store, lines, ghost } = withGhost();
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-2=34,REL-1=12'])).toBe(1);
+    expect(lines.at(-1)).toContain('REL-1: ghost replayed it already (g1)');
+    expect((await store.ghostReplays()).map((r) => r.id)).toEqual(['g1']);
+  });
+
   it('ORC-376: says that the daemon delegates each ticket rebuilt to the project', async () => {
     const { lines, ghost } = withGhost();
     expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);

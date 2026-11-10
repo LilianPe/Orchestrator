@@ -240,7 +240,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // What `factory ghost start` reads before a replay (ORC-376): a replay runs with sandboxes only.
     await store.setMeta(SANDBOXES_META, sandboxes ? '1' : '0');
     const replays = new Replays({
-      store, tracker: trackerSwitch, workspaces, projects: replaying, dir: paths.ghost, sandboxes: !!sandboxes,
+      store, tracker: trackerSwitch, projects: replaying, dir: paths.ghost, sandboxes: !!sandboxes,
       accept: (e): Promise<boolean> => orchestrator.accept(e), now: () => clock.now(), log: (level, m) => log(`${level === 'warn' ? 'Warning: ' : ''}replay: ${m}`),
       startTime: (dir, sha) => startTime({ dir, sha }),
     });

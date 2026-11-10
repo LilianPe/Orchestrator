@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { mayCheck } from '../core/engine.js';
-import { newTicketState, type FactoryEvent } from '../core/types.js';
+import type { FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { HOST_RUNS_REFUSED, Replays, replayDelegationId } from './delegate.js';
 import type { GhostReplay, GhostTicket } from './replay.js';
@@ -39,11 +39,9 @@ async function withReplays(o: { sandboxes?: boolean } = {}) {
   tracker.relate('REL-1', 'REL-2');
   tracker.relate('REL-1', 'REL-9');
   const accepted: FactoryEvent[] = [];
-  const cleaned: string[] = [];
   const logs: string[] = [];
   const replays = new Replays({
     store, tracker, dir, projects: ['ghost'], sandboxes: o.sandboxes ?? true,
-    workspaces: { cleanup: async (_p, t) => void cleaned.push(t) },
     accept: async (e) => {
       accepted.push(e);
       return store.appendInbox(e);
@@ -59,7 +57,7 @@ async function withReplays(o: { sandboxes?: boolean } = {}) {
       await store.putGhostTicket(t);
     }
   };
-  return { store, dir, tracker, replays, accepted, cleaned, logs, rebuilt };
+  return { store, dir, tracker, replays, accepted, logs, rebuilt };
 }
 
 describe('the daemon delegates each replayed ticket to the replay\'s project (ORC-376)', () => {
@@ -110,19 +108,15 @@ describe('the daemon delegates each replayed ticket to the replay\'s project (OR
     expect(logs).toEqual([`replay g1 not run: ${HOST_RUNS_REFUSED}`]);
   });
 
-  it('a later replay of the same ticket waits for the earlier run to end, then starts from its own clone', async () => {
-    const { store, replays, accepted, rebuilt, cleaned, dir } = await withReplays();
+  it('a ticket replays once per project: a later replay of it, even written before the first ran, is not delegated, and says why once', async () => {
+    const { replays, accepted, rebuilt, logs, dir } = await withReplays();
+    // Both written while the daemon was down: the first delegation not processed yet when the second is looked at.
     await rebuilt(replay('g1', ['REL-1'], NOW - 1000), ticket('g1', 'REL-1'));
-    await replays.delegate();
-    await store.putTicket({ ...newTicketState('ghost', 'REL-1', 'Export CSV', 'dev', 0), delegated: true, activeRunId: 'r1', activeJob: 'dev' });
     await rebuilt(replay('g2', ['REL-1']), ticket('g2', 'REL-1'));
     await replays.delegate();
-    expect(accepted.map((e) => e.id)).toEqual([replayDelegationId('g1', 'REL-1')]);
-    expect((await replays.of('ghost', 'REL-1'))!.replayId).toBe('g1');
-    await store.putTicket({ ...newTicketState('ghost', 'REL-1', 'Export CSV', 'dev', 0), delegated: true });
     await replays.delegate();
-    expect(accepted.map((e) => e.id)).toEqual([replayDelegationId('g1', 'REL-1'), replayDelegationId('g2', 'REL-1')]);
-    expect(cleaned).toEqual(['REL-1']);
-    expect((await replays.of('ghost', 'REL-1'))!.repoPath).toBe(join(dir, 'g2', 'REL-1', 'repo'));
+    expect(accepted.map((e) => e.id)).toEqual([replayDelegationId('g1', 'REL-1')]);
+    expect((await replays.of('ghost', 'REL-1'))!.repoPath).toBe(join(dir, 'g1', 'REL-1', 'repo'));
+    expect(logs.filter((l) => l.includes('replays once per project'))).toEqual(['REL-1 of replay g2 not run: ghost replayed it already for g1, a ticket replays once per project']);
   });
 });

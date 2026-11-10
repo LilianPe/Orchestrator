@@ -597,7 +597,12 @@ export function createApp(d: ServerDeps): Hono {
     if (await d.replays?.of(run.projectId, run.ticketId)) return c.json({ error: 'a replayed ticket searches no tracker: it holds what was written after the ticket\'s start' }, 403);
     return c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(run.ticketId)));
   });
-  agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
+  agent.get('/kb/search', async (c) => {
+    const run = c.get('run');
+    // The knowledge base as it is now may hold a note learned from the replayed ticket's own PR (ORC-376).
+    if (await d.replays?.of(run.projectId, run.ticketId)) return c.json({ error: 'a replayed ticket searches no knowledge base: the one of now holds what was learned after the ticket\'s start' }, 403);
+    return c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []);
+  });
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
     const at = d.clock.now();

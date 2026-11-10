@@ -82,7 +82,10 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
 - **Sandboxes required.** An agent run on the host gets the host's git login and could push by itself, which no effect mode holds
   back. `start` refuses a replay when the daemon said at its last start that it runs without sandboxes, or when no daemon has
   started yet (the `daemon-sandboxes` meta row); a daemon without sandboxes delegates no replayed ticket, and says why in its log.
-- **A ticket replayed again** waits for the run of its earlier replay to end; its worktree is then made anew from the new clone.
+- **Once per project.** A second run of a ticket would start on the state of the first (its session, its branch, its kept PR):
+  `start` refuses a ticket its project replayed already, and the daemon delegates none twice. Replay it on another project.
+- **Nor the knowledge base of now**: `factory-agent kb search` is refused too; the knowledge base mounted in the sandbox is still
+  the daemon's (below).
 
 ## Threshold, judging, report
 
@@ -123,7 +126,5 @@ from GitHub when judged.
   `unchecked` until then, and the report says how many: the hook is `GhostTicket.env` (`ok`, `failed`, `unchecked`), which the
   report already keeps out of the comparison when `failed`.
 - **The knowledge base at transaction time in the runs.** `start` rebuilds it under `knowledge/` (or none with `--memory off`), but
-  a run still mounts and searches the daemon's own knowledge base, as it is now: per-run knowledge is still to wire.
-- **A ticket blocked in an earlier replay** stays blocked: the fantome's delegation runs `!blocked` only, and its new replay counts
-  it as blocked.
+  a run still mounts the daemon's own knowledge base, as it is now (its search is refused): per-run knowledge is still to wire.
 - The threshold's value (ORC-143) and the pilot repository (ORC-137) are decisions still to take.
