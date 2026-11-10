@@ -22,6 +22,9 @@ export interface GhostReplay {
   startedBy: string;
 }
 
+/** The kind of the artifact a kept `publish` leaves (ORC-231): the PR the factory would have opened, which the blind judging reads. */
+export const KEPT_PR = 'kept:pr';
+
 /** The fixed grid of the judging (ORC-231). */
 export const GRADES = ['as_is', 'after_edits', 'reject'] as const;
 export type GhostGrade = (typeof GRADES)[number];

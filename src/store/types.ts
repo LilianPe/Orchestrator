@@ -4,6 +4,7 @@ import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { Baseline } from '../core/baseline.js';
+import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
@@ -734,6 +735,22 @@ export interface Store {
   putBaseline(b: Baseline, replace: boolean): Promise<boolean>;
   /** The baseline computed last, whichever project and period (ORC-230); null without one. */
   latestBaseline(): Promise<Baseline | null>;
+  /**
+   * Writes a replay of closed tickets (ORC-231), its threshold with it, once: false, nothing written, when its id is kept already.
+   * There is no other write of it: a threshold written before the replay is never changed after (criterion 4).
+   */
+  putGhostReplay(r: GhostReplay): Promise<boolean>;
+  ghostReplay(id: string): Promise<GhostReplay | undefined>;
+  /** Every replay, the last started first. */
+  ghostReplays(): Promise<GhostReplay[]>;
+  /** What the replay recorded of a ticket, replacing what it recorded before. */
+  putGhostTicket(t: GhostTicket): Promise<void>;
+  /** A replay's tickets, by ticket id. */
+  ghostTickets(replayId: string): Promise<GhostTicket[]>;
+  /** A grade of the blind judging, once per PR: false, nothing written, when that PR has one already. */
+  putGhostJudgment(j: GhostJudgment): Promise<boolean>;
+  /** A replay's grades, oldest first. */
+  ghostJudgments(replayId: string): Promise<GhostJudgment[]>;
   /** Requests per host and refusals per rule of the entries dated in `[since, until)` (ORC-296). */
   securityStats(since: number, until: number): Promise<SecurityStats>;
   /** The moves into Blocked whose decision is dated in `[since, until)` (ORC-300), oldest first. */
