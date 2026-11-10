@@ -1,4 +1,4 @@
-import type { BlockParetoView, BusMessage, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
+import type { AuditListView, AuditSheetView, BlockParetoView, BusMessage, DefectEntry, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
 
 export async function fetchSnapshot(): Promise<Snapshot> {
   return (await fetch('/api/state')).json();
@@ -29,6 +29,18 @@ export async function fetchRunDetail(runId: string): Promise<RunDetailView | und
   if (!res.ok) throw new Error(`/api/runs/${runId}: ${res.status}`);
   return res.json();
 }
+
+/** The audit sheets (ORC-229): the PRs a human reviewed, the sheet of one (undefined for a ticket the server does not know), and a defect entered on it. */
+export const fetchAuditList = () => getJson<AuditListView>('/api/audit');
+const auditPath = (projectId: string, ticketId: string) => `/api/audit/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}`;
+export async function fetchAuditSheet(projectId: string, ticketId: string): Promise<AuditSheetView | undefined> {
+  const res = await fetch(auditPath(projectId, ticketId));
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new Error(`${auditPath(projectId, ticketId)}: ${res.status}`);
+  return res.json();
+}
+export const postDefect = (projectId: string, ticketId: string, entry: DefectEntry) =>
+  fetch(`${auditPath(projectId, ticketId)}/defects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(entry) });
 
 export const post = (path: string) => fetch(path, { method: 'POST' });
 

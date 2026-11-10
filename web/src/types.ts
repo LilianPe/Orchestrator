@@ -167,6 +167,66 @@ export interface OverviewView {
   messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
   /** The 90-day baseline the measures face (ORC-230): `Baseline` of src/core/baseline.ts, null until `factory baseline` computes one. */
   baseline: BaselineView | null;
+  /** The AI reviewers' miss rate (ORC-229): `MissRate` of src/core/audit.ts; not counted while no definition of a serious defect is set. Absent from an older server. */
+  aiReviewMisses?: MissRateView;
+}
+
+/** `MissRate` of src/core/audit.ts (ORC-229). */
+export type MissRateView =
+  | { counted: false; why: string }
+  | { counted: true; definition: string; defects: number; missed: number; rate: number | null; leftOut: number };
+
+/** `ReviewDefect` of src/core/audit.ts (ORC-229): a defect a human found in review, linked to an AI finding or not. */
+export interface ReviewDefectView {
+  id: string;
+  projectId: string;
+  ticketId: string;
+  prNumber: number;
+  description: string;
+  findingId: string | null;
+  file?: string;
+  line?: number;
+  definition: string | null;
+  enteredBy: string;
+  at: number;
+}
+
+/** What the dashboard sends to enter a defect: the body of `POST /api/audit/:projectId/:ticketId/defects`. */
+export interface DefectEntry {
+  prNumber: number;
+  description: string;
+  findingId?: string;
+  file?: string;
+  line?: number;
+}
+
+/** `GET /api/audit` (ORC-229): the PRs a human reviewed among the tickets updated last. */
+export interface AuditListView {
+  definition: string | null;
+  sheets: (FlowTicketView & { logical: string; mergedAt: number | null })[];
+}
+
+/** `GET /api/audit/:projectId/:ticketId` (ORC-229): `AuditSheet` of src/core/audit.ts, and the definition of a serious defect in force. */
+export interface AuditSheetView {
+  projectId: string;
+  ticketId: string;
+  definition: string | null;
+  task: { title: string; spec: { goal?: string; criteria?: string[]; out_of_scope?: string[] } | null };
+  path: {
+    steps: RunDetailView['steps'];
+    attempts: RunMeasureView[];
+    checks: RunDetailView['checks'];
+    findings: { id: string; sha: string; at: number; lens: string; runId: string; file: string; line: number; severity: string; explanation: string; suggestion: string }[];
+  };
+  result: {
+    prs: { number: number; url: string; state: 'open' | 'merged' | 'closed'; mergedAt: number | null }[];
+    reviews: { id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }[];
+    mergedAt: number | null;
+    firstTry: boolean | null;
+    reworks: { cause: ReworkCause; id: string }[];
+    revertedWithin14Days: boolean | null;
+  };
+  defects: ReviewDefectView[];
 }
 
 /** `GET /api/security` (ORC-300): `SecurityStats` of src/store/types.ts over `[since, until)`, hosts not a plain name merged. */

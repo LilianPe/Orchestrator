@@ -238,7 +238,8 @@ function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, '
   }
 }
 
-function checkOf(e: FactoryEvent): CheckVerdict | undefined {
+/** The verdict of a check an event carries, if any: also the audit sheet's (ORC-229). */
+export function checkOf(e: FactoryEvent): CheckVerdict | undefined {
   const base = { id: e.id, at: e.at };
   switch (e.type) {
     case 'verify.passed':
@@ -256,7 +257,8 @@ function checkOf(e: FactoryEvent): CheckVerdict | undefined {
   }
 }
 
-function stepCosts(attempts: RunMeasure[]): StepCost[] {
+/** What each step cost over its attempts, in the order the steps first ran: also the audit sheet's (ORC-229). */
+export function stepCosts(attempts: RunMeasure[]): StepCost[] {
   const steps = new Map<string, StepCost>();
   for (const a of attempts) {
     const s = steps.get(a.job) ?? { job: a.job, attempts: 0, tokens: null, attemptsWithoutTokens: 0, turns: 0, workMs: 0, costUsd: 0 };

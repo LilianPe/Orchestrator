@@ -1,12 +1,14 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
+import { z } from 'zod';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
 import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
 import { teamOf, type Tracker } from '../adapters/tracker/types.js';
+import { auditSheet, humanReviewed, type ReviewDefect } from '../core/audit.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
@@ -56,6 +58,8 @@ export interface ServerDeps {
   heldRows?: (ticketId: string) => HeldRow[];
   /** The daemon's secret values (`transcriptSecrets`), masked in what the diagnosis tells with the secret shapes; read once per request. */
   secrets?: () => string[];
+  /** `audit.serious_defect` of factory.yml (ORC-153): absent, the defects of the audit sheets are kept, never counted (ORC-229). */
+  seriousDefect?: string;
 }
 
 export type { TakeOverDesk };
@@ -81,6 +85,20 @@ type AgentEnv = { Variables: { run: RunRecord } };
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;
 const MEASURES_AT_ONCE = 2;
+
+/** Tickets `GET /api/audit` looks through for a PR a human reviewed, the most recently updated. */
+const AUDITED_TICKETS = 50;
+
+/** A defect a human enters from review (ORC-229): on a PR of the ticket, linked to an AI finding of the ticket or not. */
+const defectEntry = z
+  .object({
+    prNumber: z.number().int().positive(),
+    description: z.string().trim().min(1).max(4_000),
+    findingId: z.string().min(1).max(200).optional(),
+    file: z.string().trim().min(1).max(500).optional(),
+    line: z.number().int().positive().optional(),
+  })
+  .strict();
 
 /** Runs `GET /api/security` serves, the most refused: the others are counted. */
 const SECURITY_RUNS = 50;
@@ -320,11 +338,12 @@ export function createApp(d: ServerDeps): Hono {
     measures,
   });
   // Two tickets at a time: each read is five queries at once, on a pool of ten that also serves the webhooks and the worker.
-  const measuresOfAll = async (tickets: TicketState[]): Promise<(TicketMeasures | null)[]> => {
-    const out: (TicketMeasures | null)[] = [];
-    for (let i = 0; i < tickets.length; i += MEASURES_AT_ONCE) out.push(...(await Promise.all(tickets.slice(i, i + MEASURES_AT_ONCE).map(measuresOf))));
+  const twoAtATime = async <R>(tickets: TicketState[], read: (t: TicketState) => Promise<R>): Promise<R[]> => {
+    const out: R[] = [];
+    for (let i = 0; i < tickets.length; i += MEASURES_AT_ONCE) out.push(...(await Promise.all(tickets.slice(i, i + MEASURES_AT_ONCE).map(read))));
     return out;
   };
+  const measuresOfAll = (tickets: TicketState[]) => twoAtATime(tickets, measuresOf);
   app.get('/api/measures', async (c) => {
     const tickets = (await d.store.listTickets()).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MEASURED_TICKETS);
     const measures = await measuresOfAll(tickets);
@@ -338,8 +357,60 @@ export function createApp(d: ServerDeps): Hono {
   app.get('/api/overview', overPeriod(async (c, period) => {
     const [measures, baseline] = await Promise.all([measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since)), d.store.latestBaseline()]);
     const measured = measures.filter((m) => m !== null);
-    return c.json(overview(period, measured, measures.length - measured.length, baseline));
+    return c.json(overview(period, measured, measures.length - measured.length, baseline, { defects: await d.store.reviewDefects(period.since, period.until), definition: d.seriousDefect }));
   }, OVERVIEW_PERIOD_MS));
+
+  // The audit sheets (ORC-229): the PRs a human reviewed among the tickets updated last, and the sheet of one, read from its
+  // journal, attempts and kept findings, with the defects humans entered. `definition`: the definition of a serious defect
+  // they are counted by, null while none is set (ORC-153), and then nothing is counted.
+  const definition = d.seriousDefect ?? null;
+  app.get('/api/audit', async (c) => {
+    const withPr = (await d.store.listTickets()).filter((t) => t.prNumber !== undefined).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, AUDITED_TICKETS);
+    const facts = await twoAtATime(withPr, (t) => d.store.measureFacts(t.projectId, t.ticketId));
+    const sheets = withPr.flatMap((t, i) => {
+      const f = facts[i]!;
+      if (!humanReviewed(f)) return [];
+      const merged = f.events.find((e) => e.type === 'pr.merged');
+      return [{ ...flowTicket(t), logical: t.logical, mergedAt: merged ? merged.at : null }];
+    });
+    return c.json({ definition, sheets });
+  });
+  const sheetOf = async (projectId: string, ticketId: string) => {
+    const t = await d.store.getTicket(projectId, ticketId);
+    if (!t) return undefined;
+    const [facts, findings, defects] = await Promise.all([d.store.measureFacts(projectId, ticketId), d.store.ticketFindings(projectId, ticketId), d.store.ticketDefects(projectId, ticketId)]);
+    return auditSheet(t, facts, findings, defects);
+  };
+  app.get('/api/audit/:projectId/:ticketId', async (c) => {
+    const sheet = await sheetOf(c.req.param('projectId'), c.req.param('ticketId'));
+    return sheet ? c.json({ ...sheet, definition }) : c.notFound();
+  });
+  // A defect found in human review, entered by an operator: on a PR of the sheet, linked to one of its findings or not. Kept
+  // with the definition in force, never changed: only those under the definition in force are counted.
+  app.post('/api/audit/:projectId/:ticketId/defects', async (c) => {
+    const sheet = await sheetOf(c.req.param('projectId'), c.req.param('ticketId'));
+    if (!sheet) return c.json({ error: 'no such ticket' }, 404);
+    const parsed = defectEntry.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) return c.json({ error: 'expected { prNumber, description, findingId?, file?, line? }' }, 400);
+    const entry = parsed.data;
+    if (!sheet.result.prs.some((p) => p.number === entry.prNumber)) return c.json({ error: `PR #${entry.prNumber} is not a PR of ${sheet.ticketId}` }, 400);
+    if (entry.findingId !== undefined && !sheet.path.findings.some((f) => f.id === entry.findingId)) return c.json({ error: `no finding ${entry.findingId} on ${sheet.ticketId}` }, 400);
+    const defect: ReviewDefect = {
+      id: randomUUID(),
+      projectId: sheet.projectId,
+      ticketId: sheet.ticketId,
+      prNumber: entry.prNumber,
+      description: entry.description,
+      findingId: entry.findingId ?? null,
+      ...(entry.file === undefined ? {} : { file: entry.file }),
+      ...(entry.line === undefined ? {} : { line: entry.line }),
+      definition,
+      enteredBy: operator(c, d.uiPassword).actor!,
+      at: d.clock.now(),
+    };
+    await d.store.putReviewDefect(defect);
+    return c.json({ ok: true, defect });
+  });
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
   // rules and runs over a period; a run's refusals and hosts. Never a command, a path nor a host that is not a plain name:
