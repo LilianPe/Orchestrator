@@ -1296,7 +1296,8 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   if (!refused && !keepsBlock && ticket?.blocked && !unblocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
-  if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
+  // A move to the status the ticket is in writes nothing: after a Done set by a human, the merge leaves Done to the human (ORC-170).
+  if (rule.move && rule.move !== ticket?.logical) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
   if (rule.do === 'stop') stop(out, workflow);
@@ -1644,9 +1645,10 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
   return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
 }
 
-/** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
+/** Delivered (`done`, PR merged), cancelled or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
+  if (ticket.logical === 'cancelled') return 'cancelled';
   return ticket.blocked && causeOf(ticket.blockKind) === 'stopped' ? 'stopped' : undefined;
 }
 
