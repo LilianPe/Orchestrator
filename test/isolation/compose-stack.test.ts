@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { request as plainRequest } from 'node:http';
 import { request } from 'node:https';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cli, PUBLIC_IMAGE } from './helpers.js';
@@ -19,10 +20,14 @@ const parent = process.env['FACTORY_COMPOSE_DIR'] ?? '/tmp';
 const base = `factory-recette-${Date.now()}`;
 const dir = `${parent}/${base}`;
 const HTTPS_PORT = process.env['FACTORY_HTTPS_PORT'] ?? '18443';
+const HTTP_PORT = process.env['FACTORY_LOOPBACK_PORT'] ?? '14100';
 const PASSWORD = 'recette-ui-password';
 
 const env = {
   ...process.env,
+  // caddy is off by default (ORC-221): this run takes it, as a server without a reverse proxy of its own does.
+  COMPOSE_PROFILES: 'tls',
+  FACTORY_LOOPBACK_PORT: HTTP_PORT,
   FACTORY_DIR: dir,
   FACTORY_ENGINE_SOCKET: process.env['FACTORY_ENGINE_SOCKET'] ?? '/var/run/docker.sock',
   FACTORY_RUNNER_IMAGE: runnerImage,
@@ -112,10 +117,12 @@ interface Result {
 describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
   let result: Result;
 
-  const https = (path: string, password?: string) =>
+  /** By caddy in TLS, or straight to factoryd in plain HTTP on the loopback, as the host's reverse proxy reaches it. */
+  const get = (path: string, password?: string, plain = false) =>
     new Promise<{ status: number; body: string }>((ok, ko) => {
-      const req = request(
-        { host: '127.0.0.1', servername: 'localhost', port: Number(HTTPS_PORT), path, rejectUnauthorized: false, headers: { host: 'localhost', ...(password ? { authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` } : {}) } },
+      const headers = { host: 'localhost', ...(password ? { authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` } : {}) };
+      const req = (plain ? plainRequest : request)(
+        plain ? { host: '127.0.0.1', port: Number(HTTP_PORT), path, headers } : { host: '127.0.0.1', servername: 'localhost', port: Number(HTTPS_PORT), path, rejectUnauthorized: false, headers },
         (res) => {
           let body = '';
           res.on('data', (c) => (body += c));
@@ -135,7 +142,7 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     );
     compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '180');
     for (let i = 0; ; i++) {
-      const up = await https('/api/state', PASSWORD).catch(() => undefined);
+      const up = await get('/api/state', PASSWORD).catch(() => undefined);
       if (up?.status === 200) break;
       if (i === 60) throw new Error(`factoryd n'a pas répondu par caddy :\n${compose('logs', '--tail', '40')}`);
       await new Promise((r) => setTimeout(r, 1000));
@@ -168,16 +175,23 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
   });
 
   it('answers in TLS through caddy, behind the password, on the store of postgres', async () => {
-    expect((await https('/api/state')).status).toBe(401);
-    const state = JSON.parse((await https('/api/state', PASSWORD)).body) as { capacity: { dev: { total: number } } };
+    expect((await get('/api/state')).status).toBe(401);
+    const state = JSON.parse((await get('/api/state', PASSWORD)).body) as { capacity: { dev: { total: number } } };
     expect(state.capacity.dev.total).toBe(1);
     expect(compose('logs', 'factoryd')).toContain('store : Postgres');
   });
 
-  it('publishes neither factoryd, the proxy nor postgres', () => {
-    for (const s of ['factoryd', 'proxy', 'postgres']) {
+  it('publishes neither the proxy nor postgres, and factoryd on the loopback alone (ORC-221)', () => {
+    for (const s of ['proxy', 'postgres']) {
       expect(compose('ps', '--format', '{{.Publishers}}', s).replace(/\s/g, ''), s).not.toMatch(/PublishedPort":[1-9]|:[1-9]\d*->/);
     }
+    const factoryd = JSON.parse(compose('ps', '--format', '{{json .Publishers}}', 'factoryd')) as { URL: string; PublishedPort: number }[];
+    expect(factoryd.filter((p) => p.PublishedPort > 0).map((p) => p.URL)).toEqual(['127.0.0.1']);
+  });
+
+  it("answers the host's reverse proxy in plain HTTP on the loopback, behind the password (ORC-221)", async () => {
+    expect((await get('/api/state', undefined, true)).status).toBe(401);
+    expect((await get('/api/state', PASSWORD, true)).status).toBe(200);
   });
 
   it('keeps the authority out of factoryd', () => {

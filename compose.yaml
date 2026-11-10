@@ -1,4 +1,5 @@
-# One topology (ORC-203): factoryd, postgres, proxy, caddy, on a rootless engine. See docs/deployment.md.
+# One topology (ORC-203): factoryd, postgres, proxy, on a rootless engine; TLS by the host's reverse proxy, or by caddy
+# under the `tls` profile (ORC-221). See docs/deployment.md.
 services:
   factoryd:
     build:
@@ -14,6 +15,9 @@ services:
       postgres: { condition: service_healthy }
       proxy: { condition: service_healthy }
     networks: [default, back]
+    # Plain HTTP, on the host's loopback alone: its reverse proxy brings the TLS (ORC-221).
+    ports:
+      - 127.0.0.1:${FACTORY_LOOPBACK_PORT:-4100}:4100
     stop_grace_period: 30s
     volumes:
       # Same path on both sides: the engine resolves a runner's mounts on the host, not in this container.
@@ -93,9 +97,12 @@ services:
       start_interval: 2s
     restart: unless-stopped
 
-  # TLS of the webhooks and the interface; their exposure in production is ORC-221's.
+  # TLS of the webhooks and the interface, for a server without a reverse proxy of its own (ORC-221):
+  # off by default, started with `--profile tls`.
   caddy:
     image: caddy:2.11.8-alpine
+    profiles: [tls]
+    command: ["sh", "-c", "test -n \"$$FACTORY_PUBLIC_HOST\" || { echo 'définissez FACTORY_PUBLIC_HOST (domaine de publicUrl)' >&2; exit 1; }; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
     security_opt: ["no-new-privileges:true"]
@@ -108,7 +115,8 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     environment:
-      FACTORY_PUBLIC_HOST: ${FACTORY_PUBLIC_HOST:?définissez FACTORY_PUBLIC_HOST (domaine de publicUrl)}
+      # Not `:?`: compose would ask it of a plain `up` too, caddy off. The command above refuses it empty.
+      FACTORY_PUBLIC_HOST:
     restart: unless-stopped
 
 networks:
