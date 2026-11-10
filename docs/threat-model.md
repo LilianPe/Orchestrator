@@ -62,7 +62,7 @@ Anyone who can write in Linear or on the PR can write text the agent will read.
 | A forged webhook | HMAC signature on the raw body, 60 s freshness for Linear; `X-Hub-Signature-256` for GitHub | `src/adapters/tracker/linear/webhook.test.ts` « accepts a valid HMAC and rejects others »; `src/adapters/forge/github-webhook.test.ts` « accepts the HMAC-SHA256 of the raw body »; `src/adapters/forge/github-webhook.test.ts` « answers 401 for an unsigned body » |
 | A review or a diff comment on the PR that steers the agent | Mapped as untrusted; a review counts only from someone with write access (ORC-190) | `src/adapters/forge/github-webhook.test.ts` « maps a human review and a diff comment as untrusted pr.reviewed »; `src/core/authz.test.ts` « refuses a team member without write access, and anyone else » |
 | An injection that makes the agent publish something in Linear or on GitHub | The factory composes what it publishes from the agent's capped result, through its `OutputPolicy` (ORC-214, ORC-288) | `src/publish/output-policy.test.ts` |
-| Read the tickets in transit | **Open** with the smee relay: the channel is public, anyone with its URL reads it. Use `publicUrl` ([`linear.md`](linear.md#3-webhooks-smee-or-public-url)) | none |
+| Read the tickets in transit | **Open** with the smee relay: the channel is public, anyone with its URL reads it. Use `publicUrl` ([`linear.md`](linear.md#3-webhooks-production-and-development)) | none |
 
 ## 4. Compromised member account
 
