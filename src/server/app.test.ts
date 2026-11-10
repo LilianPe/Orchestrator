@@ -67,6 +67,11 @@ describe('server', () => {
     expect(body.capacity.dev).toEqual({ used: 1, total: 3 });
   });
 
+  it('serves no cost of the day in dollars: nothing counts a day in dollars (ORC-194)', async () => {
+    const body = await (await (await setup()).app.request('/api/state')).json();
+    expect(body).not.toHaveProperty('costTodayUsd');
+  });
+
   describe('the Flow (ORC-297)', () => {
     it('serves a blocked ticket in Needs you with its cause, a running run in Working with its step, duration and tokens', async () => {
       const { app, store } = await setup();

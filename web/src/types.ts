@@ -22,7 +22,6 @@ export interface Snapshot {
   linearConnected: boolean;
   queue: QueueView[];
   activeRuns: RunView[];
-  costTodayUsd: number;
   capacity: { dev: { used: number; total: number }; questions: { used: number; total: number } };
 }
 
@@ -42,6 +41,7 @@ export interface WorkingRunView extends FlowTicketView {
   measured: boolean;
   tokens: TokensView | null;
   attemptsWithoutTokens: number;
+  usageLimitShare: number | null;
   costUsd: number;
 }
 

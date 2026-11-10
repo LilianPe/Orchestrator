@@ -87,7 +87,7 @@ Requires Linear to be connected (`Linear not connected: run `factory up`, then c
 ### `factory status`
 
 ```text
-Linear: connected · queue: active (0 waiting) · dev slots 1/3 · cost today 2.40 $
+Linear: connected · queue: active (0 waiting) · dev slots 1/3
   REL-12  dev  Add the CSV export
     run 7f3a…: dev, for 12 min, 0.80 $
   REL-15  todo (blocked)  Fix the login

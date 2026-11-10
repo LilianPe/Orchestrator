@@ -101,11 +101,6 @@ function periodOf(c: Context, now: number, length = DEFAULT_PERIOD_MS): { since:
   return Number.isNaN(since) || Number.isNaN(until) || since >= until ? undefined : { since, until };
 }
 
-function startOfUtcDay(ts: number): number {
-  const d = new Date(ts);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
@@ -264,12 +259,11 @@ export function createApp(d: ServerDeps): Hono {
 
   app.get('/api/state', async (c) => {
     // Independent reads: one round trip's wait on Postgres, not five.
-    const [paused, tickets, queue, running, costTodayUsd, usageLimitedUntil] = await Promise.all([
+    const [paused, tickets, queue, running, usageLimitedUntil] = await Promise.all([
       d.isPaused(),
       d.store.listTickets(),
       d.store.listQueue(),
       d.store.runsByStatus('running'),
-      d.store.costSince(startOfUtcDay(d.clock.now())),
       d.usageLimitedUntil?.(),
     ]);
     return c.json({
@@ -279,7 +273,6 @@ export function createApp(d: ServerDeps): Hono {
       tickets,
       queue,
       activeRuns: running.map(publicRun),
-      costTodayUsd,
       capacity: d.capacity(),
     });
   });

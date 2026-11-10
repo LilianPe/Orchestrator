@@ -1,7 +1,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { NO_SECURITY_SOURCE, percent, Security } from './Security.js';
+import { percent } from './Flow.js';
+import { NO_SECURITY_SOURCE, Security } from './Security.js';
 import type { BlockParetoView, RunSecurityView, SecurityPeriodView } from './types.js';
 
 const PERIOD: SecurityPeriodView = {

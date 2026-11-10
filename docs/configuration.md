@@ -59,7 +59,7 @@ Written by `relais init`, editable by hand. Missing file = all default values. A
 | `publicUrl` | URL | — | Public URL of Relais (tunnel or domain). If set, it is used as the base for the OAuth callback URL (`<publicUrl>/oauth/callback`) and the webhook URL (`<publicUrl>/webhooks/linear`), and `relais init` does not create a smee channel. Without it: `http://localhost:<port>`. |
 | `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay. `relais init` creates a smee.io channel when there is neither `publicUrl` nor a relay. See [`linear.md`](linear.md#3-webhooks-smee-or-public-url). |
 | `projects` | list of `{ id, repoPath, linearTeamKey, authz? }` | `[]` | One project = one local repository + one Linear team. See [`projects-and-workspaces.md`](projects-and-workspaces.md). `authz`: see [Authorization](#authorization). |
-| `limits` | `{}` | `{}` | Empty since ORC-216: the daily budget in dollars (`perDayUsd`) is gone, a file that still has it loads without it. Budgets count tokens and turns: `budgets` of `factory.yml`. |
+| `limits` | `{}` | `{}` | Empty since ORC-216: the daily budget in dollars (`perDayUsd`) is gone, a file that still has it loads without it, and nothing counts a day in dollars, not even for display (ORC-194). Budgets count tokens and turns: `budgets` of `factory.yml`. |
 | `knowledge.repoPath` | path | — | Local clone of the knowledge base repository. Read only: the startup hook injects its index and `relais-agent kb search` searches it; no job writes to it (ORC-193). Absent: `relais-agent kb search` returns nothing. |
 | `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | The daemon's GitHub App. Absent: fallback to the `gh` CLI. See [GitHub App](#github-app). |
 
