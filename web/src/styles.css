@@ -89,3 +89,7 @@ main.single { grid-template-columns: minmax(0, 1fr); }
 .refusals li + li { border-top: 1px solid var(--line); }
 .periods { display: flex; gap: 4px; }
 .periods button[aria-pressed="true"] { border-color: var(--agent); color: var(--agent); }
+.audit h3 { margin: 12px 0 4px; font-size: 13px; font-weight: 600; }
+.defect { display: grid; gap: 8px; margin-top: 12px; max-width: 640px; }
+.defect label { display: grid; gap: 4px; font-size: 13px; }
+.defect textarea { min-height: 4em; }

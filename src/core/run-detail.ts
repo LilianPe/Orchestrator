@@ -55,8 +55,22 @@ export interface Gate {
  * factory validated them (ORC-183): each on its file and line, with its severity. Empty for a round that handed back none.
  */
 export type Finding =
-  | { source: 'human'; id: string; at: number; author: string; pr: number; kind: 'review' | 'comment'; state: string | null }
+  | ({ source: 'human' } & HumanReview)
   | { source: 'ai'; runId: string; at: number; job: string; status: RunRecord['status']; outcome: AttemptOutcome | null; findings: readonly LensFinding[] };
+
+/** A human's review on a PR of the ticket, by its GitHub state, lower-cased: also the audit sheet's (ORC-229). */
+export interface HumanReview {
+  id: string;
+  at: number;
+  author: string;
+  pr: number;
+  kind: 'review' | 'comment';
+  state: string | null;
+}
+
+export const humanReviewOf = (e: FactoryEvent<'pr.reviewed'>): HumanReview => ({
+  id: e.id, at: e.at, author: e.payload.author, pr: e.payload.number, kind: e.payload.kind, state: e.payload.state?.toLowerCase() ?? null,
+});
 
 /**
  * A verdict of the factory's checks: `verify` (its commands, then `factory/anti-triche`, `factory/taille-du-diff`, the freeze…, each
@@ -238,7 +252,8 @@ function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, '
   }
 }
 
-function checkOf(e: FactoryEvent): CheckVerdict | undefined {
+/** The verdict of a check an event carries, if any: also the audit sheet's (ORC-229). */
+export function checkOf(e: FactoryEvent): CheckVerdict | undefined {
   const base = { id: e.id, at: e.at };
   switch (e.type) {
     case 'verify.passed':
@@ -256,7 +271,8 @@ function checkOf(e: FactoryEvent): CheckVerdict | undefined {
   }
 }
 
-function stepCosts(attempts: RunMeasure[]): StepCost[] {
+/** What each step cost over its attempts, in the order the steps first ran: also the audit sheet's (ORC-229). */
+export function stepCosts(attempts: RunMeasure[]): StepCost[] {
   const steps = new Map<string, StepCost>();
   for (const a of attempts) {
     const s = steps.get(a.job) ?? { job: a.job, attempts: 0, tokens: null, attemptsWithoutTokens: 0, turns: 0, workMs: 0, costUsd: 0 };
@@ -322,7 +338,7 @@ export function runDetail(run: RunRecord, facts: MeasureFacts): RunDetail {
     if (decision) decisions.push({ id: e.id, type: e.type, at: e.at, ...decision, what: describe(e) });
     const check = checkOf(e);
     if (check) checks.push(check);
-    if (e.type === 'pr.reviewed') findings.push({ source: 'human', id: e.id, at: e.at, author: e.payload.author, pr: e.payload.number, kind: e.payload.kind, state: e.payload.state?.toLowerCase() ?? null });
+    if (e.type === 'pr.reviewed') findings.push({ source: 'human', ...humanReviewOf(e) });
   }
   const ends = new Map(events.flatMap((e) => (e.type === 'run.finished' ? [[e.payload.runId, e.payload] as const] : [])));
   for (const r of facts.runs) {

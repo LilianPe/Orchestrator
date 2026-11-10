@@ -152,7 +152,7 @@ const REVERT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
  * push of the default branch about the ticket. Reads the numbers the ingestion resolved, never a message.
  */
 /** When a PR was merged: GitHub's time when the source read it, else when the factory received the merge. */
-const mergeTime = (e: FactoryEvent<'pr.merged'>): number => e.payload.mergedAt ?? e.at;
+export const mergeTime = (e: FactoryEvent<'pr.merged'>): number => e.payload.mergedAt ?? e.at;
 
 function revertedWithin14Days(events: FactoryEvent[], mergedAt: number | null): boolean | null {
   if (mergedAt === null) return null;
@@ -269,8 +269,8 @@ export const runMeasure = (r: RunRecord): RunMeasure => ({
 /** A review round: a reviewer attempt that ran to its end. */
 const reviewed = (r: RunRecord): boolean => r.sessionRole === 'reviewer' && (r.status === 'success' || r.status === 'failure') && !r.infra;
 
-/** A handover to a human reviewer: a move to Human Review the factory carried out. */
-const handedToHuman = (row: OutboxRow): boolean => row.status === 'done' && row.effect.kind === 'move' && row.effect.to === 'human_review';
+/** A handover to a human reviewer: a move to Human Review the factory carried out; also what makes a PR reviewed (ORC-229). */
+export const handedToHuman = (row: OutboxRow): boolean => row.status === 'done' && row.effect.kind === 'move' && row.effect.to === 'human_review';
 
 /** States a human sends a ticket back to dev from: its work had been handed over. */
 const HANDED_OVER = new Set<LogicalState>(['human_review', 'ai_review', 'ready', 'done']);
