@@ -1,3 +1,4 @@
+import { missRate, type MissRate, type ReviewDefect } from './audit.js';
 import type { Baseline } from './baseline.js';
 import type { Rework, TicketMeasures } from './measures.js';
 import { totalTokens } from './types.js';
@@ -31,6 +32,8 @@ export interface Overview {
   messages: { count: number; medianSignOfLifeMs: number | null; withoutSignOfLife: number; questions: number; medianAnswerMs: number | null; unanswered: number };
   /** The state of reference over 90 days the measures above face (ORC-230): null until `factory baseline` computes one. */
   baseline: Baseline | null;
+  /** The AI reviewers' miss rate over the defects entered in the period (ORC-229): not counted while no definition of a serious defect is set. */
+  aiReviewMisses: MissRate;
 }
 
 /** The median of `values`; null without one. */
@@ -50,8 +53,17 @@ function meanOf(tickets: readonly TicketMeasures[], value: (m: TicketMeasures) =
   return { mean: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, leftOut: tickets.length - values.length };
 }
 
-/** The overview of `measured` over the period, facing `baseline`; `unmeasured` tickets were read but their measures could not be. Pure. */
-export function overview(period: { since: number; until: number }, measured: readonly TicketMeasures[], unmeasured = 0, baseline: Baseline | null = null): Overview {
+/**
+ * The overview of `measured` over the period, facing `baseline`; `unmeasured` tickets were read but their measures could not be.
+ * `audit`: the defects humans entered from review, and the definition of a serious defect they are counted by, if set. Pure.
+ */
+export function overview(
+  period: { since: number; until: number },
+  measured: readonly TicketMeasures[],
+  unmeasured = 0,
+  baseline: Baseline | null = null,
+  audit: { defects: readonly ReviewDefect[]; definition?: string } = { defects: [] },
+): Overview {
   const within = (at: number) => at >= period.since && at < period.until;
   const delivered = measured.filter((m) => m.mergedAt !== null && within(m.mergedAt));
   const causes = new Map<Rework['cause'], number>();
@@ -82,5 +94,6 @@ export function overview(period: { since: number; until: number }, measured: rea
       unanswered: questions.length - answers.length,
     },
     baseline,
+    aiReviewMisses: missRate(period, audit.defects, audit.definition),
   };
 }

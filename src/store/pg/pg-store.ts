@@ -13,10 +13,11 @@ import {
 } from '../../core/dead-letter.js';
 import type { ReviewLens } from '../../config/workflow-schema.js';
 import type { Finding } from '../../core/agent-output.js';
+import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
 import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
 import type { OutboxEffect } from '../../core/decision.js';
-import type { ReviewFinding } from '../../core/review.js';
+import { findingRowId, type ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
 import type { FactoryEvent, QueueName, TicketState } from '../../core/types.js';
 import { normalizeTicket, upcastTimer, type StoredEvent, type StoredTimer } from '../../core/upcast.js';
@@ -1091,7 +1092,7 @@ export class PgStore implements AsyncStore {
       if (!r.findings.length) return;
       await tx.insert(schema.findings).values(
         r.findings.map((f, n) => ({
-          id: `${r.runId}:${r.lens}:${n}`, attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
+          id: findingRowId(r.runId, r.lens, n), attemptId: r.runId, kind: r.lens, severity: f.severity, body: f.explanation, createdAt: new Date(r.at),
           projectId: r.projectId, ticketId: r.ticketId, sha: r.sha, n, file: f.file, line: f.line, suggestion: f.suggestion, fact: f.fact ?? null,
         })),
       );
@@ -1105,6 +1106,48 @@ export class PgStore implements AsyncStore {
     `);
     return rows.rows.map((r) => ({
       file: r.file, line: r.line, severity: r.severity, explanation: r.body, suggestion: r.suggestion, ...(r.fact === null ? {} : { fact: r.fact }), lens: r.kind, runId: r.attempt_id,
+    }));
+  }
+
+  async ticketFindings(projectId: string, ticketId: string): Promise<KeptFinding[]> {
+    const rows = await this.db.execute<{ id: string; attempt_id: string; kind: ReviewLens; sha: string; at: string | number; severity: Finding['severity']; body: string; file: string; line: number; suggestion: string; fact: string | null }>(sql`
+      select id, attempt_id, kind, sha, round(extract(epoch from created_at) * 1000) as at, severity, body, file, line, suggestion, fact from findings
+      where project_id = ${projectId} and ticket_id = ${ticketId} order by created_at, kind, n
+    `);
+    return rows.rows.map((r) => ({
+      file: r.file, line: r.line, severity: r.severity, explanation: r.body, suggestion: r.suggestion, ...(r.fact === null ? {} : { fact: r.fact }), lens: r.kind, runId: r.attempt_id,
+      id: r.id, sha: r.sha, at: Number(r.at),
+    }));
+  }
+
+  async putReviewDefect(d: ReviewDefect): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.reviewDefects)
+      .values({
+        id: d.id, projectId: d.projectId, ticketId: d.ticketId, prNumber: d.prNumber, description: d.description, findingId: d.findingId,
+        file: d.file ?? null, line: d.line ?? null, seriousDefect: d.definition, enteredBy: d.enteredBy, enteredAt: new Date(d.at),
+      })
+      .onConflictDoNothing()
+      .returning({ id: schema.reviewDefects.id });
+    return rows.length === 1;
+  }
+
+  async ticketDefects(projectId: string, ticketId: string): Promise<ReviewDefect[]> {
+    return this.defectsWhere(sql`project_id = ${projectId} and ticket_id = ${ticketId}`);
+  }
+
+  async reviewDefects(since: number, until: number): Promise<ReviewDefect[]> {
+    return this.defectsWhere(sql`entered_at >= to_timestamp(${since / 1000}) and entered_at < to_timestamp(${until / 1000})`);
+  }
+
+  private async defectsWhere(where: SQL): Promise<ReviewDefect[]> {
+    const rows = await this.db.execute<{ id: string; project_id: string; ticket_id: string; pr_number: number; description: string; finding_id: string | null; file: string | null; line: number | null; definition: string | null; entered_by: string; at: string | number }>(sql`
+      select id, project_id, ticket_id, pr_number, description, finding_id, file, line, serious_defect as definition, entered_by, round(extract(epoch from entered_at) * 1000) as at
+      from review_defects where ${where} order by entered_at, id
+    `);
+    return rows.rows.map((r) => ({
+      id: r.id, projectId: r.project_id, ticketId: r.ticket_id, prNumber: r.pr_number, description: r.description, findingId: r.finding_id,
+      ...(r.file === null ? {} : { file: r.file }), ...(r.line === null ? {} : { line: r.line }), definition: r.definition, enteredBy: r.entered_by, at: Number(r.at),
     }));
   }
 

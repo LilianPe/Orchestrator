@@ -3,6 +3,7 @@ import type { RepoConfig } from '../config/repo-config.js';
 import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
+import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline } from '../core/baseline.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { BlockKind } from '../core/block-cause.js';
@@ -765,6 +766,14 @@ export interface Store {
   putFindings(r: FindingsRecord): Promise<void>;
   /** The findings kept on a ticket's commit, by lens (`correctness` first), each lens's in its own order. */
   findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]>;
+  /** All the findings kept on a ticket (ORC-229), over its commits, each by its row id: oldest kept first, then by lens, in each lens's order. */
+  ticketFindings(projectId: string, ticketId: string): Promise<KeptFinding[]>;
+  /** Keeps a defect a human entered from review (ORC-229), once by its id: false, and nothing written nor changed, when it is there already. */
+  putReviewDefect(d: ReviewDefect): Promise<boolean>;
+  /** The defects entered on a ticket (ORC-229), oldest first. */
+  ticketDefects(projectId: string, ticketId: string): Promise<ReviewDefect[]>;
+  /** The defects entered in `[since, until)` (ORC-229), whatever the project, oldest first. */
+  reviewDefects(since: number, until: number): Promise<ReviewDefect[]>;
   getMeta(key: string): Promise<string | undefined>;
   /**
    * A webhook delivery answered before it is written to the inbox (ORC-336), kept until it is: undefined when this call

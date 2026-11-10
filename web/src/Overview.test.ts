@@ -22,6 +22,21 @@ const BASELINE = {
 } satisfies OverviewView['baseline'];
 const tile = (o: OverviewView, label: string) => overviewTiles(o).find((t) => t.label === label);
 
+describe("the AI reviewers' miss rate (ORC-229)", () => {
+  it('shows no figure while no definition of a serious defect is set, and says why', () => {
+    const why = 'No definition of a serious defect is set (audit.serious_defect in factory.yml, ORC-153).';
+    expect(tile(view({ aiReviewMisses: { counted: false, why } }), 'AI reviewers’ miss rate')).toMatchObject({ value: 'not counted', detail: why });
+    expect(tile(view(), 'AI reviewers’ miss rate')).toBeUndefined();
+  });
+
+  it('shows the share of the human defects no AI finding saw, and what it is over', () => {
+    const t = tile(view({ aiReviewMisses: { counted: true, definition: 'Loses data', defects: 4, missed: 1, rate: 0.25, leftOut: 2 } }), 'AI reviewers’ miss rate');
+    expect(t).toMatchObject({ value: '25%', detail: expect.stringContaining('1 of 4 defects found in human review') });
+    expect(t?.detail).toContain('2 entered under another definition');
+    expect(tile(view({ aiReviewMisses: { counted: true, definition: 'Loses data', defects: 0, missed: 0, rate: null, leftOut: 0 } }), 'AI reviewers’ miss rate')?.value).toBe('—');
+  });
+});
+
 describe('overviewTiles (ORC-299)', () => {
   it('gives delivered, lead time, tokens per merged ticket and the rate ready at the first try', () => {
     const o = view();

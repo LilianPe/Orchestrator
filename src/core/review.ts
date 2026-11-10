@@ -15,6 +15,9 @@ export const REVIEW_CHECK = 'factory/review';
 /** A finding as the factory keeps it: the lens and the run that made it. */
 export type ReviewFinding = Finding & { lens: ReviewLens; runId: string };
 
+/** The id of a kept finding, the `n`th of its lens's run (ORC-229): both stores give it, a defect of review links to it. */
+export const findingRowId = (runId: string, lens: ReviewLens, n: number): string => `${runId}:${lens}:${n}`;
+
 /** The diff a lens is given in its prompt, at most; past it, the changed files, read in its clone, as many as fit. */
 export const DIFF_MAX = 60_000;
 
