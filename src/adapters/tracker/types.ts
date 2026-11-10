@@ -21,6 +21,21 @@ export interface TrackerIssue {
   creator?: { id: string; name: string; url: string };
 }
 
+/** A ticket with its comments, each dated (ORC-376): what the replay of a closed ticket reads of it and of its linked tickets. */
+export interface DatedIssue {
+  identifier: string;
+  title: string;
+  description: string;
+  createdAt: number;
+  comments: { body: string; createdAt: number }[];
+}
+
+/** A ticket's thread and its linked tickets (both ways of each relation), as the tracker holds them now (ORC-376). */
+export interface IssueHistory {
+  issue: DatedIssue;
+  linked: DatedIssue[];
+}
+
 export type ActivityInput =
   | { type: 'thought' | 'response' | 'error'; body: string; ephemeral?: boolean }
   /** `options`: picked in a list (Linear's `select` signal, ORC-210), a free answer still possible. */
@@ -68,6 +83,11 @@ export const teamOf = (identifier: string): string => identifier.split('-')[0]!;
  */
 export interface Tracker {
   getIssue(identifier: string): Promise<TrackerIssue>;
+  /**
+   * The ticket with its comments, and the tickets related to it with theirs (ORC-376), each dated: the replay of a closed ticket
+   * keeps what was there at its start (`ghost/history.ts`). Rejects an unknown ticket with `IssueNotFoundError`.
+   */
+  history(identifier: string): Promise<IssueHistory>;
   listDelegated(teamKey: string): Promise<TrackerIssue[]>;
   /** The issues of the team `teamKey` alone that match `term` (ORC-349): an agent never searches the whole workspace. */
   search(term: string, teamKey: string): Promise<SearchHit[]>;
