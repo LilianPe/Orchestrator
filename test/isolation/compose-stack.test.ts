@@ -20,14 +20,14 @@ const parent = process.env['FACTORY_COMPOSE_DIR'] ?? '/tmp';
 const base = `factory-recette-${Date.now()}`;
 const dir = `${parent}/${base}`;
 const HTTPS_PORT = process.env['FACTORY_HTTPS_PORT'] ?? '18443';
-const HTTP_PORT = process.env['FACTORY_PORT'] ?? '14100';
+const HTTP_PORT = process.env['FACTORY_LOOPBACK_PORT'] ?? '14100';
 const PASSWORD = 'recette-ui-password';
 
 const env = {
   ...process.env,
   // caddy is off by default (ORC-221): this run takes it, as a server without a reverse proxy of its own does.
   COMPOSE_PROFILES: 'tls',
-  FACTORY_PORT: HTTP_PORT,
+  FACTORY_LOOPBACK_PORT: HTTP_PORT,
   FACTORY_DIR: dir,
   FACTORY_ENGINE_SOCKET: process.env['FACTORY_ENGINE_SOCKET'] ?? '/var/run/docker.sock',
   FACTORY_RUNNER_IMAGE: runnerImage,

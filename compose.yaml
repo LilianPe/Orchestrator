@@ -17,7 +17,7 @@ services:
     networks: [default, back]
     # Plain HTTP, on the host's loopback alone: its reverse proxy brings the TLS (ORC-221).
     ports:
-      - 127.0.0.1:${FACTORY_PORT:-4100}:4100
+      - 127.0.0.1:${FACTORY_LOOPBACK_PORT:-4100}:4100
     stop_grace_period: 30s
     volumes:
       # Same path on both sides: the engine resolves a runner's mounts on the host, not in this container.

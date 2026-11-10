@@ -91,8 +91,12 @@ describe('compose.yaml (ORC-203)', () => {
     expect(JSON.stringify(caddy)).not.toMatch(/\$\{[^}]*:\?/);
   });
 
+  it("answers the runners' agent API 404 under the public name: they reach it through the proxy service (ORC-221)", () => {
+    expect(read('docker/Caddyfile')).toMatch(/@agent path \/agent \/agent\/\*\s+respond @agent 404\s+reverse_proxy factoryd:4100/);
+  });
+
   it("publishes factoryd on the host's loopback alone, for its reverse proxy, and caddy under its profile (ORC-221)", () => {
-    expect(factoryd.ports).toEqual(['127.0.0.1:${FACTORY_PORT:-4100}:4100']);
+    expect(factoryd.ports).toEqual(['127.0.0.1:${FACTORY_LOOPBACK_PORT:-4100}:4100']);
     expect(caddy.ports!.length).toBeGreaterThan(0);
     for (const s of [proxy, postgres]) expect(s.ports).toBeUndefined();
     expect(postgres.networks).toEqual(['back']);

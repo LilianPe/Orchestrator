@@ -19,7 +19,7 @@ Runners are not services: `factoryd` creates one per attempt, then destroys it. 
 
 ## TLS and webhooks
 
-Linear and GitHub call the server directly, in HTTPS (ORC-221): `<publicUrl>/webhooks/linear`, `<publicUrl>/webhooks/github`, and Linear's OAuth callback `<publicUrl>/oauth/callback`. The factory itself brings no TLS: `factoryd` listens in plain HTTP, published on the host's loopback alone (`127.0.0.1:${FACTORY_PORT:-4100}`), and `publicUrl` in `config.yaml` says the public HTTPS URL. A reverse proxy in front of it holds the certificate, by one of two means:
+Linear and GitHub call the server directly, in HTTPS (ORC-221): `<publicUrl>/webhooks/linear`, `<publicUrl>/webhooks/github`, and Linear's OAuth callback `<publicUrl>/oauth/callback`. The factory itself brings no TLS: `factoryd` listens in plain HTTP, published on the host's loopback alone (`127.0.0.1:${FACTORY_LOOPBACK_PORT:-4100}`; `port` in `config.yaml` stays at 4100, the container's side), and `publicUrl` in `config.yaml` says the public HTTPS URL. A reverse proxy in front of it holds the certificate, by one of two means:
 
 - **the host's reverse proxy** (the default): the server's own nginx, Caddy, Traefik or Apache, the operator's choice, forwards the public name to `http://127.0.0.1:4100`;
 - **the `caddy` service** of `compose.yaml`, for a server without one: `docker compose --profile tls up -d` (or `COMPOSE_PROFILES=tls` in `.env`). It takes ports 80 and 443 and a Let's Encrypt certificate for `FACTORY_PUBLIC_HOST` (`docker/Caddyfile`), and refuses to start without it.
@@ -28,6 +28,7 @@ What the proxy must do, and nothing more:
 
 - **pass the `Host` on as the client sent it** (the public name, with its port when it is not 443). The interface refuses a write whose `Origin` is not that name (CSRF); the webhooks do not care. Caddy, Traefik and the `tls` profile keep it by default; nginx needs `proxy_set_header Host $http_host;`, Apache `ProxyPreserveHost On`;
 - **pass the body as received**, and let it be large: the signatures are checked on its raw bytes, GitHub sends up to 25 MB and a take-over bundle up to 100 MB (nginx refuses above 1 MB by default);
+- **not forward `/agent`**: the run-token agent API, which the runners reach through the `proxy` service on port 4101, never through the public name. The examples below and the `tls` profile answer it 404;
 - **not buffer the live stream** (`/api/events`, server-sent events, one `ping` every 15 s): nginx needs `proxy_buffering off;`. Caddy flushes it on its own.
 
 `factoryd` reads no `X-Forwarded-*` header: it decides nothing on the client's address or scheme, and `publicUrl` already gives the URLs it hands out. A forged `X-Forwarded-Host` changes nothing. The interface stays behind `FACTORY_UI_PASSWORD`; the webhooks, the OAuth callback and the agent API answer to their own guards (signatures, `state`, run token).
@@ -42,6 +43,8 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/usine.exemple.fr/privkey.pem;
 
     client_max_body_size 100m;         # a take-over bundle (ORC-234); GitHub sends up to 25 MB
+
+    location /agent { return 404; }    # the runners' API, never public
 
     location / {
         proxy_pass http://127.0.0.1:4100;
@@ -59,11 +62,13 @@ Or a Caddy on the host (`/etc/caddy/Caddyfile`), which fetches its certificate i
 
 ```caddyfile
 usine.exemple.fr {
+	@agent path /agent /agent/*
+	respond @agent 404
 	reverse_proxy 127.0.0.1:4100
 }
 ```
 
-To check it: `curl -sS https://usine.exemple.fr/health` answers the JSON of the health check, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
+Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS -u x:"$FACTORY_UI_PASSWORD" https://usine.exemple.fr/health` answers the JSON of the health check (401 without the password), and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
 
 **Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
 
@@ -97,7 +102,7 @@ No image receives a secret at build time. Isolation test no. 7 looks for tokens 
 
 ## Variables
 
-In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuses to start if a required variable is missing.
+In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuses to start if a required variable is missing; `FACTORY_PUBLIC_HOST` excepted, which compose would also ask of a plain `up` without the `tls` profile: missing, `caddy` exits at its start and restarts, the message in `docker compose logs caddy`.
 
 | Variable | Required | Role |
 |---|---|---|
@@ -108,7 +113,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |
-| `FACTORY_PORT` | no | Port of `factoryd` on the host's loopback, for its reverse proxy (4100 by default). |
+| `FACTORY_LOOPBACK_PORT` | no | Port of `factoryd` on the host's loopback, for its reverse proxy (4100 by default). |
 | `FACTORY_PUBLIC_HOST` | with the `tls` profile | Domain of `publicUrl`, for `caddy`'s certificate. |
 | `POSTGRES_PASSWORD` | yes | Database password, reused in a URL: letters and digits only. |
 | `FACTORY_COMMIT` | no | At build time: the commit, recorded on each attempt. |
@@ -159,7 +164,7 @@ On the server, with the user's rootless engine running:
    FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
    ```
 
-4. Point the host's reverse proxy at `http://127.0.0.1:4100` ([TLS](#tls-and-webhooks)), then `docker compose up -d`. Without a reverse proxy on the server: `docker compose --profile tls up -d`, with `FACTORY_PUBLIC_HOST`.
+4. Point the host's reverse proxy at `http://127.0.0.1:4100`, or the port of `FACTORY_LOOPBACK_PORT` ([TLS](#tls-and-webhooks)), then `docker compose up -d`. Without a reverse proxy on the server: `docker compose --profile tls up -d`, with `FACTORY_PUBLIC_HOST`.
 5. Open `https://usine.exemple.fr` (password `FACTORY_UI_PASSWORD`), click **Connect Linear**.
 
 `factoryd` refuses to start on an engine that is not rootless: holding its socket would give root on the host.
