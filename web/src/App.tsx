@@ -171,12 +171,16 @@ function SheetPage({ projectId, ticketId }: { projectId: string; ticketId: strin
     };
   }, [projectId, ticketId, reads]);
   const enter = (entry: DefectEntry) =>
-    void postDefect(projectId, ticketId, entry).then(
+    postDefect(projectId, ticketId, entry).then(
       async (res) => {
         setNotice(res.ok ? 'Defect entered.' : await refusal(res, 'defect'));
         if (res.ok) setReads((n) => n + 1);
+        return res.ok;
       },
-      () => setNotice('Defect not sent: the server did not answer.'),
+      () => {
+        setNotice('Defect not sent: the server did not answer.');
+        return false;
+      },
     );
   return (
     <div className="flow">

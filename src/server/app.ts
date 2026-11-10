@@ -14,7 +14,7 @@ import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';
 import type { TakeOverDesk } from '../core/orchestrator.js';
-import { measureTicket, type TicketMeasures } from '../core/measures.js';
+import { measureTicket, mergeTime, type TicketMeasures } from '../core/measures.js';
 import { BASELINE_DAYS, DAY_MS } from '../core/baseline.js';
 import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
@@ -355,9 +355,13 @@ export function createApp(d: ServerDeps): Hono {
   // message of the period. A ticket whose measures cannot be read is counted, the error logged. The baseline computed
   // last faces the measures (ORC-230).
   app.get('/api/overview', overPeriod(async (c, period) => {
-    const [measures, baseline] = await Promise.all([measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since)), d.store.latestBaseline()]);
+    const [measures, baseline, defects] = await Promise.all([
+      measuresOfAll((await d.store.listTickets()).filter((t) => t.updatedAt >= period.since)),
+      d.store.latestBaseline(),
+      d.store.reviewDefects(period.since, period.until),
+    ]);
     const measured = measures.filter((m) => m !== null);
-    return c.json(overview(period, measured, measures.length - measured.length, baseline, { defects: await d.store.reviewDefects(period.since, period.until), definition: d.seriousDefect }));
+    return c.json(overview(period, measured, measures.length - measured.length, baseline, { defects, definition: d.seriousDefect }));
   }, OVERVIEW_PERIOD_MS));
 
   // The audit sheets (ORC-229): the PRs a human reviewed among the tickets updated last, and the sheet of one, read from its
@@ -366,15 +370,22 @@ export function createApp(d: ServerDeps): Hono {
   const definition = d.seriousDefect ?? null;
   app.get('/api/audit', async (c) => {
     const withPr = (await d.store.listTickets()).filter((t) => t.prNumber !== undefined).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, AUDITED_TICKETS);
-    const facts = await twoAtATime(withPr, (t) => d.store.measureFacts(t.projectId, t.ticketId));
+    // A ticket whose facts cannot be read leaves the list, the error logged: the others are still served.
+    const facts = await twoAtATime(withPr, (t) =>
+      d.store.measureFacts(t.projectId, t.ticketId).catch((err: Error) => {
+        d.bus.publish({ kind: 'log', level: 'error', message: `audit of ${t.ticketId}: ${err.message}`, at: d.clock.now() });
+        return null;
+      }),
+    );
     const sheets = withPr.flatMap((t, i) => {
-      const f = facts[i]!;
-      if (!humanReviewed(f)) return [];
-      const merged = f.events.find((e) => e.type === 'pr.merged');
-      return [{ ...flowTicket(t), logical: t.logical, mergedAt: merged ? merged.at : null }];
+      const f = facts[i];
+      if (!f || !humanReviewed(f)) return [];
+      const merged = f.events.find((e): e is FactoryEvent<'pr.merged'> => e.type === 'pr.merged');
+      return [{ ...flowTicket(t), logical: t.logical, mergedAt: merged ? mergeTime(merged) : null }];
     });
     return c.json({ definition, sheets });
   });
+  const defectLimit = bodyLimit({ maxSize: 16 * 1024, onError: (c) => c.json({ error: 'defect over 16 KB' }, 413) });
   const sheetOf = async (projectId: string, ticketId: string) => {
     const t = await d.store.getTicket(projectId, ticketId);
     if (!t) return undefined;
@@ -387,11 +398,15 @@ export function createApp(d: ServerDeps): Hono {
   });
   // A defect found in human review, entered by an operator: on a PR of the sheet, linked to one of its findings or not. Kept
   // with the definition in force, never changed: only those under the definition in force are counted.
-  app.post('/api/audit/:projectId/:ticketId/defects', async (c) => {
+  app.post('/api/audit/:projectId/:ticketId/defects', defectLimit, async (c) => {
+    // The body is checked before the sheet is read: a malformed entry costs no query.
+    const parsed = defectEntry.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      const fields = [...new Set(parsed.error.issues.map((i) => i.path.join('.') || 'body'))];
+      return c.json({ error: `expected { prNumber, description, findingId?, file?, line? }: ${fields.join(', ')} at fault` }, 400);
+    }
     const sheet = await sheetOf(c.req.param('projectId'), c.req.param('ticketId'));
     if (!sheet) return c.json({ error: 'no such ticket' }, 404);
-    const parsed = defectEntry.safeParse(await c.req.json().catch(() => undefined));
-    if (!parsed.success) return c.json({ error: 'expected { prNumber, description, findingId?, file?, line? }' }, 400);
     const entry = parsed.data;
     if (!sheet.result.prs.some((p) => p.number === entry.prNumber)) return c.json({ error: `PR #${entry.prNumber} is not a PR of ${sheet.ticketId}` }, 400);
     if (entry.findingId !== undefined && !sheet.path.findings.some((f) => f.id === entry.findingId)) return c.json({ error: `no finding ${entry.findingId} on ${sheet.ticketId}` }, 400);

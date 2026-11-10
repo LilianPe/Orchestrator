@@ -1,5 +1,5 @@
 import type { MeasureFacts } from '../store/types.js';
-import { ticketMeasures, type Rework, type RunMeasure } from './measures.js';
+import { handedToHuman, mergeTime, ticketMeasures, type Rework, type RunMeasure } from './measures.js';
 import type { ReviewFinding } from './review.js';
 import { checkOf, stepCosts, type CheckVerdict, type StepCost } from './run-detail.js';
 import type { Spec } from './spec.js';
@@ -91,8 +91,11 @@ function prsOf(events: readonly FactoryEvent[]): AuditPr[] {
   for (const e of events) {
     if (e.type !== 'pr.opened' && e.type !== 'pr.merged' && e.type !== 'pr.closed') continue;
     const pr = prs.get(e.payload.number) ?? { number: e.payload.number, url: e.payload.url, state: 'open', mergedAt: null };
-    if (e.type === 'pr.merged' && pr.state !== 'merged') Object.assign(pr, { state: 'merged', mergedAt: e.payload.mergedAt ?? e.at });
-    if (e.type === 'pr.closed' && pr.state === 'open') pr.state = 'closed';
+    if (pr.state !== 'merged') {
+      // A reopening is journaled as `pr.opened` again: it takes the PR back from closed.
+      if (e.type === 'pr.merged') Object.assign(pr, { state: 'merged', mergedAt: mergeTime(e) });
+      else pr.state = e.type === 'pr.closed' ? 'closed' : 'open';
+    }
     prs.set(pr.number, pr);
   }
   return [...prs.values()];
@@ -100,7 +103,7 @@ function prsOf(events: readonly FactoryEvent[]): AuditPr[] {
 
 /** A PR a human reviewed: one reviewed on GitHub, or handed to Human Review by the factory. */
 export function humanReviewed(facts: Pick<MeasureFacts, 'events' | 'effects'>): boolean {
-  return facts.events.some((e) => e.type === 'pr.reviewed') || facts.effects.some((r) => r.status === 'done' && r.effect.kind === 'move' && r.effect.to === 'human_review');
+  return facts.events.some((e) => e.type === 'pr.reviewed') || facts.effects.some(handedToHuman);
 }
 
 /** The audit sheet of a ticket from its facts, the findings kept of it and the defects entered (ORC-229). Pure. */

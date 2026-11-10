@@ -30,7 +30,7 @@ const sheet = (patch: Partial<AuditSheetView> = {}): AuditSheetView => ({
   defects: [defect(), defect({ id: 'd2', findingId: 'rv1:correctness:0', description: 'Off by one, seen by the AI.' })],
   ...patch,
 });
-const render = (s: AuditSheetView) => renderToStaticMarkup(createElement(AuditSheet, { sheet: s, onDefect: () => undefined }));
+const render = (s: AuditSheetView) => renderToStaticMarkup(createElement(AuditSheet, { sheet: s, onDefect: async () => true }));
 
 describe('the audit sheet page (ORC-229)', () => {
   it('shows the three parts of a reviewed PR: the task, the agent path, the result', () => {
@@ -54,6 +54,10 @@ describe('the audit sheet page (ORC-229)', () => {
     expect(html).toContain('audit.serious_defect');
     expect(html).not.toMatch(/\d+ defects?/);
     expect(html).not.toMatch(/\d+ missed/);
+  });
+
+  it('says when the finding a defect is linked to is no longer kept: its lens read the commit again', () => {
+    expect(render(sheet({ defects: [defect({ findingId: 'rv0:correctness:0' })] }))).toContain('seen by finding rv0:correctness:0 (no longer kept)');
   });
 
   it('says the definition the defects are counted by once one is set, and which defects it leaves out', () => {

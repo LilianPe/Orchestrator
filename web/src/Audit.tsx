@@ -125,7 +125,10 @@ function standing(d: ReviewDefectView, definition: string | null): string {
   return d.definition === null ? ' · entered under no definition: not counted' : ' · entered under another definition: not counted';
 }
 
-function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: (e: DefectEntry) => void }) {
+/** Enters a defect: true once the server kept it. */
+export type OnDefect = (e: DefectEntry) => Promise<boolean>;
+
+function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: OnDefect }) {
   const [prNumber, setPr] = useState(sheet.result.prs.at(-1)?.number ?? 0);
   const [description, setDescription] = useState('');
   const [findingId, setFinding] = useState('');
@@ -133,8 +136,11 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: (e: 
   const [line, setLine] = useState('');
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    onDefect({ prNumber, description, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number(line) > 0 ? { line: Number(line) } : {}) });
-    setDescription('');
+    const at = Number(line);
+    // What was typed stays until the server keeps it: a refusal leaves it to correct.
+    void onDefect({ prNumber, description, ...(findingId ? { findingId } : {}), ...(file.trim() ? { file: file.trim() } : {}), ...(Number.isInteger(at) && at > 0 ? { line: at } : {}) }).then((kept) => {
+      if (kept) setDescription('');
+    });
   };
   return (
     <form className="defect" onSubmit={submit}>
@@ -148,7 +154,7 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: (e: 
         </select>
       </label>
       <label>File <input value={file} onChange={(e) => setFile(e.target.value)} /></label>
-      <label>Line <input inputMode="numeric" value={line} onChange={(e) => setLine(e.target.value)} /></label>
+      <label>Line <input type="number" min={1} step={1} value={line} onChange={(e) => setLine(e.target.value)} /></label>
       <button type="submit" disabled={!sheet.result.prs.length}>Enter the defect</button>
     </form>
   );
@@ -158,7 +164,8 @@ function DefectForm({ sheet, onDefect }: { sheet: AuditSheetView; onDefect: (e: 
  * The defects humans found in review (ORC-229), each linked to the AI finding that saw it or missed by the AI reviewers, and
  * the entry of one. No figure while no definition of a serious defect is set (ORC-153).
  */
-function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect: (e: DefectEntry) => void; notice?: string | undefined }) {
+function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect: OnDefect; notice?: string | undefined }) {
+  const kept = new Set(sheet.path.findings.map((f) => f.id));
   return (
     <section>
       <h2>Defects found in human review</h2>
@@ -168,7 +175,7 @@ function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect:
           {sheet.defects.map((d) => (
             <li key={d.id}>
               {time(d.at)} · PR #{d.prNumber}{d.file ? ` · ${d.file}${d.line ? `:${d.line}` : ''}` : ''}: {d.description}{' '}
-              <em>{d.findingId === null ? 'missed by the AI reviewers' : `seen by finding ${d.findingId}`}</em>
+              <em>{d.findingId === null ? 'missed by the AI reviewers' : `seen by finding ${d.findingId}${kept.has(d.findingId) ? '' : ' (no longer kept)'}`}</em>
               <span className="note"> · {d.enteredBy}{standing(d, sheet.definition)}</span>
             </li>
           ))}
@@ -181,7 +188,7 @@ function Defects({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect:
 }
 
 /** The audit sheet of a reviewed PR (ORC-229): the task, the agent's path, the result, from the factory's records; then the defects. */
-export function AuditSheet({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect: (e: DefectEntry) => void; notice?: string | undefined }) {
+export function AuditSheet({ sheet, onDefect, notice }: { sheet: AuditSheetView; onDefect: OnDefect; notice?: string | undefined }) {
   return (
     <div className="measures audit">
       <section><h2>Audit sheet · {sheet.ticketId}</h2></section>

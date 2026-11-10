@@ -76,6 +76,15 @@ describe('auditSheet (ORC-229)', () => {
     expect(sheet.result.prs).toEqual([{ number: 3, url: 'https://gh/pr/3', state: 'closed', mergedAt: null }, { number: 4, url: 'https://gh/pr/4', state: 'open', mergedAt: null }]);
     expect(sheet.result.mergedAt).toBeNull();
   });
+
+  it('a PR closed then reopened is open again; a merge is timed by GitHub when it names the time', () => {
+    const sheet = auditSheet({ projectId: 'p', ticketId: 'REL-1', title: 'T' }, facts({
+      events: [ev('o', 'pr.opened', 1, pr), ev('c', 'pr.closed', 2, pr), ev('o2', 'pr.opened', 3, pr)],
+    }), [], []);
+    expect(sheet.result.prs).toEqual([{ number: 3, url: 'https://gh/pr/3', state: 'open', mergedAt: null }]);
+    const merged = auditSheet({ projectId: 'p', ticketId: 'REL-1', title: 'T' }, facts({ events: [ev('o', 'pr.opened', 1, pr), ev('m', 'pr.merged', 90, { ...pr, mergedAt: 40 } as never)] }), [], []);
+    expect(merged.result.prs[0]).toMatchObject({ state: 'merged', mergedAt: 40 });
+  });
 });
 
 describe('humanReviewed (ORC-229)', () => {

@@ -290,6 +290,12 @@ describe('server', () => {
       });
       expect(JSON.stringify(sheet)).not.toContain('"token"');
       expect((await app.request('/api/audit/p/REL-9')).status).toBe(404);
+      // A ticket whose facts cannot be read leaves the list, the others are still served.
+      const facts = store.measureFacts.bind(store);
+      const read = vi.spyOn(store, 'measureFacts').mockImplementation((projectId, ticketId) => (ticketId === 'REL-1' ? Promise.reject(new Error('journal illisible')) : facts(projectId, ticketId)));
+      expect((await (await app.request('/api/audit')).json()).sheets).toEqual([]);
+      expect(read.mock.calls.map((c) => c[1]).sort()).toEqual(['REL-1', 'REL-2']);
+      read.mockRestore();
       expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/audit/p/REL-1')).status).toBe(401);
     });
 
@@ -316,6 +322,8 @@ describe('server', () => {
       for (const bad of [{ prNumber: 4, description: 'x' }, { prNumber: 3, description: 'x', findingId: 'other:correctness:0' }, { prNumber: 3, description: '  ' }, { prNumber: 3 }, 'not json']) {
         expect((await post(app, bad)).status, JSON.stringify(bad)).toBe(400);
       }
+      // The refusal names the field at fault.
+      expect((await (await post(app, { prNumber: 3, description: 'x', line: 2.5 })).json()).error).toContain('line');
       expect((await post(app, { prNumber: 3, description: 'x' }, { origin: 'https://evil.test' })).status).toBe(403);
       expect(await store.ticketDefects('p', 'REL-1')).toEqual([]);
     });
