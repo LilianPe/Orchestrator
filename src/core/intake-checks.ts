@@ -1,18 +1,24 @@
-import type { ForgeBranch, OpenPr } from '../adapters/forge/types.js';
+import type { Forge, ForgeBranch, OpenPr } from '../adapters/forge/types.js';
 import type { SearchHit } from '../adapters/tracker/types.js';
 import type { AgentOutput } from './agent-output.js';
-import { ownBranchPrefix } from './naming.js';
+import { DEFAULT_BRANCH_NAMING, isOwnBranch, ownBranchPrefixes, type BranchNaming } from './naming.js';
 import type { ReuseLead } from './types.js';
 
 /**
  * The work the ticket itself already has on the forge (ORC-207): a branch of its own, named by its open PR when it has one.
  * The `not_started` pickup check, absorbed by the duplicate search: a certain duplicate, found without judgement.
  */
-export function ownWork(identifier: string, branches: readonly ForgeBranch[], prs: readonly OpenPr[]): string | undefined {
-  const own = branches.find((b) => b.name.startsWith(ownBranchPrefix(identifier)));
+export function ownWork(identifier: string, branches: readonly ForgeBranch[], prs: readonly OpenPr[], naming: BranchNaming = DEFAULT_BRANCH_NAMING): string | undefined {
+  const own = branches.find((b) => isOwnBranch(identifier, b.name, naming));
   if (!own) return undefined;
   const link = prs.find((p) => !p.fork && p.branch === own.name)?.url ?? own.url;
   return `This ticket already has work on the forge: ${link} (branch ${own.name}).`;
+}
+
+/** The ticket's own branches on the forge (ORC-207, ORC-283): asked by each of their prefixes, kept when `isOwnBranch` takes them. */
+export async function ticketBranches(forge: Pick<Forge, 'branches'>, repoPath: string, identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): Promise<ForgeBranch[]> {
+  const found = (await Promise.all(ownBranchPrefixes(identifier, naming).map((prefix) => forge.branches(repoPath, prefix)))).flat();
+  return [...new Map(found.filter((b) => isOwnBranch(identifier, b.name, naming)).map((b) => [b.name, b])).values()];
 }
 
 /** What the factory read of the work in progress elsewhere, for `intake` to judge: its duplicate candidates. */
@@ -34,11 +40,11 @@ const PR_FILES_SHOWN = 30;
  * another repository: it hides none). Capped at `ACTIVE_WORK_MAX`, in that order, what is cut counted at the end. Data the
  * factory read: the forge's and the tracker's texts, not instructions.
  */
-export function formatActiveWork(identifier: string, work: ActiveWork): string {
-  const own = ownBranchPrefix(identifier);
-  const prs = work.prs.filter((p) => p.fork || !p.branch.startsWith(own));
+export function formatActiveWork(identifier: string, work: ActiveWork, naming: BranchNaming = DEFAULT_BRANCH_NAMING): string {
+  const own = (branch: string) => isOwnBranch(identifier, branch, naming);
+  const prs = work.prs.filter((p) => p.fork || !own(p.branch));
   const withPr = new Set(work.prs.filter((p) => !p.fork).map((p) => p.branch));
-  const branches = work.branches.filter((b) => !withPr.has(b.name) && !b.name.startsWith(own));
+  const branches = work.branches.filter((b) => !withPr.has(b.name) && !own(b.name));
   const tickets = work.tickets.filter((t) => t.identifier !== identifier);
   if (!prs.length && !branches.length && !tickets.length) return 'No open PR, no other branch, no close ticket.';
   const sections = [

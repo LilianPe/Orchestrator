@@ -1,5 +1,5 @@
 import type { BranchReader, HumanPush } from '../../core/clean-verify.js';
-import { branchName } from '../../core/naming.js';
+import { branchName, legacyBranchName } from '../../core/naming.js';
 import type { StepDiff, Workspace, WorkspaceManager, WorkspaceRequest } from './types.js';
 
 export class FakeWorkspaces implements WorkspaceManager {
@@ -32,7 +32,11 @@ export class FakeWorkspaces implements WorkspaceManager {
     const path = `/tmp/factory-fake/${req.projectId}/${req.ticketId}`;
     const fresh = !this.made.has(path);
     this.made.add(path);
-    return { path, port: req.portBase + req.slot, branch: branchName(req.ticketId, req.title), ...(fresh ? { fresh } : {}), ...(fresh && this.ahead.has(req.ticketId) ? { ahead: true } : {}) };
+    // A legacy branch the ticket already has on the forge is kept (ORC-283), as `GitWorkspaces` does.
+    const asked = req.branch ?? branchName(req.ticketId, req.title);
+    const legacy = legacyBranchName(req.ticketId, req.title);
+    const branch = !this.remoteBranches.has(asked) && this.remoteBranches.has(legacy) ? legacy : asked;
+    return { path, port: req.portBase + req.slot, branch, ...(fresh ? { fresh } : {}), ...(fresh && this.ahead.has(req.ticketId) ? { ahead: true } : {}) };
   }
 
   async cleanup(projectId: string, ticketId: string): Promise<void> {
@@ -112,7 +116,7 @@ export class FakeWorkspaces implements WorkspaceManager {
     if (this.trunks.delete(trunk)) this.released.push(trunk);
   }
 
-  async remoteBranchExists(_repoPath: string, prefix: string): Promise<boolean> {
-    return [...this.remoteBranches].some((b) => b.startsWith(prefix));
+  async remoteBranchExists(_repoPath: string, matches: (name: string) => boolean): Promise<boolean> {
+    return [...this.remoteBranches].some(matches);
   }
 }

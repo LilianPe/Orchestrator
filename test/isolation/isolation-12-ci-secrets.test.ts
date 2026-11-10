@@ -42,7 +42,7 @@ describe.skipIf(skip)(title, () => {
     const report = JSON.parse(lines.join('\n')) as { workflows: { path: string; secrets: boolean; verdict: string }[] };
     expect(report.workflows, `${CANARY} is missing from the test repository`).toContainEqual(expect.objectContaining({ path: CANARY, secrets: true, verdict: 'accepted' }));
     // The control: the same workflows, the environment without its reviewer.
-    const unprotected = { listWorkflows: (p: string) => api.listWorkflows(p), listEnvironments: async () => [{ name: ENVIRONMENT, requiredReviewers: false }] };
+    const unprotected = { listWorkflows: (p: string) => api.listWorkflows(p), listEnvironments: async () => [{ name: ENVIRONMENT, requiredReviewers: false }], appLogin: () => api.appLogin() };
     expect(await runDoctor({ repoPath: REPO, api: unprotected, out: () => {}, json: true })).toBe(1);
   }, 120_000);
 

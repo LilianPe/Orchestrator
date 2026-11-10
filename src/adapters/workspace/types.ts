@@ -14,6 +14,13 @@ export interface WorkspaceRequest {
   runId: string;
   /** The published commit a `published` workspace is on (ORC-183). */
   sha?: string;
+  /**
+   * The name of a ticket worktree's branch (ORC-283): the one recorded on the ticket, else the repository's naming's. A
+   * ticket that already has its legacy `factory/<id>-<slug>` branch keeps it instead. Absent: the team's convention.
+   */
+  branch?: string;
+  /** The launch has just fetched the forge, reading the repository's config for that name: a fresh worktree does not fetch it again. */
+  fetched?: boolean;
 }
 
 export interface Workspace {
@@ -46,7 +53,8 @@ export interface WorkspaceManager {
   cleanup(projectId: string, ticketId: string): Promise<void>;
   /** The trunk a run asked for (a question's, or an AI review's clone), once its sandbox is gone. A run that had none: nothing to do. */
   release(projectId: string, runId: string): Promise<void>;
-  remoteBranchExists(repoPath: string, prefix: string): Promise<boolean>;
+  /** Whether origin has a branch `matches` takes: a ticket's own, whatever its type or title (ORC-283). */
+  remoteBranchExists(repoPath: string, matches: (name: string) => boolean): Promise<boolean>;
   /** The commit a worktree's run ended on (ORC-148: only it may be recorded as reviewed); none for a path that is no worktree. */
   head(path: string): Promise<string | undefined>;
   /**

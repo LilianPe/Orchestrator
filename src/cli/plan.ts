@@ -1,7 +1,7 @@
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { ProjectRuntime } from '../core/orchestrator.js';
-import { ownBranchPrefix } from '../core/naming.js';
+import { DEFAULT_BRANCH_NAMING, isOwnBranch, type BranchNaming } from '../core/naming.js';
 import { pickupFailures } from '../core/pickup.js';
 import { repoLabel } from '../core/routing.js';
 import { routedIssues } from '../adapters/tracker/linear/reconcile.js';
@@ -22,6 +22,8 @@ export async function planRows(d: {
   store: Store;
   projects: ProjectRuntime[];
   workspaces: WorkspaceManager;
+  /** The repository's branch naming (ORC-283), as the daemon reads it: the team's convention without it. */
+  naming?: (project: ProjectRuntime) => Promise<BranchNaming>;
 }): Promise<PlanRow[]> {
   const rows: PlanRow[] = [];
   // One read per team; each ticket listed once, under the project it goes to (ORC-291).
@@ -41,8 +43,8 @@ export async function planRows(d: {
       }
       const checks = p.workflow.tracker.pickup.checks;
       // A preview: the daemon reads the ticket's own work on the forge (ORC-207), the command on origin, which needs no GitHub App.
-      const prefix = ownBranchPrefix(issue.identifier);
-      const own = checks.includes('not_started') && (await d.workspaces.remoteBranchExists(p.repoPath, prefix)) ? `A branch ${prefix}… already exists on origin.` : undefined;
+      const naming = checks.includes('not_started') ? ((await d.naming?.(p)) ?? DEFAULT_BRANCH_NAMING) : undefined;
+      const own = naming && (await d.workspaces.remoteBranchExists(p.repoPath, (name) => isOwnBranch(issue.identifier, name, naming))) ? `A branch of ${issue.identifier} already exists on origin.` : undefined;
       const reasons = pickupFailures(checks, issue, own);
       rows.push({ ...row, status: reasons.length ? 'not taken' : 'taken', reasons });
     }

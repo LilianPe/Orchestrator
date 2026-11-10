@@ -9,7 +9,7 @@ import type { FactoryEvent } from '../../src/core/types.js';
 import type { Store } from '../../src/store/types.js';
 
 export const GH_SECRET = 'github-test-secret';
-export const BRANCH = 'factory/rel-1-export-csv';
+export const BRANCH = 'feat/rel-1-export-csv';
 const REPO = { full_name: 'acme/app', html_url: 'https://github.com/acme/app', default_branch: 'main' };
 
 /** A GitHub delivery of `body` as event `name`, signed with `secret`. */

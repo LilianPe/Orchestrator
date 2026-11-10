@@ -64,8 +64,8 @@ describe('GitWorkspaces', () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
-    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'factory/rel-1-export-csv', fresh: true });
-    expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('factory/rel-1-export-csv');
+    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'feat/rel-1-export-csv', fresh: true });
+    expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/rel-1-export-csv');
     expect(await ws.prepare(req(repo))).toEqual({ ...w, fresh: undefined });
     await ws.cleanup('p', 'REL-1');
     expect(existsSync(w.path)).toBe(false);
@@ -80,8 +80,46 @@ describe('GitWorkspaces', () => {
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
     expect(git(w.path, 'log', '-1', '--format=%s')).toBe('wip');
-    expect(await ws.remoteBranchExists(repo, 'factory/rel-1-')).toBe(true);
-    expect(await ws.remoteBranchExists(repo, 'factory/rel-2-')).toBe(false);
+    expect(await ws.remoteBranchExists(repo, (name) => name.startsWith('factory/rel-1-'))).toBe(true);
+    expect(await ws.remoteBranchExists(repo, (name) => name.startsWith('factory/rel-2-'))).toBe(false);
+  });
+
+  describe("the ticket's branch name (ORC-283)", () => {
+    it("takes the name the request gives: the repository's naming, or the one recorded on the ticket", async () => {
+      const { repo, root } = fixtureRepo();
+      const ws = new GitWorkspaces({ root });
+      const w = await ws.prepare(req(repo, { branch: 'fix/rel-1-export-csv' }));
+      expect(w.branch).toBe('fix/rel-1-export-csv');
+      expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('fix/rel-1-export-csv');
+    });
+
+    for (const where of ['forge', 'repository'] as const) {
+      it(`keeps the legacy factory/ branch a ticket already has on the ${where}, never a second branch beside it`, async () => {
+        const { repo, root } = fixtureRepo();
+        git(repo, 'checkout', '-q', '-b', 'factory/rel-1-export-csv');
+        git(repo, 'commit', '--allow-empty', '-m', 'the PR already open');
+        if (where === 'forge') git(repo, 'push', '-q', 'origin', 'factory/rel-1-export-csv');
+        git(repo, 'checkout', '-q', 'main');
+        if (where === 'forge') git(repo, 'branch', '-q', '-D', 'factory/rel-1-export-csv');
+        const ws = new GitWorkspaces({ root });
+        const w = await ws.prepare(req(repo, { branch: 'feat/rel-1-export-csv' }));
+        expect(w).toMatchObject({ branch: 'factory/rel-1-export-csv', fresh: true, ahead: true });
+        expect(git(w.path, 'log', '-1', '--format=%s')).toBe('the PR already open');
+      });
+    }
+
+    it('prefers the name it is given when that branch exists too', async () => {
+      const { repo, root } = fixtureRepo();
+      for (const b of ['factory/rel-1-export-csv', 'feat/rel-1-export-csv']) {
+        git(repo, 'checkout', '-q', '-b', b);
+        git(repo, 'commit', '--allow-empty', '-m', b);
+        git(repo, 'push', '-q', 'origin', b);
+        git(repo, 'checkout', '-q', 'main');
+        git(repo, 'branch', '-q', '-D', b);
+      }
+      const w = await new GitWorkspaces({ root }).prepare(req(repo, { branch: 'feat/rel-1-export-csv' }));
+      expect(w.branch).toBe('feat/rel-1-export-csv');
+    });
   });
 
   it('reads the HEAD of a worktree, none for a path that is not one (ORC-148)', async () => {
@@ -467,7 +505,7 @@ describe('GitWorkspaces', () => {
     expect(git(w.path, 'config', 'user.name')).toBe('t');
     expect(git(w.path, 'symbolic-ref', 'refs/remotes/origin/HEAD')).toBe('refs/remotes/origin/main');
     expect(git(w.path, 'tag')).toBe('v1');
-    expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('factory/rel-1-export-csv');
+    expect(git(w.path, 'branch', '--format=%(refname:short)')).toBe('feat/rel-1-export-csv');
     expect(existsSync(join(w.path, '.git', 'hooks'))).toBe(false);
     expect(readFileSync(join(w.path, '.git', 'config'), 'utf8')).not.toContain('/host/hooks');
     // Neither the factory's objects by a link, nor another's name for them: the agent rewrites only its own.
@@ -592,7 +630,7 @@ describe('GitWorkspaces', () => {
     const head = git(w.path, 'rev-parse', 'HEAD');
     git(w.path, 'pack-refs', '--all');
     expect(await ws.head(w.path)).toBe(head);
-    expect(await ws.prepare(req(repo))).toMatchObject({ branch: 'factory/rel-1-export-csv' });
+    expect(await ws.prepare(req(repo))).toMatchObject({ branch: 'feat/rel-1-export-csv' });
     git(w.path, 'checkout', '-q', '--detach');
     expect(await ws.head(w.path)).toBe(head);
     expect(await ws.prepare(req(repo))).toMatchObject({ branch: 'HEAD' });

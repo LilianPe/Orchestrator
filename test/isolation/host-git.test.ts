@@ -168,7 +168,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
       await diff?.showAtHead('agent.txt');
     });
     await attempt('another ticket: its fetch, its checkout', () => ws.prepare(ask({ ticketId: 'ISO-3', title: 'next' })));
-    await attempt('a pickup: ls-remote', () => ws.remoteBranchExists(repo, 'factory/iso-4-'));
+    await attempt('a pickup: ls-remote', () => ws.remoteBranchExists(repo, (name) => name.startsWith('factory/iso-4-')));
     await attempt('a question: the trunk', () => ws.prepare(ask({ kind: 'trunk-readonly' })));
     await attempt('the next question: the trunk again', () => ws.prepare(ask({ kind: 'trunk-readonly', runId: 'bbbbbbbb2222' })));
     await attempt('the pointed ticket: its next launch', () => ws.prepare(ask({ ticketId: 'ISO-2', title: 'pointed' })));

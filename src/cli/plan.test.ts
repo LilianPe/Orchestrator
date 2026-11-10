@@ -52,6 +52,6 @@ describe('plan', () => {
     const workspaces = new FakeWorkspaces();
     workspaces.remoteBranches.add('factory/rel-1-old');
     const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
-    expect(rows.map((r) => [r.status, r.reasons])).toEqual([['not taken', ['A branch factory/rel-1-… already exists on origin.']]]);
+    expect(rows.map((r) => [r.status, r.reasons])).toEqual([['not taken', ['A branch of REL-1 already exists on origin.']]]);
   });
 });

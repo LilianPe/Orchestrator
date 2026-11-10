@@ -351,6 +351,11 @@ export class GitHubAppAuth {
     return data.token;
   }
 
+  /** A JWT of the App itself, for what it reads as the App rather than as an installation (`GET /app`, ORC-283). */
+  protected appJwt(): string {
+    return createAppJwt(this.appId, this.#privateKey, this.now());
+  }
+
   private async findInstallationId(repo: GitHubRepoRef, jwt: string): Promise<string> {
     const data = await this.read('GET', `${repoApi(repo)}/installation`, jwt, isCreated, 'an installation');
     return String(data.id);

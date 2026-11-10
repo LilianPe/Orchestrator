@@ -9,25 +9,41 @@ import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
-import { branchName, FACTORY_BRANCHES } from '../core/naming.js';
+import { makeRepoConfig } from '../app/repo-variables.js';
+import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
- * Branches as the factory names them (`branchName`, ORC-353): a team key for every initial (one with a digit too), numbers
- * of every length, titles that start and end with a letter or a digit, the longest slug and the empty title's. Enough to
- * decide whether a filter reaches the factory's branches, or leaves every one of them out; a sample all the same, not
- * every branch (docs/github.md).
+ * Branches as the factory names them (ORC-353, ORC-283): by the repository's naming, every type of it, and the legacy
+ * `factory/<id>-<slug>` a ticket with its PR already open keeps; a team key for every initial (one with a digit too),
+ * numbers of every length, titles that start and end with a letter or a digit, the longest slug and the empty title's.
+ * Enough to decide whether a filter reaches the factory's branches, or leaves every one of them out; a sample all the
+ * same, not every branch (docs/github.md). A pattern under one of their fixed beginnings (`feat/`, `fix/`, `factory/`)
+ * always counts as reaching: it may name a team key no probe has.
  */
+interface FactoryBranches {
+  probes: string[];
+  spaces: string[];
+}
+
 const PROBE_TITLES = ['', 'Fix the login', '2026 : Été', 'x'.repeat(60), 'a-b c', 'Upgrade to v2', '42'];
-let probes: string[] | undefined;
-/** Built once, on first use: the CLI imports doctor for every command. */
-const factoryProbes = (): string[] =>
-  (probes ??= [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'].flatMap((key, i) =>
-    PROBE_TITLES.map((title, j) => branchName(`${key}-${[1, 42, 353, 70000][(i + j) % 4]}`, title)),
-  ));
+const PROBE_KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'];
+
+function factoryBranches(naming: BranchNaming): FactoryBranches {
+  const types = branchTypes(naming);
+  const probes = PROBE_KEYS.flatMap((key, i) =>
+    PROBE_TITLES.flatMap((title, j) => {
+      const id = `${key}-${[1, 42, 353, 70000][(i + j) % 4]}`;
+      return [...types.map((type) => branchNameOfType(id, title, type, naming)), legacyBranchName(id, title)];
+    }),
+  );
+  return { probes, spaces: [...branchSpaces(naming), LEGACY_BRANCHES] };
+}
 
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
   listEnvironments(repoPath: string): Promise<EnvironmentProtection[]>;
+  /** The login GitHub gives the factory's App as an actor, `<slug>[bot]` (ORC-283): what a workflow's `if:` keeps out. */
+  appLogin(): Promise<string>;
 }
 
 export interface DoctorOptions {
@@ -35,6 +51,8 @@ export interface DoctorOptions {
   api: DoctorApi;
   out: (line: string) => void;
   json?: boolean;
+  /** The repository's branch naming (`.factory/config.yml`, ORC-283): the team's convention without it. */
+  naming?: BranchNaming;
 }
 
 export interface WorkflowReport {
@@ -46,7 +64,9 @@ export interface WorkflowReport {
   /** Whether a trigger can run the workflow on a branch the factory names (ORC-353). */
   factoryBranches: boolean;
   environments: { name: string; requiredReviewers: boolean }[];
-  /** True when every job that can see a secret or a writable GITHUB_TOKEN is attached to a protected environment. */
+  /** The jobs whose `if:` keeps the factory's App out (ORC-283): `github.actor != '<app>[bot]'`, joined to the rest by `&&` only. */
+  actorExcluded: string[];
+  /** True when every job that can see a secret or a writable GITHUB_TOKEN is attached to a protected environment or keeps the App out. */
   protected: boolean;
   verdict: 'accepted' | 'refused';
   reasons: string[];
@@ -62,6 +82,8 @@ interface TriggerFilters {
 interface ParsedWorkflow {
   triggers: Map<string, TriggerFilters>;
   jobEnvironments: Map<string, string>;
+  /** Each job's `if:`, as the YAML gives it. */
+  jobConditions: Map<string, unknown>;
   environmentNames: string[];
   hasSecrets: boolean;
   /** Jobs that can see a secret; every job when a workflow-level value references one. */
@@ -226,11 +248,13 @@ function parseWorkflow(content: string): ParseResult {
 
   const jobs = new Map<string, Record<string, unknown>>();
   const jobEnvironments = new Map<string, string>();
+  const jobConditions = new Map<string, unknown>();
   const environmentNames: string[] = [];
   const tokenWrites = new Map<string, string>();
   for (const [jobId, rawJob] of Object.entries(rawJobs)) {
     if (!isRecord(rawJob)) return { ok: false, reason: `job \`${jobId}\` invalide` };
     jobs.set(jobId, rawJob);
+    if (rawJob['if'] !== undefined) jobConditions.set(jobId, rawJob['if']);
     const rights = rawJob['permissions'] === undefined ? workflowRights : writeRights(rawJob['permissions']);
     if (rights === undefined) return { ok: false, reason: `ambiguous \`permissions\` for the job \`${jobId}\`` };
     if (rights) tokenWrites.set(jobId, rights);
@@ -254,6 +278,7 @@ function parseWorkflow(content: string): ParseResult {
     workflow: {
       triggers: parsedOn,
       jobEnvironments,
+      jobConditions,
       environmentNames,
       hasSecrets: rootSecrets || secretJobs.length > 0,
       secretJobs,
@@ -295,67 +320,48 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`${source}$`);
 }
 
-function canMatchFactory(pattern: string): boolean {
-  // A pattern of the factory's own space may name a team key no probe has: it reaches, fail closed.
-  if (pattern.startsWith(FACTORY_BRANCHES)) return true;
-  try {
-    const regexp = globToRegExp(pattern);
-    return factoryProbes().some((probe) => regexp.test(probe));
-  } catch {
-    // Unreadable glob: fail closed, the workflow may reach a factory branch.
-    return true;
+/**
+ * Whether a filter lets the workflow run on `branch`: GitHub reads its patterns in order, the last that matches wins.
+ * `ignore`: a `branches-ignore`, where a pattern leaves a branch out and a `!` brings it back. `runs`: before the first
+ * pattern. A glob doctor cannot read counts when it would let the branch run, never when it would leave it out: fail closed.
+ */
+function runsOn(patterns: readonly string[], branch: string, ignore: boolean, runs: boolean): boolean {
+  for (const pattern of patterns) {
+    const negated = pattern.startsWith('!');
+    const lets = negated === ignore;
+    let matches: boolean;
+    try {
+      matches = globToRegExp(negated ? pattern.slice(1) : pattern).test(branch);
+    } catch {
+      matches = lets;
+    }
+    if (matches) runs = lets;
   }
+  return runs;
 }
 
-/** A pattern that matches every factory branch: as a negation, it excludes them all. */
-function coversAllFactoryBranches(pattern: string): boolean {
-  try {
-    const regexp = globToRegExp(pattern);
-    return factoryProbes().every((probe) => regexp.test(probe));
-  } catch {
-    // Unreadable glob: fail closed, it is not read as excluding the factory's branches.
-    return false;
-  }
-}
-
-function branchesReachFactory(patterns: string[]): boolean {
-  // GitHub applies patterns in order: a later negative can exclude a positive,
-  // and a later positive can re-include a branch. Only positives after the last
-  // "exclude every factory branch" pattern can bring factory branches back.
-  let lastCover = -1;
-  for (let index = 0; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (pattern.startsWith('!') && coversAllFactoryBranches(pattern.slice(1))) lastCover = index;
-  }
-  if (lastCover === -1) {
-    const positives = patterns.filter((pattern) => !pattern.startsWith('!'));
-    return positives.length === 0 || positives.some(canMatchFactory);
-  }
-  for (let index = lastCover + 1; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (!pattern.startsWith('!') && canMatchFactory(pattern)) return true;
-  }
-  return false;
-}
-
-function branchesIgnoreReachFactory(patterns: string[]): boolean {
-  let lastCover = -1;
-  for (let index = 0; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (!pattern.startsWith('!') && coversAllFactoryBranches(pattern)) lastCover = index;
-  }
-  if (lastCover === -1) return true;
-  for (let index = lastCover + 1; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (pattern.startsWith('!') && canMatchFactory(pattern.slice(1))) return true;
-  }
-  return false;
+/**
+ * Whether a `branches` or `branches-ignore` filter can let the workflow run on a factory branch: on one of the probes, or
+ * by a pattern that lets in under the factory's own space (`feat/…`), which may name a team key no probe has, unless the
+ * patterns after it leave out every probe of that space.
+ */
+function filterReachesFactory(patterns: readonly string[], factory: FactoryBranches, ignore: boolean): boolean {
+  // Negations only: GitHub runs on no branch, which doctor does not count on.
+  if (!ignore && patterns.every((pattern) => pattern.startsWith('!'))) return true;
+  if (factory.probes.some((probe) => runsOn(patterns, probe, ignore, ignore))) return true;
+  return patterns.some((pattern, index) => {
+    const negated = pattern.startsWith('!');
+    const glob = negated ? pattern.slice(1) : pattern;
+    const space = negated === ignore ? factory.spaces.find((s) => glob.startsWith(s)) : undefined;
+    const rest = patterns.slice(index + 1);
+    return space !== undefined && factory.probes.some((probe) => probe.startsWith(space) && runsOn(rest, probe, ignore, true));
+  });
 }
 
 /** Branch push: an absent filter means all branches; a tags-only filter means no branch push. */
-function pushReachesFactory(filters: TriggerFilters): boolean {
-  if (filters.branches !== undefined) return branchesReachFactory(filters.branches);
-  if (filters.branchesIgnore !== undefined) return branchesIgnoreReachFactory(filters.branchesIgnore);
+function pushReachesFactory(filters: TriggerFilters, factory: FactoryBranches): boolean {
+  if (filters.branches !== undefined) return filterReachesFactory(filters.branches, factory, false);
+  if (filters.branchesIgnore !== undefined) return filterReachesFactory(filters.branchesIgnore, factory, true);
   if (filters.tags !== undefined || filters.tagsIgnore !== undefined) return false;
   return true;
 }
@@ -370,13 +376,13 @@ function triggerLabel(name: string, filters: TriggerFilters): string {
 }
 
 /** Why a workflow with secrets can run on a factory branch; empty when no trigger does. */
-function exposureReasons(triggers: Map<string, TriggerFilters>): string[] {
+function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
     if (name === 'pull_request' || name === 'pull_request_target') {
-      reasons.push(`${name} can run the CI on a \`factory/*\` branch`);
-    } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters)) {
-      reasons.push(`${triggerLabel(name, filters)} can run the CI on a \`factory/*\` branch`);
+      reasons.push(`${name} can run the CI on the factory's branches`);
+    } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters, factory)) {
+      reasons.push(`${triggerLabel(name, filters)} can run the CI on the factory's branches`);
     }
   }
   return reasons;
@@ -387,7 +393,63 @@ function protectedByEnvironment(jobId: string, workflow: ParsedWorkflow, environ
   return name !== undefined && environments.get(name)?.requiredReviewers === true;
 }
 
-function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>): WorkflowReport {
+/** `expression` cut at `separator` where it stands outside quotes and parentheses. */
+function splitTopLevel(expression: string, separator: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let start = 0;
+  for (let i = 0; i < expression.length; i++) {
+    const char = expression[i]!;
+    if (char === "'") quoted = !quoted;
+    else if (quoted) continue;
+    else if (char === '(') depth++;
+    else if (char === ')') depth--;
+    else if (depth === 0 && expression.startsWith(separator, i)) {
+      parts.push(expression.slice(start, i));
+      start = i + separator.length;
+      i += separator.length - 1;
+    }
+  }
+  parts.push(expression.slice(start));
+  return parts.map((part) => part.trim());
+}
+
+/** A term without the parentheses that wrap it whole: `((a))` is `a`; `(a) == (b)`, whose first one closes early, stays. */
+function unwrap(term: string): string {
+  while (term.startsWith('(') && term.endsWith(')')) {
+    const inner = term.slice(1, -1);
+    let depth = 0;
+    for (const char of inner) {
+      if (char === '(') depth++;
+      else if (char === ')' && --depth < 0) return term;
+    }
+    term = inner.trim();
+  }
+  return term;
+}
+
+const ACTOR_EXCLUDED = [/^github\.actor\s*!=\s*'([^']*)'$/, /^'([^']*)'\s*!=\s*github\.actor$/];
+
+/**
+ * Whether a job's `if:` keeps the factory's App out (ORC-283): one of its terms joined by `&&` alone, at the top, is
+ * `github.actor != '<login>'` (GitHub compares strings without case). Anything it cannot read so, a `||` at the top, a
+ * negation, another context, an expression beside text, is no exclusion: fail closed.
+ */
+function excludesActor(condition: unknown, login: string): boolean {
+  if (typeof condition !== 'string') return false;
+  let expression = condition.trim();
+  const inline = [...expression.matchAll(EXPRESSION)];
+  if (inline.length > 1 || (inline.length === 1 && inline[0]![0] !== expression)) return false;
+  if (inline.length === 1) expression = (inline[0]![1] ?? '').trim();
+  if (splitTopLevel(expression, '||').length > 1) return false;
+  return splitTopLevel(expression, '&&').some((term) => {
+    const read = unwrap(term);
+    return ACTOR_EXCLUDED.some((form) => form.exec(read)?.[1]?.toLowerCase() === login.toLowerCase());
+  });
+}
+
+function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>, factory: FactoryBranches, login: string): WorkflowReport {
   const parsed = parseWorkflow(source.content);
   if (!parsed.ok) {
     return {
@@ -397,6 +459,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
       githubToken: [],
       factoryBranches: false,
       environments: [],
+      actorExcluded: [],
       protected: false,
       verdict: 'refused',
       reasons: [parsed.reason],
@@ -408,9 +471,12 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     name,
     requiredReviewers: environments.get(name)?.requiredReviewers === true,
   }));
-  const exposure = exposureReasons(workflow.triggers);
+  const exposure = exposureReasons(workflow.triggers, factory);
   const { sensitiveJobs } = workflow;
-  const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
+  const actorExcluded = [...workflow.jobConditions].filter(([, condition]) => excludesActor(condition, login)).map(([jobId]) => jobId);
+  const byEnvironment = sensitiveJobs.filter((jobId) => protectedByEnvironment(jobId, workflow, environments));
+  const unprotectedJobs = sensitiveJobs.filter((jobId) => !byEnvironment.includes(jobId) && !actorExcluded.includes(jobId));
+  const exclusion = `\`if: github.actor != '${login}'\``;
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
 
   const reasons: string[] = [];
@@ -422,10 +488,15 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   } else if (sensitiveJobs.length === 0) {
     reasons.push('workflow without jobs: no secret can be exposed');
   } else if (unprotectedJobs.length === 0) {
-    reasons.push(`${what} limited to jobs under a protected environment (${[...new Set(workflow.environmentNames)].join(', ')})`);
+    const how = [
+      ...(byEnvironment.length ? [`under a protected environment (${[...new Set(byEnvironment.map((jobId) => workflow.jobEnvironments.get(jobId)!))].join(', ')})`] : []),
+      ...(sensitiveJobs.some((jobId) => !byEnvironment.includes(jobId)) ? [`that exclude the factory's App (${exclusion})`] : []),
+    ];
+    reasons.push(`${what} limited to jobs ${how.join(' or ')}`);
   } else {
     verdict = 'refused';
     reasons.push(`${what} exposed on the factory's branches (${exposure.join('; ')}) without human approval`);
+    reasons.push(`attach each of these jobs to an environment with required reviewers, or keep the factory's App out of it with ${exclusion} on the job`);
     const withoutEnvironment = unprotectedJobs.filter((jobId) => !workflow.jobEnvironments.has(jobId));
     const withUnprotectedEnvironment = unprotectedJobs.filter((jobId) => workflow.jobEnvironments.has(jobId));
     if (withoutEnvironment.length > 0) reasons.push(`job(s) without an environment: ${withoutEnvironment.join(', ')}`);
@@ -445,6 +516,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     githubToken: [...workflow.tokenWrites].map(([job, rights]) => ({ job, rights })),
     factoryBranches: exposure.length > 0,
     environments: environmentReport,
+    actorExcluded,
     protected: sensitiveJobs.length > 0 && unprotectedJobs.length === 0,
     verdict,
     reasons,
@@ -464,15 +536,22 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     return doctorFailure(options, `Cannot read the workflows: ${errorMessage(error)}`);
   }
   let environments: EnvironmentProtection[] = [];
+  let login = '';
   if (workflows.length > 0) {
     try {
       environments = await api.listEnvironments(repoPath);
     } catch (error) {
       return doctorFailure(options, `Cannot read the environments: ${errorMessage(error)}`);
     }
+    try {
+      login = await api.appLogin();
+    } catch (error) {
+      return doctorFailure(options, `Cannot read the GitHub App's login: ${errorMessage(error)}`);
+    }
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
-  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap));
+  const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
+  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory, login));
   const accepted = reports.every((report) => report.verdict === 'accepted');
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
@@ -498,7 +577,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
               : 'none'
           }`,
         );
-        out(`  protected environment: ${report.protected ? 'yes' : 'no'}`);
+        out(`  factory's App excluded: ${report.actorExcluded.length > 0 ? report.actorExcluded.join(', ') : 'no job'}`);
+        out(`  protected: ${report.protected ? 'yes' : 'no'}`);
         out(`  verdict: ${report.verdict} — ${report.reasons.join(' ')}`);
         out('');
       }
@@ -512,7 +592,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-function doctorFailure(options: DoctorOptions, message: string): number {
+function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'>, message: string): number {
   if (options.json) {
     options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message }, null, 2));
   } else {
@@ -533,8 +613,8 @@ export interface DoctorCommandOptions {
 }
 
 /**
- * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check),
- * then runs the same analysis as `runDoctor`.
+ * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the repository's
+ * branch naming on its default branch as the clone last fetched it (ORC-283), then runs the same analysis as `runDoctor`.
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
@@ -558,10 +638,17 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  let naming: BranchNaming;
+  try {
+    naming = (await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false })).branches;
+  } catch (error) {
+    return doctorFailure({ repoPath: options.repoPath, out, ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
+  }
   return runDoctor({
     repoPath: options.repoPath,
     api,
     out,
+    naming,
     ...(options.json ? { json: true } : {}),
   });
 }

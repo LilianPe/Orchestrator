@@ -8,7 +8,7 @@ import { createHarness } from '../helpers/harness.js';
  * `on_success` waits for it. Nothing reaches the forge otherwise, and a replay doubles nothing.
  */
 type Harness = ReturnType<typeof createHarness>;
-const BRANCH = 'factory/rel-1-export-csv';
+const BRANCH = 'feat/rel-1-export-csv';
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const SHA = 'abc123';
 
