@@ -178,7 +178,11 @@ export class GitWorkspaces implements WorkspaceManager {
     const port = req.portBase + req.slot;
     if (existsSync(path)) {
       const branch = agentHead(path)?.branch;
-      if (!branch) throw new Error(`The git repository of ${path} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
+      if (!branch) {
+        // The message reaches the ticket (Linear): the worktree by its project and ticket, its path on the server in the log.
+        this.o.log?.(`${path}: not the git repository the factory created, or no longer readable`);
+        throw new Error(`The git repository of the worktree ${req.projectId}/${req.ticketId} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
+      }
       return { path, port, branch };
     }
     if (!req.fetched) await this.fetch(req.repoPath);

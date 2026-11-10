@@ -282,6 +282,12 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       expect(await f.ws.head(path)).toBeUndefined();
       expect(await f.ws.stepDiff(f.repo, path, 'HEAD')).toBeUndefined();
       await expect(f.ws.prepare(req(f.repo))).rejects.toThrow('is not the one the factory created');
+      // The message reaches the ticket (Linear): the worktree by its project and ticket, its path on the server in the log (ORC-364).
+      const logged: string[] = [];
+      const refused = await new GitWorkspaces({ root: f.root, log: (m) => logged.push(m) }).prepare(req(f.repo)).catch((err: Error) => err.message);
+      expect(refused).toContain('p/REL-1');
+      expect(refused).not.toContain(f.base);
+      expect(logged.join('\n')).toContain(path);
     });
 
     it('a HEAD that names a path out of its git dir, or a commit it could not hold, reads as none', async () => {
