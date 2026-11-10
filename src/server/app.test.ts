@@ -13,7 +13,7 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -690,12 +690,37 @@ describe('server', () => {
       }
     });
 
-    it('lists exactly submit_result, with the output JSON Schema, and ask', async () => {
+    it('lists exactly submit_result, with the output JSON Schema, ask and kb_search', async () => {
       const { app } = await setup();
       const { tools } = (await (await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()).result;
-      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'ask']);
+      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'ask', 'kb_search']);
       expect(tools[0].inputSchema).toMatchObject({ type: 'object', required: expect.arrayContaining(['status', 'summary', 'review_hints']), additionalProperties: false });
       expect(tools[1].inputSchema).toMatchObject({ type: 'object', required: ['text'] });
+      expect(tools[2].inputSchema).toMatchObject({ type: 'object', required: ['query'] });
+    });
+
+    it('kb_search answers with the notes the server searched, the runner reading no repository (ORC-232)', async () => {
+      const queries: string[] = [];
+      const { app } = await setup({
+        knowledgeSearch: async (q) => {
+          queries.push(q);
+          return [{ file: 'notes/scores.md', line: 4, text: 'Les agrégats se calculent côté serveur.' }];
+        },
+      });
+      expect(await call(app, 'kb_search', { query: 'agrégats serveur' })).toEqual({ content: [{ type: 'text', text: 'notes/scores.md:4: Les agrégats se calculent côté serveur.' }] });
+      expect(queries).toEqual(['agrégats serveur']);
+      expect((await call(app, 'kb_search', {})).isError).toBe(true);
+      // The HTTP route of factory-agent's `kb search` is gone with it: the MCP tool is the only way.
+      const route = await agentOnly(app)(new Request('http://172.17.0.1:4101/agent/kb/search?q=agrégats', { headers: { authorization: 'Bearer tok' } }));
+      expect(route.headers.get('content-type')).not.toContain('application/json');
+      expect(queries).toEqual(['agrégats serveur']);
+    });
+
+    it('kb_search says when nothing matches, and when the factory has no knowledge base', async () => {
+      expect((await call((await setup({ knowledgeSearch: async () => [] })).app, 'kb_search', { query: 'xyzzy' })).content[0].text).toBe('No note matches.');
+      const none = await call((await setup()).app, 'kb_search', { query: 'scores' });
+      expect(none.content[0].text).toBe('This factory has no knowledge base.');
+      expect(none.isError).toBeUndefined();
     });
 
     it('submit_result stores a valid output for the run of the token, the last one winning', async () => {

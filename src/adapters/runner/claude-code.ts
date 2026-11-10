@@ -56,6 +56,7 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     req.resume ? '--resume' : '--session-id', req.claudeSessionId,
     '--model', req.model,
     ...(req.effort ? ['--effort', req.effort] : []),
+    ...(req.systemPrompt ? ['--append-system-prompt', req.systemPrompt] : []),
     '--plugin-dir', req.pluginDir,
     '--settings', req.settingsPath,
     // Nothing of the repository's: no settings, hooks, skills, CLAUDE.md, nor .mcp.json, nor the account's

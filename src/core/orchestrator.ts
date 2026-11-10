@@ -61,6 +61,7 @@ import { formatReuse, ownWork } from './intake-checks.js';
 import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
+import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -271,7 +272,11 @@ export interface OrchestratorDeps {
   claudeAccount?: () => string | undefined;
   newId?: () => string;
   activityIntervalMs?: number;
-  beforeRun?: (run: RunRecord) => Promise<void>;
+  /**
+   * The knowledge index, read at each launch (ORC-232): the server pulls the knowledge repository and reads its INDEX.md,
+   * capped. The session gets it in its system prompt, and the rest through the MCP's `kb_search`. Absent: no knowledge base.
+   */
+  knowledgeIndex?: () => Promise<KbIndex | undefined>;
   /**
    * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
@@ -1414,6 +1419,19 @@ export class Orchestrator {
   /** An invalid configuration holds every launch, as the pause does (ORC-350). */
   private configHeld(): boolean {
     return !!this.d.configProblems?.length;
+  }
+
+  /** The knowledge index for a session's system prompt (ORC-232), its cut logged: a read that fails launches without it, and says so. */
+  private async knowledgePrompt(ticketId: string, job: string): Promise<string | undefined> {
+    if (!this.d.knowledgeIndex) return undefined;
+    try {
+      const index = await this.d.knowledgeIndex();
+      if (index?.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
+      return index && knowledgePrompt(index);
+    } catch (err) {
+      this.log('warn', `${ticketId} ${job}: knowledge index not read, the session starts without it: ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -2845,7 +2863,8 @@ export class Orchestrator {
         ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
-      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
+      const systemPrompt = await this.knowledgePrompt(ticketId, job.name);
+      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null, ...(systemPrompt ? { systemPrompt } : {}) });
       // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
       const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;
 
@@ -2915,9 +2934,7 @@ export class Orchestrator {
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
       // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
       await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
-      if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
-
-      // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` took. A failure leaves it to the next beat.
+      // Its lease starts here: until now the launch is alive by itself. A failure leaves it to the next beat.
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
       // A review job of a version frozen before ORC-367 has its lens, not yet its tools.
@@ -2926,6 +2943,7 @@ export class Orchestrator {
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
         prompt,
+        ...(systemPrompt ? { systemPrompt } : {}),
         claudeSessionId,
         resume,
         model: job.model,

@@ -60,7 +60,7 @@ Written by `relais init`, editable by hand. Missing file = all default values. A
 | `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay. `relais init` creates a smee.io channel when there is neither `publicUrl` nor a relay. See [`linear.md`](linear.md#3-webhooks-smee-or-public-url). |
 | `projects` | list of `{ id, repoPath, linearTeamKey, authz? }` | `[]` | One project = one local repository + one Linear team. See [`projects-and-workspaces.md`](projects-and-workspaces.md). `authz`: see [Authorization](#authorization). |
 | `limits` | `{}` | `{}` | Empty since ORC-216: the daily budget in dollars (`perDayUsd`) is gone, a file that still has it loads without it. Budgets count tokens and turns: `budgets` of `factory.yml`. |
-| `knowledge.repoPath` | path | — | Local clone of the knowledge base repository. Read only: the startup hook injects its index and `relais-agent kb search` searches it; no job writes to it (ORC-193). Absent: `relais-agent kb search` returns nothing. |
+| `knowledge.repoPath` | path | — | Local clone of the knowledge base repository. Read only, by the server: pulled at each launch, its index in the session's system prompt, its notes searched by the factory MCP's `kb_search` (ORC-232); no job writes to it (ORC-193). Absent: no index, and `kb_search` says there is no knowledge base. |
 | `github` | `{ appId, privateKey, installationId?, webhookSecret? }` | — | The daemon's GitHub App. Absent: fallback to the `gh` CLI. See [GitHub App](#github-app). |
 
 Example:

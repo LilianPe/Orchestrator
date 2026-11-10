@@ -139,6 +139,11 @@ describe('buildClaudeArgs', () => {
     expect(args).not.toContain('--permission-mode');
     expect(buildClaudeArgs(req())).not.toContain('--tools');
   });
+  it('appends the system prompt the factory gives, and none without one (ORC-232)', () => {
+    const args = buildClaudeArgs(req({ systemPrompt: '# Knowledge base (index)\n- a' }));
+    expect(args.slice(args.indexOf('--append-system-prompt'), args.indexOf('--append-system-prompt') + 2)).toEqual(['--append-system-prompt', '# Knowledge base (index)\n- a']);
+    expect(buildClaudeArgs(req())).not.toContain('--append-system-prompt');
+  });
   it('resumes read-only', () => {
     const args = buildClaudeArgs(req({ resume: true, readOnly: true }));
     expect(args.slice(5, 7)).toEqual(['--resume', 'uuid-1']);

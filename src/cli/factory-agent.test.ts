@@ -29,13 +29,17 @@ describe('factory-agent', () => {
     expect(out.join('')).toContain('REL-1 — Export (Todo)');
   });
 
-  it('searches the knowledge base and asks a question', async () => {
-    const { f, calls } = fetchStub({ '/kb/search': [{ file: 'notes/a.md', line: 3, text: 'agrégats' }], '/ask': { ok: true } });
-    const out: string[] = [];
-    await runAgentCli(['kb', 'search', 'agrégats', 'serveur'], env, f, (s) => out.push(s));
-    expect(calls[0]!.url).toBe('http://127.0.0.1:4100/agent/kb/search?q=agr%C3%A9gats%20serveur');
-    expect(out.join('')).toContain('notes/a.md:3: agrégats');
+  it('asks a question', async () => {
+    const { f, calls } = fetchStub({ '/ask': { ok: true } });
     await runAgentCli(['ask', 'Quelle', 'base', '?'], env, f, () => {});
-    expect(calls[1]!.init!.body).toBe(JSON.stringify({ text: 'Quelle base ?' }));
+    expect(calls[0]!.init!.body).toBe(JSON.stringify({ text: 'Quelle base ?' }));
+  });
+
+  it("searches the knowledge base no more: the factory MCP's kb_search does (ORC-232)", async () => {
+    const { f, calls } = fetchStub({});
+    const out: string[] = [];
+    expect(await runAgentCli(['kb', 'search', 'agrégats'], env, f, (s) => out.push(s))).toBe(1);
+    expect(calls).toEqual([]);
+    expect(out.join('')).not.toContain('kb search');
   });
 });

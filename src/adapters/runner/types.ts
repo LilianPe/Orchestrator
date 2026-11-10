@@ -21,6 +21,8 @@ export interface RunRequest {
   runId: string;
   cwd: string;
   prompt: string;
+  /** Appended to the session's system prompt (`claude --append-system-prompt`): the knowledge index, as data (ORC-232). */
+  systemPrompt?: string;
   claudeSessionId: string;
   resume: boolean;
   model: string;

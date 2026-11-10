@@ -64,9 +64,8 @@ export interface BootOptions {
 
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
-/** Where a sandbox sees the factory's install and the knowledge base (ORC-204); its image puts `/factory/app/bin` on its PATH. */
+/** Where a sandbox sees the factory's install (ORC-204); its image puts `/factory/app/bin` on its PATH. No knowledge base: the server reads it (ORC-232). */
 const SANDBOX_ROOT = '/factory/app';
-const SANDBOX_KNOWLEDGE = '/factory/knowledge';
 
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
@@ -231,9 +230,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
-      beforeRun: async () => {
-        if (kb) await kb.pull();
-      },
+      // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
+      ...(kb ? { knowledgeIndex: () => kb.refresh(log) } : {}),
       store,
       clock,
       bus,
@@ -274,14 +272,13 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             egressJournal: (runId: string) => egress.journalPath(runId),
             registries: registriesViaEgress(egress),
             // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
-            // which can hold a `.env` or a dev FACTORY_HOME. The knowledge base, read-only, for the session-start hook.
+            // which can hold a `.env` or a dev FACTORY_HOME.
             sandboxMounts: [
               ...['bin', 'package.json', 'node_modules', existsSync(join(root, 'dist')) ? 'dist' : 'src'].map((p) => ({
                 host: join(root, p),
                 target: `${SANDBOX_ROOT}/${p}`,
                 readOnly: true,
               })),
-              ...(instance.knowledge ? [{ host: instance.knowledge.repoPath, target: SANDBOX_KNOWLEDGE, readOnly: true }] : []),
             ],
           }
         : {}),
@@ -295,12 +292,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         ...(sandboxes
           ? {
               FACTORY_API: `http://${agentHostInSandbox}:${agentPort}/agent`,
-              FACTORY_KNOWLEDGE: instance.knowledge ? SANDBOX_KNOWLEDGE : '',
               FACTORY_ROOT: SANDBOX_ROOT,
             }
           : {
               FACTORY_API: `http://127.0.0.1:${port}/agent`,
-              FACTORY_KNOWLEDGE: instance.knowledge?.repoPath ?? '',
               FACTORY_ROOT: root,
               PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
             }),

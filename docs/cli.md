@@ -181,8 +181,9 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 |---|---|
 | `relais-agent issue <ID>` | Prints the ticket: identifier, title, status, URL, description. **Limited to the run's ticket** (403 otherwise). |
 | `relais-agent search <text>` | Searches the Linear tickets of the current ticket's team (ORC-349). |
-| `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
+
+The knowledge base is no longer searched here: the factory MCP's `kb_search` tool searches `notes/*.md` (words of 3 letters or more, ignoring accents and case) and answers `file:line: text` (ORC-232).
 
 Launched outside a run, it answers `relais-agent must be started by Relais (RELAIS_API and RELAIS_RUN_TOKEN missing).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-and-skills.md`](pack-and-skills.md)).
 

@@ -9,6 +9,7 @@ import { buildPrompt, type PromptInput } from './prompt.js';
 import {
   attemptLabels,
   configFingerprint,
+  hashText,
   packFingerprints,
   pendingLabels,
   promptTemplate,
@@ -75,15 +76,19 @@ describe('attempt labels', () => {
   it('leaves the labels nothing provides yet null, each with the tickets that will fill it', () => {
     const l = attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null });
     expect(l).toMatchObject({ factoryCommit: null, image: null, risk: null, registryCommit: null, deliveredFactIds: null });
-    expect(l.fingerprints.knowledgeIndex).toBeNull();
     expect(pendingLabels(l)).toEqual({
       image: ['ORC-204'],
       risk: ['ORC-206'],
       registryCommit: ['ORC-257'],
       deliveredFactIds: ['ORC-257'],
-      knowledgeIndex: ['ORC-232'],
     });
     expect(pendingLabels(attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: 'abc' }))).not.toHaveProperty('factoryCommit');
+  });
+
+  it('fingerprints the knowledge index the attempt read, null when it read none (ORC-232)', () => {
+    expect(attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null }).fingerprints.knowledgeIndex).toBeNull();
+    const l = attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null, systemPrompt: '# Knowledge base (index)' });
+    expect(l.fingerprints.knowledgeIndex).toBe(hashText('# Knowledge base (index)'));
   });
 
   it('takes the factory commit from FACTORY_COMMIT when none is given', () => {

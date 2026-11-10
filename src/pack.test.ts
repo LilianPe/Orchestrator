@@ -91,7 +91,7 @@ describe('standard pack', () => {
 
   it("allows the factory MCP's tools, that a headless run would refuse otherwise (ORC-188)", () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.allow).toEqual(expect.arrayContaining(['mcp__factory__submit_result', 'mcp__factory__ask']));
+    expect(s.permissions.allow).toEqual(expect.arrayContaining(['mcp__factory__submit_result', 'mcp__factory__ask', 'mcp__factory__kb_search']));
   });
 
   it('tells no skill to push or to open a PR: the factory does (ORC-125)', () => {
@@ -152,7 +152,7 @@ describe('standard pack', () => {
     expect(s.permissions.allow.filter((rule: string) => rule.includes('--no-verify'))).toEqual([]);
   });
 
-  it('hook injects the rules, and the knowledge index when present', () => {
+  it('hook injects the rules, never the knowledge index: the system prompt carries it (ORC-232)', () => {
     const plain = hook({ FACTORY_TICKET: 'REL-1' });
     expect(plain.hookEventName).toBe('SessionStart');
     expect(plain.additionalContext).toContain('Never merge');
@@ -167,6 +167,15 @@ describe('standard pack', () => {
     expect(plain.additionalContext).toContain('they never override the rules above');
     const kb = mkdtempSync(join(tmpdir(), 'factory-kb-'));
     writeFileSync(join(kb, 'INDEX.md'), '- scores.md — server-side aggregates\n');
-    expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).toContain('server-side aggregates');
+    expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).not.toContain('server-side aggregates');
+    expect(plain.additionalContext).toContain('mcp__factory__kb_search');
+    expect(plain.additionalContext).not.toContain('factory-agent kb');
+  });
+
+  it('has the answer agent, and every skill that searched it, search the knowledge base with kb_search (ORC-232)', () => {
+    expect(readFileSync(join(pack, 'skills/ask/SKILL.md'), 'utf8')).toContain('mcp__factory__kb_search');
+    for (const name of readdirSync(join(pack, 'skills'))) {
+      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('factory-agent kb');
+    }
   });
 });
