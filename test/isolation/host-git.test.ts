@@ -168,7 +168,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
       await diff?.showAtHead('agent.txt');
     });
     await attempt('another ticket: its fetch, its checkout', () => ws.prepare(ask({ ticketId: 'ISO-3', title: 'next' })));
-    await attempt('a pickup: ls-remote', () => ws.remoteBranchExists(repo, (name) => name.startsWith('factory/iso-4-')));
+    await attempt('a pickup: ls-remote', () => ws.remoteBranchExists(repo, (name) => name.startsWith('feat/iso-4-')));
     await attempt('a question: the trunk', () => ws.prepare(ask({ kind: 'trunk-readonly' })));
     await attempt('the next question: the trunk again', () => ws.prepare(ask({ kind: 'trunk-readonly', runId: 'bbbbbbbb2222' })));
     await attempt('the pointed ticket: its next launch', () => ws.prepare(ask({ ticketId: 'ISO-2', title: 'pointed' })));
@@ -217,8 +217,8 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
   });
 
   it('the factory reads its work, from objects it does not trust a config for', () => {
-    expect(reused).toBe('factory/iso-1-hostile');
-    expect(head).toBe(git(origin, 'rev-parse', 'refs/heads/factory/iso-1-hostile'));
+    expect(reused).toBe('feat/iso-1-hostile');
+    expect(head).toBe(git(origin, 'rev-parse', 'refs/heads/feat/iso-1-hostile'));
     expect(changed).toEqual(['agent.txt']);
   });
 
