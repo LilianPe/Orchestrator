@@ -493,6 +493,11 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     // One relayed since that launch is still to ask.
     const later = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, quick);
     expect(later.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
+    // Since ORC-170 the end of `dev-feedback` starts the review: a question relayed since waits for the review's end.
+    const current = { ...workflow, jobs: { ...workflow.jobs, 'dev-feedback': { ...workflow.jobs['dev-feedback']!, verify: [], repoChecks: false } } };
+    const reviewed = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, current);
+    expect(relays(reviewed)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
+    expect(reviewed.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'review' })]);
   });
 
   describe('the questions still relayed when the work ends (ORC-374)', () => {
