@@ -36,4 +36,31 @@ describe('the statuses of the MVP (ORC-170)', () => {
     expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review']);
     expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
   });
+
+  it('a commit dev-feedback publishes, on a reply to a block with no step of its own, is reviewed with no human move to AI Review', async () => {
+    const h = createHarness({ aiReview: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
+    h.tracker.setTeamMembers('REL', ['user-lilian']);
+    h.forge.setRepoPermission('lilian-gh', 'write');
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: SHA, checks: 'pass', failedChecks: [] });
+    h.workspaces.heads.set(WORKTREE, SHA);
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: SHA });
+
+    // A stop is a block with no step of its own: the reply resumes the session by `dev-feedback`, which commits.
+    await h.send('session.stopped', { linearSessionId: 'ls-1' });
+    expect(await h.ticket()).toMatchObject({ blocked: true });
+    const fixed = 'fade'.padEnd(40, '0');
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Fixed.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
+    h.workspaces.heads.set(WORKTREE, fixed);
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: fixed, checks: 'pass', failedChecks: [] });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Go on, and rename the export button.', author: 'L' }, 'REL-1', { actor: 'user-lilian' });
+
+    // Its commit went through the AI review on its own, and Human Review shows it: the next Done merges it.
+    const skills = h.runner.requests.map((r) => r.prompt.split('\n')[0]);
+    expect(skills).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback', '/factory:review', '/factory:review']);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: fixed, blocked: false });
+    expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review', 'AI Review', 'Human Review']);
+  });
 });

@@ -618,7 +618,7 @@ export interface TicketState {
   repeatedFailure?: { signature: string; count: number } | null;
   /**
    * The move of a job's `on_success` that waits for its publication (ORC-125). Kept through a refusal: what relaunches the ticket
-   * is `dev-feedback`, which has no move of its own, and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
+   * is `dev-feedback`, which had no move of its own before ORC-170 (a frozen version still has none), and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
    */
   owedMove?: LogicalState | null;
   /**

@@ -241,7 +241,7 @@ A command with no spec waiting (none yet, a ticket blocked or undelegated), on a
 
 ## `review` step (ORC-183)
 
-Once `dev`'s commit is published (`on_success: { move: ai_review, post: summary, run: review }`), the AI review starts: two agent sessions on Opus, effort high, 25 turns, one after the other, each a fresh session of its own (role `reviewer`), never the implementer's. When `dev`'s publication is refused and a later `dev-feedback` publishes, that end makes the move `dev` owed and starts the review it came with.
+Once `dev`'s commit is published (`on_success: { move: ai_review, post: summary, run: review }`), the AI review starts: two agent sessions on Opus, effort high, 25 turns, one after the other, each a fresh session of its own (role `reviewer`), never the implementer's. Every job that writes goes back through it the same way: `fix-ci`, `fix-review`, `fix-human`, and `dev-feedback` since ORC-170. When `dev`'s publication is refused and a later job publishes, that end makes the move `dev` owed and starts the review it came with (on a version frozen before ORC-170, `dev-feedback` has no move of its own: the owed move and its review are what reach the reviewer).
 
 | Job | Lens | What it looks at |
 | -- | -- | -- |
@@ -256,7 +256,7 @@ Both flag over-engineering (an abstraction with one user, code outside the ticke
 
 **What the factory publishes.** Each lens's findings are kept in the `findings` table, by ticket, commit and lens, a lens run again on the same commit replacing its own. At the end of `review-security` (`on_success.post: review`), every lens's findings on that commit go out as one GitHub review on the PR (a comment, it neither approves nor requests changes), each blocking or minor finding a comment on its line, the out-of-scope ones (on code the diff does not change) listed in the review's text; when GitHub cannot place one (a line the diff does not show), all of them are listed there instead, shortened if they would not fit in one text. The texts are vetted together, one secret scan for them all. Then the `factory/review` check on the commit: failed while a blocking finding stands, green otherwise, its title the count (« 1 blocking finding, 2 minor, 0 out of scope »). Every text goes through the `OutputPolicy`: a refused one is replaced by its notice, its place kept. Nothing goes to Linear. Then the move to Human Review, which records the reviewed commit as before. A review that fails to go out is retried by the outbox; a dead one blocks the ticket, and the move waits.
 
-**Not yet.** A commit `dev-feedback` publishes (a reply to a block) gets no review of its own: a human moves the ticket to AI Review to have it reviewed again. Human review feedback does go back through the review (`fix-human`, [below](#human-review-feedback-orc-190)). A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
+**No human move needed (ORC-170).** A commit `dev-feedback` publishes (a reply in In Progress, or to a block with no step of its own) ends as `fix-human` does: `on_success: { move: ai_review, post: reply, run: review }`, then Human Review on that commit. Its end without a commit starts the review too, on the commit already published, as `fix-human`'s does. On a version frozen before ORC-170, `dev-feedback` moves nothing: a human moves the ticket to AI Review to have its commit reviewed. A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
 
 ## Human review feedback (ORC-190)
 
