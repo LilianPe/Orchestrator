@@ -38,6 +38,11 @@ export const fantome: Preset = {
   ],
 };
 
+/** A project's effects (ORC-231): none when it says so, or when it runs the fantome preset, which never has any. */
+export function projectEffects(p: { effects?: 'none' | undefined; preset?: string | undefined }): 'none' | undefined {
+  return p.effects === 'none' || p.preset === fantome.name ? 'none' : undefined;
+}
+
 const compiled = compilePreset(fantome).preset;
 const bound = (counter: string) => compiled.counters[counter]!.limit;
 

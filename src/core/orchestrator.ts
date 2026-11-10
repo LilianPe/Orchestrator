@@ -46,6 +46,7 @@ import {
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
 import { describePr, verifySummary } from '../publish/describe.js';
+import { KEPT_PR } from '../ghost/replay.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from './bus.js';
 import type { Clock } from './clock.js';
@@ -368,9 +369,6 @@ type StartOutcome = 'queued' | 'deferred' | 'done';
 const ECHO_MS = 60_000;
 /** The `meta` key of the installation's id (`instanceId`). */
 const INSTANCE_KEY = 'instance-id';
-
-/** The kind of the artifact a kept `publish` leaves (ORC-231): the PR the factory would have opened, which the blind judging reads. */
-export const KEPT_PR = 'kept:pr';
 
 /** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
 /** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */
@@ -2040,8 +2038,8 @@ export class Orchestrator {
   /** `state`: what the caller makes of a failed read or write of the factory's state (a launch's: a start to try again, ORC-359). */
   private async sessionFor(t: TicketState, state: StateIo = asIs): Promise<string> {
     if (t.linearSessionId) return t.linearSessionId;
-    if (this.noEffect(t.projectId)) throw new Error(`no Linear session for ${t.ticketId}: its project has no effects, none is opened`);
-    const s = await this.d.tracker.ensureSession(t.ticketId);
+    // A project without effects opens no Linear session (ORC-231): a local one, which only kept effects name.
+    const s = this.noEffect(t.projectId) ? `kept:${t.ticketId}` : await this.d.tracker.ensureSession(t.ticketId);
     await state(this.apply(await state(this.ticket(t.projectId, t.ticketId)), { type: 'session.linked', linearSessionId: s }));
     return s;
   }

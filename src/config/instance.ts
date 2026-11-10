@@ -21,6 +21,10 @@ const projectSchema = z.object({
   repoPath: z.string().min(1),
   linearTeamKey: z.string().min(1),
   authz: authzSchema.optional(),
+  /** `none` (ORC-231): nothing of the project leaves the factory, its effects are kept as artifacts of its runs. */
+  effects: z.literal('none').optional(),
+  /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
+  preset: z.enum(['factory/default', 'factory/fantome']).optional(),
 });
 
 const idSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);
@@ -85,6 +89,8 @@ export function homePaths(home: string) {
     network: join(home, 'network'),
     /** The egress CA (ORC-213): its key is the daemon's, never mounted in a sandbox. */
     egressCa: join(home, 'egress-ca'),
+    /** The effects of the projects without effects, kept instead of made (ORC-231). */
+    kept: join(home, 'kept'),
   };
 }
 

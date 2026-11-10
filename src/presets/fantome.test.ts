@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
-import { asFantome, fantome } from './fantome.js';
+import { asFantome, fantome, projectEffects } from './fantome.js';
 import { compilePreset, PresetError, type Preset } from './preset.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -31,5 +31,12 @@ describe('the factory/fantome preset (ORC-231)', () => {
     expect(wf.jobs['dev']).toMatchObject({ onStart: {}, onSuccess: {} });
     // The bounds are the preset's.
     expect(wf.limits).toMatchObject({ specCheckReturns: 1, verifyAttempts: 4 });
+  });
+
+  it('a project on the fantome preset never has effects; another has none only when it says so', () => {
+    expect(projectEffects({ preset: 'factory/fantome' })).toBe('none');
+    expect(projectEffects({ effects: 'none' })).toBe('none');
+    expect(projectEffects({ preset: 'factory/default' })).toBeUndefined();
+    expect(projectEffects({})).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { KEPT_PR } from '../../src/core/orchestrator.js';
+import { KEPT_PR } from '../../src/ghost/replay.js';
 import { createHarness } from '../helpers/harness.js';
 
 /**
@@ -38,6 +38,14 @@ describe('a project without effects (ORC-231)', () => {
     // The run ended as after a publication: nothing left verifying, nothing blocked.
     expect(await h.ticket()).toMatchObject({ blocked: false, verifiedSha: SHA });
     expect((await h.ticket()).verifyingRunId).toBeUndefined();
+  });
+
+  it('a delegation without a Linear session opens none: the run gets a local one, and its PR is kept', async () => {
+    const h = verified();
+    await h.send('ticket.delegated', {});
+    expect(h.tracker.calls.filter((c) => TRACKER_WRITES.includes(c.method))).toEqual([]);
+    expect((await h.ticket()).linearSessionId).toBe('kept:REL-1');
+    expect((await h.store.artifacts('REL-1')).some((a) => a.kind === KEPT_PR)).toBe(true);
   });
 
   it('nowhere to keep its effects: the ticket is blocked, and still nothing goes out', async () => {
