@@ -124,7 +124,7 @@ Each agent run takes the repository's level, read at launch, narrowed by its ste
 | `custom` | `limited`, plus the hosts in `network.allow`, read-only. |
 | `none` | The Claude API only (`claude-api`): without it, the agent does not run. |
 
-A step can only narrow it (ORC-183): the build, its fixes and intake run at `limited` at most, the AI review at `claude-api`, the Claude API alone, whatever the repository's level. `ask` has no step: the answer agent sets its own level, `claude-api` (ORC-182). After a daemon restart, a resumed run keeps its level and its `allow` list (ORC-322).
+A step can only narrow it (ORC-183): the build, its fixes and intake run at `limited` at most, the AI review at `claude-api`, the Claude API alone, whatever the repository's level. `ask` has no step: the answer agent sets its own level, `claude-api` (ORC-182). After a daemon restart, a resumed run keeps its level and its `allow` list (ORC-322), except a run whose container was started by a daemon from before ORC-322: it resumes without the list.
 
 ## Checking
 
