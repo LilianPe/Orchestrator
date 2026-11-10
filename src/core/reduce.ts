@@ -85,7 +85,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
       // Cancelled (ORC-170): nothing waits for a human any longer, and the replies kept for a next run are dropped.
       // Any human move, a cancel or an unmapped status included, ends the status the factory put the ticket in.
       // A cancel also ends a wait for the ticket's repo: delegated and unblocked, it would hold this repo (ORC-291).
-      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), ...UNBLOCKED, humanInbox: [], recordedStatus: undefined };
+      if (e.payload.cancelled) return { ...t, ...(t.awaitingRepo ? { delegated: false, awaitingRepo: null } : {}), ...UNBLOCKED, logical: 'cancelled', humanInbox: [], recordedStatus: undefined };
       if (isOwnMoveEcho(t, e)) return t;
       const to = e.payload.to;
       if (!to) return { ...t, recordedStatus: undefined };

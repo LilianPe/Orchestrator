@@ -243,8 +243,11 @@ export interface Workflow {
   /** `rapide` (ORC-231): the level of `factory/fantome`, no question asked and the spec approved by the preset (`asFantome`). */
   level?: 'rapide';
   tracker: { kind: 'linear'; team?: string; pickup: { checks: PickupCheck[] } };
-  /** `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. */
-  states: Record<Exclude<LogicalState, 'ready'>, string> & { ready?: string };
+  /**
+   * `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. `cancelled` has no
+   * status of its own: it is read on the Linear type, so a move or a rule to it is refused at load.
+   */
+  states: Record<Exclude<LogicalState, 'ready' | 'cancelled'>, string> & { ready?: string; cancelled?: never };
   limits: Limits;
   /** `preview`: the command that starts the application for the visual proof (ORC-176), on `PORT`; absent, the proof is unavailable. */
   workspace: { setup: string[]; portBase: number; preview?: string };

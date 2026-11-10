@@ -85,7 +85,7 @@ Maps Relais's five **logical states** to the exact names of the team's Linear co
 | `ai_review` | `AI Review` |
 | `done` | `Done` |
 
-You can redefine only some of them; after merging, all five must have a name. `ready` ("Ready to Merge") is no longer declared by the pack (ORC-170); a `move` to a state without a name is rejected at load time, with the key's path. No other state name is accepted. During « Connect Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
+You can redefine only some of them; after merging, all five must have a name. `ready` ("Ready to Merge") is no longer declared by the pack (ORC-170); a `move` to a state without a name is rejected at load time, with the key's path. `cancelled` has no name: it is read on the Linear type *Canceled* ([`linear.md`](linear.md#5-states-columns-and-labels)). No other state name is accepted. During « Connect Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
 
 ### `limits`
 | Key | Type | Default | Effect when the limit is reached |
@@ -310,7 +310,7 @@ A condition is a sequence of **atoms** joined by `&&` (all must be true).
 | `!blocked` | It is not. |
 | `job == <name>` | The job of the `dev` run in progress on the ticket is `<name>`. |
 
-`<state>` is one of the logical states (`todo`, `dev`, `human_review`, `ai_review`, `done`, and `ready` for a workflow that still declares it), never a Linear column name. For an event without a known ticket, the state is `todo` and `blocked` is false.
+`<state>` is one of the logical states (`todo`, `dev`, `human_review`, `ai_review`, `done`, `cancelled` for a ticket a human cancelled, and `ready` for a workflow that still declares it), never a Linear column name. For an event without a known ticket, the state is `todo` and `blocked` is false.
 
 Valid:
 
