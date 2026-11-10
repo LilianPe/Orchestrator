@@ -231,9 +231,10 @@ export interface EventPayloads {
   /**
    * `ack`: brought by the webhook, to acknowledge (ORC-171). `noRepo`: the Linear team no project takes: the ticket waits blocked under the first project.
    * `repos`: the team has several and the ticket names none (ORC-291); the delegation then waits for a human's choice.
-   * `waitedIn`: the project where the ticket waited for that choice.
+   * `waitedIn`: the project where the ticket waited for that choice. `replay`: the replay of closed tickets whose daemon delegated it
+   * (ORC-376), no human: no actor to check.
    */
-  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string; repos?: string[]; waitedIn?: string };
+  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string; repos?: string[]; waitedIn?: string; replay?: string };
   /** `keepLabel`: another project's ticket for the same issue is blocked, the label stays (ORC-291). */
   'ticket.undelegated': { keepLabel?: true };
   /**
