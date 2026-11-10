@@ -19,7 +19,7 @@ import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
 import { CHANGES, formatSpec, publishedSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
-import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
+import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type LogicalState, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -72,13 +72,16 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
 function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId?: string, output?: AgentOutput): Decision {
   const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
   // An end that would start the AI review with nothing new for it moves nothing and starts nothing (ORC-170).
-  const stays = !job.lens && !!next?.lens && nothingToReview(out, at, job);
+  const idle = !job.lens && next?.lens ? nothingToReview(at) : undefined;
+  if (idle) out.trace.push(`review: nothing new at the end of ${job.name} (${idle}), the ticket stays where it is`);
+  const stays = !!idle;
   // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
   if (!stays && job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
-  else handOver(out, at, job, stays);
+  // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
+  else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove));
   return out;
 }
 
@@ -87,12 +90,10 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  * is the one shown in Human Review, already reviewed. An answer that commits nothing is no work to review again. In the
  * review loop (AI Review) the ticket has no reviewed commit: a fix that contests without committing is judged again.
  */
-function nothingToReview(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined }, job: JobSpec): boolean {
-  const { event, ticket } = at;
+function nothingToReview({ event, ticket }: { event: FactoryEvent; ticket: TicketState | undefined }): string | undefined {
   const sha = event.type === 'publish.done' || event.type === 'verify.passed' ? event.payload.sha : undefined;
-  const why = !ticket?.prNumber ? 'no PR' : sha && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
-  if (why) out.trace.push(`review: nothing new at the end of ${job.name} (${why}), the ticket stays where it is`);
-  return !!why;
+  if (!ticket?.prNumber) return 'no PR';
+  return sha && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
 }
 
 /**
@@ -103,13 +104,12 @@ function nothingToReview(out: Decision, at: { event: FactoryEvent; ticket: Ticke
  * A question relayed while a step that does not resume the session ran (the AI review) resumes it too, as no round of
  * human review: it answers a question (ORC-374).
  */
-function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, stays = false): void {
+function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, leaves: LogicalState | undefined): void {
   const { event, ticket, workflow } = at;
   if (job.queue !== 'dev' || !ticket?.delegated || heldWork(ticket)) return;
   const feedback = awaitsAgent(ticket.humanInbox);
   if (!feedback && !relayWaits(out, ticket)) return;
-  // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
-  const after = stays ? ticket : { ...ticket, logical: job.onSuccess.move ?? ticket.owedMove ?? ticket.logical };
+  const after = { ...ticket, logical: leaves ?? ticket.logical };
   const next = replyJob(event, after, workflow);
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);
