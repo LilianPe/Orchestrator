@@ -1,7 +1,7 @@
 import type { Forge, ForgeBranch, OpenPr } from '../adapters/forge/types.js';
 import type { SearchHit } from '../adapters/tracker/types.js';
 import type { AgentOutput } from './agent-output.js';
-import { DEFAULT_BRANCH_NAMING, isOwnBranch, ownBranchPrefixes, type BranchNaming } from './naming.js';
+import { DEFAULT_BRANCH_NAMING, ownBranchMatcher, ownBranchPrefixes, type BranchNaming } from './naming.js';
 import type { ReuseLead } from './types.js';
 
 /**
@@ -9,16 +9,18 @@ import type { ReuseLead } from './types.js';
  * The `not_started` pickup check, absorbed by the duplicate search: a certain duplicate, found without judgement.
  */
 export function ownWork(identifier: string, branches: readonly ForgeBranch[], prs: readonly OpenPr[], naming: BranchNaming = DEFAULT_BRANCH_NAMING): string | undefined {
-  const own = branches.find((b) => isOwnBranch(identifier, b.name, naming));
+  const isOwn = ownBranchMatcher(identifier, naming);
+  const own = branches.find((b) => isOwn(b.name));
   if (!own) return undefined;
   const link = prs.find((p) => !p.fork && p.branch === own.name)?.url ?? own.url;
   return `This ticket already has work on the forge: ${link} (branch ${own.name}).`;
 }
 
-/** The ticket's own branches on the forge (ORC-207, ORC-283): asked by each of their prefixes, kept when `isOwnBranch` takes them. */
+/** The ticket's own branches on the forge (ORC-207, ORC-283): asked by each of their prefixes, kept when `ownBranchMatcher` takes them. */
 export async function ticketBranches(forge: Pick<Forge, 'branches'>, repoPath: string, identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): Promise<ForgeBranch[]> {
   const found = (await Promise.all(ownBranchPrefixes(identifier, naming).map((prefix) => forge.branches(repoPath, prefix)))).flat();
-  return [...new Map(found.filter((b) => isOwnBranch(identifier, b.name, naming)).map((b) => [b.name, b])).values()];
+  const isOwn = ownBranchMatcher(identifier, naming);
+  return [...new Map(found.filter((b) => isOwn(b.name)).map((b) => [b.name, b])).values()];
 }
 
 /** What the factory read of the work in progress elsewhere, for `intake` to judge: its duplicate candidates. */
@@ -41,7 +43,7 @@ const PR_FILES_SHOWN = 30;
  * factory read: the forge's and the tracker's texts, not instructions.
  */
 export function formatActiveWork(identifier: string, work: ActiveWork, naming: BranchNaming = DEFAULT_BRANCH_NAMING): string {
-  const own = (branch: string) => isOwnBranch(identifier, branch, naming);
+  const own = ownBranchMatcher(identifier, naming);
   const prs = work.prs.filter((p) => p.fork || !own(p.branch));
   const withPr = new Set(work.prs.filter((p) => !p.fork).map((p) => p.branch));
   const branches = work.branches.filter((b) => !withPr.has(b.name) && !own(b.name));

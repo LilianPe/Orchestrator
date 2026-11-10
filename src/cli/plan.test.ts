@@ -54,4 +54,28 @@ describe('plan', () => {
     const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
     expect(rows.map((r) => [r.status, r.reasons])).toEqual([['not taken', ['A branch of REL-1 already exists on origin.']]]);
   });
+
+  it("previews by each repository's own branch naming, read once per project; an invalid one is that project's reason only (ORC-283)", async () => {
+    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const tracker = new FakeTracker();
+    tracker.addIssue({ identifier: 'REL-1', delegateId: 'a' });
+    tracker.addIssue({ identifier: 'REL-2', delegateId: 'a' });
+    tracker.addIssue({ identifier: 'BAD-1', delegateId: 'a' });
+    const workspaces = new FakeWorkspaces();
+    workspaces.remoteBranches.add('agent/rel-1');
+    const reads: string[] = [];
+    const naming = async (p: { id: string }) => {
+      reads.push(p.id);
+      if (p.id === 'bad') throw new Error('.factory/config.yml refused:\n- branches.pattern: {id} is required');
+      return { pattern: 'agent/{id}', types: [], fallback: 'feat' };
+    };
+    const projects = [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }, { id: 'bad', repoPath: '/b', teamKey: 'BAD', workflow }];
+    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects, workspaces, naming });
+    expect(rows.map((r) => [r.identifier, r.status, r.reasons])).toEqual([
+      ['REL-1', 'not taken', ['A branch of REL-1 already exists on origin.']],
+      ['REL-2', 'taken', []],
+      ['BAD-1', 'not taken', ['.factory/config.yml refused:\n- branches.pattern: {id} is required']],
+    ]);
+    expect(reads.sort()).toEqual(['bad', 'p']);
+  });
 });

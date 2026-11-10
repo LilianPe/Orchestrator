@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
-import { branchName, legacyBranchName } from '../../core/naming.js';
+import { BRANCH_NAME, branchName, legacyBranchName } from '../../core/naming.js';
 import { capDiff, DIFF_MAX } from '../../core/review.js';
 import { forkPoint, gitAt, gitReader, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
@@ -26,8 +26,6 @@ const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean
 /** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
 const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
-/** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
-const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
 const MAX_REFS_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -66,8 +64,9 @@ function agentHead(work: string): { branch: string; sha?: string } | undefined {
   if (!head) return undefined;
   if (SHA.test(head)) return { branch: 'HEAD', sha: head };
   const ref = /^ref: (\S+)$/.exec(head)?.[1];
-  if (!ref || !BRANCH_REF.test(ref)) return undefined;
-  const branch = ref.slice('refs/heads/'.length);
+  // Git's own rules on a branch's name, as a name out of them cannot be its branch (shared with the naming, ORC-283).
+  const branch = ref?.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : undefined;
+  if (!ref || branch === undefined || !BRANCH_NAME.test(branch)) return undefined;
   const loose = agentFile(gitDir, ref)?.trim();
   if (loose && SHA.test(loose)) return { branch, sha: loose };
   const packed = agentFile(gitDir, 'packed-refs')?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];

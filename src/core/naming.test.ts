@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchName, branchNamingErrors, branchType, isBranchRefName, isOwnBranch, legacyBranchName, ownBranchPrefixes, slugify, type BranchNaming } from './naming.js';
+import { branchName, branchNamingErrors, branchType, isBranchRefName, legacyBranchName, ownBranchMatcher, ownBranchPrefixes, slugify, type BranchNaming } from './naming.js';
 
 describe('slugify', () => {
   it('lowercases, strips accents and collapses separators', () => {
@@ -35,16 +35,16 @@ describe('branchName (ORC-283)', () => {
 
 describe("a ticket's own branches (ORC-283)", () => {
   it('are recognized under every type and title, and under the legacy factory/ name, never under another ticket', () => {
-    for (const name of ['feat/rel-3-export-csv', 'fix/rel-3-other-title', 'factory/rel-3-export-csv']) expect(isOwnBranch('REL-3', name), name).toBe(true);
-    for (const name of ['feat/rel-31-export-csv', 'feat/rel-3', 'chore/rel-3-x', 'factory/rel-31-x', 'feat/rel-3-Export']) expect(isOwnBranch('REL-3', name), name).toBe(false);
-    expect(isOwnBranch('REL-3', 'agent/sec-rel-3', custom)).toBe(true);
-    expect(isOwnBranch('REL-3', 'agent/sec-rel-31', custom)).toBe(false);
+    for (const name of ['feat/rel-3-export-csv', 'fix/rel-3-other-title', 'factory/rel-3-export-csv']) expect(ownBranchMatcher('REL-3')(name), name).toBe(true);
+    for (const name of ['feat/rel-31-export-csv', 'feat/rel-3', 'chore/rel-3-x', 'factory/rel-31-x', 'feat/rel-3-Export']) expect(ownBranchMatcher('REL-3')(name), name).toBe(false);
+    expect(ownBranchMatcher('REL-3', custom)('agent/sec-rel-3')).toBe(true);
+    expect(ownBranchMatcher('REL-3', custom)('agent/sec-rel-31')).toBe(false);
   });
 
   it('are looked for on the forge by the prefix of each type, and the legacy one', () => {
     expect(ownBranchPrefixes('REL-3')).toEqual(['fix/rel-3-', 'feat/rel-3-', 'factory/rel-3-']);
     expect(ownBranchPrefixes('REL-3', custom)).toEqual(['agent/sec-rel-3', 'agent/bugfix-rel-3', 'agent/work-rel-3', 'factory/rel-3-']);
-    for (const prefix of ownBranchPrefixes('REL-3')) expect(isOwnBranch('REL-3', `${prefix}x`)).toBe(true);
+    for (const prefix of ownBranchPrefixes('REL-3')) expect(ownBranchMatcher('REL-3')(`${prefix}x`)).toBe(true);
   });
 });
 
@@ -54,7 +54,11 @@ describe('branchNamingErrors (ORC-283)', () => {
   it('takes the default and a custom pattern', () => {
     expect(branchNamingErrors(naming('{type}/{id}-{slug}'), 'main')).toEqual([]);
     expect(branchNamingErrors(custom, 'main')).toEqual([]);
-    expect(branchNamingErrors(naming('{id}'), 'main')).toEqual([]);
+    expect(branchNamingErrors(naming('agent/{id}'), 'main')).toEqual([]);
+  });
+
+  it("refuses a pattern that starts with {id} or {slug}: doctor would have no fixed beginning to hold a CI filter by", () => {
+    for (const pattern of ['{id}', '{id}-{slug}', '{slug}-{id}']) expect(branchNamingErrors(naming(pattern)).join(), pattern).toContain('must start with fixed text or {type}');
   });
 
   it('refuses a pattern without {id}', () => {
@@ -72,7 +76,7 @@ describe('branchNamingErrors (ORC-283)', () => {
   });
 
   it('refuses a name git does not take', () => {
-    for (const bad of [naming('{type}..{id}'), naming('{type}/{id}.lock'), naming('{type} {id}'), naming('{type}/{id}', [], 'a~b'), naming('/{id}'), naming('{id}/')]) {
+    for (const bad of [naming('{type}..{id}'), naming('{type}/{id}.lock'), naming('{type} {id}'), naming('{type}/{id}', [], 'a~b'), naming('/{id}'), naming('x/{id}/')]) {
       expect(branchNamingErrors(bad).join(), bad.pattern).toContain('git check-ref-format');
     }
   });

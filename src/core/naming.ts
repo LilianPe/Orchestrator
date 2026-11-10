@@ -63,7 +63,7 @@ export const branchTypes = (naming: BranchNaming): string[] => [...new Set([...n
 
 /**
  * The prefixes of the branches a ticket can have (ORC-207, ORC-283): its name for each type, up to its slug, and the
- * legacy `factory/<id>-`. What the forge is asked for; `isOwnBranch` then tells which of the branches found are the ticket's.
+ * legacy `factory/<id>-`. What the forge is asked for; `ownBranchMatcher` then tells which of the branches found are the ticket's.
  */
 export function ownBranchPrefixes(identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): string[] {
   const id = identifier.toLowerCase();
@@ -74,25 +74,29 @@ export function ownBranchPrefixes(identifier: string, naming: BranchNaming = DEF
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*';
 
-/** Whether a branch is one the factory names for this ticket, by the repository's naming (any type, any title) or the legacy one. */
-export function isOwnBranch(identifier: string, name: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): boolean {
+/** Whether a branch is one the factory names for this ticket, by the repository's naming (any type, any title) or the legacy one. Built once per ticket. */
+export function ownBranchMatcher(identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): (name: string) => boolean {
   const id = identifier.toLowerCase();
-  if (name.startsWith(`${LEGACY_BRANCHES}${id}-`)) return true;
+  const legacy = `${LEGACY_BRANCHES}${id}-`;
   const types = branchTypes(naming).map(escape).join('|');
   const source = naming.pattern
     .split(/(\{[^{}]*\})/)
     .map((part) => (part === '{type}' ? `(?:${types})` : part === '{id}' ? escape(id) : part === '{slug}' ? SLUG : escape(part)))
     .join('');
-  return new RegExp(`^${source}$`).test(name);
+  const own = new RegExp(`^${source}$`);
+  return (name) => name.startsWith(legacy) || own.test(name);
 }
 
-/** A name git takes for a branch (`git check-ref-format --branch`): what `refs/heads/<name>` must be. */
-export function isBranchRefName(name: string): boolean {
-  if (!name || name === 'HEAD' || name === '@' || name.startsWith('-')) return false;
-  if (name.startsWith('/') || name.endsWith('/') || name.endsWith('.') || name.includes('//') || name.includes('..') || name.includes('@{')) return false;
-  if (/[ ~^:?*[\\]/.test(name) || [...name].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return false;
-  return name.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'));
-}
+
+/**
+ * Git's own rules on a branch's name (`git check-ref-format`), what `refs/heads/<name>` must be: the agent's HEAD is read
+ * by them (`agentHead`), so a name the repository's naming makes is too. Never `..`: it becomes a path.
+ */
+export const BRANCH_NAME = /^(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
+
+/** A name git takes for a branch, and that `BRANCH_NAME` reads: none that starts or ends with `/`, ends with `.`, nor `@` or `HEAD`. */
+export const isBranchRefName = (name: string): boolean =>
+  BRANCH_NAME.test(name) && name !== '@' && name !== 'HEAD' && !name.startsWith('/') && !name.endsWith('/') && !name.endsWith('.');
 
 /** Samples a naming is tried on: identifiers of several lengths, the empty title's slug and a long one. */
 const SAMPLE_IDS = ['ORC-1', 'ZZ9-70000'];
@@ -110,6 +114,8 @@ export function branchNamingErrors(naming: BranchNaming, defaultBranch?: string)
   if (unknown.length) errors.push(`unknown variable(s) ${unknown.map((v) => `{${v}}`).join(', ')}: only {type}, {id} and {slug}`);
   if (/[{}]/.test(pattern.replace(VARIABLE, ''))) errors.push('a `{` or `}` that opens or closes no variable');
   const at = pattern.indexOf('{id}');
+  // `factory doctor` holds a CI filter under that beginning as reaching the factory's branches, whatever team key it names.
+  if (/^\{(id|slug)\}/.test(pattern)) errors.push('the pattern must start with fixed text or {type} (`agent/{id}`, `{type}/{id}`), never with {id} or {slug}');
   if (at === -1) errors.push('{id} is required: without it, two tickets would share a branch');
   else {
     const before = pattern.slice(0, at);
