@@ -70,14 +70,29 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
  * ORC-212), there is nothing to post.
  */
 function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId?: string, output?: AgentOutput): Decision {
+  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+  // An end that would start the AI review with nothing new for it moves nothing and starts nothing (ORC-170).
+  const stays = !job.lens && !!next?.lens && nothingToReview(out, at, job);
   // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
-  if (job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
+  if (!stays && job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
-  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
-  if (next) startRun(out, at.event, at.ticket, next, { input: next.input });
-  else handOver(out, at, job);
+  if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
+  else handOver(out, at, job, stays);
   return out;
+}
+
+/**
+ * Nothing new for the AI review at the end of `job` (ORC-170): no PR to post its findings on, or the commit this end leaves
+ * is the one shown in Human Review, already reviewed. An answer that commits nothing is no work to review again. In the
+ * review loop (AI Review) the ticket has no reviewed commit: a fix that contests without committing is judged again.
+ */
+function nothingToReview(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined }, job: JobSpec): boolean {
+  const { event, ticket } = at;
+  const sha = event.type === 'publish.done' || event.type === 'verify.passed' ? event.payload.sha : undefined;
+  const why = !ticket?.prNumber ? 'no PR' : sha && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
+  if (why) out.trace.push(`review: nothing new at the end of ${job.name} (${why}), the ticket stays where it is`);
+  return !!why;
 }
 
 /**
@@ -88,13 +103,13 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  * A question relayed while a step that does not resume the session ran (the AI review) resumes it too, as no round of
  * human review: it answers a question (ORC-374).
  */
-function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec): void {
+function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, stays = false): void {
   const { event, ticket, workflow } = at;
   if (job.queue !== 'dev' || !ticket?.delegated || heldWork(ticket)) return;
   const feedback = awaitsAgent(ticket.humanInbox);
   if (!feedback && !relayWaits(out, ticket)) return;
-  // A move owed by an earlier job is made by this end too (`publish.done`).
-  const after = { ...ticket, logical: job.onSuccess.move ?? ticket.owedMove ?? ticket.logical };
+  // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
+  const after = stays ? ticket : { ...ticket, logical: job.onSuccess.move ?? ticket.owedMove ?? ticket.logical };
   const next = replyJob(event, after, workflow);
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);

@@ -570,7 +570,7 @@ describe('decide — taint', () => {
 describe('decide — built-ins', () => {
   it('run success without verify applies on_success', () => {
     const unchecked = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, repoChecks: undefined } } } as typeof workflow;
-    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unchecked);
+    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1', prNumber: 7 }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unchecked);
     expect(out).toEqual(
       decision({
         effects: [

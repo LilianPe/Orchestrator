@@ -292,7 +292,7 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
 
   it('the state it is read on is the one this end leaves, a move owed by a refused publication included', () => {
     const done = ev('publish.done', { runId: run, job: 'dev-feedback', sha: 'abc' });
-    const t = ticket({ logical: 'dev', verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
+    const t = ticket({ logical: 'dev', prNumber: 7, verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
     // Owed to AI Review, where no reply rule applies: the messages wait; only the review the move came with starts (ORC-183).
     const starts = decide(t, done, beforeOrc170).effects.filter((e) => e.kind === 'start_run');
     expect(starts).toEqual([expect.objectContaining({ job: 'review' })]);
@@ -451,7 +451,7 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     const answered = { ...output, answers: [{ question: 'q1', answer: 'Le ticket demande du CSV.' }] };
     const end = (committed = false) => ev('run.finished', { runId: 'r1', job: 'answer-relayed', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: answered, ...(committed ? { committed: true as const } : {}) });
     const inReviewAnswering = (patch: Partial<TicketState> = {}) =>
-      ticket({ logical: 'human_review', activeRunId: 'r1', activeJob: 'answer-relayed', verifiedSha: sha, relayed: [handed('q1', 'r1')], ...patch });
+      ticket({ logical: 'human_review', prNumber: 7, activeRunId: 'r1', activeJob: 'answer-relayed', verifiedSha: sha, relayed: [handed('q1', 'r1')], ...patch });
 
     it('with no commit: the answer is relayed, and nothing moves, posts, checks or reviews (criterion 1)', () => {
       // Frozen tests too (ORC-131): they check a commit, and the answer wrote none.
@@ -495,9 +495,12 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     expect(later.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
     // Since ORC-170 the end of `dev-feedback` starts the review: a question relayed since waits for the review's end.
     const current = { ...workflow, jobs: { ...workflow.jobs, 'dev-feedback': { ...workflow.jobs['dev-feedback']!, verify: [], repoChecks: false } } };
-    const reviewed = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, current);
+    const reviewed = decide(ticket({ prNumber: 7, activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, current);
     expect(relays(reviewed)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
     expect(reviewed.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'review' })]);
+    // No PR, nothing to review: the ticket stays, and the question relayed since is asked at once.
+    const unpublished = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, current);
+    expect(unpublished.effects.filter((e) => e.kind === 'move' || e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
   });
 
   describe('the questions still relayed when the work ends (ORC-374)', () => {

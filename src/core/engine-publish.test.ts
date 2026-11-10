@@ -12,9 +12,9 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEve
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload } as FactoryEvent;
 }
 
-/** A delegated ticket whose verification of `r1` is under way. */
+/** A delegated ticket whose verification of `r1` is under way, its PR open (`pr.opened` comes before `publish.done`). */
 function verifying(patch: Partial<TicketState> = {}): TicketState {
-  return { ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, branch: 'factory/rel-1-titre', worktreePath: '/w', verifyingRunId: 'r1', ...patch };
+  return { ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, branch: 'factory/rel-1-titre', worktreePath: '/w', verifyingRunId: 'r1', prNumber: 7, ...patch };
 }
 
 const passed = (job = 'dev', sha: string | null = 'abc') => ev('verify.passed', { runId: 'r1', job, ...(sha ? { sha } : {}) });
@@ -105,6 +105,41 @@ describe('the publish effect (ORC-125)', () => {
     const out = decide(t, done, workflow);
     expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'reply', runId: 'r1' }, expect.objectContaining({ kind: 'start_run', job: 'review' })]);
     expect(after(t, done, out).owedMove).toBeNull();
+  });
+
+  describe('nothing new for the AI review (ORC-170)', () => {
+    const reviewing = (e: ReturnType<typeof decide>) => e.effects.filter((x) => x.kind === 'move' || x.kind === 'start_run');
+
+    it('no PR: the end posts its reply, moves nothing and starts no review', () => {
+      const done = ev('publish.done', { runId: 'r1', job: 'dev-feedback', sha: 'abc' });
+      const out = decide(verifying({ prNumber: undefined }), done, workflow);
+      expect(out.effects).toEqual([{ kind: 'post_output', style: 'reply', runId: 'r1' }]);
+      expect(out.trace).toContainEqual(expect.stringContaining('nothing new at the end of dev-feedback (no PR)'));
+      // `dev` too: its summary, and In Progress.
+      expect(decide(verifying({ prNumber: undefined }), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow).effects).toEqual([{ kind: 'post_output', style: 'summary', runId: 'r1' }]);
+    });
+
+    it('the commit shown in Human Review, already reviewed: the ticket stays there, for every fix', () => {
+      const shown = verifying({ logical: 'human_review', reviewSha: 'abc' });
+      for (const job of ['dev-feedback', 'fix-human', 'fix-ci']) {
+        const out = decide(shown, ev('publish.done', { runId: 'r1', job, sha: 'abc' }), workflow);
+        expect(reviewing(out), job).toEqual([]);
+        expect(out.effects, job).toContainEqual({ kind: 'post_output', style: 'reply', runId: 'r1' });
+      }
+      // A new commit is reviewed.
+      expect(reviewing(decide(shown, ev('publish.done', { runId: 'r1', job: 'dev-feedback', sha: 'def' }), workflow))).toEqual([{ kind: 'move', to: 'ai_review' }, expect.objectContaining({ job: 'review' })]);
+    });
+
+    it('in the review loop, a fix that contests without committing is judged again: AI Review has no reviewed commit', () => {
+      const loop = verifying({ logical: 'ai_review', reviewSha: undefined, reviewBlocking: { sha: 'abc', counts: { correctness: 1 } } });
+      expect(reviewing(decide(loop, ev('publish.done', { runId: 'r1', job: 'fix-review', sha: 'abc' }), workflow))).toEqual([expect.objectContaining({ job: 'review' })]);
+    });
+
+    it('the lenses chain as before, a PR or not', () => {
+      const end = ev('run.finished', { runId: 'r1', job: 'review', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { status: 'done', summary: '', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings: [] } });
+      const lens = verifying({ logical: 'ai_review', prNumber: undefined, verifyingRunId: undefined, activeRunId: 'r1', activeJob: 'review', verifiedSha: 'abc' });
+      expect(decide(lens, end, workflow).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'review-security' }));
+    });
   });
 
   it('a stop keeps its reason over a refusal that comes later', () => {
