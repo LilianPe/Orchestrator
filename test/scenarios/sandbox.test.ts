@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { execFailure } from '../../src/adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
@@ -334,6 +335,21 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Launch error: The worktree setup failed: npm ci\n');
+  });
+
+  it("a git failure of the launch's preparation tells the ticket neither the server's path nor the command, which the daemon's log keeps", async () => {
+    const h = createHarness();
+    const args = ['-C', '/srv/factory/repos/p', 'rev-list', '--count', 'refs/remotes/origin/main..refs/heads/factory/rel-1'];
+    h.workspaces.prepare = async () => {
+      throw execFailure('git', args, { stdout: '', stderr: 'fatal: bad revision', code: 128 });
+    };
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: git failed (code 128); the command and its output are in the daemon log.' });
+    const told = [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? a.body : ''))].join('\n');
+    expect(told).toContain('Launch error: git failed (code 128)');
+    expect(told).not.toMatch(/\/srv\/factory|rev-list|bad revision/);
+    expect(h.logs.map((l) => l.message).join('\n')).toContain('git -C /srv/factory/repos/p rev-list --count refs/remotes/origin/main..refs/heads/factory/rel-1: fatal: bad revision');
   });
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {

@@ -19,6 +19,7 @@ import {
   type SandboxProvider,
   type SpawnCommand,
 } from '../adapters/sandbox/types.js';
+import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
@@ -171,6 +172,13 @@ const USAGE_MIN_WAIT_MS = 5 * 60_000;
 
 /** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
 class TicketBudgetError extends Error {}
+
+/**
+ * What a launch error tells the ticket (Linear): a failed command names the server's paths and its command line, which
+ * stay in the daemon's log (ORC-364); the ticket gets the command's name and its code.
+ */
+const launchErrorTold = (err: unknown): string =>
+  err instanceof ExecFailure ? `${err.cmd} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
 
 /**
  * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
@@ -2628,7 +2636,8 @@ export class Orchestrator {
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
     const [kind, reason]: [BlockKind, string] =
-      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
+      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${launchErrorTold(err)}`];
+    if (err instanceof ExecFailure) this.log('error', `launch of ${job.name} on ${ticketId}: ${err.message}`);
     fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
