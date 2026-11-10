@@ -56,10 +56,11 @@ export async function cloneAtStart(o: { remote: string; mergeSha: string; dir: s
     const headlines = n > 1 && parents === 1 ? (await git(['log', '--format=%s', '-n', String(n), o.mergeSha])).split('\n').reverse() : [];
     const rebased = n > 1 && headlines.length === n && headlines.every((h, i) => h === o.prCommits![i]);
     start = await git(['rev-parse', rebased ? `${o.mergeSha}~${n}` : `${o.mergeSha}^1`]);
+    // From the probe, which holds the start already: the forge is fetched from once.
+    await shallowAt(probe, start, o.dir, exec);
   } finally {
     await rm(probe, { recursive: true, force: true });
   }
-  await shallowAt(o.remote, start, o.dir, exec);
   return start;
 }
 

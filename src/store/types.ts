@@ -390,6 +390,12 @@ export interface Artifact {
 }
 
 /**
+ * The kind of the artifact a kept `publish` leaves (ORC-231): the PR a project without effects would have opened, which the blind
+ * judging of the replay reads. The other kept effects are `kept:<kind>`.
+ */
+export const KEPT_PR = 'kept:pr';
+
+/**
  * An entry of the changelog (ORC-197): what a merged PR delivered, appended by the `after_merge` step and never changed. `id`: its
  * merge's, as the inbox names the `pr.merged` event, its idempotency key. `summary`: what changed, as the published work said it (the ticket's title
  * when none did); where: `page`, the page the visual proof shot, and `paths`, the paths of the diff that asked for it; `at`: when

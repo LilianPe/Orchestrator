@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { KEPT_PR } from '../../src/ghost/replay.js';
+import { KEPT_PR } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 
 /**

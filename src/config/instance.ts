@@ -24,7 +24,7 @@ const projectSchema = z.object({
   /** `none` (ORC-231): nothing of the project leaves the factory, its effects are kept as artifacts of its runs. */
   effects: z.literal('none').optional(),
   /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
-  preset: z.enum(['factory/default', 'factory/fantome']).optional(),
+  preset: z.literal('factory/fantome').optional(),
 });
 
 const idSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);

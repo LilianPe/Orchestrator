@@ -141,10 +141,12 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const checks = p.pickup ?? [];
   // A probable duplicate or a ticket out of scope (ORC-207) goes to the guard as a failed check does: a question, never dropped.
   const findings = guardFindings(a);
-  // The Rapide level (ORC-231): nobody answers a closed ticket. What the guard would ask is assumed, to be written in the spec.
+  const asked: ClarifyQuestion[] = a.complete ? [] : a.missing.map((m) => (typeof m === 'string' ? { question: m, options: [] } : m));
+  // The Rapide level (ORC-231): nobody answers a closed ticket, nor moves its blockers. What the guard would ask is assumed, to be
+  // written in the spec, and the work goes on.
   if (at.workflow.level === 'rapide') {
-    const asked = [...checks, ...findings, ...(a.complete ? [] : a.missing.map((m) => (typeof m === 'string' ? m : m.options.length ? `${m.question} (options: ${m.options.join(', ')})` : m.question)))];
-    if (asked.length) out.events.push({ type: 'ticket.patched', patch: { assumed: asked.map((q) => `Unasked: ${q}`) } });
+    const unasked = [...checks, ...findings, ...asked.map((q) => (q.options.length ? `${q.question} (options: ${q.options.join(', ')})` : q.question))];
+    if (unasked.length) out.events.push({ type: 'ticket.patched', patch: { assumed: unasked.map((q) => `Unasked: ${q}`) } });
     return success(out, at, job, p.runId);
   }
   if (!checks.length && !findings.length && a.complete) {
@@ -160,7 +162,6 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const completeIt: ClarifyQuestion[] = checks.length ? [{ question: `${checks.join(' ')} Can you complete the ticket, then reply here?`, options: [] }] : [];
   // Intake's findings (ORC-207), one question: a human confirms or lifts them, and intake reads the ticket again with the answer.
   const confirm: ClarifyQuestion[] = findings.length ? [{ question: `${findings.join(' ')} Is this right? Answer here, or change the ticket and reply.`, options: [] }] : [];
-  const asked = a.complete ? [] : a.missing.map((m) => (typeof m === 'string' ? { question: m, options: [] } : m));
   return clarify(out, at.event, job, [...completeIt, ...confirm, ...asked].slice(0, CLARIFY_MAX));
 }
 
@@ -355,15 +356,16 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
     return block(out, workflow, { kind: 'failed', reason, body: `${reason}\n${listed}\nReply in this thread and I will draft it again.`, job: job.name, step: 'spec_check', attempts: used + 1, tried: problems });
   }
   const version = (ticket?.spec?.version ?? 0) + 1;
-  if (workflow.level === 'rapide') {
-    // Nobody reviews it (ORC-231): the preset approves the version, with what the level assumed written in `assumed`.
-    const assumed = [...(spec.assumed ?? []), ...(ticket?.assumed ?? []).filter((x) => !spec.assumed?.includes(x))];
-    const approved: SpecVersion = { job: job.name, version, spec: { ...spec, assumed }, at: event.at, approval: { author: FANTOME_APPROVER, at: event.at } };
-    out.events.push({ type: 'ticket.patched', patch: { spec: approved, ...(ticket?.specCheckReturns ? { specCheckReturns: 0 } : {}) } });
-    out.trace.push(`spec_review: version ${version} approved by ${FANTOME_APPROVER} (level rapide), ${assumed.length} assumption(s)`);
+  // Nobody reviews it at the Rapide level (ORC-231): the preset approves the version, with what the level assumed written in `assumed`.
+  const rapide = workflow.level === 'rapide';
+  const written: SpecVersion = rapide
+    ? { job: job.name, version, spec: { ...spec, assumed: [...new Set([...(spec.assumed ?? []), ...(ticket?.assumed ?? [])])] }, at: event.at, approval: { author: FANTOME_APPROVER, at: event.at } }
+    : { job: job.name, version, spec, at: event.at };
+  out.events.push({ type: 'ticket.patched', patch: { spec: written, ...(ticket?.specCheckReturns ? { specCheckReturns: 0 } : {}) } });
+  if (rapide) {
+    out.trace.push(`spec_review: version ${version} approved by ${FANTOME_APPROVER} (level rapide), ${written.spec.assumed!.length} assumption(s)`);
     return success(out, at, job, p.runId);
   }
-  out.events.push({ type: 'ticket.patched', patch: { spec: { job: job.name, version, spec, at: event.at }, ...(ticket?.specCheckReturns ? { specCheckReturns: 0 } : {}) } });
   out.effects.push({ kind: 'activity', type: 'response', body: publishedSpec(spec, { version, risk: ticket?.risk ?? undefined }) });
   out.trace.push(`spec_review: version ${version} published, waiting for a validator`);
   return out;

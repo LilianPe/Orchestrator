@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { GoldenVerdict } from '../golden/replay.js';
 
 /**
  * The replay of closed tickets (ORC-231): each ticket run again by the factory on the `factory/fantome` preset, in its historical
@@ -22,8 +23,6 @@ export interface GhostReplay {
   startedBy: string;
 }
 
-/** The kind of the artifact a kept `publish` leaves (ORC-231): the PR the factory would have opened, which the blind judging reads. */
-export const KEPT_PR = 'kept:pr';
 
 /** The fixed grid of the judging (ORC-231). */
 export const GRADES = ['as_is', 'after_edits', 'reject'] as const;
@@ -53,7 +52,7 @@ export interface GhostTicket {
    * How the run ended: with a PR (kept as an artifact, `factoryPr` its id), without one, or blocked; `pending` while it has not
    * run or not ended, which leaves the replay without a verdict.
    */
-  outcome: 'pending' | 'pr' | 'no_pr' | 'blocked';
+  outcome: 'pending' | GoldenVerdict;
   factoryPr?: string;
   costUsd: number;
   /** What the Rapide level assumed instead of asking, as written in the spec (`assumed`). */
@@ -147,15 +146,18 @@ const isMergeable = (g: GhostReportRow['factory']) => g === 'as_is' || g === 'af
 export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[], judgments: readonly GhostJudgment[]): GhostReport {
   const grade = (ticketId: string, side: GhostSide) => judgments.find((j) => j.ticketId === ticketId && j.side === side)?.grade;
   const kept = tickets.filter((t) => t.env !== 'failed');
-  const rows: GhostReportRow[] = kept.map((t) => ({
-    ticketId: t.ticketId,
-    humanPr: t.humanPr.url,
-    ...(t.start ? { start: t.start } : {}),
-    factory: comparable(t) ? (grade(t.ticketId, 'factory') ?? 'unjudged') : t.outcome === 'pending' ? 'pending' : 'no_pr',
-    human: comparable(t) ? (grade(t.ticketId, 'human') ?? 'unjudged') : null,
-    assumptions: t.assumptions,
-    costUsd: t.costUsd,
-  }));
+  const rows = kept.map((t): GhostReportRow => {
+    const paired = comparable(t);
+    return {
+      ticketId: t.ticketId,
+      humanPr: t.humanPr.url,
+      ...(t.start ? { start: t.start } : {}),
+      factory: paired ? (grade(t.ticketId, 'factory') ?? 'unjudged') : t.outcome === 'pending' ? 'pending' : 'no_pr',
+      human: paired ? (grade(t.ticketId, 'human') ?? 'unjudged') : null,
+      assumptions: t.assumptions,
+      costUsd: t.costUsd,
+    };
+  });
   const mergeable = rows.filter((r) => isMergeable(r.factory)).length;
   const unjudged = rows.filter((r) => r.factory === 'unjudged' || r.human === 'unjudged').length;
   const pending = rows.filter((r) => r.factory === 'pending').length;

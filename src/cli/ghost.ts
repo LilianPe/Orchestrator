@@ -8,10 +8,10 @@ import { execCmd, mustExec } from '../adapters/exec.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
 import { cloneAtStart, knowledgeAt } from '../ghost/history.js';
-import { blindPairs, ghostReport, GRADE_LABELS, GRADES, KEPT_PR, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
+import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
 import { projectEffects } from '../presets/fantome.js';
 import { openStore } from '../store/open.js';
-import type { Store } from '../store/types.js';
+import { KEPT_PR, type Store } from '../store/types.js';
 
 export const GHOST_USAGE = `Usage: factory ghost <command>
   start <project> --threshold <share> --tickets <ID>=<PR>,... [--memory off] [--id <replay>]
@@ -113,28 +113,19 @@ async function list(o: GhostOptions): Promise<number> {
 async function start(o: GhostOptions, projectId: string, values: { threshold?: string | undefined; tickets?: string | undefined; memory?: string | undefined; id?: string | undefined }): Promise<number> {
   const threshold = parseThreshold(values.threshold);
   if (threshold === undefined) {
-    o.print(`${values.threshold === undefined ? 'No threshold' : `No threshold in « ${values.threshold} »`}: --threshold is required, a share (0.6) or a percentage (60%) of the factory's PRs to be mergeable, written before the replay and never changed after (ORC-143).`);
-    return 1;
+    const given = values.threshold === undefined ? 'No threshold' : `No threshold in « ${values.threshold} »`;
+    return refuse(o, `${given}: --threshold is required, a share (0.6) or a percentage (60%) of the factory's PRs to be mergeable, written before the replay and never changed after (ORC-143).`);
   }
   const tickets = parseTickets(values.tickets);
-  if (!tickets) {
-    o.print('--tickets: each ticket and its human PR, as REL-1=12,REL-2=34.');
-    return 1;
-  }
+  if (!tickets) return refuse(o, '--tickets: each ticket and its human PR, as REL-1=12,REL-2=34.');
   if (values.memory !== undefined && values.memory !== 'on' && values.memory !== 'off') return refuse(o, '--memory: on or off.');
   const project = o.projects.find((p) => p.id === projectId);
   if (!project) return refuse(o, `No project ${projectId}.`);
-  if (!project.noEffect) {
-    o.print(`${projectId} has effects: a replay runs on a project with \`effects: none\` or the factory/fantome preset, which push nothing, open no PR and write no comment.`);
-    return 1;
-  }
+  if (!project.noEffect) return refuse(o, `${projectId} has effects: a replay runs on a project with \`effects: none\` or the factory/fantome preset, which push nothing, open no PR and write no comment.`);
   // Every PR read before anything is written: a replay is never left half-made by a ticket that cannot be replayed.
-  const prs = new Map<string, HumanPr>();
-  for (const t of tickets) {
-    const pr = await o.humanPr(project.repoPath, t.pr);
-    if (!pr.mergeSha) return refuse(o, `${t.ticketId}: PR #${t.pr} is not merged, there is no human work to compare with.`);
-    prs.set(t.ticketId, pr);
-  }
+  const prs = await Promise.all(tickets.map(async (t) => ({ ...t, read: await o.humanPr(project.repoPath, t.pr) })));
+  const unmerged = prs.find((t) => !t.read.mergeSha);
+  if (unmerged) return refuse(o, `${unmerged.ticketId}: PR #${unmerged.pr} is not merged, there is no human work to compare with.`);
   const replay: GhostReplay = {
     id: values.id ?? o.newId(),
     projectId,
@@ -150,15 +141,15 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
     return 1;
   }
   o.print(`Replay ${replay.id} of ${projectId}: threshold ${percent(threshold)}, written now and never changed; memory ${replay.memory ? 'on' : 'off'}.`);
-  for (const { ticketId } of tickets) {
-    const pr = prs.get(ticketId)!;
+  for (const { ticketId, read: pr } of prs) {
+    const mergeSha = pr.mergeSha!;
     const base: GhostTicket = {
-      replayId: replay.id, ticketId, humanPr: { number: pr.number, url: pr.url, author: pr.author }, mergeSha: pr.mergeSha!,
+      replayId: replay.id, ticketId, humanPr: { number: pr.number, url: pr.url, author: pr.author }, mergeSha,
       // The dry run on the start commit is ORC-208's (criterion 3): until it exists, the environment is not checked, and the report says so.
       env: 'unchecked', outcome: 'pending', costUsd: 0, assumptions: 0, at: o.now(),
     };
     try {
-      const env = await o.environment({ ticketId, repoPath: project.repoPath, mergeSha: pr.mergeSha!, prCommits: pr.commits, dir: join(o.dir, replay.id, ticketId), memory: replay.memory });
+      const env = await o.environment({ ticketId, repoPath: project.repoPath, mergeSha, prCommits: pr.commits, dir: join(o.dir, replay.id, ticketId), memory: replay.memory });
       await o.store.putGhostTicket({ ...base, start: env.start, ...(env.knowledge ? { knowledge: env.knowledge } : {}) });
       o.print(`  ${ticketId}: at ${env.start.slice(0, 12)}, the parent of PR #${pr.number}'s merge commit${env.knowledge ? `; knowledge base at ${env.knowledge.slice(0, 12)}` : ''}.`);
     } catch (err) {
@@ -206,11 +197,8 @@ async function collect(o: GhostOptions, id: string): Promise<number> {
 }
 
 /** The diff of one side of a pair: the factory's from its kept PR, the human's from the forge. */
-async function diffOf(o: GhostOptions, replay: GhostReplay, t: GhostTicket, side: GhostSide): Promise<string> {
-  if (side === 'human') {
-    const repoPath = o.projects.find((p) => p.id === replay.projectId)?.repoPath ?? '';
-    return (await o.humanDiff(repoPath, t.humanPr.number)).trim() || '(no diff)';
-  }
+async function diffOf(o: GhostOptions, repoPath: string, t: GhostTicket, side: GhostSide): Promise<string> {
+  if (side === 'human') return (await o.humanDiff(repoPath, t.humanPr.number)).trim() || '(no diff)';
   const kept = (await o.store.artifacts(t.ticketId)).find((a) => a.id === t.factoryPr);
   if (!kept) return '(the kept PR is gone)';
   return ((JSON.parse(await readFile(kept.path, 'utf8')) as { pr?: { diff?: string } }).pr?.diff ?? '').trim() || '(no diff)';
@@ -235,6 +223,8 @@ async function gradeOf(o: GhostOptions, label: string): Promise<GhostGrade> {
 async function judge(o: GhostOptions, id: string, judgeName: string): Promise<number> {
   const replay = await replayOf(o, id);
   if (!replay) return 1;
+  const project = o.projects.find((p) => p.id === replay.projectId);
+  if (!project) return refuse(o, `No project ${replay.projectId}: the human PRs are read in its checkout.`);
   const tickets = await o.store.ghostTickets(id);
   const done = new Set((await o.store.ghostJudgments(id)).map((j) => `${j.ticketId}:${j.side}`));
   const pairs = blindPairs(replay, tickets, judgeName).filter((p) => !done.has(`${p.ticketId}:${p.a}`) || !done.has(`${p.ticketId}:${p.b}`));
@@ -246,7 +236,8 @@ async function judge(o: GhostOptions, id: string, judgeName: string): Promise<nu
     const t = tickets.find((x) => x.ticketId === pair.ticketId)!;
     o.print(`\n=== Pair ${i + 1} of ${pairs.length} · ${pair.ticketId} ===`);
     const sides = [['A', pair.a], ['B', pair.b]] as const;
-    for (const [label, side] of sides) o.print(`\n--- PR ${label} ---\n${await diffOf(o, replay, t, side)}`);
+    const diffs = await Promise.all(sides.map(([, side]) => diffOf(o, project.repoPath, t, side)));
+    sides.forEach(([label], k) => o.print(`\n--- PR ${label} ---\n${diffs[k]}`));
     o.print(`\nGrade each PR: ${GRID}.`);
     for (const [label, side] of sides) {
       if (done.has(`${pair.ticketId}:${side}`)) continue;

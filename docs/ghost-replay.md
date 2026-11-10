@@ -37,7 +37,7 @@ without touching Linear or GitHub.
 the store) or `outside` (Linear and GitHub, `reconcile` included). The outbox executor hands each `outside` row of such a project
 to `keep`, never to the adapters: an adapter that forgets the mode cannot push. A new effect kind does not compile until it is
 classified. The few writes the orchestrator makes outside the outbox (the move to In Progress at a start, the run's activities,
-a block notice, a wait's thought, a new Linear session) check the same mode (`quiet`).
+a block notice, a wait's thought, a new Linear session) check the same mode (`silenced`).
 
 **Kept as artifacts.** Each kept effect is a JSON file under `<FACTORY_HOME>/kept/<ticket>/` with its row in `artifacts`
 (`kept:<kind>`). A `publish` keeps the PR the factory would have opened (`kept:pr`): title, body, branch, commit and the ticket's

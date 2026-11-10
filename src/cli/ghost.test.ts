@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { KEPT_PR } from '../ghost/replay.js';
+import { KEPT_PR } from '../store/types.js';
 import { newTicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import type { RunRecord } from '../store/types.js';

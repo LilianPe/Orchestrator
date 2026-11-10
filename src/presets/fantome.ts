@@ -1,3 +1,4 @@
+import { presetBound } from '../config/load-workflow.js';
 import type { Workflow } from '../config/workflow-schema.js';
 import { parseCondition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
@@ -44,13 +45,13 @@ export function projectEffects(p: { effects?: 'none' | undefined; preset?: strin
   return p.effects === 'none' || p.preset === fantome.name ? 'none' : undefined;
 }
 
-const compiled = compilePreset(fantome).preset;
-const bound = (counter: string) => compiled.counters[counter]!.limit;
+// Compiled once, at load, as `factory/default` is: a preset that breaks an invariant of the core never drives a workflow.
+compilePreset(fantome);
 
 /**
- * The workflow the fantome drives, until the engine runs the preset's steps itself (ORC-177): delegation runs `intake`, `intake`
- * the spec, the spec the tests, the tests `dev`, whose publication ends the run (no move, no AI review). Its level and its bounds
- * are the preset's.
+ * The workflow the fantome drives, until the engine runs the preset's steps itself (ORC-177). Delegation runs `intake`, then
+ * `intake` the spec, the spec the tests, the tests `dev`, whose publication ends the run (no move, no AI review). Its level and its
+ * bounds are the preset's.
  */
 export function asFantome(wf: Workflow): Workflow {
   const job = (name: string) => {
@@ -60,7 +61,7 @@ export function asFantome(wf: Workflow): Workflow {
   };
   return {
     ...wf,
-    level: 'rapide',
+    level: fantome.level,
     // Its delegation alone: a replayed ticket is closed (Done), and nothing a human does on the real one starts any job of its run.
     on: { 'ticket.delegated': [{ when: parseCondition('!blocked'), whenSrc: '!blocked', run: 'intake' }] },
     jobs: {
@@ -70,6 +71,7 @@ export function asFantome(wf: Workflow): Workflow {
       tests: { ...job('tests'), onSuccess: { run: 'dev' } },
       dev: { ...job('dev'), onStart: {}, onSuccess: {} },
     },
-    limits: { ...wf.limits, verifyAttempts: bound('verify') + 1, specCheckReturns: bound('spec_check') },
+    // `verifyAttempts` counts every check: the preset's returns, plus the first one, as `loadWorkflow` counts them.
+    limits: { ...wf.limits, verifyAttempts: presetBound(fantome, 'verify') + 1, specCheckReturns: presetBound(fantome, 'spec_check') },
   };
 }
