@@ -252,8 +252,12 @@ describe('ContainerSandboxProvider.create', () => {
       throw new Error(`unexpected ${x.join(' ')}`);
     });
     const egress = fakeEgress();
-    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress }).reattach('r1');
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
+    await p.reattach('r1');
     expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['a.example.com', 'b.example.com'] } }]);
+    // The run's next create takes the container back as it is, without opening its egress again.
+    expect((await p.create(req({ network: 'limited', allow: ['a.example.com', 'b.example.com'] }))).id).toBe('c9');
+    expect(egress.opened).toHaveLength(1);
   });
 
   it('puts no allow label on a sandbox without hosts of its own, and reattaches a container without one with none', async () => {
