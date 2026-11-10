@@ -13,6 +13,9 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
+/** The HTTP Basic header the UI password asks for; its user is free. */
+const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
+
 async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
@@ -732,7 +735,6 @@ describe('server', () => {
   });
 
   describe('UI password (non-loopback host)', () => {
-    const basic = (p: string) => ({ authorization: `Basic ${Buffer.from(`admin:${p}`).toString('base64')}` });
 
     it('requires Basic auth on the API, the UI and /oauth/start', async () => {
       const { app } = await setup({ uiPassword: 's3cret' });
@@ -778,7 +780,11 @@ describe('server', () => {
     // What a proxy that keeps the Host sends on: the public name, its own X-Forwarded-*, on plain HTTP.
     const PUBLIC = 'factory.example.com';
     const proxied = (headers: Record<string, string> = {}) => ({ host: PUBLIC, 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7', 'x-forwarded-host': PUBLIC, ...headers });
-    const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
+    /** A write of the interface's through the proxy, behind the password: each test changes the headers it is about. */
+    const pause = async (url: string, headers: Record<string, string>) => {
+      const { app, submitted } = await setup({ uiPassword: 's3cret' });
+      return { status: (await app.request(`${url}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic('s3cret'), ...headers }) })).status, submitted };
+    };
 
     it('takes the webhooks under the public name, on plain HTTP, the headers passed on as they came', async () => {
       const { app, linearWebhook, githubWebhook } = await setup({ uiPassword: 's3cret' });
@@ -789,23 +795,20 @@ describe('server', () => {
     });
 
     it("serves the interface's writes from the public HTTPS origin: the scheme never counts, only the name", async () => {
-      const { app, submitted } = await setup({ uiPassword: 's3cret' });
-      const res = await app.request(`http://${PUBLIC}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic, origin: `https://${PUBLIC}` }) });
-      expect(res.status).toBe(200);
+      const { status, submitted } = await pause(`http://${PUBLIC}`, { origin: `https://${PUBLIC}` });
+      expect(status).toBe(200);
       expect(submitted).toHaveLength(1);
     });
 
     it('trusts no X-Forwarded-Host: a forged one does not let another origin write', async () => {
-      const { app, submitted } = await setup({ uiPassword: 's3cret' });
-      const res = await app.request(`http://${PUBLIC}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic, origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' }) });
-      expect(res.status).toBe(403);
+      const { status, submitted } = await pause(`http://${PUBLIC}`, { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' });
+      expect(status).toBe(403);
       expect(submitted).toEqual([]);
     });
 
     it("refuses the interface's writes behind a proxy that rewrites the Host: it must pass the public name on", async () => {
-      const { app, submitted } = await setup({ uiPassword: 's3cret' });
-      const res = await app.request('http://127.0.0.1:4100/api/control/pause', { method: 'POST', headers: proxied({ ...basic, host: '127.0.0.1:4100', origin: `https://${PUBLIC}` }) });
-      expect(res.status).toBe(403);
+      const { status, submitted } = await pause('http://127.0.0.1:4100', { host: '127.0.0.1:4100', origin: `https://${PUBLIC}` });
+      expect(status).toBe(403);
       expect(submitted).toEqual([]);
     });
   });
@@ -834,8 +837,7 @@ describe('server', () => {
       expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
       expect((await app.request('/agent/issue/REL-1', as('host.containers.internal:4101', { headers: { authorization: 'Bearer tok' } }))).status).toBe(200);
       const guarded = await setup({ uiPassword: 's3cret' });
-      const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
-      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic }))).status).toBe(200);
+      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic('s3cret') }))).status).toBe(200);
     });
   });
 });
