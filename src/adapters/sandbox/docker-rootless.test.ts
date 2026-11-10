@@ -67,6 +67,13 @@ function fakeEgress(live: string[] = []) {
 }
 const inspectLine = (id: string, running: boolean, runId: string, network: string, allow = '') => `${id}\t${running}\t${runId}\t${network}\t${allow}\n`;
 
+const HOSTS = ['a.example.com', 'b.example.com'];
+/** An engine whose one live `limited` container of attempt r1 carries `allow` on its label. */
+const labelled = (allow: string) => engine((a) => {
+  if (a[0] === 'ps') return ok('c9\n');
+  if (a[0] === 'inspect') return ok(inspectLine('c9', true, 'r1', 'limited', allow));
+  throw new Error(`unexpected ${a.join(' ')}`);
+});
 /** An engine with no container yet: `run` prints the new id. */
 const empty = () => engine((a) => (a[0] === 'run' ? ok('c1\n') : ok()));
 const runArgs = (calls: { args: string[] }[]) => calls.map((c) => sub(c.args)).find((a) => a[0] === 'run')!;
@@ -242,33 +249,32 @@ describe('ContainerSandboxProvider.create', () => {
 
   it('keeps the hosts of a custom repository on a label, and a resumed run gets them back (ORC-322)', async () => {
     const made = empty();
-    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec, egress: fakeEgress() }).create(req({ network: 'limited', allow: ['a.example.com', 'b.example.com'] }));
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec, egress: fakeEgress() }).create(req({ network: 'limited', allow: HOSTS }));
     const a = runArgs(made.calls);
     expect(a[a.indexOf('factory.allow=a.example.com,b.example.com') - 1]).toBe('--label');
 
-    const e = engine((x) => {
-      if (x[0] === 'ps') return ok('c9\n');
-      if (x[0] === 'inspect') return ok(inspectLine('c9', true, 'r1', 'limited', 'a.example.com,b.example.com'));
-      throw new Error(`unexpected ${x.join(' ')}`);
-    });
     const egress = fakeEgress();
-    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress });
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: labelled('a.example.com,b.example.com').exec, egress }).reattach('r1');
+    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: HOSTS } }]);
+  });
+
+  it('takes a reattached container back on the next create, without opening its egress again', async () => {
+    const egress = fakeEgress();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: labelled('a.example.com,b.example.com').exec, egress });
     await p.reattach('r1');
-    expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: ['a.example.com', 'b.example.com'] } }]);
-    // The run's next create takes the container back as it is, without opening its egress again.
-    expect((await p.create(req({ network: 'limited', allow: ['a.example.com', 'b.example.com'] }))).id).toBe('c9');
+    expect((await p.create(req({ network: 'limited', allow: HOSTS }))).id).toBe('c9');
     expect(egress.opened).toHaveLength(1);
   });
 
-  it('puts no allow label on a sandbox without hosts of its own, and reattaches a container without one with none', async () => {
+  it('puts no allow label on a sandbox without hosts of its own', async () => {
     const made = empty();
     await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec }).create(req({ network: 'limited' }));
     expect(runArgs(made.calls).some((x) => x.startsWith('factory.allow='))).toBe(false);
+  });
 
-    // Some engines print a missing label as `<no value>`.
-    const e = engine((x) => (x[0] === 'ps' ? ok('c9\n') : ok(inspectLine('c9', true, 'r1', 'limited', '<no value>'))));
+  it('reattaches a container without an allow label with no hosts, as some engines print it', async () => {
     const egress = fakeEgress();
-    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, egress }).reattach('r1');
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: labelled('<no value>').exec, egress }).reattach('r1');
     expect(egress.opened).toEqual([{ runId: 'r1', policy: { level: 'limited', allow: [] } }]);
   });
 
