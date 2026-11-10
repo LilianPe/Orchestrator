@@ -8,8 +8,7 @@ const ISSUE_FIELDS = `id identifier title description url priority createdAt upd
   delegate { id } team { id key }`;
 
 /** A ticket as the replay reads it (ORC-376): its text, its creation and its comments, dated. */
-const DATED = 'identifier title description createdAt comments(first: 100) { nodes { body createdAt } }';
-const DATED_LINKED = 'identifier title description createdAt comments(first: 25) { nodes { body createdAt } }';
+const dated = (comments: number) => `identifier title description createdAt comments(first: ${comments}) { nodes { body createdAt } }`;
 
 export const Q = {
   /** With its creator (ORC-197), read for one issue only: the list of delegated tickets stays under Linear's cost bound. */
@@ -18,8 +17,8 @@ export const Q = {
    * An issue's thread and its related issues with theirs, both ways (ORC-376), each dated: what the replay of a closed ticket reads.
    * First pages only, under Linear's cost bound: 100 comments of the issue, 25 relations each way, 25 comments of each related one.
    */
-  issueHistory: `query IssueHistory($id: String!) { issue(id: $id) { ${DATED} trashed
-    relations(first: 25) { nodes { relatedIssue { ${DATED_LINKED} } } } inverseRelations(first: 25) { nodes { issue { ${DATED_LINKED} } } } } }`,
+  issueHistory: `query IssueHistory($id: String!) { issue(id: $id) { ${dated(100)} trashed
+    relations(first: 25) { nodes { relatedIssue { ${dated(25)} } } } inverseRelations(first: 25) { nodes { issue { ${dated(25)} } } } } }`,
   /** An issue's labels past the page `ISSUE_FIELDS` read (ORC-347). */
   issueLabels: `query IssueLabels($id: String!, $after: String) { issue(id: $id) { labels(first: 250, after: $after) { nodes { id name parent { id } } ${PAGE} } } }`,
   /** An issue's relations past the page `ISSUE_FIELDS` read (ORC-363). */

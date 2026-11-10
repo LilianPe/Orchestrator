@@ -11,7 +11,7 @@ import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { HOST_RUNS_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
 import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
 import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
-import { fantome } from '../presets/fantome.js';
+import { isFantome } from '../presets/fantome.js';
 import { openStore } from '../store/open.js';
 import { KEPT_PR, type Store } from '../store/types.js';
 
@@ -298,6 +298,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   // Opened for the judge's answers only: the long clones of `start` hold no terminal.
   let rl: ReturnType<typeof createInterface> | undefined;
+  // Each project's default branch, read once for all its tickets.
+  const branches: Record<string, Promise<string>> = {};
   try {
     let user = 'cli';
     try {
@@ -308,7 +310,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
     return await runGhost({
       args, store, user, print: (l) => console.log(l), now: () => Date.now(), newId: () => `ghost-${randomUUID().slice(0, 8)}`,
       dir: homePaths(home).ghost,
-      projects: instance.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, fantome: p.preset === fantome.name })),
+      projects: instance.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, fantome: isFantome(p) })),
       sandboxes: async () => {
         const said = await store.getMeta(SANDBOXES_META);
         return said === undefined ? undefined : said === '1';
@@ -320,7 +322,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         const repo = join(dir, 'repo');
         const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: repo });
         // The run's repository (ORC-376): the start on the project's default branch, its own origin.
-        await asRepository({ dir: repo, branch: (await originHeadOf(execCmd, repoPath)).name.replace(/^origin\//, '') });
+        branches[repoPath] ??= originHeadOf(execCmd, repoPath).then((h) => h.name.replace(/^origin\//, ''));
+        await asRepository({ dir: repo, branch: await branches[repoPath] });
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.
         const at = await startTime({ dir: repo, sha: start });

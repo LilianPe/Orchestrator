@@ -84,8 +84,9 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
   started yet (the `daemon-sandboxes` meta row); a daemon without sandboxes delegates no replayed ticket, and says why in its log.
 - **Once per project.** A second run of a ticket would start on the state of the first (its session, its branch, its kept PR):
   `start` refuses a ticket its project replayed already, and the daemon delegates none twice. Replay it on another project.
-- **Nor the knowledge base of now**: `factory-agent kb search` is refused too; the knowledge base mounted in the sandbox is still
-  the daemon's (below).
+- **The knowledge base at its start**: `factory-agent kb search` searches the one `start` rebuilt under `knowledge/`, never the
+  daemon's, which may hold a note learned from the ticket's own PR; nothing with `--memory off`. The knowledge base mounted in the
+  sandbox is still the daemon's (below).
 
 ## Threshold, judging, report
 
@@ -125,6 +126,6 @@ from GitHub when judged.
 - **The dry run on each start commit** (criterion 3) needs ORC-208, which waits on ORC-209. Every ticket's environment is
   `unchecked` until then, and the report says how many: the hook is `GhostTicket.env` (`ok`, `failed`, `unchecked`), which the
   report already keeps out of the comparison when `failed`.
-- **The knowledge base at transaction time in the runs.** `start` rebuilds it under `knowledge/` (or none with `--memory off`), but
-  a run still mounts the daemon's own knowledge base, as it is now (its search is refused): per-run knowledge is still to wire.
+- **The knowledge base mounted in a replayed run's sandbox** (and read by its session-start hook) is still the daemon's own, as it
+  is now: only `factory-agent kb search` reads the one at transaction time. Mounting it per run is still to wire.
 - The threshold's value (ORC-143) and the pilot repository (ORC-137) are decisions still to take.

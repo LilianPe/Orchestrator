@@ -28,24 +28,30 @@ export const replayDelegationId = (replayId: string, ticketId: string) => `ghost
  */
 const currentKey = (projectId: string, ticketId: string) => `ghost-current:${projectId}:${ticketId}`;
 
+
 /** The ticket as of its start, beside its clone: read from the tracker once, at its delegation. */
 const SNAPSHOT = 'ticket.json';
 
-interface Snapshot {
-  /** When the start commit was made (ms): the comments and linked tickets kept are those of before. */
-  start: number;
-  history: IssueHistory;
+/** `<dir>/ticket.json`, written by the delegation; undefined before it. */
+async function readSnapshot(dir: string): Promise<IssueHistory | undefined> {
+  try {
+    return JSON.parse(await readFile(join(dir, SNAPSHOT), 'utf8')) as IssueHistory;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
 }
 
 /** What the run of a replayed ticket reads instead of the live ticket and the project's repository. */
 export interface ReplayedTicket {
-  replayId: string;
   /** The clone at the start, standing for the project's repository (`asRepository`). */
   repoPath: string;
   /** The ticket's text as of its start, read through no tracker at the launch. */
   issue: TrackerIssue;
   /** Its comments and linked tickets as of its start (`formatHistory`), none when it had neither. */
   history?: string;
+  /** The knowledge base at transaction time (`knowledgeAt`), none with `--memory off` or none before the start. */
+  knowledge?: string;
 }
 
 /** Where a replayed ticket of a project runs (`Orchestrator`'s `replays`): undefined for any other ticket. */
@@ -65,36 +71,46 @@ export interface ReplaysDeps {
   accept(event: FactoryEvent): Promise<boolean>;
   now(): number;
   log(level: 'info' | 'warn', message: string): void;
-  /** When `sha` was made, in the clone `repo` (ms): `startTime`. */
-  startTime(repo: string, sha: string): Promise<number>;
+  /** When `sha` was made, in the clone `dir` (ms): `startTime`. */
+  startTime(o: { dir: string; sha: string }): Promise<number>;
 }
 
 export class Replays implements ReplaySource {
   /** What was said already of a replay held back (no sandboxes, a ticket replayed before): once each, not at every pass. */
   private said = new Set<string>();
-  /** Each replayed ticket as its run reads it, by replay and ticket: its snapshot never changes once written. */
+  /** Each replayed ticket as its run reads it, by project and ticket: once delegated, it never changes. */
   private read = new Map<string, ReplayedTicket>();
+  /** The delegations this process wrote or found in the inbox: not looked up again at each pass. */
+  private delegated = new Set<string>();
+  private handle: NodeJS.Timeout | undefined;
+  private passing: Promise<void> | undefined;
 
   constructor(private readonly d: ReplaysDeps) {}
 
   async of(projectId: string, ticketId: string): Promise<ReplayedTicket | undefined> {
     if (!this.d.projects.includes(projectId)) return undefined;
-    const replayId = await this.d.store.getMeta(currentKey(projectId, ticketId));
-    if (!replayId) return undefined;
-    const key = `${replayId}:${ticketId}`;
+    const key = `${projectId}:${ticketId}`;
     const known = this.read.get(key);
     if (known) return known;
+    const replayId = await this.d.store.getMeta(currentKey(projectId, ticketId));
+    if (!replayId) return undefined;
     const dir = join(this.d.dir, replayId, ticketId);
     // Written before the meta that names it: missing, the replay's files were removed, and its run must not go on elsewhere.
-    const { history } = JSON.parse(await readFile(join(dir, SNAPSHOT), 'utf8')) as Snapshot;
+    const history = await readSnapshot(dir);
+    if (!history) throw new Error(`${ticketId} of replay ${replayId}: ${join(dir, SNAPSHOT)} is gone, the ticket cannot run as it was`);
+    return this.remember(key, dir, history);
+  }
+
+  private remember(key: string, dir: string, history: IssueHistory): ReplayedTicket {
     const { issue } = history;
     const text = formatHistory(history);
+    const knowledge = join(dir, 'knowledge');
     const replayed: ReplayedTicket = {
-      replayId,
       repoPath: join(dir, 'repo'),
       // No link to the live ticket, which holds the human's work: the agent reads the ticket as it was, here.
       issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: '(a replayed ticket: no link)', stateName: '', stateType: 'unstarted', labels: [], teamKey: teamOf(issue.identifier), priority: 0, createdAt: issue.createdAt },
       ...(text ? { history: text } : {}),
+      ...(existsSync(knowledge) ? { knowledge } : {}),
     };
     this.read.set(key, replayed);
     return replayed;
@@ -107,20 +123,44 @@ export class Replays implements ReplaySource {
     this.d.log('warn', message);
   }
 
+  /** A pass each `intervalMs`, the first now; a tick that finds the last pass still going is skipped. */
+  start(intervalMs = 60_000): void {
+    const pass = () => {
+      this.passing ??= this.delegate()
+        .catch((e: Error) => this.d.log('warn', `replay pass: ${e.message}`))
+        .finally(() => (this.passing = undefined));
+    };
+    if (this.handle) clearInterval(this.handle);
+    pass();
+    this.handle = setInterval(pass, intervalMs);
+    this.handle.unref();
+  }
+
+  /** No pass starts after it; resolves once the pass under way, if any, has finished. */
+  async stop(): Promise<void> {
+    if (this.handle) clearInterval(this.handle);
+    this.handle = undefined;
+    await this.passing;
+  }
+
   /**
    * One pass: each ticket of a replay on such a project, its environment rebuilt and its run not started, delegated to the project,
    * once. A ticket the project replayed already, for another replay, is not: it stays pending in this one. Without sandboxes, none.
    */
   async delegate(): Promise<void> {
     const replays = (await this.d.store.ghostReplays()).filter((r) => this.d.projects.includes(r.projectId)).sort((a, b) => a.startedAt - b.startedAt);
+    if (!this.d.sandboxes) {
+      for (const r of replays) this.once(r.id, `replay ${r.id} not run: ${HOST_RUNS_REFUSED}`);
+      return;
+    }
     for (const replay of replays) {
       for (const t of await this.d.store.ghostTickets(replay.id)) {
         if (t.env === 'failed' || !t.start || t.outcome !== 'pending') continue;
         const id = replayDelegationId(replay.id, t.ticketId);
-        if (await this.d.store.inboxHas(id)) continue;
-        if (!this.d.sandboxes) {
-          this.once(replay.id, `replay ${replay.id} not run: ${HOST_RUNS_REFUSED}`);
-          break;
+        if (this.delegated.has(id)) continue;
+        if (await this.d.store.inboxHas(id)) {
+          this.delegated.add(id);
+          continue;
         }
         const earlier = await this.d.store.getMeta(currentKey(replay.projectId, t.ticketId));
         if (earlier && earlier !== replay.id) {
@@ -129,6 +169,7 @@ export class Replays implements ReplaySource {
         }
         try {
           await this.delegateOne(replay, t.ticketId, t.start, id);
+          this.delegated.add(id);
         } catch (err) {
           this.d.log('warn', `${t.ticketId} of replay ${replay.id} not delegated, the next pass tries again: ${(err as Error).message}`);
         }
@@ -136,22 +177,21 @@ export class Replays implements ReplaySource {
     }
   }
 
-  private async delegateOne(replay: GhostReplay, ticketId: string, startSha: string, id: string): Promise<void> {
+  private async delegateOne(replay: GhostReplay, ticketId: string, sha: string, id: string): Promise<void> {
     const dir = join(this.d.dir, replay.id, ticketId);
-    const file = join(dir, SNAPSHOT);
-    let snapshot: Snapshot;
-    if (existsSync(file)) snapshot = JSON.parse(await readFile(file, 'utf8')) as Snapshot;
-    else {
-      const start = await this.d.startTime(join(dir, 'repo'), startSha);
-      snapshot = { start, history: historyAsOf(await this.d.tracker.history(ticketId), start) };
-      await writeFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
+    let history = await readSnapshot(dir);
+    if (!history) {
+      const start = await this.d.startTime({ dir: join(dir, 'repo'), sha });
+      history = historyAsOf(await this.d.tracker.history(ticketId), start);
+      await writeFile(join(dir, SNAPSHOT), `${JSON.stringify(history, null, 2)}\n`);
     }
     await this.d.store.setMeta(currentKey(replay.projectId, ticketId), replay.id);
+    this.remember(`${replay.projectId}:${ticketId}`, dir, history);
     await this.d.accept({
       id, type: 'ticket.delegated', at: this.d.now(), projectId: replay.projectId, ticketId, ...TRUSTED,
       // The ticket as it was when the human started: to do, whatever Linear says of it now.
-      payload: { replay: replay.id, issue: { title: snapshot.history.issue.title, logical: 'todo', priority: 0 } },
+      payload: { replay: replay.id, issue: { title: history.issue.title, logical: 'todo', priority: 0 } },
     } as FactoryEvent);
-    this.d.log('info', `${ticketId} of replay ${replay.id} delegated to ${replay.projectId}, on its clone at ${startSha.slice(0, 12)}`);
+    this.d.log('info', `${ticketId} of replay ${replay.id} delegated to ${replay.projectId}, on its clone at ${sha.slice(0, 12)}`);
   }
 }

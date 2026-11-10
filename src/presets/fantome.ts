@@ -40,9 +40,12 @@ export const fantome: Preset = {
   ],
 };
 
+/** A project that replays closed tickets (ORC-376): on the fantome preset. Only the daemon's delegations reach it, never Linear's. */
+export const isFantome = (p: { preset?: string | undefined }): boolean => p.preset === fantome.name;
+
 /** A project's effects (ORC-231): none when it says so, or when it runs the fantome preset, which never has any. */
 export function projectEffects(p: { effects?: 'none' | undefined; preset?: string | undefined }): 'none' | undefined {
-  return p.effects === 'none' || p.preset === fantome.name ? 'none' : undefined;
+  return p.effects === 'none' || isFantome(p) ? 'none' : undefined;
 }
 
 // Compiled once, at load, as `factory/default` is: a preset that breaks an invariant of the core never drives a workflow.

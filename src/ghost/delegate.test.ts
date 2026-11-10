@@ -78,16 +78,18 @@ describe('the daemon delegates each replayed ticket to the replay\'s project (OR
     const { replays, rebuilt, dir } = await withReplays();
     expect(await replays.of('ghost', 'REL-1')).toBeUndefined();
     await rebuilt(replay('g1', ['REL-1']), ticket('g1', 'REL-1'));
+    // The knowledge base at transaction time, as `start` rebuilt it with memory on.
+    mkdirSync(join(dir, 'g1', 'REL-1', 'knowledge'));
     await replays.delegate();
     const r = await replays.of('ghost', 'REL-1');
-    expect(r).toMatchObject({ replayId: 'g1', repoPath: join(dir, 'g1', 'REL-1', 'repo'), issue: { identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from their list.', teamKey: 'REL' } });
+    expect(r).toMatchObject({ repoPath: join(dir, 'g1', 'REL-1', 'repo'), knowledge: join(dir, 'g1', 'REL-1', 'knowledge'), issue: { identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from their list.', teamKey: 'REL' } });
     expect(r!.issue.url).not.toContain('linear.app');
     expect(r!.history).toContain('CSV, not XLSX.');
     expect(r!.history).toContain('### REL-2 — Audit list');
     expect(r!.history).toContain('Paginated by 50.');
     for (const later of ['Fixed by PR #12.', 'REL-9']) expect(r!.history).not.toContain(later);
     // Read once, at the delegation: kept beside the clone.
-    expect(JSON.parse(readFileSync(join(dir, 'g1', 'REL-1', 'ticket.json'), 'utf8'))).toMatchObject({ start: START });
+    expect(JSON.parse(readFileSync(join(dir, 'g1', 'REL-1', 'ticket.json'), 'utf8'))).toMatchObject({ issue: { identifier: 'REL-1' } });
     // Another project's ticket, the same identifier: no replay of its own.
     expect(await replays.of('live', 'REL-1')).toBeUndefined();
   });

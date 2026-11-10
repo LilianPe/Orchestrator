@@ -86,7 +86,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
 
   function replayed() {
     const dir = mkdtempSync(join(tmpdir(), 'factory-ghost-'));
-    const h = createHarness({ noEffect: true, fantome: true, sandboxed: true, replays: { dir, startTime: START } });
+    const h = createHarness({ fantome: true, sandboxed: true, replays: { dir, startTime: START } });
     const CLONE = join(dir, 'pilot', 'REL-1', 'repo');
     // REL-1 is Done on Linear, its PR merged: what came after its start is there too, and must not reach the run.
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from the audit list.', stateName: 'Done', stateType: 'completed', createdAt: START - 86_400_000 });

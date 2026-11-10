@@ -137,16 +137,22 @@ export class LinearTracker implements Tracker, TeamDirectory {
 
   /** `relations`: every page of its relations too, for a read of the ticket; a write needs its labels only. */
   private async node(identifier: string, relations = false): Promise<IssueNode> {
-    let issue: IssueNode | null = null;
+    const issue = await this.queryIssue<IssueNode>(Q.issue, identifier);
+    this.issueIds.set(identifier, issue.id);
+    return this.withAllPages(issue, relations);
+  }
+
+  /** The issue `query` reads by its identifier; `IssueNotFoundError` when Linear has none. */
+  private async queryIssue<N>(query: string, identifier: string): Promise<N> {
+    let issue: N | null = null;
     try {
-      ({ issue } = await this.api.gql<{ issue: IssueNode | null }>(Q.issue, { id: identifier }));
+      ({ issue } = await this.api.gql<{ issue: N | null }>(query, { id: identifier }));
     } catch (err) {
       // Linear answers an unknown or deleted issue with an error, not with null.
       if (!(err instanceof LinearApiError && err.errors.some(isNotFound))) throw err;
     }
     if (!issue) throw new IssueNotFoundError(`Linear ticket not found: ${identifier}`);
-    this.issueIds.set(identifier, issue.id);
-    return this.withAllPages(issue, relations);
+    return issue;
   }
 
   /** Every node of a list `query` reads under `key`, page after page (ORC-347). */
@@ -249,13 +255,9 @@ export class LinearTracker implements Tracker, TeamDirectory {
 
   async history(identifier: string): Promise<IssueHistory> {
     type Node = DatedNode & { trashed: boolean | null; relations: { nodes: { relatedIssue: DatedNode | null }[] }; inverseRelations: { nodes: { issue: DatedNode | null }[] } };
-    let issue: Node | null = null;
-    try {
-      ({ issue } = await this.api.gql<{ issue: Node | null }>(Q.issueHistory, { id: identifier }));
-    } catch (err) {
-      if (!(err instanceof LinearApiError && err.errors.some(isNotFound))) throw err;
-    }
-    if (!issue || issue.trashed) throw new IssueNotFoundError(`Linear ticket not found: ${identifier}`);
+    const issue = await this.queryIssue<Node>(Q.issueHistory, identifier);
+    // Deleted in Linear, as `getIssue` says.
+    if (issue.trashed) throw new IssueNotFoundError(`Linear ticket deleted: ${identifier}`);
     const linked = [...issue.relations.nodes.map((r) => r.relatedIssue), ...issue.inverseRelations.nodes.map((r) => r.issue)].filter((n): n is DatedNode => !!n);
     // A ticket related twice (a relation each way) is read once.
     return { issue: dated(issue), linked: [...new Map(linked.map((n) => [n.identifier, dated(n)])).values()] };

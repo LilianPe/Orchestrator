@@ -1504,8 +1504,8 @@ export class Orchestrator {
   private async runtimeFor(projectId: string, ticketId: string | undefined, known?: TicketState | null): Promise<ProjectRuntime | undefined> {
     const found = projectId === '*' ? this.d.projects[0] : this.project(projectId);
     if (!found || !ticketId) return found;
-    // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was: only a project without effects has any.
-    const replayed = found.effects === 'none' ? await this.d.replays?.of(found.id, ticketId) : undefined;
+    // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was.
+    const replayed = await this.d.replays?.of(found.id, ticketId);
     const project = replayed ? { ...found, repoPath: replayed.repoPath, replayed } : found;
     const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;

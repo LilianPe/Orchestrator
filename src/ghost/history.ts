@@ -104,12 +104,15 @@ export type HistoricalIssue = DatedIssue;
  * history of a description: an edit made after the start stays, a limit the report states.
  */
 export function linkedAsOf(issues: readonly HistoricalIssue[], start: number): HistoricalIssue[] {
-  return issues.filter((i) => i.createdAt < start).map((i) => ({ ...i, comments: i.comments.filter((c) => c.createdAt < start) }));
+  return issues.filter((i) => i.createdAt < start).map((i) => commentsBefore(i, start));
 }
+
+/** `i` with its comments written before `start` (ms) only. */
+const commentsBefore = (i: DatedIssue, start: number): DatedIssue => ({ ...i, comments: i.comments.filter((c) => c.createdAt < start) });
 
 /** The ticket and its linked tickets as they were at `start` (ms, ORC-376): its own comments written before it, `linkedAsOf` the others. */
 export function historyAsOf(h: IssueHistory, start: number): IssueHistory {
-  return { issue: { ...h.issue, comments: h.issue.comments.filter((c) => c.createdAt < start) }, linked: linkedAsOf(h.linked, start) };
+  return { issue: commentsBefore(h.issue, start), linked: linkedAsOf(h.linked, start) };
 }
 
 /** What the agent reads of a replayed ticket beside its text (ORC-376): its thread and its linked tickets as of the start. */

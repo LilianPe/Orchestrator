@@ -268,11 +268,12 @@ export function createHarness(
     transcriptsDir?: string;
     /** The project without effects (ORC-231), its effects kept in a temporary dir (`keptEffectsDir`): or `{ keptEffectsDir: false }`, nowhere. */
     noEffect?: boolean | { keptEffectsDir: false };
-    /** The `factory/fantome` preset's workflow (ORC-231): `asFantome`. */
+    /** The `factory/fantome` preset's workflow (ORC-231): `asFantome`, and no effects, as the preset always has none. */
     fantome?: boolean;
     /**
      * The replay of closed tickets (ORC-376): each life delegates the replays of the store's `ghost_*` tables kept under `dir` to the
-     * project, as the daemon does (`delegateReplays`), the start of each ticket made at `startTime`. With sandboxes when `sandboxed`.
+     * project, as the daemon does (`delegateReplays`), the start of each ticket made at `startTime`. Its runs have sandboxes when
+     * `sandboxed` (above) says so.
      */
     replays?: { dir: string; startTime: number };
   } = {},
@@ -296,6 +297,7 @@ export function createHarness(
   const visualProof = opts.visualShooter && { shooter: opts.visualShooter, artifactsDir: mkdtempSync(join(tmpdir(), 'factory-artifacts-')) };
   /** The orchestrator's log lines, every life of it. */
   const logs: { level: string; message: string }[] = [];
+  if (opts.fantome) opts.noEffect ??= true;
   const keptEffectsDir = opts.noEffect === true ? mkdtempSync(join(tmpdir(), 'factory-kept-')) : undefined;
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
   const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
