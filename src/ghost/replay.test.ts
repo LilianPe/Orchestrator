@@ -52,6 +52,12 @@ describe('the report of a replay (ORC-231)', () => {
     expect(ghostReport(replay, [ticket('REL-1')], [judged('REL-1', 'factory', 'after_edits'), judged('REL-1', 'human', 'reject')]).verdict).toBe('met');
   });
 
+  it('a ticket not run or not collected yet leaves the replay without a verdict, never below the threshold', () => {
+    const r = ghostReport(replay, [ticket('REL-1', { outcome: 'pending', factoryPr: undefined })], []);
+    expect(r).toMatchObject({ pending: 1, verdict: 'incomplete' });
+    expect(r.rows[0]!.factory).toBe('pending');
+  });
+
   it('the environment is unchecked until the dry run exists (ORC-208): said, not counted as a failure', () => {
     expect(ghostReport(replay, [ticket('REL-1')], []).envUnchecked).toBe(1);
   });

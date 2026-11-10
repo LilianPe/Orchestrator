@@ -18,17 +18,18 @@ export const GHOST_USAGE = `Usage: factory ghost <command>
               write the replay and its threshold (0.6, or 60%: the share of the factory's PRs to be mergeable), before any
               ticket runs; then rebuild each ticket at the parent of its PR's merge commit. The threshold never changes after.
   collect <replay>  read what each ticket ran to on the project without effects: its kept PR, its cost, its assumptions
-  judge <replay> [--judge <name>]  the blind screen: each pair as PR A and PR B, graded 1 mergeable as is, 2 after edits, 3 to reject
+  judge <replay> --judge <GitHub login>  the blind screen: each pair as PR A and PR B, graded 1 mergeable as is, 2 after edits,
+              3 to reject; the PRs the judge wrote are left to another judge
   report <replay>   ticket by ticket, environment failures apart, the total cost and the verdict against the threshold
   list              the replays, the last started first`;
 
-/** The human PR of a replayed ticket, as the forge has it: merged, its merge commit and its diff. */
+/** The human PR of a replayed ticket, as the forge has it: its author's login, its merge commit, its commits' headlines oldest first. */
 export interface HumanPr {
   number: number;
   url: string;
   author: string;
   mergeSha?: string;
-  diff: string;
+  commits: string[];
 }
 
 export interface GhostOptions {
@@ -44,11 +45,14 @@ export interface GhostOptions {
   /** The instance's projects: a replay runs on one without effects only. */
   projects: readonly { id: string; repoPath: string; noEffect: boolean }[];
   humanPr(repoPath: string, number: number): Promise<HumanPr>;
+  /** The diff of a human PR, read when it is judged. */
+  humanDiff(repoPath: string, number: number): Promise<string>;
   /**
-   * The ticket's environment as the human found it (`ghost/history.ts`), in `dir`: the clone at the parent of `mergeSha`, then the
-   * knowledge base at its last commit before that start, unless `memory` is off. Throws when it cannot be rebuilt.
+   * The ticket's environment as the human found it (`ghost/history.ts`), in `dir`: the clone at the parent of `mergeSha` (before the
+   * first of `prCommits` for a rebase merge), then the knowledge base at its last commit before that start, unless `memory` is off.
+   * Throws when it cannot be rebuilt.
    */
-  environment(o: { ticketId: string; repoPath: string; mergeSha: string; dir: string; memory: boolean }): Promise<{ start: string; knowledge?: string }>;
+  environment(o: { ticketId: string; repoPath: string; mergeSha: string; prCommits: readonly string[]; dir: string; memory: boolean }): Promise<{ start: string; knowledge?: string }>;
   /** A line typed by the judge. */
   ask(question: string): Promise<string>;
 }
@@ -89,7 +93,9 @@ export async function runGhost(o: GhostOptions): Promise<number> {
     case 'collect':
       return collect(o, arg);
     case 'judge':
-      return judge(o, arg, values.judge ?? o.user);
+      // A GitHub login, as the human PRs' authors are: who wrote a human PR never judges it.
+      if (!values.judge) return refuse(o, '--judge <GitHub login> is required: the PRs you wrote are left to another judge.');
+      return judge(o, arg, values.judge);
     case 'report':
       return report(o, arg);
     default:
@@ -149,10 +155,10 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
     const base: GhostTicket = {
       replayId: replay.id, ticketId, humanPr: { number: pr.number, url: pr.url, author: pr.author }, mergeSha: pr.mergeSha!,
       // The dry run on the start commit is ORC-208's (criterion 3): until it exists, the environment is not checked, and the report says so.
-      env: 'unchecked', outcome: 'no_pr', costUsd: 0, assumptions: 0, at: o.now(),
+      env: 'unchecked', outcome: 'pending', costUsd: 0, assumptions: 0, at: o.now(),
     };
     try {
-      const env = await o.environment({ ticketId, repoPath: project.repoPath, mergeSha: pr.mergeSha!, dir: join(o.dir, replay.id, ticketId), memory: replay.memory });
+      const env = await o.environment({ ticketId, repoPath: project.repoPath, mergeSha: pr.mergeSha!, prCommits: pr.commits, dir: join(o.dir, replay.id, ticketId), memory: replay.memory });
       await o.store.putGhostTicket({ ...base, start: env.start, ...(env.knowledge ? { knowledge: env.knowledge } : {}) });
       o.print(`  ${ticketId}: at ${env.start.slice(0, 12)}, the parent of PR #${pr.number}'s merge commit${env.knowledge ? `; knowledge base at ${env.knowledge.slice(0, 12)}` : ''}.`);
     } catch (err) {
@@ -170,19 +176,31 @@ async function replayOf(o: GhostOptions, id: string): Promise<GhostReplay | unde
   return replay;
 }
 
-/** What each ticket ran to on the replay's project: its PR kept (the last one), its runs' cost, the assumptions of its spec. */
+/**
+ * What each ticket ran to on the replay's project, within the replay's time (from its start to the next replay of the same ticket
+ * on the project): its last kept PR, its runs' cost, the assumptions of its spec. A ticket whose run has not ended, or has not
+ * started, stays `pending`. A PR already graded stays the one graded.
+ */
 async function collect(o: GhostOptions, id: string): Promise<number> {
   const replay = await replayOf(o, id);
   if (!replay) return 1;
+  const later = (await o.store.ghostReplays()).filter((r) => r.projectId === replay.projectId && r.startedAt > replay.startedAt);
+  const graded = new Set((await o.store.ghostJudgments(id)).filter((j) => j.side === 'factory').map((j) => j.ticketId));
   for (const t of await o.store.ghostTickets(id)) {
     if (t.env === 'failed') continue;
-    const [state, runs, artifacts] = await Promise.all([o.store.getTicket(replay.projectId, t.ticketId), o.store.ticketRuns(replay.projectId, t.ticketId), o.store.artifacts(t.ticketId)]);
-    const pr = artifacts.filter((a) => a.kind === KEPT_PR).at(-1);
-    const outcome: GhostTicket['outcome'] = pr ? 'pr' : state?.blocked ? 'blocked' : 'no_pr';
+    const until = Math.min(...later.filter((r) => r.tickets.includes(t.ticketId)).map((r) => r.startedAt), Infinity);
+    const within = (at: number) => at >= replay.startedAt && at < until;
+    const [state, allRuns, artifacts] = await Promise.all([o.store.getTicket(replay.projectId, t.ticketId), o.store.ticketRuns(replay.projectId, t.ticketId), o.store.artifacts(t.ticketId)]);
+    const runs = allRuns.filter((r) => within(r.startedAt));
+    const kept = graded.has(t.ticketId) && t.factoryPr ? t.factoryPr : artifacts.filter((a) => a.kind === KEPT_PR && within(a.createdAt)).at(-1)?.id;
+    const running = !runs.length || !!state?.activeRunId || !!state?.verifyingRunId;
+    const outcome: GhostTicket['outcome'] = kept ? 'pr' : state?.blocked ? 'blocked' : running ? 'pending' : 'no_pr';
     const { factoryPr: _, ...rest } = t;
     const assumptions = state?.spec?.spec.assumed?.length ?? state?.assumed?.length ?? 0;
-    await o.store.putGhostTicket({ ...rest, outcome, ...(pr ? { factoryPr: pr.id } : {}), costUsd: runs.reduce((s, r) => s + r.costUsd, 0), assumptions, at: o.now() });
-    o.print(`  ${t.ticketId}: ${outcome === 'pr' ? 'a PR kept' : outcome === 'blocked' ? 'blocked' : 'no PR yet'}, ${dollars(runs.reduce((s, r) => s + r.costUsd, 0))}, ${assumptions} assumption(s).`);
+    const costUsd = runs.reduce((s, r) => s + r.costUsd, 0);
+    await o.store.putGhostTicket({ ...rest, outcome, ...(kept ? { factoryPr: kept } : {}), costUsd, assumptions, at: o.now() });
+    const said = { pr: 'a PR kept', blocked: 'blocked', pending: 'not ended yet', no_pr: 'no PR' }[outcome];
+    o.print(`  ${t.ticketId}: ${said}, ${dollars(costUsd)}, ${assumptions} assumption(s).`);
   }
   return 0;
 }
@@ -191,7 +209,7 @@ async function collect(o: GhostOptions, id: string): Promise<number> {
 async function diffOf(o: GhostOptions, replay: GhostReplay, t: GhostTicket, side: GhostSide): Promise<string> {
   if (side === 'human') {
     const repoPath = o.projects.find((p) => p.id === replay.projectId)?.repoPath ?? '';
-    return (await o.humanPr(repoPath, t.humanPr.number)).diff;
+    return (await o.humanDiff(repoPath, t.humanPr.number)).trim() || '(no diff)';
   }
   const kept = (await o.store.artifacts(t.ticketId)).find((a) => a.id === t.factoryPr);
   if (!kept) return '(the kept PR is gone)';
@@ -248,6 +266,7 @@ async function report(o: GhostOptions, id: string): Promise<number> {
   o.print(`Replay ${replay.id} of ${replay.projectId}, started ${new Date(replay.startedAt).toISOString()} by ${replay.startedBy}, threshold ${percent(replay.threshold)}, memory ${replay.memory ? 'on' : 'off'}.`);
   for (const row of r.rows) o.print(`  ${row.ticketId}  factory: ${show(row.factory)}  human: ${show(row.human)}  ${row.assumptions} assumption(s)  ${dollars(row.costUsd)}  (${row.humanPr}${row.start ? `, from ${row.start.slice(0, 12)}` : ''})`);
   o.print(`Environment failures (out of the comparison): ${r.envFailures.length ? r.envFailures.map((f) => `${f.ticketId} (${f.envReason})`).join(', ') : 'none'}.`);
+  if (r.pending) o.print(`Tickets not ended, or not collected, yet: ${r.pending}.`);
   if (r.envUnchecked) o.print(`Environments not checked by a dry run: ${r.envUnchecked} (ORC-208).`);
   o.print(`Mergeable factory PRs: ${r.mergeable} of ${r.compared} compared (${percent(r.share)}), threshold ${percent(r.threshold)}.${r.unjudged ? ` ${r.unjudged} pair(s) still to judge.` : ''}`);
   o.print(`Assumptions written in the specs: ${r.assumptions}.`);
@@ -258,11 +277,11 @@ async function report(o: GhostOptions, id: string): Promise<number> {
 
 /** The forge's view of a merged PR, through `gh` in the project's checkout. */
 async function ghHumanPr(repoPath: string, number: number): Promise<HumanPr> {
-  const view = JSON.parse(await mustExec(execCmd, 'gh', ['pr', 'view', String(number), '--json', 'number,url,author,mergeCommit'], { cwd: repoPath })) as {
-    number: number; url: string; author?: { login?: string }; mergeCommit?: { oid?: string } | null;
+  const view = JSON.parse(await mustExec(execCmd, 'gh', ['pr', 'view', String(number), '--json', 'number,url,author,mergeCommit,commits'], { cwd: repoPath })) as {
+    number: number; url: string; author?: { login?: string }; mergeCommit?: { oid?: string } | null; commits?: { messageHeadline?: string }[];
   };
-  const diff = await mustExec(execCmd, 'gh', ['pr', 'diff', String(number)], { cwd: repoPath });
-  return { number: view.number, url: view.url, author: view.author?.login ?? '', ...(view.mergeCommit?.oid ? { mergeSha: view.mergeCommit.oid } : {}), diff };
+  const commits = (view.commits ?? []).map((c) => c.messageHeadline ?? '');
+  return { number: view.number, url: view.url, author: view.author?.login ?? '', ...(view.mergeCommit?.oid ? { mergeSha: view.mergeCommit.oid } : {}), commits };
 }
 
 /** The command line, on the instance's store and projects; the PRs read through `gh`, the clones from each project's origin. */
@@ -270,7 +289,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   const instance = loadInstance(home);
   // The daemon migrates the schema; this only reads and writes rows.
   const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // Opened for the judge's answers only: the long clones of `start` hold no terminal.
+  let rl: ReturnType<typeof createInterface> | undefined;
   try {
     let user = 'cli';
     try {
@@ -283,19 +303,20 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       dir: join(home, 'ghost'),
       projects: instance.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, noEffect: projectEffects(p) === 'none' })),
       humanPr: ghHumanPr,
-      environment: async ({ repoPath, mergeSha, dir, memory }) => {
+      humanDiff: (repoPath, number) => mustExec(execCmd, 'gh', ['pr', 'diff', String(number)], { cwd: repoPath }),
+      environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
         const remote = (await mustExec(execCmd, 'git', ['-C', repoPath, 'remote', 'get-url', 'origin'])).trim();
-        const start = await cloneAtStart({ remote, mergeSha, dir: join(dir, 'repo') });
+        const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: join(dir, 'repo') });
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.
         const at = Number((await mustExec(execCmd, 'git', ['-C', join(dir, 'repo'), 'log', '-1', '--format=%ct', start])).trim()) * 1000;
         const knowledge = await knowledgeAt({ repo: instance.knowledge.repoPath, before: at, dir: join(dir, 'knowledge') });
         return { start, ...(knowledge ? { knowledge } : {}) };
       },
-      ask: (q) => rl.question(q),
+      ask: (q) => (rl ??= createInterface({ input: process.stdin, output: process.stdout })).question(q),
     });
   } finally {
-    rl.close();
+    rl?.close();
     await store.close();
   }
 }

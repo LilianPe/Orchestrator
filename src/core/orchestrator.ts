@@ -1677,9 +1677,18 @@ export class Orchestrator {
     let runId = 'runId' in effect ? effect.runId : undefined;
     if (effect.kind === 'publish') {
       if (t.verifyingRunId !== effect.runId) return this.log('info', `kept publish of ${t.ticketId} dropped: the ticket let go of run ${effect.runId}`);
+      const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId, at: this.d.clock.now() };
+      const payload = { runId: effect.runId, job: effect.job, sha: effect.sha };
+      // The same refusals as a publication (`publish`): nothing kept that the forge would not have been given.
+      const refused = !mayPublish(t, effect.sha, project.workflow)
+        ? `the commit ${effect.sha.slice(0, 12)} has no green verification.`
+        : !t.branch || !t.worktreePath ? `no branch or no worktree for ${t.ticketId}.` : undefined;
+      if (refused) return void (await this.accept({ ...base, id: `publish-refused:kept:${row.id}`, type: 'publish.refused', payload: { ...payload, reason: refused } }));
+      const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath!);
+      // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
+      if (!diff?.trim()) return void (await this.accept({ ...base, id: `publish-done:kept:${row.id}`, type: 'publish.done', payload: { ...payload, ...(effect.output ? { output: effect.output } : {}) } }));
       const facts = { ticketId: t.ticketId, title: t.title, sha: effect.sha, ...(effect.commands ? { commands: effect.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
-      const diff = t.worktreePath ? await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath) : undefined;
-      kept = { pr: { ...describePr(effect.output, facts), branch: t.branch, sha: effect.sha, ...(diff === undefined ? {} : { diff }) } };
+      kept = { pr: { ...describePr(effect.output, facts), branch: t.branch, sha: effect.sha, diff } };
       runId = effect.runId;
     }
     const body = `${JSON.stringify({ kind: effect.kind, row: row.id, ...kept }, null, 2)}\n`;

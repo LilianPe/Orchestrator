@@ -49,8 +49,11 @@ export interface GhostTicket {
    */
   env: 'ok' | 'failed' | 'unchecked';
   envReason?: string;
-  /** How the run ended: with a PR (kept as an artifact, `factoryPr` its id), without one, or blocked. */
-  outcome: 'pr' | 'no_pr' | 'blocked';
+  /**
+   * How the run ended: with a PR (kept as an artifact, `factoryPr` its id), without one, or blocked; `pending` while it has not
+   * run or not ended, which leaves the replay without a verdict.
+   */
+  outcome: 'pending' | 'pr' | 'no_pr' | 'blocked';
   factoryPr?: string;
   costUsd: number;
   /** What the Rapide level assumed instead of asking, as written in the spec (`assumed`). */
@@ -108,8 +111,8 @@ export interface GhostReportRow {
   ticketId: string;
   humanPr: string;
   start?: string;
-  /** The factory's grade, or why it has none: `no_pr` (no PR, or blocked: not mergeable), `unjudged`. */
-  factory: GhostGrade | 'no_pr' | 'unjudged';
+  /** The factory's grade, or why it has none: `no_pr` (no PR, or blocked: not mergeable), `pending` (not run yet), `unjudged`. */
+  factory: GhostGrade | 'no_pr' | 'pending' | 'unjudged';
   human: GhostGrade | 'unjudged' | null;
   assumptions: number;
   costUsd: number;
@@ -125,9 +128,11 @@ export interface GhostReport {
   compared: number;
   mergeable: number;
   unjudged: number;
+  /** Tickets not run, or not collected, yet. */
+  pending: number;
   share: number;
   threshold: number;
-  /** `incomplete` while a compared PR waits for its judgment: no verdict on part of the replay. */
+  /** `incomplete` while a ticket has not run or a compared PR waits for its judgment: no verdict on part of the replay. */
   verdict: 'met' | 'below' | 'incomplete';
   assumptions: number;
   totalCostUsd: number;
@@ -146,13 +151,14 @@ export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[]
     ticketId: t.ticketId,
     humanPr: t.humanPr.url,
     ...(t.start ? { start: t.start } : {}),
-    factory: comparable(t) ? (grade(t.ticketId, 'factory') ?? 'unjudged') : 'no_pr',
+    factory: comparable(t) ? (grade(t.ticketId, 'factory') ?? 'unjudged') : t.outcome === 'pending' ? 'pending' : 'no_pr',
     human: comparable(t) ? (grade(t.ticketId, 'human') ?? 'unjudged') : null,
     assumptions: t.assumptions,
     costUsd: t.costUsd,
   }));
   const mergeable = rows.filter((r) => isMergeable(r.factory)).length;
   const unjudged = rows.filter((r) => r.factory === 'unjudged' || r.human === 'unjudged').length;
+  const pending = rows.filter((r) => r.factory === 'pending').length;
   const share = rows.length ? mergeable / rows.length : 0;
   return {
     replay,
@@ -162,9 +168,10 @@ export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[]
     compared: rows.length,
     mergeable,
     unjudged,
+    pending,
     share,
     threshold: replay.threshold,
-    verdict: unjudged || !rows.length ? 'incomplete' : share >= replay.threshold ? 'met' : 'below',
+    verdict: unjudged || pending || !rows.length ? 'incomplete' : share >= replay.threshold ? 'met' : 'below',
     assumptions: rows.reduce((s, r) => s + r.assumptions, 0),
     totalCostUsd: tickets.reduce((s, t) => s + t.costUsd, 0),
   };

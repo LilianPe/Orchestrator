@@ -47,8 +47,10 @@ is blocked: nothing goes out either way.
 ## Historical environment
 
 - **Start point**: the parent of the human PR's merge commit (its first parent; for a squash, the commit it was squashed onto).
-  The clone is shallow, at that commit alone, with no remote: no later commit enters the context, and a `git fetch` of the agent
-  brings nothing back.
+  A rebase merge puts the PR's commits one by one on the base, the merge commit being the last of them: when the merge commit has
+  one parent and the last commits carry exactly the PR's commit headlines, the start is the commit before the first of them. The
+  clone is shallow, at that commit alone, with no remote: no later commit enters the context, and a `git fetch` of the agent brings
+  nothing back.
 - **Knowledge base at transaction time** (ORC-257): its last commit before the start commit was made, by commit date, not a date a
   note claims, so a note learned from the replayed PR does not leak into its own replay. `--memory off` gives none (ORC-260).
 - **Linked tickets**: those created before the start, with the comments written before it (`linkedAsOf`). Linear keeps no
@@ -62,27 +64,29 @@ any ticket runs. The store writes a replay once: starting it again with another 
 
 **Blind judging** (criterion 5): `factory ghost judge` shows the pairs in an order drawn from the replay's seed, each pair's two PRs
 as PR A and PR B in a random order, by their diffs only (a branch, a description or an author would tell whose it is). Each PR is
-graded on the fixed grid: 1 mergeable as is, 2 mergeable after edits, 3 to reject; a grade given stands. The tickets whose human
-PR the judge wrote are left out of the judge's screen.
+graded on the fixed grid: 1 mergeable as is, 2 mergeable after edits, 3 to reject; a grade given stands. The judge names their
+GitHub login (`--judge`, required): the tickets whose human PR they wrote are left out of their screen.
 
 **Report**: ticket by ticket (grades, assumptions, cost, start commit), the environment failures apart and out of the comparison,
-the total cost, and the verdict: `met`, `below`, or `incomplete` while a pair waits for its grades. A ticket the factory left
-without a PR counts as not mergeable.
+the total cost, and the verdict: `met`, `below`, or `incomplete` while a ticket has not run (`pending`) or a pair waits for its
+grades. A ticket the factory left without a PR, or blocked, counts as not mergeable.
 
 ## Commands
 
 ```
 factory ghost start <project> --threshold 0.6 --tickets REL-12=345,REL-14=351 [--memory off] [--id pilot]
 factory ghost collect <replay>
-factory ghost judge <replay> [--judge <name>]
+factory ghost judge <replay> --judge <GitHub login>
 factory ghost report <replay>
 factory ghost list
 ```
 
 `start` refuses a project with effects and a PR that is not merged, before writing anything. It reads each human PR with `gh`
 in the project's checkout, and rebuilds each ticket under `<FACTORY_HOME>/ghost/<replay>/<ticket>/` (`repo/`, `knowledge/`). An
-environment that cannot be rebuilt is counted apart, with why. `collect` reads what each ticket ran to on the project: its last
-kept PR, its runs' cost, the assumptions of its spec.
+environment that cannot be rebuilt is counted apart, with why. `collect` reads what each ticket ran to on the project, within
+the replay's time (from its start to the next replay of the same ticket): its last kept PR, its runs' cost, the assumptions of its
+spec; a ticket whose run has not ended stays `pending`, and a PR already graded stays the one graded. The human diffs are read
+from GitHub when judged.
 
 ## Not yet
 
@@ -93,4 +97,7 @@ kept PR, its runs' cost, the assumptions of its spec.
   without effects; the link between the two (the daemon delegating each replayed ticket to the project, on its rebuilt clone and its
   ticket text as it was, with its linked tickets read as of the start) is still to wire. Until then, `collect` reads what the project
   ran.
+- **The agent's own push.** The no-effect mode holds the factory's writes. An agent in a sandbox holds no GitHub credential (only
+  the factory publishes, ORC-125); an agent run on the host (no sandboxes) gets the host's git login and could push by itself. A
+  project without effects should run with sandboxes; nothing refuses a host run yet.
 - The threshold's value (ORC-143) and the pilot repository (ORC-137) are decisions still to take.

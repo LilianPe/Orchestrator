@@ -68,6 +68,27 @@ describe('the historical environment of a replayed ticket (ORC-231)', () => {
     expect(git(dir, ['rev-list', '--all']).split('\n')).toEqual([base]);
   });
 
+  it("a rebase merge has the PR's commits replayed on the base: the start is before the first of them, none in the clone", async () => {
+    const repo = origin();
+    const base = commit(repo, 'a.txt');
+    const first = commit(repo, 'one.txt');
+    const second = commit(repo, 'two.txt');
+    const last = commit(repo, 'three.txt');
+    commit(repo, 'later.txt');
+    const dir = join(temp(), 'clone');
+    expect(await cloneAtStart({ remote: repo, mergeSha: last, dir, prCommits: ['one.txt', 'two.txt', 'three.txt'] })).toBe(base);
+    expect(git(dir, ['rev-list', '--all']).split('\n')).toEqual([base]);
+    for (const sha of [first, second]) expect(() => git(dir, ['cat-file', '-e', sha])).toThrow();
+  });
+
+  it("a squash of several commits is no rebase: its single commit does not carry the last commit's message", async () => {
+    const repo = origin();
+    const base = commit(repo, 'a.txt');
+    const squash = commit(repo, 'squashed.txt');
+    const dir = join(temp(), 'clone');
+    expect(await cloneAtStart({ remote: repo, mergeSha: squash, dir, prCommits: ['wip', 'fix tests'] })).toBe(base);
+  });
+
   it('the knowledge base at transaction time: its last commit before the start, and nothing committed after', async () => {
     const kb = origin();
     const t0 = 1_700_000_000;

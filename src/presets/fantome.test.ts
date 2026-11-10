@@ -24,7 +24,9 @@ describe('the factory/fantome preset (ORC-231)', () => {
   it('the workflow it drives: delegation runs intake, intake the spec, the spec the tests, and dev ends at its publication', () => {
     const wf = asFantome(loadWorkflow({ packDir }));
     expect(wf.level).toBe('rapide');
-    expect(wf.on['ticket.delegated']).toEqual([expect.objectContaining({ run: 'intake' })]);
+    expect(wf.on['ticket.delegated']).toEqual([expect.objectContaining({ run: 'intake', whenSrc: '!blocked' })]);
+    // Nothing else starts a job: a closed ticket's state, or a human on the real one, never does.
+    expect(Object.keys(wf.on)).toEqual(['ticket.delegated']);
     expect(wf.jobs['intake']!.onSuccess).toEqual({ run: 'spec' });
     expect(wf.jobs['spec']!.onSuccess).toEqual({ run: 'tests' });
     expect(wf.jobs['tests']!.onSuccess).toEqual({ run: 'dev' });

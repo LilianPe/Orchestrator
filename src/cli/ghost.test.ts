@@ -14,10 +14,12 @@ afterEach(() => {
 });
 
 const PRS: Record<number, HumanPr> = {
-  12: { number: 12, url: 'https://github.test/pr/12', author: 'lilian', mergeSha: 'merge12', diff: 'diff --git a/x12' },
-  34: { number: 34, url: 'https://github.test/pr/34', author: 'lilian', mergeSha: 'merge34', diff: 'diff --git a/x34' },
-  56: { number: 56, url: 'https://github.test/pr/56', author: 'lilian', diff: '' },
+  12: { number: 12, url: 'https://github.test/pr/12', author: 'lilian', mergeSha: 'merge12', commits: ['one', 'two'] },
+  34: { number: 34, url: 'https://github.test/pr/34', author: 'lilian', mergeSha: 'merge34', commits: ['only'] },
+  56: { number: 56, url: 'https://github.test/pr/56', author: 'lilian', commits: [] },
 };
+/** When the runs and the kept PRs of the tests are dated: the replay's start, which `now` gives. */
+const NOW = 1_710_000_000_000;
 
 function withGhost() {
   const store = new SqliteStore(':memory:');
@@ -26,20 +28,26 @@ function withGhost() {
   const dir = mkdtempSync(join(tmpdir(), 'ghost-cli-'));
   dirs.push(dir);
   let ids = 0;
+  const environments: { ticketId: string; prCommits: readonly string[] }[] = [];
   const base: Omit<GhostOptions, 'args'> = {
     store,
     print: (l) => void lines.push(l),
-    now: () => 1_710_000_000_000,
+    now: () => NOW,
     user: 'armand',
     newId: () => `g${++ids}`,
     dir,
     projects: [{ id: 'ghost', repoPath: '/repo', noEffect: true }, { id: 'live', repoPath: '/repo', noEffect: false }],
     humanPr: async (_repo, n) => PRS[n] ?? Promise.reject(new Error(`no PR #${n}`)),
-    environment: async ({ ticketId, mergeSha, memory }) => (ticketId === 'REL-3' ? Promise.reject(new Error('fetch refused')) : { start: `parent-of-${mergeSha}`, ...(memory ? { knowledge: 'kb1' } : {}) }),
+    humanDiff: async (_repo, n) => `diff --git a/x${n}`,
+    environment: async ({ ticketId, mergeSha, prCommits, memory }) => {
+      environments.push({ ticketId, prCommits });
+      if (ticketId === 'REL-3') throw new Error('fetch refused');
+      return { start: `parent-of-${mergeSha}`, ...(memory ? { knowledge: 'kb1' } : {}) };
+    },
     ask: async () => answers.shift() ?? '',
   };
   const ghost = (args: string[]) => runGhost({ ...base, args });
-  return { store, lines, answers, ghost, dir };
+  return { store, lines, answers, ghost, dir, environments };
 }
 
 describe('factory ghost start (ORC-231)', () => {
@@ -53,13 +61,15 @@ describe('factory ghost start (ORC-231)', () => {
   });
 
   it('writes the replay with its threshold, then the environment of each ticket at the parent of its merge commit', async () => {
-    const { store, lines, ghost } = withGhost();
+    const { store, lines, ghost, environments } = withGhost();
     expect(await ghost(['start', 'ghost', '--threshold', '60%', '--tickets', 'REL-1=12,REL-2=34'])).toBe(0);
-    expect(await store.ghostReplay('g1')).toMatchObject({ projectId: 'ghost', threshold: 0.6, memory: true, tickets: ['REL-1', 'REL-2'], startedAt: 1_710_000_000_000, startedBy: 'armand' });
+    expect(await store.ghostReplay('g1')).toMatchObject({ projectId: 'ghost', threshold: 0.6, memory: true, tickets: ['REL-1', 'REL-2'], startedAt: NOW, startedBy: 'armand' });
     expect(await store.ghostTickets('g1')).toEqual([
-      expect.objectContaining({ ticketId: 'REL-1', mergeSha: 'merge12', start: 'parent-of-merge12', knowledge: 'kb1', env: 'unchecked', outcome: 'no_pr', humanPr: { number: 12, url: 'https://github.test/pr/12', author: 'lilian' } }),
+      expect.objectContaining({ ticketId: 'REL-1', mergeSha: 'merge12', start: 'parent-of-merge12', knowledge: 'kb1', env: 'unchecked', outcome: 'pending', humanPr: { number: 12, url: 'https://github.test/pr/12', author: 'lilian' } }),
       expect.objectContaining({ ticketId: 'REL-2', start: 'parent-of-merge34' }),
     ]);
+    // The PR's commits go with it: a rebase merge starts before the first of them.
+    expect(environments).toEqual([{ ticketId: 'REL-1', prCommits: ['one', 'two'] }, { ticketId: 'REL-2', prCommits: ['only'] }]);
     expect(lines.join('\n')).toContain('threshold 60%');
     expect(lines.join('\n')).toContain('ORC-208');
   });
@@ -102,10 +112,10 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
     for (const id of ['REL-1', 'REL-2']) {
       const spec = { job: 'spec', version: 1, at: 0, spec: { assumed: ['a', 'Unasked: b'] } };
       await g.store.putTicket({ ...newTicketState('ghost', id, 'Export CSV', 'dev', 0), spec });
-      await g.store.putRun({ id: `run-${id}`, projectId: 'ghost', ticketId: id, job: 'dev', queue: 'dev', status: 'success', claudeSessionId: 's', startedAt: 0, costUsd: 0.75, turns: 3, lastText: '', token: 't', cwd: '/w' } as RunRecord);
+      await g.store.putRun({ id: `run-${id}`, projectId: 'ghost', ticketId: id, job: 'dev', queue: 'dev', status: 'success', claudeSessionId: 's', startedAt: NOW, costUsd: 0.75, turns: 3, lastText: '', token: 't', cwd: '/w' } as RunRecord);
       const path = join(g.dir, `${id}.json`);
       writeFileSync(path, JSON.stringify({ kind: 'publish', pr: { title: `${id} Export CSV`, body: 'factory body', branch: `factory/${id.toLowerCase()}`, sha: 'abc', diff: `diff --git a/y-${id}` } }));
-      await g.store.putArtifact({ id: `kept:${id}`, ticketId: id, attemptId: `run-${id}`, kind: KEPT_PR, path, sha256: 'x', createdAt: 1 });
+      await g.store.putArtifact({ id: `kept:${id}`, ticketId: id, attemptId: `run-${id}`, kind: KEPT_PR, path, sha256: 'x', createdAt: NOW });
     }
     expect(await g.ghost(['collect', 'g1'])).toBe(0);
     return g;
@@ -119,11 +129,40 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
     ]);
   });
 
+  it('collects within the replay: a run or a kept PR from before it is not its own; a ticket not run yet stays pending', async () => {
+    const g = withGhost();
+    await g.store.putRun({ id: 'old', projectId: 'ghost', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'success', claudeSessionId: 's', startedAt: NOW - 1, costUsd: 9, turns: 1, lastText: '', token: 't', cwd: '/w' } as RunRecord);
+    await g.store.putArtifact({ id: 'kept:old', ticketId: 'REL-1', kind: KEPT_PR, path: '/nowhere', sha256: 'x', createdAt: NOW - 1 });
+    await g.ghost(['start', 'ghost', '--threshold', '0.5', '--tickets', 'REL-1=12']);
+    await g.ghost(['collect', 'g1']);
+    expect(await g.store.ghostTickets('g1')).toEqual([expect.objectContaining({ ticketId: 'REL-1', outcome: 'pending', costUsd: 0 })]);
+    expect((await g.store.ghostTickets('g1'))[0]).not.toHaveProperty('factoryPr');
+  });
+
+  it('a PR already graded stays the one graded when collected again', async () => {
+    const { store, answers, ghost, dir } = await replayed();
+    answers.push('1', '1', '1', '1');
+    await ghost(['judge', 'g1', '--judge', 'armand']);
+    const path = join(dir, 'newer.json');
+    writeFileSync(path, '{}');
+    await store.putArtifact({ id: 'kept:newer', ticketId: 'REL-1', kind: KEPT_PR, path, sha256: 'y', createdAt: NOW + 1 });
+    await ghost(['collect', 'g1']);
+    expect((await store.ghostTickets('g1'))[0]).toMatchObject({ ticketId: 'REL-1', factoryPr: 'kept:REL-1' });
+  });
+
+  it('a judge names their GitHub login: without it, nothing is shown', async () => {
+    const { lines, ghost } = await replayed();
+    lines.length = 0;
+    expect(await ghost(['judge', 'g1'])).toBe(1);
+    expect(lines.join('\n')).toContain('--judge');
+    expect(lines.join('\n')).not.toContain('PR A');
+  });
+
   it('criterion 5: the judge sees each pair blind, as PR A and PR B, and grades both on the fixed grid', async () => {
     const { store, lines, answers, ghost } = await replayed();
     lines.length = 0;
     answers.push('1', '3', '2', '2');
-    expect(await ghost(['judge', 'g1'])).toBe(0);
+    expect(await ghost(['judge', 'g1', '--judge', 'armand'])).toBe(0);
     const screen = lines.join('\n');
     expect(screen).toContain('PR A');
     expect(screen).toContain('PR B');
@@ -136,21 +175,21 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
     expect(new Set(judgments.map((j) => `${j.ticketId}:${j.side}`))).toEqual(new Set(['REL-1:factory', 'REL-1:human', 'REL-2:factory', 'REL-2:human']));
     // Graded again: nothing left to judge.
     lines.length = 0;
-    expect(await ghost(['judge', 'g1'])).toBe(0);
+    expect(await ghost(['judge', 'g1', '--judge', 'armand'])).toBe(0);
     expect(lines.join('\n')).toContain('Nothing left to judge');
   });
 
   it('an answer off the grid is asked again', async () => {
     const { store, answers, ghost } = await replayed();
     answers.push('5', 'yes', '1', '1', '1', '1');
-    await ghost(['judge', 'g1']);
+    await ghost(['judge', 'g1', '--judge', 'armand']);
     expect((await store.ghostJudgments('g1')).map((j) => j.grade)).toEqual(['as_is', 'as_is', 'as_is', 'as_is']);
   });
 
   it('reports ticket by ticket, with the cost and the verdict against the threshold', async () => {
     const { lines, answers, ghost } = await replayed();
     answers.push('1', '1', '1', '1');
-    await ghost(['judge', 'g1']);
+    await ghost(['judge', 'g1', '--judge', 'armand']);
     lines.length = 0;
     expect(await ghost(['report', 'g1'])).toBe(0);
     const report = lines.join('\n');

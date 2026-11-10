@@ -1,4 +1,5 @@
 import type { Workflow } from '../config/workflow-schema.js';
+import { parseCondition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, type Preset, type Step } from './preset.js';
 
@@ -60,7 +61,8 @@ export function asFantome(wf: Workflow): Workflow {
   return {
     ...wf,
     level: 'rapide',
-    on: { ...wf.on, 'ticket.delegated': (wf.on['ticket.delegated'] ?? []).map((r) => ({ ...r, run: 'intake' })) },
+    // Its delegation alone: a replayed ticket is closed (Done), and nothing a human does on the real one starts any job of its run.
+    on: { 'ticket.delegated': [{ when: parseCondition('!blocked'), whenSrc: '!blocked', run: 'intake' }] },
     jobs: {
       ...wf.jobs,
       intake: { ...job('intake'), onSuccess: { run: 'spec' } },
