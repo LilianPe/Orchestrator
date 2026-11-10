@@ -55,8 +55,11 @@ export const branchNameOfType = (identifier: string, title: string, type: string
 export const branchSpaces = (naming: BranchNaming): string[] =>
   [...new Set(branchTypes(naming).map((type) => render(naming.pattern.split(/\{id\}|\{slug\}/)[0]!, { type })))].filter(Boolean);
 
+/** What every branch the factory named a ticket before ORC-283 starts with. */
+const legacyPrefix = (identifier: string): string => `${LEGACY_BRANCHES}${identifier.toLowerCase()}-`;
+
 /** A ticket's branch as the factory named it before ORC-283. */
-export const legacyBranchName = (identifier: string, title: string): string => `${LEGACY_BRANCHES}${identifier.toLowerCase()}-${slugify(title)}`;
+export const legacyBranchName = (identifier: string, title: string): string => `${legacyPrefix(identifier)}${slugify(title)}`;
 
 /** Every type a repository's naming can give. */
 export const branchTypes = (naming: BranchNaming): string[] => [...new Set([...naming.types.map(([, type]) => type), naming.fallback])];
@@ -68,7 +71,7 @@ export const branchTypes = (naming: BranchNaming): string[] => [...new Set([...n
 export function ownBranchPrefixes(identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): string[] {
   const id = identifier.toLowerCase();
   const head = naming.pattern.split('{slug}')[0]!;
-  return [...new Set([...branchTypes(naming).map((type) => render(head, { type, id })), `${LEGACY_BRANCHES}${id}-`])];
+  return [...new Set([...branchTypes(naming).map((type) => render(head, { type, id })), legacyPrefix(identifier)])];
 }
 
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -77,7 +80,7 @@ const SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*';
 /** Whether a branch is one the factory names for this ticket, by the repository's naming (any type, any title) or the legacy one. Built once per ticket. */
 export function ownBranchMatcher(identifier: string, naming: BranchNaming = DEFAULT_BRANCH_NAMING): (name: string) => boolean {
   const id = identifier.toLowerCase();
-  const legacy = `${LEGACY_BRANCHES}${id}-`;
+  const legacy = legacyPrefix(identifier);
   const types = branchTypes(naming).map(escape).join('|');
   const source = naming.pattern
     .split(/(\{[^{}]*\})/)

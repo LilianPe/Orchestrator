@@ -64,9 +64,10 @@ function agentHead(work: string): { branch: string; sha?: string } | undefined {
   if (!head) return undefined;
   if (SHA.test(head)) return { branch: 'HEAD', sha: head };
   const ref = /^ref: (\S+)$/.exec(head)?.[1];
+  if (!ref?.startsWith('refs/heads/')) return undefined;
   // Git's own rules on a branch's name, as a name out of them cannot be its branch (shared with the naming, ORC-283).
-  const branch = ref?.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : undefined;
-  if (!ref || branch === undefined || !BRANCH_NAME.test(branch)) return undefined;
+  const branch = ref.slice('refs/heads/'.length);
+  if (!BRANCH_NAME.test(branch)) return undefined;
   const loose = agentFile(gitDir, ref)?.trim();
   if (loose && SHA.test(loose)) return { branch, sha: loose };
   const packed = agentFile(gitDir, 'packed-refs')?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];

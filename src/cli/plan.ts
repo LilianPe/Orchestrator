@@ -27,11 +27,16 @@ export async function planRows(d: {
 }): Promise<PlanRow[]> {
   const rows: PlanRow[] = [];
   // Read once per project: an invalid file is that project's error, never the whole preview's.
-  const namings = new Map<string, Promise<BranchNaming | Error>>();
-  const namingOf = (p: ProjectRuntime): Promise<BranchNaming | Error> => {
-    let read = namings.get(p.id);
-    if (!read) namings.set(p.id, (read = (d.naming?.(p) ?? Promise.resolve(DEFAULT_BRANCH_NAMING)).catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))));
-    return read;
+  const namings = new Map<string, BranchNaming | Error>();
+  const namingOf = async (p: ProjectRuntime): Promise<BranchNaming | Error> => {
+    if (!namings.has(p.id)) {
+      try {
+        namings.set(p.id, d.naming ? await d.naming(p) : DEFAULT_BRANCH_NAMING);
+      } catch (err) {
+        namings.set(p.id, err as Error);
+      }
+    }
+    return namings.get(p.id)!;
   };
   // One read per team; each ticket listed once, under the project it goes to (ORC-291).
   for (const teamKey of new Set(d.projects.map((p) => p.teamKey))) {

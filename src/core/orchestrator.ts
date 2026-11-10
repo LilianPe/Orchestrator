@@ -2651,6 +2651,8 @@ export class Orchestrator {
       // which its `prepare` then does not do again; another launch reads the config again once its workspace is there.
       const worktree = job.workspace === 'worktree';
       const early = worktree || guarded ? await this.repoConfigOf(project, { fetch: worktree }) : undefined;
+      // Fetched by that read only when a reader of the repository is wired: without one, `prepare` fetches as before.
+      const fetched = worktree && !!this.d.repoConfig;
       const naming = early?.branches;
       // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together.
       const [search, ownBranches] = guarded
@@ -2690,7 +2692,7 @@ export class Orchestrator {
       const reviewed = job.workspace === 'published' ? t.verifiedSha : undefined;
       // A worktree's branch: the one recorded on the ticket, so that a label or a naming changed since opens no second PR (ORC-283).
       const branch = worktree ? (t.branch ?? branchName(issue.identifier, issue.title, issue.labels, naming)) : undefined;
-      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched: !!this.d.repoConfig } : {}) };
+      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
       // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.

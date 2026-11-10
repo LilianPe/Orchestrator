@@ -320,23 +320,31 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`${source}$`);
 }
 
-/**
- * Whether a filter lets the workflow run on `branch`: GitHub reads its patterns in order, the last that matches wins.
- * `ignore`: a `branches-ignore`, where a pattern leaves a branch out and a `!` brings it back. `runs`: before the first
- * pattern. A glob doctor cannot read counts when it would let the branch run, never when it would leave it out: fail closed.
- */
-function runsOn(patterns: readonly string[], branch: string, ignore: boolean, runs: boolean): boolean {
-  for (const pattern of patterns) {
+/** A filter's pattern, compiled once: whether it lets a branch in, and what it matches (`regexp: null`, a glob doctor cannot read). */
+interface FilterPattern {
+  lets: boolean;
+  glob: string;
+  regexp: RegExp | null;
+}
+
+/** `ignore`: a `branches-ignore`, where a pattern leaves a branch out and a `!` brings it back. */
+function compileFilter(patterns: readonly string[], ignore: boolean): FilterPattern[] {
+  return patterns.map((pattern) => {
     const negated = pattern.startsWith('!');
-    const lets = negated === ignore;
-    let matches: boolean;
+    const glob = negated ? pattern.slice(1) : pattern;
+    let regexp: RegExp | null = null;
     try {
-      matches = globToRegExp(negated ? pattern.slice(1) : pattern).test(branch);
+      regexp = globToRegExp(glob);
     } catch {
-      matches = lets;
+      // Unreadable: it counts when it would let the branch run, never when it would leave it out (fail closed).
     }
-    if (matches) runs = lets;
-  }
+    return { lets: negated === ignore, glob, regexp };
+  });
+}
+
+/** Whether a filter lets the workflow run on `branch`: GitHub reads its patterns in order, the last that matches wins. `runs`: before the first. */
+function runsOn(filter: readonly FilterPattern[], branch: string, runs: boolean): boolean {
+  for (const { lets, regexp } of filter) if (regexp ? regexp.test(branch) : lets) runs = lets;
   return runs;
 }
 
@@ -348,13 +356,11 @@ function runsOn(patterns: readonly string[], branch: string, ignore: boolean, ru
 function filterReachesFactory(patterns: readonly string[], factory: FactoryBranches, ignore: boolean): boolean {
   // Negations only: GitHub runs on no branch, which doctor does not count on.
   if (!ignore && patterns.every((pattern) => pattern.startsWith('!'))) return true;
-  if (factory.probes.some((probe) => runsOn(patterns, probe, ignore, ignore))) return true;
-  return patterns.some((pattern, index) => {
-    const negated = pattern.startsWith('!');
-    const glob = negated ? pattern.slice(1) : pattern;
-    const space = negated === ignore ? factory.spaces.find((s) => glob.startsWith(s)) : undefined;
-    const rest = patterns.slice(index + 1);
-    return space !== undefined && factory.probes.some((probe) => probe.startsWith(space) && runsOn(rest, probe, ignore, true));
+  const filter = compileFilter(patterns, ignore);
+  if (factory.probes.some((probe) => runsOn(filter, probe, ignore))) return true;
+  return filter.some(({ lets, glob }, index) => {
+    const space = lets ? factory.spaces.find((s) => glob.startsWith(s)) : undefined;
+    return space !== undefined && factory.probes.some((probe) => probe.startsWith(space) && runsOn(filter.slice(index + 1), probe, true));
   });
 }
 
@@ -475,7 +481,8 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   const { sensitiveJobs } = workflow;
   const actorExcluded = [...workflow.jobConditions].filter(([, condition]) => excludesActor(condition, login)).map(([jobId]) => jobId);
   const byEnvironment = sensitiveJobs.filter((jobId) => protectedByEnvironment(jobId, workflow, environments));
-  const unprotectedJobs = sensitiveJobs.filter((jobId) => !byEnvironment.includes(jobId) && !actorExcluded.includes(jobId));
+  const byActor = sensitiveJobs.filter((jobId) => !byEnvironment.includes(jobId) && actorExcluded.includes(jobId));
+  const unprotectedJobs = sensitiveJobs.filter((jobId) => !byEnvironment.includes(jobId) && !byActor.includes(jobId));
   const exclusion = `\`if: github.actor != '${login}'\``;
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
 
@@ -488,10 +495,9 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   } else if (sensitiveJobs.length === 0) {
     reasons.push('workflow without jobs: no secret can be exposed');
   } else if (unprotectedJobs.length === 0) {
-    const how = [
-      ...(byEnvironment.length ? [`under a protected environment (${[...new Set(byEnvironment.map((jobId) => workflow.jobEnvironments.get(jobId)!))].join(', ')})`] : []),
-      ...(sensitiveJobs.some((jobId) => !byEnvironment.includes(jobId)) ? [`that exclude the factory's App (${exclusion})`] : []),
-    ];
+    const how: string[] = [];
+    if (byEnvironment.length) how.push(`under a protected environment (${[...new Set(byEnvironment.map((jobId) => workflow.jobEnvironments.get(jobId)!))].join(', ')})`);
+    if (byActor.length) how.push(`that exclude the factory's App (${exclusion})`);
     reasons.push(`${what} limited to jobs ${how.join(' or ')}`);
   } else {
     verdict = 'refused';
@@ -538,16 +544,11 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   let environments: EnvironmentProtection[] = [];
   let login = '';
   if (workflows.length > 0) {
-    try {
-      environments = await api.listEnvironments(repoPath);
-    } catch (error) {
-      return doctorFailure(options, `Cannot read the environments: ${errorMessage(error)}`);
-    }
-    try {
-      login = await api.appLogin();
-    } catch (error) {
-      return doctorFailure(options, `Cannot read the GitHub App's login: ${errorMessage(error)}`);
-    }
+    const [read, app] = await Promise.allSettled([api.listEnvironments(repoPath), api.appLogin()]);
+    if (read.status === 'rejected') return doctorFailure(options, `Cannot read the environments: ${errorMessage(read.reason)}`);
+    if (app.status === 'rejected') return doctorFailure(options, `Cannot read the GitHub App's login: ${errorMessage(app.reason)}`);
+    environments = read.value;
+    login = app.value;
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
