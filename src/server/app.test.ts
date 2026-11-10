@@ -774,6 +774,42 @@ describe('server', () => {
     });
   });
 
+  describe("behind the host's TLS reverse proxy (ORC-221)", () => {
+    // What a proxy that keeps the Host sends on: the public name, its own X-Forwarded-*, on plain HTTP.
+    const PUBLIC = 'factory.example.com';
+    const proxied = (headers: Record<string, string> = {}) => ({ host: PUBLIC, 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7', 'x-forwarded-host': PUBLIC, ...headers });
+    const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
+
+    it('takes the webhooks under the public name, on plain HTTP, the headers passed on as they came', async () => {
+      const { app, linearWebhook, githubWebhook } = await setup({ uiPassword: 's3cret' });
+      expect((await app.request(`http://${PUBLIC}/webhooks/linear`, { method: 'POST', body: '{}', headers: proxied() })).status).toBe(200);
+      await app.request(`http://${PUBLIC}/webhooks/github`, { method: 'POST', body: '{}', headers: proxied({ 'x-hub-signature-256': 'sha256=00' }) });
+      expect(githubWebhook).toHaveBeenCalledWith('{}', expect.objectContaining({ 'x-hub-signature-256': 'sha256=00', 'x-forwarded-proto': 'https' }));
+      expect(linearWebhook).toHaveBeenCalledTimes(1);
+    });
+
+    it("serves the interface's writes from the public HTTPS origin: the scheme never counts, only the name", async () => {
+      const { app, submitted } = await setup({ uiPassword: 's3cret' });
+      const res = await app.request(`http://${PUBLIC}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic, origin: `https://${PUBLIC}` }) });
+      expect(res.status).toBe(200);
+      expect(submitted).toHaveLength(1);
+    });
+
+    it('trusts no X-Forwarded-Host: a forged one does not let another origin write', async () => {
+      const { app, submitted } = await setup({ uiPassword: 's3cret' });
+      const res = await app.request(`http://${PUBLIC}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic, origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' }) });
+      expect(res.status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+
+    it("refuses the interface's writes behind a proxy that rewrites the Host: it must pass the public name on", async () => {
+      const { app, submitted } = await setup({ uiPassword: 's3cret' });
+      const res = await app.request('http://127.0.0.1:4100/api/control/pause', { method: 'POST', headers: proxied({ ...basic, host: '127.0.0.1:4100', origin: `https://${PUBLIC}` }) });
+      expect(res.status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+  });
+
   describe('a foreign Host is refused: DNS rebinding (ORC-349)', () => {
     // A page of evil.example rebound to 127.0.0.1 sends Host and Origin of its own name: equal, so the Origin check passes.
     const as = (host: string, init: RequestInit = {}) => ({ ...init, headers: { ...(init.headers as Record<string, string>), host } });

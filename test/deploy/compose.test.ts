@@ -11,6 +11,7 @@ const root = join(import.meta.dirname, '../..');
 const read = (f: string) => readFileSync(join(root, f), 'utf8');
 
 interface Service {
+  profiles?: string[];
   volumes?: string[];
   ports?: string[];
   networks?: string[];
@@ -83,9 +84,17 @@ describe('compose.yaml (ORC-203)', () => {
     expect(factoryd.environment!['FACTORY_RUNNER_IMAGE']).toMatch(/^\$\{FACTORY_RUNNER_IMAGE:\?/);
   });
 
-  it('publishes caddy alone, and keeps postgres on an internal network', () => {
+  it("leaves TLS to the host's reverse proxy: caddy only under the `tls` profile, off by default (ORC-221)", () => {
+    expect(caddy.profiles).toEqual(['tls']);
+    for (const s of [factoryd, proxy, postgres]) expect(s.profiles).toBeUndefined();
+    // Compose interpolates a service off its profile too: a `:?` there would stop a plain `up` without caddy's variables.
+    expect(JSON.stringify(caddy)).not.toMatch(/\$\{[^}]*:\?/);
+  });
+
+  it("publishes factoryd on the host's loopback alone, for its reverse proxy, and caddy under its profile (ORC-221)", () => {
+    expect(factoryd.ports).toEqual(['127.0.0.1:${FACTORY_PORT:-4100}:4100']);
     expect(caddy.ports!.length).toBeGreaterThan(0);
-    for (const s of [factoryd, proxy, postgres]) expect(s.ports).toBeUndefined();
+    for (const s of [proxy, postgres]) expect(s.ports).toBeUndefined();
     expect(postgres.networks).toEqual(['back']);
     expect(compose.networks['back']!.internal).toBe(true);
     expect(caddy.networks ?? ['default']).not.toContain('back');

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { request as plainRequest } from 'node:http';
 import { request } from 'node:https';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cli, PUBLIC_IMAGE } from './helpers.js';
@@ -19,10 +20,14 @@ const parent = process.env['FACTORY_COMPOSE_DIR'] ?? '/tmp';
 const base = `factory-recette-${Date.now()}`;
 const dir = `${parent}/${base}`;
 const HTTPS_PORT = process.env['FACTORY_HTTPS_PORT'] ?? '18443';
+const HTTP_PORT = process.env['FACTORY_PORT'] ?? '14100';
 const PASSWORD = 'recette-ui-password';
 
 const env = {
   ...process.env,
+  // caddy is off by default (ORC-221): this run takes it, as a server without a reverse proxy of its own does.
+  COMPOSE_PROFILES: 'tls',
+  FACTORY_PORT: HTTP_PORT,
   FACTORY_DIR: dir,
   FACTORY_ENGINE_SOCKET: process.env['FACTORY_ENGINE_SOCKET'] ?? '/var/run/docker.sock',
   FACTORY_RUNNER_IMAGE: runnerImage,
@@ -174,10 +179,26 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     expect(compose('logs', 'factoryd')).toContain('store : Postgres');
   });
 
-  it('publishes neither factoryd, the proxy nor postgres', () => {
-    for (const s of ['factoryd', 'proxy', 'postgres']) {
+  it('publishes neither the proxy nor postgres, and factoryd on the loopback alone (ORC-221)', () => {
+    for (const s of ['proxy', 'postgres']) {
       expect(compose('ps', '--format', '{{.Publishers}}', s).replace(/\s/g, ''), s).not.toMatch(/PublishedPort":[1-9]|:[1-9]\d*->/);
     }
+    const factoryd = JSON.parse(compose('ps', '--format', '{{json .Publishers}}', 'factoryd')) as { URL: string; PublishedPort: number }[];
+    expect(factoryd.filter((p) => p.PublishedPort > 0).map((p) => p.URL)).toEqual(['127.0.0.1']);
+  });
+
+  it("answers the host's reverse proxy in plain HTTP on the loopback, behind the password (ORC-221)", async () => {
+    const status = (password?: string) =>
+      new Promise<number>((ok, ko) => {
+        const req = plainRequest(
+          { host: '127.0.0.1', port: Number(HTTP_PORT), path: '/api/state', headers: { host: 'localhost', ...(password ? { authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` } : {}) } },
+          (res) => (res.resume(), ok(res.statusCode ?? 0)),
+        );
+        req.on('error', ko);
+        req.end();
+      });
+    expect(await status()).toBe(401);
+    expect(await status(PASSWORD)).toBe(200);
   });
 
   it('keeps the authority out of factoryd', () => {
