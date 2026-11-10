@@ -63,4 +63,21 @@ describe('the statuses of the MVP (ORC-170)', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: fixed, blocked: false });
     expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review', 'AI Review', 'Human Review']);
   });
+
+  it('a reply that commits nothing leaves the ticket in Human Review, on the commit already reviewed: no review again', async () => {
+    const h = createHarness({ aiReview: true });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
+    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: SHA, checks: 'pass', failedChecks: [] });
+    h.workspaces.heads.set(WORKTREE, SHA);
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await h.send('session.stopped', { linearSessionId: 'ls-1' });
+
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'I was building the export; nothing to change.' }] });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'What were you doing?', author: 'L' });
+
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback']);
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: SHA, blocked: false });
+    expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review']);
+  });
 });
