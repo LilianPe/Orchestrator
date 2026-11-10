@@ -180,6 +180,13 @@ class TicketBudgetError extends Error {}
 const launchErrorTold = (err: unknown): string =>
   err instanceof ExecFailure ? `${err.cmd} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
 
+/** An error's message, then each of its causes', as the daemon's log keeps them. */
+const causeChain = (err: unknown): string => {
+  const parts: string[] = [];
+  for (let e: unknown = err; e instanceof Error && parts.length < 5; e = e.cause) parts.push(e.message);
+  return parts.join(' ← ') || String(err);
+};
+
 /**
  * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
  * `repeatedFailures` too (ORC-187), for its checks only, and keeps running as it did. Only a dev job has its worktree read
@@ -2637,7 +2644,8 @@ export class Orchestrator {
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
     const [kind, reason]: [BlockKind, string] =
       err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${launchErrorTold(err)}`];
-    if (err instanceof ExecFailure) this.log('error', `launch of ${job.name} on ${ticketId}: ${err.message}`);
+    // The whole of it in the daemon's log, what each error wraps included: the ticket may have been told less.
+    if (kind === 'infra') this.log('error', `launch of ${job.name} on ${ticketId}: ${causeChain(err)}`);
     fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
