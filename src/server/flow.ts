@@ -34,7 +34,7 @@ export interface WorkingRun extends FlowTicket {
   tokens: TokenUsage | null;
   /** Finished attempts `tokens` leaves out: they reported no usage. */
   attemptsWithoutTokens: number;
-  /** Share of the ticket's token budget its code runs spent, what the dashboard shows in place of a cost of the day (ORC-194); null without a cap. */
+  /** Share of the ticket's token budget its code runs spent, what the dashboard shows in place of a cost of the day (ORC-194); null without a cap or while no code run reported its tokens. */
   usageLimitShare: number | null;
   /** Of the ticket, in dollars: what exists when no attempt reported tokens (ORC-216). */
   costUsd: number;

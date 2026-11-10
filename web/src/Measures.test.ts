@@ -9,7 +9,7 @@ const attempt = (patch: Partial<RunMeasureView> = {}): RunMeasureView => ({
   id: 'r1', job: 'dev', role: 'implementer', status: 'success', startedAt: 0, endedAt: 60_000, durationMs: 60_000, tokens, costUsd: 0, turns: 5, ...patch,
 });
 const measures = (patch: Partial<TicketMeasuresView> = {}): TicketMeasuresView => ({
-  mergedAt: null, tokens, attempts: 1, attemptsWithoutTokens: 0, firstTry: null, reworks: [], revertedWithin14Days: null, ciCost: null, messages: [],
+  mergedAt: null, tokens, attempts: 1, attemptsWithoutTokens: 0, usageLimitShare: null, firstTry: null, reworks: [], revertedWithin14Days: null, ciCost: null, messages: [],
   startedAt: 0, leadTimeMs: null, workMs: 60_000, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [attempt()], ...patch,
 });
 const ticket = (ticketId: string, m: TicketMeasuresView | null, patch: Partial<MeasuredTicketView> = {}): MeasuredTicketView => ({
@@ -40,6 +40,7 @@ describe('the cells of the measures (ORC-223)', () => {
     expect(costCell(measures({ attemptsWithoutTokens: 1 })).text).toBe('≥ 37.0 k');
     expect(costCell(measures({ tokens: null, costUsd: 0.5 })).text).toBe('— ($0.50)');
     expect(costCell(null).text).toBe('?');
+    expect(costCell(measures({ usageLimitShare: 0.42 })).text).toBe('37.0 k · 42%'); // As the Flow (ORC-194).
   });
 });
 

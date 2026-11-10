@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { AGENT_QUESTION, STOPPED } from '../../src/core/block-cause.js';
-import { Flow, formatDuration, formatTokens, plural, tokensCell } from './Flow.js';
+import { Flow, formatDuration, formatTokens, percent, plural, tokensCell } from './Flow.js';
 import type { FlowView, WorkingRunView } from './types.js';
 
 const EMPTY: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
@@ -37,6 +37,11 @@ describe('formats', () => {
     expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).title).toMatch(/^2 finished attempts without a measurement\. /);
   });
 
+  it('percent: a whole percentage', () => {
+    expect(percent(0.75)).toBe('75%');
+    expect(percent(1 / 3)).toBe('33%');
+  });
+
   it('tokensCell: the measure, marked when attempts are missing from it, and the cost in dollars when none reported (ORC-216)', () => {
     expect(tokensCell(running).text).toBe('37.0 k');
     expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).text).toBe('≥ 37.0 k');
@@ -47,7 +52,7 @@ describe('formats', () => {
   it("tokensCell: the share of the ticket's token budget, beside its tokens, when there is a cap (ORC-194)", () => {
     const cell = tokensCell({ ...running, usageLimitShare: 0.42 });
     expect(cell.text).toBe('37.0 k · 42%');
-    expect(cell.title).toMatch(/ 42% of the ticket’s token budget\.$/);
+    expect(cell.title).toContain(' 42% of the ticket’s token budget: its code runs, cache reads left out, against factory.yml’s per_ticket_tokens.');
     expect(tokensCell({ ...running, tokens: null, costUsd: 0, usageLimitShare: null }).text).toBe('—');
   });
 

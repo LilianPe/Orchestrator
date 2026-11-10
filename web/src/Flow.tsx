@@ -52,17 +52,17 @@ export const totalTokens = (t: TokensView): number => t.input + t.output + t.cac
  * The measure of the ticket, with the share of its token budget when it has one (ORC-194); the cost in dollars is what
  * exists when no attempt reported tokens (ORC-216).
  */
-export function tokensCell(run: Pick<WorkingRunView, 'measured' | 'tokens' | 'attemptsWithoutTokens' | 'costUsd'> & { usageLimitShare?: number | null }): { text: string; title: string } {
+export function tokensCell(run: Pick<WorkingRunView, 'measured' | 'tokens' | 'attemptsWithoutTokens' | 'usageLimitShare' | 'costUsd'>): { text: string; title: string } {
   if (!run.measured) return { text: '?', title: 'This ticket’s measurements could not be read: see the log.' };
   if (!run.tokens) {
     return { text: run.costUsd > 0 ? `— ($${run.costUsd.toFixed(2)})` : '—', title: 'No finished attempt reported its tokens.' };
   }
   const { input, output, cacheRead, cacheCreation } = run.tokens;
   const missing = run.attemptsWithoutTokens > 0 ? `${plural(run.attemptsWithoutTokens, 'finished attempt')} without a measurement. ` : '';
-  const share = run.usageLimitShare == null ? undefined : percent(run.usageLimitShare);
+  const share = run.usageLimitShare === null ? undefined : percent(run.usageLimitShare);
   return {
     text: `${missing ? '≥ ' : ''}${formatTokens(totalTokens(run.tokens))}${share ? ` · ${share}` : ''}`,
-    title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.${share ? ` ${share} of the ticket’s token budget.` : ''}`,
+    title: `${missing}Input ${formatTokens(input)}, output ${formatTokens(output)}, cache read ${formatTokens(cacheRead)}, cache write ${formatTokens(cacheCreation)}.${share ? ` ${share} of the ticket’s token budget: its code runs, cache reads left out, against factory.yml’s per_ticket_tokens.` : ''}`,
   };
 }
 

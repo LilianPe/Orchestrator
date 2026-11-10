@@ -109,6 +109,7 @@ export interface TicketMeasuresView {
   tokens: TokensView | null;
   attempts: number;
   attemptsWithoutTokens: number;
+  usageLimitShare: number | null;
   firstTry: boolean | null;
   reworks: { cause: string; id: string }[];
   revertedWithin14Days: boolean | null;
