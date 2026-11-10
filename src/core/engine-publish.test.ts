@@ -84,7 +84,7 @@ describe('the publish effect (ORC-125)', () => {
     expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ step: 'publish', reason: expect.stringContaining('la branche a bougé') }) });
   });
 
-  it('a move the refused publication owed comes with the next one: a relaunch by dev-feedback, which has no move of its own, still shows the work, and starts the AI review it came with (ORC-183)', () => {
+  it('a move the refused publication owed comes with the next one: a relaunch by dev-feedback still shows the work, and starts the AI review it came with, once (ORC-183)', () => {
     const owed = after(verifying(), passed(), decide(verifying(), passed(), workflow));
     expect(owed.owedMove).toBe('ai_review');
     const refused = ev('publish.refused', { runId: 'r1', job: 'dev', sha: 'abc', reason: 'x' });
@@ -97,12 +97,14 @@ describe('the publish effect (ORC-125)', () => {
     expect(after(relaunched, done, out).owedMove).toBeNull();
   });
 
-  it('a feedback published in its own course owes nothing, and moves nothing', () => {
+  it('a feedback published goes to AI Review and is reviewed, as fix-human: no commit of the factory waits for a human move to be reviewed (ORC-170)', () => {
     const event = ev('verify.passed', { runId: 'r1', job: 'dev-feedback', sha: 'abc' });
     const t = after(verifying(), event, decide(verifying(), event, workflow));
-    expect(t.owedMove).toBeUndefined();
+    expect(t.owedMove).toBe('ai_review');
     const done = ev('publish.done', { runId: 'r1', job: 'dev-feedback', sha: 'abc' });
-    expect(decide(t, done, workflow).effects).toEqual([{ kind: 'post_output', style: 'reply', runId: 'r1' }]);
+    const out = decide(t, done, workflow);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'ai_review' }, { kind: 'post_output', style: 'reply', runId: 'r1' }, expect.objectContaining({ kind: 'start_run', job: 'review' })]);
+    expect(after(t, done, out).owedMove).toBeNull();
   });
 
   it('a stop keeps its reason over a refusal that comes later', () => {

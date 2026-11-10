@@ -189,7 +189,7 @@ Pack jobs:
 | Job | Queue | Model | Role |
 |---|---|---|---|
 | `dev` | dev | sonnet | First development; moves the ticket to `dev` at the start; once published, posts a summary, moves it to `ai_review` and starts `review`. |
-| `dev-feedback` | dev | sonnet | Extends `dev`: resumes the session to address feedback. |
+| `dev-feedback` | dev | sonnet | Extends `dev`: resumes the session to address feedback, then `verify`, publication and the AI review (`move: ai_review, post: reply, run: review`, ORC-170). |
 | `fix-ci` | dev | sonnet | Extends `dev-feedback`: fixes CI, then goes back through `verify`, publication and the AI review (ORC-184). |
 | `fix-review` | dev | sonnet | Extends `dev-feedback`: the fix of the review loop, on the blocking findings of the last AI review and the PR's unresolved threads; one commit per finding fixed or a justified contest (`fixed`, `contested` of `submit_result`), then `verify`, publication and the AI review again (ORC-184). |
 | `fix-human` | dev | sonnet | Extends `dev-feedback`: the fix of human review feedback in Human Review (the session's replies, the PR's reviews and unresolved threads), then `verify`, publication, the AI review and Human Review again; each start a round of `human_review_rounds` (`counter: human_review`, ORC-190). |
@@ -286,7 +286,7 @@ There is no `post` field in a rule: publishing the result is configured in `jobs
 | Event | Rules (in order) |
 |---|---|
 | `ticket.delegated` | if `state in [todo, dev] && !blocked` → `dev` |
-| `status.changed` | to `ai_review` → `review` (the published commit reviewed again: how a commit `dev-feedback` published gets a review). A move from Human Review back to In Progress starts nothing since ORC-190: the feedback itself does. |
+| `status.changed` | to `ai_review` → `review` (the published commit reviewed again: on a human's move, and the job a merge refused for a push since the review starts, ORC-148; every fix starts its own review since ORC-170). A move from Human Review back to In Progress starts nothing since ORC-190: the feedback itself does. |
 | `session.prompted` | if `blocked` → `dev-feedback` immediately; if `state in [human_review]` → 3-minute grouping with no new message, then `fix-human`, a round of human feedback (ORC-190); if `state in [dev]` → the same grouping, then `dev-feedback`. A run in progress is not interrupted: its end hands the messages over. Otherwise, the message stays in `humanInbox` |
 | `pr.reviewed` | no rule of its own: a review written on the open PR, with words and not an approval, by a writer of the repository (`review_feedback`), is kept in `humanInbox` and goes through the `session.prompted` rules, the blocked one aside (ORC-190) |
 | `session.mentioned` | → `ask` |

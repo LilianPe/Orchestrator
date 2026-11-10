@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadWorkflow } from '../config/load-workflow.js';
+import type { Workflow } from '../config/workflow-schema.js';
 import type { Effect } from './decision.js';
 import { decide, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
@@ -10,6 +11,8 @@ import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
 /** `workflow` as a version frozen before ORC-375 holds it: no relay job, the reply rule's job answers a relayed question. */
 const { relayJob: _relayJob, ...beforeOrc375 } = workflow;
+/** A version frozen before ORC-170, whose `dev-feedback` moves nothing and starts no review. */
+const beforeOrc170: Workflow = { ...workflow, jobs: { ...workflow.jobs, 'dev-feedback': { ...workflow.jobs['dev-feedback']!, onSuccess: { post: 'reply' } } } };
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], patch: Partial<FactoryEvent> = {}): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', ...patch, payload } as FactoryEvent;
@@ -291,9 +294,11 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
     const done = ev('publish.done', { runId: run, job: 'dev-feedback', sha: 'abc' });
     const t = ticket({ logical: 'dev', verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
     // Owed to AI Review, where no reply rule applies: the messages wait; only the review the move came with starts (ORC-183).
-    const starts = decide(t, done, workflow).effects.filter((e) => e.kind === 'start_run');
+    const starts = decide(t, done, beforeOrc170).effects.filter((e) => e.kind === 'start_run');
     expect(starts).toEqual([expect.objectContaining({ job: 'review' })]);
-    expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'fix-human' });
+    expect(decide({ ...t, owedMove: 'human_review' }, done, beforeOrc170).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'fix-human' });
+    // Since ORC-170 the job's own move comes first: its commit is reviewed, the messages wait for the review's end.
+    expect(decide({ ...t, owedMove: 'human_review' }, done, workflow).effects.filter((e) => e.kind === 'move' || e.kind === 'start_run')).toEqual([{ kind: 'move', to: 'ai_review' }, expect.objectContaining({ job: 'review' })]);
   });
 
   it('the end of an answer starts no agent', () => {
@@ -480,7 +485,7 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
   });
 
   it('the end of the step the questions were handed to starts nothing for them: they are answered', () => {
-    const quick = { ...workflow, jobs: { ...workflow.jobs, 'dev-feedback': { ...workflow.jobs['dev-feedback']!, verify: [], repoChecks: false } } };
+    const quick = { ...beforeOrc170, jobs: { ...beforeOrc170.jobs, 'dev-feedback': { ...beforeOrc170.jobs['dev-feedback']!, verify: [], repoChecks: false } } };
     const end = ev('run.finished', { runId: 'r1', job: 'dev-feedback', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output });
     const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1')] }), end, quick);
     expect(relays(out)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
