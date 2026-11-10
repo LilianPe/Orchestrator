@@ -14,6 +14,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import type { FactoryEvent, FeedbackItem } from '../../core/types.js';
+import type { GhostTicket } from '../../ghost/replay.js';
 import type { ChangelogEntry } from '../types.js';
 
 /** Every timestamp is `timestamptz`, so Postgres stores it in UTC and returns it in the session zone. */
@@ -438,7 +439,47 @@ export const reviewDefects = pgTable(
   (t) => [index('review_defects_entered_at_idx').on(t.enteredAt), index('review_defects_ticket_idx').on(t.projectId, t.ticketId)],
 );
 
-/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355), the review defects (ORC-229). */
+/**
+ * A replay of closed tickets (ORC-231), written once with its threshold, which nothing updates: written before the replay, never
+ * changed after. `seed` draws the blind order of the pairs; `tickets`, the tickets it replays.
+ */
+export const ghostReplays = pgTable('ghost_replays', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull(),
+  threshold: doublePrecision('threshold').notNull(),
+  memory: boolean('memory').notNull(),
+  seed: text('seed').notNull(),
+  tickets: jsonb('tickets').$type<string[]>().notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'date' }).notNull(),
+  startedBy: text('started_by').notNull(),
+});
+
+/** What a replay recorded of each ticket (ORC-231): its environment, its outcome, its cost, as `GhostTicket` holds them. */
+export const ghostTickets = pgTable(
+  'ghost_tickets',
+  {
+    replayId: text('replay_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    data: jsonb('data').$type<GhostTicket>().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.replayId, t.ticketId] })],
+);
+
+/** The grades of the blind judging (ORC-231), once per PR of a pair: `side`, whose PR it was, which the judge was not shown. */
+export const ghostJudgments = pgTable(
+  'ghost_judgments',
+  {
+    replayId: text('replay_id').notNull(),
+    ticketId: text('ticket_id').notNull(),
+    side: text('side').notNull(),
+    grade: text('grade').notNull(),
+    judge: text('judge').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.replayId, t.ticketId, t.side] })],
+);
+
+/** The public tables, in migration order: the twelve of ORC-132, the security log's (ORC-296), the known flaky tests (ORC-164), the changelog (ORC-197), the baselines (ORC-230), the deliveries (ORC-355), the review defects (ORC-229), the replays of closed tickets (ORC-231). */
 export const PG_TABLES = {
   inbox,
   journal,
@@ -460,6 +501,9 @@ export const PG_TABLES = {
   baselines,
   deliveries,
   reviewDefects,
+  ghostReplays,
+  ghostTickets,
+  ghostJudgments,
 } as const;
 
 export const PG_TABLE_NAMES = [
@@ -483,6 +527,9 @@ export const PG_TABLE_NAMES = [
   'baselines',
   'deliveries',
   'review_defects',
+  'ghost_replays',
+  'ghost_tickets',
+  'ghost_judgments',
 ] as const;
 
 export type PgTableName = (typeof PG_TABLE_NAMES)[number];

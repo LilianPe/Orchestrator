@@ -264,6 +264,8 @@ export function createHarness(
     packDir?: string;
     /** Where the runs' transcripts are, as a test writes them: the answer agent reads the session at work there (ORC-182). */
     transcriptsDir?: string;
+    /** The project without effects (ORC-231), its effects kept in a temporary dir (`keptEffectsDir`): or `{ keptEffectsDir: false }`, nowhere. */
+    noEffect?: boolean | { keptEffectsDir: false };
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
@@ -284,7 +286,8 @@ export function createHarness(
   const visualProof = opts.visualShooter && { shooter: opts.visualShooter, artifactsDir: mkdtempSync(join(tmpdir(), 'factory-artifacts-')) };
   /** The orchestrator's log lines, every life of it. */
   const logs: { level: string; message: string }[] = [];
-  const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow };
+  const keptEffectsDir = opts.noEffect === true ? mkdtempSync(join(tmpdir(), 'factory-kept-')) : undefined;
+  const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
   const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
   /** One life of the process: its store and its adapters, all of them silent once it is killed. */
   const connect = () => {
@@ -310,6 +313,7 @@ export function createHarness(
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(visualProof ? { visualProof } : {}),
+      ...(keptEffectsDir ? { keptEffectsDir } : {}),
       ...(opts.transcriptsDir ? { transcriptsDir: opts.transcriptsDir } : {}),
     };
     return { ...life, outside };

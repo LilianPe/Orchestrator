@@ -1,3 +1,4 @@
+import type { OutboxEffect } from '../core/decision.js';
 import { LEASE_MS, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
 import { attemptsFor, backoff, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 
@@ -19,6 +20,36 @@ export function effectBackoff(attempt: number, retry: EffectRetry = EFFECT_RETRY
   return backoff(retry, attempt);
 }
 
+/**
+ * Where each kind of effect acts (ORC-231): `outside` writes to Linear or GitHub, or reads them into the inbox (`reconcile`);
+ * `inside` stays in the factory (its runs, its workspaces, its store). Every kind is listed, so a new one does not compile until
+ * someone says where it acts: the no-effect mode never lets one out by default.
+ */
+export const EFFECT_REACH: Record<OutboxEffect['kind'], 'inside' | 'outside'> = {
+  start_run: 'inside',
+  stop_run: 'inside',
+  run_verify: 'inside',
+  publish: 'outside',
+  move: 'outside',
+  labels: 'outside',
+  comment: 'outside',
+  block_comment: 'outside',
+  ack: 'outside',
+  activity: 'outside',
+  post_output: 'outside',
+  review: 'outside',
+  link_pr: 'outside',
+  reconcile: 'outside',
+  merge: 'outside',
+  take_over: 'inside',
+  close_take_over: 'inside',
+  publish_bundle: 'outside',
+  after_merge: 'outside',
+  cleanup: 'inside',
+  set_paused: 'inside',
+  settle: 'inside',
+};
+
 export interface OutboxExecutorDeps {
   store: Store;
   log: (level: 'info' | 'warn' | 'error', message: string) => void;
@@ -27,6 +58,13 @@ export interface OutboxExecutorDeps {
    * that it found the effect already made by an earlier execution (ORC-162): its result says so.
    */
   execute(row: OutboxRow): Promise<EffectOutcome | void>;
+  /**
+   * The projects without effects (ORC-231: the replay of closed tickets, a prompt tried out): their rows that reach outside
+   * (`EFFECT_REACH`) go to `keep`, never to `execute`.
+   */
+  noEffect?: (projectId: string) => boolean;
+  /** Keeps what a row of a project without effects would have done, as an artifact of its run. Absent: such a row fails. */
+  keep?(row: OutboxRow): Promise<void>;
   /** A row went back to `pending` for its retry in `delayMs`: whoever polls should look again then. */
   retryIn(delayMs: number): void;
   leaseMs?: number;
@@ -79,6 +117,16 @@ export class OutboxExecutor {
     }
   }
 
+  /**
+   * Here and not in the adapters (ORC-231): a project without effects has its writes kept whatever adapter would make them, so an
+   * adapter that forgets the mode cannot push.
+   */
+  private async carryOut(row: OutboxRow): Promise<EffectOutcome | void> {
+    if (!this.d.noEffect?.(row.projectId) || EFFECT_REACH[row.effect.kind] === 'inside') return this.d.execute(row);
+    if (!this.d.keep) throw new Error(`project ${row.projectId} has no effects, and nowhere to keep ${row.effect.kind}`);
+    await this.d.keep(row);
+  }
+
   /** Executes one claimed row and settles it: `done`, `retry` (back to pending), `dead`, or `lost` (its lease went to another). */
   async run(row: OutboxRow): Promise<'done' | 'retry' | 'dead' | 'lost'> {
     const { store } = this.d;
@@ -95,7 +143,7 @@ export class OutboxExecutor {
     let failure: Error | undefined;
     let outcome: EffectOutcome | undefined;
     try {
-      outcome = (await this.d.execute(row)) ?? undefined;
+      outcome = (await this.carryOut(row)) ?? undefined;
     } catch (err) {
       // A non-Error throw still has a message to store and to report.
       failure = err instanceof Error ? err : new Error(String(err));

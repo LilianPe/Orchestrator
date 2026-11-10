@@ -15,6 +15,7 @@ import type { ReviewLens } from '../../config/workflow-schema.js';
 import type { Finding } from '../../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
+import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import { findingRowId, type ReviewFinding } from '../../core/review.js';
 import { claims, holds } from '../../core/routing.js';
@@ -1030,6 +1031,59 @@ export class PgStore implements AsyncStore {
     if (!first) return null;
     const measures = Object.fromEntries(rows.map((r) => [r.measure, { value: r.value === null ? null : Number(r.value), over: r.over_count, leftOut: r.left_out, noSource: r.no_source }]));
     return { projectId: first.project_id, since: Number(first.since), until: Number(first.until), computedAt: Number(first.at), measures };
+  }
+
+  async putGhostReplay(r: GhostReplay): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.ghostReplays)
+      .values({ id: r.id, projectId: r.projectId, threshold: r.threshold, memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: new Date(r.startedAt), startedBy: r.startedBy })
+      .onConflictDoNothing()
+      .returning({ id: schema.ghostReplays.id });
+    return rows.length === 1;
+  }
+
+  async ghostReplay(id: string): Promise<GhostReplay | undefined> {
+    return (await this.readGhostReplays(sql`where id = ${id}`))[0];
+  }
+
+  async ghostReplays(): Promise<GhostReplay[]> {
+    return this.readGhostReplays(sql`order by started_at desc, id`);
+  }
+
+  private async readGhostReplays(rest: ReturnType<typeof sql>): Promise<GhostReplay[]> {
+    type Row = { id: string; project_id: string; threshold: number; memory: boolean; seed: string; tickets: string[]; started_at: string | number; started_by: string };
+    const { rows } = await this.db.execute<Row>(sql`
+      select id, project_id, threshold, memory, seed, tickets, round(extract(epoch from started_at) * 1000) as started_at, started_by from ghost_replays ${rest}
+    `);
+    return rows.map((r) => ({ id: r.id, projectId: r.project_id, threshold: Number(r.threshold), memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: Number(r.started_at), startedBy: r.started_by }));
+  }
+
+  async putGhostTicket(t: GhostTicket): Promise<void> {
+    // Through JSON: an absent field stays absent, as the SQLite store keeps it.
+    const data = JSON.parse(JSON.stringify(t)) as GhostTicket;
+    await this.db.insert(schema.ghostTickets).values({ replayId: t.replayId, ticketId: t.ticketId, data }).onConflictDoUpdate({ target: [schema.ghostTickets.replayId, schema.ghostTickets.ticketId], set: { data } });
+  }
+
+  async ghostTickets(replayId: string): Promise<GhostTicket[]> {
+    const { rows } = await this.db.execute<{ data: GhostTicket }>(sql`select data from ghost_tickets where replay_id = ${replayId} order by ticket_id`);
+    return rows.map((r) => r.data);
+  }
+
+  async putGhostJudgment(j: GhostJudgment): Promise<boolean> {
+    const rows = await this.db
+      .insert(schema.ghostJudgments)
+      .values({ replayId: j.replayId, ticketId: j.ticketId, side: j.side, grade: j.grade, judge: j.judge, at: new Date(j.at) })
+      .onConflictDoNothing()
+      .returning({ side: schema.ghostJudgments.side });
+    return rows.length === 1;
+  }
+
+  async ghostJudgments(replayId: string): Promise<GhostJudgment[]> {
+    type Row = { ticket_id: string; side: GhostSide; grade: GhostGrade; judge: string; at: string | number };
+    const { rows } = await this.db.execute<Row>(sql`
+      select ticket_id, side, grade, judge, round(extract(epoch from at) * 1000) as at from ghost_judgments where replay_id = ${replayId} order by at, ticket_id, side
+    `);
+    return rows.map((r) => ({ replayId, ticketId: r.ticket_id, side: r.side, grade: r.grade, judge: r.judge, at: Number(r.at) }));
   }
 
   async putFindings(r: FindingsRecord): Promise<void> {

@@ -4,7 +4,7 @@ import { settledTicket } from '../core/engine.js';
 import type { FactoryEvent } from '../core/types.js';
 import { upcast, type StoredEvent } from '../core/upcast.js';
 import { TicketHeldError, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type Store } from '../store/types.js';
-import { OutboxExecutor, type EffectRetry } from './outbox.js';
+import { OutboxExecutor, type EffectRetry, type OutboxExecutorDeps } from './outbox.js';
 import { attemptsFor, backoff, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 
 /** Inbox rows read per pass. */
@@ -49,6 +49,9 @@ export interface WorkerDeps {
   committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void>;
   /** Executes one outbox row. Throws when the effect failed: the executor retries it, then lets it die (ORC-150). */
   execute(row: OutboxRow): Promise<EffectOutcome | void>;
+  /** The no-effect mode of the outbox (ORC-231): `OutboxExecutorDeps`. */
+  noEffect?: OutboxExecutorDeps['noEffect'];
+  keep?: OutboxExecutorDeps['keep'];
   leaseMs?: number;
   /** Retries of a row whose processing throws (`PROCESS_RETRY` by default; its delay tripled at each failure unless `factor` says otherwise). */
   retry?: RetryPolicy;
@@ -143,6 +146,8 @@ export class Worker {
       store: d.store,
       log: d.log,
       execute: (row) => d.execute(row),
+      ...(d.noEffect ? { noEffect: d.noEffect } : {}),
+      ...(d.keep ? { keep: d.keep } : {}),
       retryIn: (delayMs) => this.wakeIn(delayMs),
       leaseMs: d.leaseMs,
       retry: d.effectRetry,
