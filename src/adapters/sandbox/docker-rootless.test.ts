@@ -266,6 +266,14 @@ describe('ContainerSandboxProvider.create', () => {
     expect(egress.opened).toHaveLength(1);
   });
 
+  it.each([[['a.example.com,b.example.com']], [['']], [['a.example.com\tnone']], [['a.example.com\nc2']]])('refuses a host that would not read back as itself from the label: %j', async (allow) => {
+    const made = empty();
+    const egress = fakeEgress();
+    await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec, egress }).create(req({ network: 'limited', allow }))).rejects.toThrow(/unsupported host/);
+    expect(made.calls.some((c) => sub(c.args)[0] === 'run')).toBe(false);
+    expect(egress.opened).toHaveLength(0);
+  });
+
   it('puts no allow label on a sandbox without hosts of its own', async () => {
     const made = empty();
     await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: made.exec }).create(req({ network: 'limited' }));

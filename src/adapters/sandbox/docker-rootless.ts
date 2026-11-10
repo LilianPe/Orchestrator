@@ -226,6 +226,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
     if (browser) throw new Error('container sandbox: no browser');
     const unknown = this.unprovided(services);
     if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
+    // Kept comma-separated on a label `inspect` prints in a tab-separated line: what would split it differently is refused.
+    const host = req.allow?.find((h) => !/^[^\s,]+$/.test(h));
+    if (host !== undefined) throw new Error(`container sandbox: unsupported host ${JSON.stringify(host)} in allow`);
     const mounts = [{ host: req.workspacePath, target: WORKSPACE_TARGET, readOnly: false }, ...req.mounts].map(mountArg);
     const key = req.servicesOf ?? req.runId;
 
