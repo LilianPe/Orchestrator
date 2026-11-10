@@ -5,7 +5,8 @@ the factory, from where the human started, without any effect outside the factor
 with the human one.
 
 Code: `src/presets/fantome.ts` (the preset), `src/runtime/outbox.ts` and `Orchestrator.keep` (the no-effect mode),
-`src/ghost/history.ts` (the historical environment), `src/ghost/replay.ts` (blind pairs, report), `src/cli/ghost.ts` (the command).
+`src/ghost/history.ts` (the historical environment), `src/ghost/delegate.ts` (the daemon's delegation of the tickets, ORC-376),
+`src/ghost/replay.ts` (blind pairs, report), `src/cli/ghost.ts` (the command).
 
 ## The `factory/fantome` preset
 
@@ -49,12 +50,39 @@ is blocked: nothing goes out either way.
 - **Start point**: the parent of the human PR's merge commit (its first parent; for a squash, the commit it was squashed onto).
   A rebase merge puts the PR's commits one by one on the base, the merge commit being the last of them: when the merge commit has
   one parent and the last commits carry exactly the PR's commit headlines, the start is the commit before the first of them. The
-  clone is shallow, at that commit alone, with no remote: no later commit enters the context, and a `git fetch` of the agent brings
-  nothing back.
+  clone holds that commit and its history, nothing after it: no later commit enters the context. It is not shallow (ORC-376): the
+  run's worktree and the verify clone are fetched from it, and a fetch refuses the refs of a shallow repository.
+- **The run's repository** (ORC-376): the clone stands for the project's repository. The start is on a branch named as the
+  project's default branch, and its `origin` is the clone itself, its `HEAD` on that branch: the ticket's worktree is made from it as
+  from any repository, its trunk the start, and a `git fetch` of `origin` brings nothing that was not there. No forge is named in it.
 - **Knowledge base at transaction time** (ORC-257): its last commit before the start commit was made, by commit date, not a date a
   note claims, so a note learned from the replayed PR does not leak into its own replay. `--memory off` gives none (ORC-260).
-- **Linked tickets**: those created before the start, with the comments written before it (`linkedAsOf`). Linear keeps no
-  history of a description: an edit made after the start stays.
+- **The ticket and its linked tickets** (ORC-376): read from the tracker once, when the daemon delegates the ticket (`history`:
+  the ticket's comments, the tickets related to it either way with theirs), then kept as of the start, by the start commit's date:
+  the ticket's comments written before it, the linked tickets created before it with their comments of before (`historyAsOf`,
+  `linkedAsOf`). Kept beside the clone (`ticket.json`), the run reads them from there, never from Linear. Linear keeps no history of
+  a description or a title: an edit made after the start stays.
+
+## Running the tickets (ORC-376)
+
+`factory ghost start` writes the replay and rebuilds each ticket; the daemon runs them. At its start, then each minute, it
+delegates each ticket of a replay whose environment was rebuilt and whose run has not started to the replay's project, once
+(`ticket.delegated`, its id `ghost:<replay>:<ticket>`, its payload `replay`). No human sent that delegation: no matrix checks it.
+The ticket starts to do, whatever Linear says of it now (Done), and runs the fantome's pipeline without effects.
+
+- **On its clone.** The project's repository, for that ticket, is its clone (`Orchestrator.runtimeFor`): the worktree, the diffs and
+  the verification read it, not the project's checkout.
+- **Its text as of its start.** The run reads the title, the description, the thread and the linked tickets kept at the delegation
+  (`## The ticket's thread and its linked tickets, as of its start (data)` in its prompt), and `factory-agent issue` answers the same.
+  No link to the live ticket is given.
+- **Nothing of what came after.** The forge and Linear hold now the human's PR, its branch and what was written after the start:
+  `intake`'s duplicate search and the read of the ticket's own branches are skipped, and `factory-agent search` is refused.
+- **Only the daemon's delegations.** Linear's webhooks and the reconciliation never route a ticket to a project on `factory/fantome`:
+  its tickets of the same team stay the other projects'.
+- **Sandboxes required.** An agent run on the host gets the host's git login and could push by itself, which no effect mode holds
+  back. `start` refuses a replay when the daemon said at its last start that it runs without sandboxes, or when no daemon has
+  started yet (the `daemon-sandboxes` meta row); a daemon without sandboxes delegates no replayed ticket, and says why in its log.
+- **A ticket replayed again** waits for the run of its earlier replay to end; its worktree is then made anew from the new clone.
 
 ## Threshold, judging, report
 
@@ -81,9 +109,10 @@ factory ghost report <replay>
 factory ghost list
 ```
 
-`start` refuses a project with effects and a PR that is not merged, before writing anything. It reads each human PR with `gh`
-in the project's checkout, and rebuilds each ticket under `<FACTORY_HOME>/ghost/<replay>/<ticket>/` (`repo/`, `knowledge/`). An
-environment that cannot be rebuilt is counted apart, with why. `collect` reads what each ticket ran to on the project, within
+`start` refuses a project not on `factory/fantome`, a daemon without sandboxes, and a PR that is not merged, before writing
+anything. It reads each human PR with `gh` in the project's checkout, and rebuilds each ticket under
+`<FACTORY_HOME>/ghost/<replay>/<ticket>/` (`repo/`, `knowledge/`; `ticket.json` once delegated). An environment that cannot be
+rebuilt is counted apart, with why. `collect` reads what each ticket ran to on the project, within
 the replay's time (from its start to the next replay of the same ticket): its last kept PR, its runs' cost, the assumptions of its
 spec; a ticket whose run has not ended stays `pending`, and a PR already graded stays the one graded. The human diffs are read
 from GitHub when judged.
@@ -93,11 +122,8 @@ from GitHub when judged.
 - **The dry run on each start commit** (criterion 3) needs ORC-208, which waits on ORC-209. Every ticket's environment is
   `unchecked` until then, and the report says how many: the hook is `GhostTicket.env` (`ok`, `failed`, `unchecked`), which the
   report already keeps out of the comparison when `failed`.
-- **Running the tickets.** `start` rebuilds each ticket's environment, and a project on `factory/fantome` runs a delegated ticket
-  without effects; the link between the two (the daemon delegating each replayed ticket to the project, on its rebuilt clone and its
-  ticket text as it was, with its linked tickets read as of the start) is still to wire. Until then, `collect` reads what the project
-  ran.
-- **The agent's own push.** The no-effect mode holds the factory's writes. An agent in a sandbox holds no GitHub credential (only
-  the factory publishes, ORC-125); an agent run on the host (no sandboxes) gets the host's git login and could push by itself. A
-  project without effects should run with sandboxes; nothing refuses a host run yet.
+- **The knowledge base at transaction time in the runs.** `start` rebuilds it under `knowledge/` (or none with `--memory off`), but
+  a run still mounts and searches the daemon's own knowledge base, as it is now: per-run knowledge is still to wire.
+- **A ticket blocked in an earlier replay** stays blocked: the fantome's delegation runs `!blocked` only, and its new replay counts
+  it as blocked.
 - The threshold's value (ORC-143) and the pilot repository (ORC-137) are decisions still to take.
