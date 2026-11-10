@@ -9,6 +9,23 @@ const PR = { number: 3, url: 'https://github.com/acme/app/pull/3' };
 
 const lens = (summary: string): AgentOutput => ({ status: 'done', summary, tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings: [] });
 
+const reviewed = (sha: string) => ({ ...PR, state: 'OPEN' as const, headSha: sha, checks: 'pass' as const, failedChecks: [] });
+const built = () => [{ events: [{ kind: 'text' as const, text: 'Built.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') }];
+
+/** The ticket written in Todo, its PR on `SHA`, the agents' runs scripted for `dev` and both lenses; `lilian` may merge. */
+function delegable() {
+  const h = createHarness({ aiReview: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+  h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
+  h.tracker.setTeamMembers('REL', ['user-lilian']);
+  h.forge.setRepoPermission('lilian-gh', 'write');
+  h.forge.setPr(BRANCH, reviewed(SHA));
+  h.workspaces.heads.set(WORKTREE, SHA);
+  h.runner.enqueue(...built());
+  return h;
+}
+const moves = (h: ReturnType<typeof createHarness>) => h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
+const skills = (h: ReturnType<typeof createHarness>) => h.runner.requests.map((r) => r.prompt.split('\n')[0]);
+
 /**
  * ORC-170, criterion 1: the statuses of the MVP. A ticket taken to the merge with the pack as it ships, whose Linear history
  * holds only two moves by a human, Todo (the ticket written and delegated) and Done (the merge decision): the factory sets
@@ -16,13 +33,7 @@ const lens = (summary: string): AgentOutput => ({ status: 'done', summary, tests
  */
 describe('the statuses of the MVP (ORC-170)', () => {
   it('criterion 1: a ticket taken to the merge was moved by a human to Todo and Done only', async () => {
-    const h = createHarness({ aiReview: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
-    h.tracker.setTeamMembers('REL', ['user-lilian']);
-    h.forge.setRepoPermission('lilian-gh', 'write');
-    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: SHA, checks: 'pass', failedChecks: [] });
-    h.workspaces.heads.set(WORKTREE, SHA);
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
+    const h = delegable();
 
     // What a human does, all of it: the ticket in Todo is delegated, then, once in Human Review, moved to Done.
     expect(h.tracker.issues.get('REL-1')!.stateName).toBe('Todo');
@@ -33,18 +44,12 @@ describe('the statuses of the MVP (ORC-170)', () => {
     await h.send('pr.merged', { ...PR, branch: BRANCH, mergeSha: 'm1' });
 
     // Everything else is the factory's: In Progress, AI Review and Human Review, from its steps; never Todo nor Done.
-    expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review']);
+    expect(moves(h)).toEqual(['In Progress', 'AI Review', 'Human Review']);
     expect(await h.ticket()).toMatchObject({ logical: 'done', prState: 'MERGED' });
   });
 
   it('a commit dev-feedback publishes, on a reply to a block with no step of its own, is reviewed with no human move to AI Review', async () => {
-    const h = createHarness({ aiReview: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
-    h.tracker.setTeamMembers('REL', ['user-lilian']);
-    h.forge.setRepoPermission('lilian-gh', 'write');
-    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: SHA, checks: 'pass', failedChecks: [] });
-    h.workspaces.heads.set(WORKTREE, SHA);
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
+    const h = delegable();
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: SHA });
 
@@ -52,32 +57,27 @@ describe('the statuses of the MVP (ORC-170)', () => {
     await h.send('session.stopped', { linearSessionId: 'ls-1' });
     expect(await h.ticket()).toMatchObject({ blocked: true });
     const fixed = 'fade'.padEnd(40, '0');
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Fixed.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Fixed.' }] }, ...built().slice(1));
     h.workspaces.heads.set(WORKTREE, fixed);
-    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: fixed, checks: 'pass', failedChecks: [] });
+    h.forge.setPr(BRANCH, reviewed(fixed));
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Go on, and rename the export button.', author: 'L' }, 'REL-1', { actor: 'user-lilian' });
 
     // Its commit went through the AI review on its own, and Human Review shows it: the next Done merges it.
-    const skills = h.runner.requests.map((r) => r.prompt.split('\n')[0]);
-    expect(skills).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback', '/factory:review', '/factory:review']);
+    expect(skills(h)).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback', '/factory:review', '/factory:review']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: fixed, blocked: false });
-    expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review', 'AI Review', 'Human Review']);
+    expect(moves(h)).toEqual(['In Progress', 'AI Review', 'Human Review', 'AI Review', 'Human Review']);
   });
 
   it('a reply that commits nothing leaves the ticket in Human Review, on the commit already reviewed: no review again', async () => {
-    const h = createHarness({ aiReview: true });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits to CSV from their list.' });
-    h.forge.setPr(BRANCH, { ...PR, state: 'OPEN', headSha: SHA, checks: 'pass', failedChecks: [] });
-    h.workspaces.heads.set(WORKTREE, SHA);
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Built.' }] }, { output: lens('Correctness lens.') }, { output: lens('Security lens.') });
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const h = delegable();
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
     await h.send('session.stopped', { linearSessionId: 'ls-1' });
 
     h.runner.enqueue({ events: [{ kind: 'text', text: 'I was building the export; nothing to change.' }] });
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'What were you doing?', author: 'L' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'What were you doing?', author: 'L' }, 'REL-1', { actor: 'user-lilian' });
 
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback']);
+    expect(skills(h)).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: SHA, blocked: false });
-    expect(h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1])).toEqual(['In Progress', 'AI Review', 'Human Review']);
+    expect(moves(h)).toEqual(['In Progress', 'AI Review', 'Human Review']);
   });
 });

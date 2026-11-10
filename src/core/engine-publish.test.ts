@@ -18,6 +18,7 @@ function verifying(patch: Partial<TicketState> = {}): TicketState {
 }
 
 const passed = (job = 'dev', sha: string | null = 'abc') => ev('verify.passed', { runId: 'r1', job, ...(sha ? { sha } : {}) });
+const reviewing = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'move' || e.kind === 'start_run');
 const after = (t: TicketState, event: FactoryEvent, decision: ReturnType<typeof decide>) => decision.events.reduce<TicketState | undefined>((s, e) => reduce(s, e), reduce(t, event))!;
 
 describe('the publish effect (ORC-125)', () => {
@@ -108,8 +109,6 @@ describe('the publish effect (ORC-125)', () => {
   });
 
   describe('nothing new for the AI review (ORC-170)', () => {
-    const reviewing = (e: ReturnType<typeof decide>) => e.effects.filter((x) => x.kind === 'move' || x.kind === 'start_run');
-
     it('no PR: the end posts its reply, moves nothing and starts no review', () => {
       const done = ev('publish.done', { runId: 'r1', job: 'dev-feedback', sha: 'abc' });
       const out = decide(verifying({ prNumber: undefined }), done, workflow);
