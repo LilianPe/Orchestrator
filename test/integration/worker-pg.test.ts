@@ -36,7 +36,7 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     await pool.query(EMPTY_ALL);
   });
 
-  // The harnesses of the test, shut down before the next one empties the database (ORC-290).
+  // The harnesses of the test, shut down before the next one empties the schema (ORC-290).
   afterEach(trackHarnesses());
 
   afterAll(async () => {

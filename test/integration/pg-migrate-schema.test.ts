@@ -1,3 +1,5 @@
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { journalSchemaOf, migratePgStore } from '../../src/store/pg/migrate.js';
@@ -9,7 +11,8 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
   let b: TestSchema;
 
   beforeAll(async () => {
-    [a, b] = await Promise.all([createTestSchema('factory_mig_a'), createTestSchema('factory_mig_b')]);
+    // Each assigned as soon as made: if the other fails, afterAll still drops it.
+    await Promise.all([createTestSchema('factory_mig_a').then((s) => (a = s)), createTestSchema('factory_mig_b').then((s) => (b = s))]);
     for (const s of [a, b]) {
       const pool = new Pool({ connectionString: s.url, max: 1 });
       await migratePgStore(pool).finally(() => pool.end());
@@ -30,12 +33,32 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
   it('keeps the journal of the public schema where it always was', () => {
     expect(journalSchemaOf('public')).toBe('drizzle');
     expect(journalSchemaOf('tenant')).toBe('tenant_drizzle');
+    expect(() => journalSchemaOf('t'.repeat(56))).toThrow(/too long/);
   });
 
   it('migrates two schemas of one database each on its own, the journal beside each', async () => {
     for (const s of [a, b]) {
       expect(await tablesOf(s.name)).toEqual([...PG_TABLE_NAMES].sort());
       expect(await tablesOf(journalSchemaOf(s.name))).toEqual(['__drizzle_migrations']);
+    }
+  });
+
+  it('keeps the journal of a schema migrated before ORC-334, left in drizzle', async () => {
+    const legacy = await createTestSchema('factory_mig_legacy');
+    const hadDrizzle = await queryOn(PG_URL, async (c) => (await c.query(`select 1 from pg_namespace where nspname = 'drizzle'`)).rowCount === 1);
+    const pool = new Pool({ connectionString: legacy.url, max: 1 });
+    try {
+      // A journal already in drizzle (a run killed here) would make the legacy migration below a no-op.
+      expect(hadDrizzle, 'a drizzle schema left in the test database').toBe(false);
+      // As migratePgStore did before ORC-334: the journal in drizzle, whatever the search_path.
+      await migrate(drizzle(pool), { migrationsFolder: 'drizzle' });
+      await migratePgStore(pool);
+      expect(await tablesOf(legacy.name)).toEqual([...PG_TABLE_NAMES].sort());
+      expect(await tablesOf(journalSchemaOf(legacy.name))).toEqual([]);
+    } finally {
+      await pool.end();
+      await legacy.drop();
+      if (!hadDrizzle) await queryOn(PG_URL, (c) => c.query('drop schema if exists drizzle cascade'));
     }
   });
 

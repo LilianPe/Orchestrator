@@ -3,10 +3,10 @@ import { defineConfig } from 'vitest/config';
 
 /** What the projects on one Postgres share; the measures behind these numbers are in docs/tests.md (ORC-290). */
 const onPostgres = {
-  // A hook creates and migrates schemas (ORC-334): about 0.8 s of DDL at rest. On a stalled CI runner a
-  // checkpoint of 45 buffers took 14.5 s, past Vitest's default of 10 s for a hook.
+  // A hook creates and migrates schemas (ORC-334), about 0.8 s of DDL at rest. On a stalled CI runner a
+  // checkpoint of 45 buffers took 14.5 s, past Vitest's default of 10 s for a hook: the DDL waits on the same disk.
   hookTimeout: 60_000,
-  // Vitest's default for a run (a worker per CPU but one), bounded: a drop's p90 is 4.2 s at 11 workers.
+  // Vitest's default for a run (a worker per CPU but one), bounded: a database drop's p90 was 4.2 s at 11 workers (ORC-290).
   // A bare 4 would raise a small CI runner's single worker.
   maxWorkers: Math.max(1, Math.min(4, availableParallelism() - 1)),
   // Vitest wants projects with another maxWorkers in another group; a same group shares that bound.

@@ -30,6 +30,8 @@ let made = 0;
 
 export function testSchemaName(prefix: string): string {
   const name = `${prefix}_${process.pid}_${Date.now()}_${++made}`;
+  // Unquoted in the search_path option, where Postgres would fold upper case that `create schema "…"` keeps.
+  if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`test schema name not in [a-z0-9_]: ${name}`);
   // Longer, Postgres would truncate the application_name, and drop would no longer find its connections.
   if (name.length > 63 - '_drizzle'.length) throw new Error(`test schema name too long: ${name}`);
   return name;
