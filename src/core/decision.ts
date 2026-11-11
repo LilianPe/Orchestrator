@@ -33,8 +33,9 @@ export type Effect =
   /**
    * The ack of a webhook's event (ORC-171): `body` in its session, as Linear asks of a session within 10 s, its time
    * recorded on the inbox row. `comment`: on the ticket too (ORC-140), first. `plan`: then opens the session's plan.
+   * `commentId`: the comment the message was written in, which `acknowledge: reaction` reacts on (ORC-380).
    */
-  | { kind: 'ack'; body: string; linearSessionId: string; comment?: true; plan?: true }
+  | { kind: 'ack'; body: string; linearSessionId: string; comment?: true; plan?: true; commentId?: string }
   /** `options`: an elicitation answered by picking one (`select`, ORC-210). */
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string; options?: readonly string[] }
   | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }

@@ -214,11 +214,15 @@ export type TimerKind = keyof TimerPayloads;
 /** A timer's kind and what it carries: what `timer.fired` brings back to `decide`. */
 export type TimerFired = { [K in TimerKind]: { kind: K; payload: TimerPayloads[K] } }[TimerKind];
 
-/** A human message in a Linear session, a mention or a reply. */
+/**
+ * A human message in a Linear session, a mention or a reply. `commentId`: the Linear comment it was written in, which
+ * an ack by reaction reacts on (ORC-380); absent on a reply Linear names no comment of, and on rows written before.
+ */
 interface SessionMessage {
   linearSessionId: string;
   body: string;
   author: string;
+  commentId?: string;
   issue?: IssueSnapshot;
   ack?: true;
   kind?: MessageKind;
@@ -268,7 +272,7 @@ export interface EventPayloads {
   /** `before`: the branch's head before the push (all zeros for a new branch); absent on events recorded before ORC-338. */
   'push.human': { branch: string; sha: string; author: string; before?: string };
   /** `frozen`: for a `/refreeze`, the freeze at the branch's head, read before the decision (ORC-131); absent without a freeze or a branch. */
-  command: { name: string; body: string; linearSessionId: string; author: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
+  command: { name: string; body: string; linearSessionId: string; author: string; commentId?: string; issue?: IssueSnapshot; ack?: true; kind?: MessageKind; masked?: true; frozen?: FrozenTests; repos?: string[]; waitedIn?: string };
   'pr.opened': PrPayload;
   'pr.checks_passed': PrPayload;
   'pr.checks_failed': PrPayload & { failures: string[] };

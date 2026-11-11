@@ -276,6 +276,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       settingsPath: writeRunSettings(packDir, o.home),
       ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
       ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),
+      ...(yml?.acknowledge ? { acknowledge: yml.acknowledge } : {}),
       // The account whose token the runner and the proxy use (`claudeAccount` above): `claude.active` when its token is the one resolved,
       // else the daemon's CLAUDE_CODE_OAUTH_TOKEN, held as `default`. A usage limit holds the launches of that account only (ORC-340).
       claudeAccount: () => claudeAccount().name,

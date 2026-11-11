@@ -341,6 +341,25 @@ describe('LinearTracker', () => {
     expect(calls.at(-1)!.vars).toEqual({ input: { issueId: 'uuid-1', body: 'Budget atteint.' } });
   });
 
+  it("keys an effect's reaction by a client id and finds it among the comment's reactions (ORC-380)", async () => {
+    let reactions: { id: string }[] = [{ id: 'someone-else' }];
+    const { api, calls } = fakeLinear({
+      ReactionCreate: () => ({ reactionCreate: { success: true } }),
+      EffectReaction: () => ({ comment: { reactions } }),
+    });
+    const t = new LinearTracker(api, 'app-1');
+    const id = effectUuid('reaction', 'REL-1:2:1');
+    expect(await t.findReaction('c-1', 'REL-1:2:1')).toBeUndefined();
+    await t.react('c-1', 'eyes', 'REL-1:2:1');
+    reactions = [...reactions, { id }];
+    expect(await t.findReaction('c-1', 'REL-1:2:1')).toBe(id);
+    expect(calls.map((c) => c.vars)).toEqual([
+      { commentId: 'c-1' },
+      { input: { commentId: 'c-1', emoji: 'eyes', id } },
+      { commentId: 'c-1' },
+    ]);
+  });
+
   it("keys an effect's agent activity by a client id and finds it by that id (ORC-162)", async () => {
     let found: { id: string }[] = [];
     const { api, calls } = fakeLinear({

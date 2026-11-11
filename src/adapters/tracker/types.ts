@@ -98,6 +98,13 @@ export interface Tracker {
   comment(identifier: string, body: string, effectId?: string): Promise<void>;
   /** The id of the ticket's comment written for `effectId`, if there is one. */
   findComment(identifier: string, effectId: string): Promise<string | undefined>;
+  /**
+   * Puts `emoji`, by its name (`eyes`), on the comment `commentId` (ORC-380); with `effectId`, under an id derived from it, for `findReaction` to
+   * find it. Rejects when the tracker refuses the reaction on that comment.
+   */
+  react(commentId: string, emoji: string, effectId?: string): Promise<void>;
+  /** The id of the comment's reaction put for `effectId`, if there is one. */
+  findReaction(commentId: string, effectId: string): Promise<string | undefined>;
   /** With `effectId`, the activity is written under an id derived from it, for `findActivity` to find it. */
   activity(sessionId: string, a: ActivityInput, effectId?: string): Promise<void>;
   /** The id of the session's activity written for `effectId`, if there is one. */

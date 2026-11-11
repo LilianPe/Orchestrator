@@ -71,7 +71,7 @@ const isNotFound = (e: LinearGqlError) => e.extensions?.type === 'invalid input'
  * object by it. A sha256 of the effect id with the version and variant bits of a v4: the same effect
  * always gets the same id.
  */
-export function effectUuid(kind: 'comment' | 'activity', effectId: string): string {
+export function effectUuid(kind: 'comment' | 'activity' | 'reaction', effectId: string): string {
   const h = createHash('sha256').update(`factory:${kind}:${effectId}`).digest();
   h[6] = (h[6]! & 0x0f) | 0x40;
   h[8] = (h[8]! & 0x3f) | 0x80;
@@ -362,6 +362,18 @@ export class LinearTracker implements Tracker, TeamDirectory {
       marker: effectMarker(effectId),
     });
     return comments.nodes[0]?.id;
+  }
+
+  async react(commentId: string, emoji: string, effectId?: string): Promise<void> {
+    const input: Record<string, unknown> = { commentId, emoji };
+    if (effectId !== undefined) input['id'] = effectUuid('reaction', effectId);
+    await this.api.gql(Q.reactionCreate, { input });
+  }
+
+  async findReaction(commentId: string, effectId: string): Promise<string | undefined> {
+    const { comment } = await this.api.gql<{ comment: { reactions: { id: string }[] } | null }>(Q.effectReaction, { commentId });
+    const id = effectUuid('reaction', effectId);
+    return comment?.reactions.find((r) => r.id === id)?.id;
   }
 
   async activity(sessionId: string, a: ActivityInput, effectId?: string): Promise<void> {

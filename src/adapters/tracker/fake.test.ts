@@ -33,6 +33,18 @@ describe('FakeTracker', () => {
     expect(t.activities(s)).toEqual([{ type: 'thought', body: 'x' }]);
   });
 
+  it('records a reaction per comment, found again by its effect id, and refuses them when told to (ORC-380)', async () => {
+    const t = new FakeTracker();
+    expect(await t.findReaction('c-1', 'REL-1:1:1')).toBeUndefined();
+    await t.react('c-1', 'eyes', 'REL-1:1:1');
+    expect(t.reactions('c-1')).toEqual(['eyes']);
+    expect(await t.findReaction('c-1', 'REL-1:1:1')).toBe('reaction-c-1-1');
+    expect(await t.findReaction('c-1', 'REL-1:9:1')).toBeUndefined();
+    t.refuseReactions = true;
+    await expect(t.react('c-2', 'eyes')).rejects.toThrow(/refused/);
+    expect(t.reactions('c-2')).toEqual([]);
+  });
+
   it('reads « blocked by » relations with the blocker as it is now, until taken off (ORC-363)', async () => {
     const t = new FakeTracker();
     t.addIssue({ identifier: 'REL-1', delegateId: 'app' });

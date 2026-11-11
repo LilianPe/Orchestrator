@@ -39,7 +39,12 @@ export interface FactoryYml {
    * but none is counted, and the AI reviewers' miss rate is not computed (ORC-229). A change counts from the next startup.
    */
   audit?: { seriousDefect: string };
+  /** How a human message is acknowledged (ORC-380, decision ORC-140): `comment` when absent, or a reaction on its comment. */
+  acknowledge?: AckMode;
 }
+
+/** The ack of a human message (ORC-380): the comment « Got it. », or a reaction on the comment the message was written in. */
+export type AckMode = 'comment' | 'reaction';
 
 /** Sealing purges the files that hold a secret: a value this short would be found in many that do not. */
 const MIN_REPO_SECRET_LENGTH = 8;
@@ -152,6 +157,7 @@ const SECTIONS: Record<string, string[]> = {
   repos: [],
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
+  acknowledge: [],
 };
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
@@ -315,6 +321,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (maxLines !== undefined) out.readGuard = { maxLines };
   const seriousDefect = leaf('audit.serious_defect', section('audit')?.['serious_defect'], z.string().trim().min(1), 'a non-empty text is expected: the definition');
   if (seriousDefect !== undefined) out.audit = { seriousDefect };
+  const acknowledge = leaf('acknowledge', r['acknowledge'], z.enum(['comment', 'reaction']), '`comment` or `reaction` expected');
+  if (acknowledge !== undefined) out.acknowledge = acknowledge;
 
   if (violations.length > 0) throw new FactoryYmlError(violations);
   return out;
