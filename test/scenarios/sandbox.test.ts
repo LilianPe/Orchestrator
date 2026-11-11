@@ -352,6 +352,17 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.logs.map((l) => l.message).join('\n')).toContain('git -C /srv/factory/repos/p rev-list --count refs/remotes/origin/main..refs/heads/factory/rel-1: fatal: bad revision');
   });
 
+  it('a failed command configured by its path is told to the ticket by its name alone', async () => {
+    const h = createHarness();
+    h.workspaces.prepare = async () => {
+      throw execFailure('/opt/factory/bin/docker', ['create', '--name', 'box'], { stdout: '', stderr: 'Error response from daemon', code: 125 });
+    };
+    await delegate(h);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: docker failed (code 125); the command and its output are in the daemon log.' });
+    const told = [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? a.body : ''))].join('\n');
+    expect(told).not.toContain('/opt/factory');
+  });
+
   it("a transient git failure of the launch's preparation, its retries spent, tells the ticket neither the server's path nor the command", async () => {
     const h = createHarness();
     const args = ['-C', '/srv/factory/worktrees/p/REL-1.new', 'checkout', '--quiet', 'factory/rel-1'];

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
@@ -175,10 +175,11 @@ class TicketBudgetError extends Error {}
 
 /**
  * What a launch error tells the ticket (Linear): a failed command names the server's paths and its command line, which
- * stay in the daemon's log (ORC-364); the ticket gets the command's name and its code.
+ * stay in the daemon's log (ORC-364); the ticket gets the command's name, without its directory (a CLI configured by
+ * its path), and its code.
  */
 const launchErrorTold = (err: unknown): string =>
-  err instanceof ExecFailure ? `${err.cmd} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
+  err instanceof ExecFailure ? `${basename(err.cmd)} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
 
 /** An error's message, then each of its causes', as the daemon's log keeps them. */
 const causeChain = (err: unknown): string => {
