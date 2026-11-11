@@ -266,7 +266,9 @@ export class ClaudeCodeRunner implements Runner {
     // hold a secret value the daemon or the run knows of.
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
     const chosen = this.o.claudeToken?.();
-    let env = childEnv(process.env, req.env, chosen);
+    // The pack's PreToolUse hook refuses any tool off `--tools`, and journals it (ORC-383): the same list, a second guard.
+    const runEnv = req.tools ? { ...req.env, FACTORY_TOOLS: req.tools.join(',') } : req.env;
+    let env = childEnv(process.env, runEnv, chosen);
     let argv = [...(this.o.command ?? ['claude']), ...buildClaudeArgs(req)];
     let cwd = req.cwd;
     if (req.sandboxId !== undefined) {
@@ -275,7 +277,7 @@ export class ClaudeCodeRunner implements Runner {
         // The allowlist of the runner (ORC-211): the run's variables and a placeholder for the account's token, nothing else.
         // Without a token, none: `claude` says it is not logged in, clearer than the proxy's 401.
         const hasToken = this.o.proxyHasToken?.() ?? !!(chosen ?? process.env[CLAUDE_TOKEN]);
-        const { PATH: sandboxPath, ...run } = req.env;
+        const { PATH: sandboxPath, ...run } = runEnv;
         const named = { ...run, ...(hasToken ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
         // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
         // the container gets it through `env` (no secret in it, so on the command line is fine).

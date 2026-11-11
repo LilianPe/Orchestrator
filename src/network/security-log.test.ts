@@ -120,8 +120,11 @@ describe('the security log of a run (ORC-296)', () => {
     const log = readSecurityLog(RUN, paths);
     expect(log).toMatchObject({ refusals: [{ tool: 'Edit', rule: 'tool-not-allowed' }], skipped: { refusals: 0 } });
     expect(refusalSummary(log)).not.toContain('s3cret-name');
-    const forged = readSecurityLog(RUN, files(undefined, [refusalLine({ tool: 'Edit', rule: 'push' }), refusalLine({ tool: 'a b', rule: 'tool-not-allowed' }), refusalLine({ tool: 'mcp__other__x', rule: 'tool-not-allowed' })]));
-    expect(forged).toMatchObject({ refusals: [{ tool: 'mcp__other__x' }], skipped: { refusals: 2 } });
+    // A name the agent's log chose is never kept: only a built-in tool's, any other as `mcp` or `other`.
+    const lines = [refusalLine({ tool: 'Edit', rule: 'push' }), refusalLine({ tool: 'ghp_s3cret', rule: 'tool-not-allowed' }), refusalLine({ tool: 'mcp__other__s3cret', rule: 'tool-not-allowed' })];
+    const forged = readSecurityLog(RUN, files(undefined, lines));
+    expect(forged).toMatchObject({ refusals: [{ tool: 'other' }, { tool: 'mcp' }], skipped: { refusals: 1 } });
+    expect(JSON.stringify(forged)).not.toContain('s3cret');
   });
 
   it('still reads a forge-read refusal the hook wrote before ORC-193: a genuine line, not a forged one', () => {

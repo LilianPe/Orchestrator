@@ -205,6 +205,8 @@ on:
       expect(load({ build: ['WebSearch'] })).toThrow(/tools\.per_step\.build: WebSearch/);
       expect(load({ buid: ['Read'] })).toThrow(/tools\.per_step\.buid: not an agent step/);
       expect(load({ spec_check: ['Read'] })).toThrow(/tools\.per_step\.spec_check: not an agent step/);
+      // Every step at once, as factory validate lists them.
+      expect(load({ intake: ['Bash'], review: ['Edit'] })).toThrow(/intake: Bash[\s\S]*review: Edit/);
     });
 
     it('takes the after_merge step on a merge only: no other event carries a merged PR (ORC-197)', () => {

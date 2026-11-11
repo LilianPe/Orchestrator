@@ -186,6 +186,8 @@ describe("a tool off the step's list (ORC-383)", () => {
     expect(r.reason).toMatch(/Edit.*Read, Grep, Glob/);
     expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Edit', command: '/work/a.ts', rule: 'tool-not-allowed', ticket: null }]);
     expect(guard({ command: 'ls' }, tools).denied).toBe(true);
+    // A web search is still journaled under its own rule.
+    expect(guard({ query: 'x' }, tools, 'WebSearch').lines).toEqual([expect.objectContaining({ rule: 'web-search' })]);
   });
 
   it("lets through the step's tools and the factory's MCP tools, and judges them as before", () => {

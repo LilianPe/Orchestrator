@@ -6,7 +6,7 @@ import { isPackageName, type AllowList } from '../checks/deps.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { stepTools, toolRefusal } from '../presets/tools.js';
+import { perStepToolViolations } from '../presets/tools.js';
 
 /**
  * `.factory/config.yml` (ORC-209): what a repository declares to the factory, optional. It can add controls or
@@ -170,19 +170,9 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     });
   }
   const tools = read('tools', z.strictObject({ per_step: z.record(z.string(), strings) }), '`{ per_step: { step: [tool, …] } }` expected', 'a list of tool names per step expected');
-  for (const [name, list] of Object.entries(tools?.per_step ?? {})) {
-    const step = factoryDefault.steps.find((s) => s.id === name);
-    if (!step || !stepTools(step)) {
-      violations.push(`tools.per_step.${name}: not an agent step of ${factoryDefault.name}`);
-      continue;
-    }
-    // At network none, its step runs at none too: no WebFetch (`stepPolicy`).
-    const level = network.level === 'none' ? 'none' : step.network;
-    for (const tool of list) {
-      const refused = toolRefusal(step, tool, level);
-      if (refused) violations.push(`tools.per_step.${name}: ${refused}`);
-    }
-  }
+  // A repository at none runs every step at none: no WebFetch. Its ceiling (`repoNetworkCeiling`) is otherwise its steps' own.
+  const repoNone = network.level === 'none';
+  violations.push(...perStepToolViolations(tools?.per_step ?? {}, factoryDefault.steps, factoryDefault.name, (s) => (repoNone ? 'none' : s.network ?? 'none')));
   let maxDiff = resolveMaxDiff();
   try {
     maxDiff = resolveMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);

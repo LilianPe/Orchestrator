@@ -6,7 +6,7 @@ import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from '../presets/preset.js';
-import { READ_TOOLS, stepTools, toolRefusal } from '../presets/tools.js';
+import { perStepToolViolations, READ_TOOLS, stepTools } from '../presets/tools.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -150,10 +150,8 @@ function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
     }
   }
   // Refused at load, as a network wider than the repository's: a list never gives a step more than it may have (ORC-383).
-  for (const [name, list] of Object.entries(tools?.perStep ?? {})) {
-    const refused = list.map((t) => toolRefusal(agentStep(name)!, t)).filter((r) => r !== undefined);
-    if (refused.length) throw new WorkflowError(refused.map((r) => `factory.yml: tools.per_step.${name}: ${r}`).join('\n'));
-  }
+  const refused = perStepToolViolations(tools?.perStep ?? {}, preset.steps, preset.name);
+  if (refused.length) throw new WorkflowError(refused.map((r) => `factory.yml: ${r}`).join('\n'));
 }
 
 function limits(raw: { turns?: number; duration?: string | number } | undefined, base: RunLimits): RunLimits {

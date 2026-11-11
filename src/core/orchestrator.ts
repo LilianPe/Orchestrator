@@ -108,9 +108,9 @@ import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type
 import { changelogEntry, deliveredBody, mergedWork, type MergedPr } from './changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
-import { agentPolicy, stepPolicy, type EgressPolicy } from '../network/levels.js';
+import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { narrowTools, READ_TOOLS } from '../presets/tools.js';
+import { READ_TOOLS } from '../presets/tools.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -3051,7 +3051,7 @@ export class Orchestrator {
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
       // A review job of a version frozen before ORC-367 has its lens, not yet its tools. The repository's list only restricts them (ORC-383).
-      const tools = narrowTools(job.tools ?? (job.lens ? READ_TOOLS : undefined), job.step ? config.tools?.perStep[job.step] : undefined, stepPolicy(config, job.network).level);
+      const tools = runTools(job.tools ?? (job.lens ? READ_TOOLS : undefined), config, job.step, job.network);
       const handle = this.d.runner.start({
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
@@ -3075,8 +3075,6 @@ export class Orchestrator {
           ...this.d.agentEnv(run),
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
-          // The pack's PreToolUse hook refuses any other tool, and journals it (ORC-383): a second guard behind `--tools`.
-          ...(tools ? { FACTORY_TOOLS: tools.join(',') } : {}),
           ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
           ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
           ...CLAUDE_RUN_ENV,

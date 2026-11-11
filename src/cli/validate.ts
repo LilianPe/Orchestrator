@@ -2,10 +2,11 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, ticketTokenCap, type RepoConfig } from '../config/repo-config.js';
+import { runTools } from '../network/levels.js';
 import { checkBudgets } from '../presets/budget.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { isAgentStep } from '../presets/preset.js';
-import { narrowTools, stepTools, toolRefusal } from '../presets/tools.js';
+import { perStepToolViolations, stepTools } from '../presets/tools.js';
 
 const FILE = REPO_CONFIG_PATH;
 /** A spelling the factory never reads: validating around it would pass a file nobody applies. */
@@ -78,24 +79,16 @@ type FactoryChecks = Pick<FactoryYml, 'budgets' | 'tools'>;
  * names that factory.yml does not give is a warning: the repository only restricts, the launch ignores it.
  */
 function validateTools(config: RepoConfig, yml: FactoryChecks | undefined, out: (line: string) => void): number {
-  const steps = factoryDefault.steps.filter(isAgentStep);
-  const given = (id: string) => yml?.tools?.perStep?.[id] ?? stepTools(steps.find((s) => s.id === id)!)!;
-  const refused = Object.entries(yml?.tools?.perStep ?? {}).flatMap(([id, tools]) => {
-    const step = steps.find((s) => s.id === id);
-    if (!step) return [`tools.per_step.${id}: not an agent step of ${factoryDefault.name}`];
-    return tools.flatMap((t) => toolRefusal(step, t) ?? []).map((r) => `tools.per_step.${id}: ${r}`);
-  });
+  const refused = perStepToolViolations(yml?.tools?.perStep ?? {}, factoryDefault.steps, factoryDefault.name);
   if (refused.length) return list(out, 'factory.yml refused:', refused);
-  const ignored = Object.entries(config.tools?.perStep ?? {}).flatMap(([id, tools]) => {
-    const extra = tools.filter((t) => !given(id).includes(t));
-    return extra.length ? [`tools.per_step.${id}: ${extra.join(', ')}`] : [];
+  const given = new Map(factoryDefault.steps.filter(isAgentStep).map((s) => [s, yml?.tools?.perStep?.[s.id] ?? stepTools(s)!]));
+  const ignored = [...given].flatMap(([s, tools]) => {
+    const extra = (config.tools?.perStep[s.id] ?? []).filter((t) => !tools.includes(t));
+    return extra.length ? [`tools.per_step.${s.id}: ${extra.join(', ')}`] : [];
   });
   if (ignored.length) list(out, 'Warning, tools the repository names that factory.yml does not give the step (ignored):', ignored);
   out(`Tools of each agent step of ${factoryDefault.name}:`);
-  for (const s of steps) {
-    const network = config.network.level === 'none' ? 'none' : s.network;
-    out(`- ${s.id}: ${narrowTools(given(s.id), config.tools?.perStep[s.id], network)!.join(', ') || 'none'}`);
-  }
+  for (const [s, tools] of given) out(`- ${s.id}: ${runTools(tools, config, s.id, s.network)!.join(', ') || 'none'}`);
   return 0;
 }
 

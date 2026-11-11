@@ -46,12 +46,11 @@ describe("the repository's config at the launch", () => {
     expect(agents(h)[0]).not.toHaveProperty('allow');
   });
 
-  it("hands the build the step's tools, narrowed by the repository's list, to claude and to the hook (ORC-383)", async () => {
+  it("hands the build the step's tools, narrowed by the repository's list, to claude (ORC-383)", async () => {
     const h = createHarness({ sandboxed: true, ...onDefaultBranch('tools: { per_step: { build: [Read, Grep, Glob, Edit, Write] } }\n') });
     await delegate(h);
     const [req] = h.runner.requests;
     expect(req!.tools).toEqual(['Read', 'Grep', 'Glob', 'Edit', 'Write']);
-    expect(req!.env['FACTORY_TOOLS']).toBe('Read,Grep,Glob,Edit,Write');
   });
 
   it("hands the build the preset's write tools when the repository restricts nothing (ORC-383)", async () => {
@@ -59,7 +58,6 @@ describe("the repository's config at the launch", () => {
     await delegate(h);
     const [req] = h.runner.requests;
     expect(req!.tools).toEqual(WRITE_TOOLS);
-    expect(req!.env['FACTORY_TOOLS']).toBe(WRITE_TOOLS.join(','));
   });
 
   it("runs the file's setup, not the workflow's", async () => {
