@@ -8,7 +8,7 @@ import { createHarness } from '../helpers/harness.js';
  * back to Human Review with the reason.
  */
 type Harness = ReturnType<typeof createHarness>;
-const BRANCH = 'factory/rel-1-export-csv';
+const BRANCH = 'feat/rel-1-export-csv';
 const PR = { number: 3, url: 'https://github.com/acme/app/pull/3' };
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
 

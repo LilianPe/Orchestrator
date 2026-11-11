@@ -9,21 +9,35 @@ import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
-import { branchName, FACTORY_BRANCHES } from '../core/naming.js';
+import { makeRepoConfig } from '../app/repo-variables.js';
+import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
- * Branches as the factory names them (`branchName`, ORC-353): a team key for every initial (one with a digit too), numbers
- * of every length, titles that start and end with a letter or a digit, the longest slug and the empty title's. Enough to
- * decide whether a filter reaches the factory's branches, or leaves every one of them out; a sample all the same, not
- * every branch (docs/github.md).
+ * Branches as the factory names them (ORC-353, ORC-283): by the repository's naming, every type of it, and the legacy
+ * `factory/<id>-<slug>` a ticket with its PR already open keeps; a team key for every initial (one with a digit too),
+ * numbers of every length, titles that start and end with a letter or a digit, the longest slug and the empty title's.
+ * Enough to decide whether a filter reaches the factory's branches, or leaves every one of them out; a sample all the
+ * same, not every branch (docs/github.md). A pattern under one of their fixed beginnings (`feat/`, `fix/`, `factory/`)
+ * always counts as reaching: it may name a team key no probe has.
  */
+interface FactoryBranches {
+  probes: string[];
+  spaces: string[];
+}
+
 const PROBE_TITLES = ['', 'Fix the login', '2026 : Été', 'x'.repeat(60), 'a-b c', 'Upgrade to v2', '42'];
-let probes: string[] | undefined;
-/** Built once, on first use: the CLI imports doctor for every command. */
-const factoryProbes = (): string[] =>
-  (probes ??= [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'].flatMap((key, i) =>
-    PROBE_TITLES.map((title, j) => branchName(`${key}-${[1, 42, 353, 70000][(i + j) % 4]}`, title)),
-  ));
+const PROBE_KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZZ9'];
+
+function factoryBranches(naming: BranchNaming): FactoryBranches {
+  const types = branchTypes(naming);
+  const probes = PROBE_KEYS.flatMap((key, i) =>
+    PROBE_TITLES.flatMap((title, j) => {
+      const id = `${key}-${[1, 42, 353, 70000][(i + j) % 4]}`;
+      return [...types.map((type) => branchNameOfType(id, title, type, naming)), legacyBranchName(id, title)];
+    }),
+  );
+  return { probes, spaces: [...branchSpaces(naming), LEGACY_BRANCHES] };
+}
 
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
@@ -35,6 +49,8 @@ export interface DoctorOptions {
   api: DoctorApi;
   out: (line: string) => void;
   json?: boolean;
+  /** The repository's branch naming (`.factory/config.yml`, ORC-283): the team's convention without it. */
+  naming?: BranchNaming;
 }
 
 export interface WorkflowReport {
@@ -295,67 +311,54 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`${source}$`);
 }
 
-function canMatchFactory(pattern: string): boolean {
-  // A pattern of the factory's own space may name a team key no probe has: it reaches, fail closed.
-  if (pattern.startsWith(FACTORY_BRANCHES)) return true;
-  try {
-    const regexp = globToRegExp(pattern);
-    return factoryProbes().some((probe) => regexp.test(probe));
-  } catch {
-    // Unreadable glob: fail closed, the workflow may reach a factory branch.
-    return true;
-  }
+/** A filter's pattern, compiled once: whether it lets a branch in, and what it matches (`regexp: null`, a glob doctor cannot read). */
+interface FilterPattern {
+  lets: boolean;
+  glob: string;
+  regexp: RegExp | null;
 }
 
-/** A pattern that matches every factory branch: as a negation, it excludes them all. */
-function coversAllFactoryBranches(pattern: string): boolean {
-  try {
-    const regexp = globToRegExp(pattern);
-    return factoryProbes().every((probe) => regexp.test(probe));
-  } catch {
-    // Unreadable glob: fail closed, it is not read as excluding the factory's branches.
-    return false;
-  }
+/** `ignore`: a `branches-ignore`, where a pattern leaves a branch out and a `!` brings it back. */
+function compileFilter(patterns: readonly string[], ignore: boolean): FilterPattern[] {
+  return patterns.map((pattern) => {
+    const negated = pattern.startsWith('!');
+    const glob = negated ? pattern.slice(1) : pattern;
+    let regexp: RegExp | null = null;
+    try {
+      regexp = globToRegExp(glob);
+    } catch {
+      // Unreadable: it counts when it would let the branch run, never when it would leave it out (fail closed).
+    }
+    return { lets: negated === ignore, glob, regexp };
+  });
 }
 
-function branchesReachFactory(patterns: string[]): boolean {
-  // GitHub applies patterns in order: a later negative can exclude a positive,
-  // and a later positive can re-include a branch. Only positives after the last
-  // "exclude every factory branch" pattern can bring factory branches back.
-  let lastCover = -1;
-  for (let index = 0; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (pattern.startsWith('!') && coversAllFactoryBranches(pattern.slice(1))) lastCover = index;
-  }
-  if (lastCover === -1) {
-    const positives = patterns.filter((pattern) => !pattern.startsWith('!'));
-    return positives.length === 0 || positives.some(canMatchFactory);
-  }
-  for (let index = lastCover + 1; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (!pattern.startsWith('!') && canMatchFactory(pattern)) return true;
-  }
-  return false;
+/** Whether a filter lets the workflow run on `branch`: GitHub reads its patterns in order, the last that matches wins. `runs`: before the first. */
+function runsOn(filter: readonly FilterPattern[], branch: string, runs: boolean): boolean {
+  for (const { lets, regexp } of filter) if (regexp ? regexp.test(branch) : lets) runs = lets;
+  return runs;
 }
 
-function branchesIgnoreReachFactory(patterns: string[]): boolean {
-  let lastCover = -1;
-  for (let index = 0; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (!pattern.startsWith('!') && coversAllFactoryBranches(pattern)) lastCover = index;
-  }
-  if (lastCover === -1) return true;
-  for (let index = lastCover + 1; index < patterns.length; index++) {
-    const pattern = patterns[index]!;
-    if (pattern.startsWith('!') && canMatchFactory(pattern.slice(1))) return true;
-  }
-  return false;
+/**
+ * Whether a `branches` or `branches-ignore` filter can let the workflow run on a factory branch: on one of the probes, or
+ * by a pattern that lets in under the factory's own space (`feat/…`), which may name a team key no probe has, unless the
+ * patterns after it leave out every probe of that space.
+ */
+function filterReachesFactory(patterns: readonly string[], factory: FactoryBranches, ignore: boolean): boolean {
+  // Negations only: GitHub runs on no branch, which doctor does not count on.
+  if (!ignore && patterns.every((pattern) => pattern.startsWith('!'))) return true;
+  const filter = compileFilter(patterns, ignore);
+  if (factory.probes.some((probe) => runsOn(filter, probe, ignore))) return true;
+  return filter.some(({ lets, glob }, index) => {
+    const space = lets ? factory.spaces.find((s) => glob.startsWith(s)) : undefined;
+    return space !== undefined && factory.probes.some((probe) => probe.startsWith(space) && runsOn(filter.slice(index + 1), probe, true));
+  });
 }
 
 /** Branch push: an absent filter means all branches; a tags-only filter means no branch push. */
-function pushReachesFactory(filters: TriggerFilters): boolean {
-  if (filters.branches !== undefined) return branchesReachFactory(filters.branches);
-  if (filters.branchesIgnore !== undefined) return branchesIgnoreReachFactory(filters.branchesIgnore);
+function pushReachesFactory(filters: TriggerFilters, factory: FactoryBranches): boolean {
+  if (filters.branches !== undefined) return filterReachesFactory(filters.branches, factory, false);
+  if (filters.branchesIgnore !== undefined) return filterReachesFactory(filters.branchesIgnore, factory, true);
   if (filters.tags !== undefined || filters.tagsIgnore !== undefined) return false;
   return true;
 }
@@ -370,13 +373,13 @@ function triggerLabel(name: string, filters: TriggerFilters): string {
 }
 
 /** Why a workflow with secrets can run on a factory branch; empty when no trigger does. */
-function exposureReasons(triggers: Map<string, TriggerFilters>): string[] {
+function exposureReasons(triggers: Map<string, TriggerFilters>, factory: FactoryBranches): string[] {
   const reasons: string[] = [];
   for (const [name, filters] of triggers) {
     if (name === 'pull_request' || name === 'pull_request_target') {
-      reasons.push(`${name} can run the CI on a \`factory/*\` branch`);
-    } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters)) {
-      reasons.push(`${triggerLabel(name, filters)} can run the CI on a \`factory/*\` branch`);
+      reasons.push(`${name} can run the CI on the factory's branches`);
+    } else if ((name === 'push' || name === 'workflow_run') && pushReachesFactory(filters, factory)) {
+      reasons.push(`${triggerLabel(name, filters)} can run the CI on the factory's branches`);
     }
   }
   return reasons;
@@ -387,7 +390,7 @@ function protectedByEnvironment(jobId: string, workflow: ParsedWorkflow, environ
   return name !== undefined && environments.get(name)?.requiredReviewers === true;
 }
 
-function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>): WorkflowReport {
+function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>, factory: FactoryBranches): WorkflowReport {
   const parsed = parseWorkflow(source.content);
   if (!parsed.ok) {
     return {
@@ -408,7 +411,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     name,
     requiredReviewers: environments.get(name)?.requiredReviewers === true,
   }));
-  const exposure = exposureReasons(workflow.triggers);
+  const exposure = exposureReasons(workflow.triggers, factory);
   const { sensitiveJobs } = workflow;
   const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
@@ -472,7 +475,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
-  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap));
+  const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
+  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory));
   const accepted = reports.every((report) => report.verdict === 'accepted');
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
@@ -512,7 +516,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-function doctorFailure(options: DoctorOptions, message: string): number {
+function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'>, message: string): number {
   if (options.json) {
     options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message }, null, 2));
   } else {
@@ -533,8 +537,8 @@ export interface DoctorCommandOptions {
 }
 
 /**
- * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check),
- * then runs the same analysis as `runDoctor`.
+ * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the repository's
+ * branch naming on its default branch as the clone last fetched it (ORC-283), then runs the same analysis as `runDoctor`.
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
@@ -558,10 +562,17 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  let naming: BranchNaming;
+  try {
+    naming = (await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false })).branches;
+  } catch (error) {
+    return doctorFailure({ repoPath: options.repoPath, out, ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
+  }
   return runDoctor({
     repoPath: options.repoPath,
     api,
     out,
+    naming,
     ...(options.json ? { json: true } : {}),
   });
 }

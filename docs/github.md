@@ -187,31 +187,37 @@ The knowledge repository (`relais-knowledge`) deserves the same protection: a hu
 
 ## `factory doctor`: CI secrets and factory branches
 
-`factory doctor [repo] [--json]` (current repository by default) checks, before entrusting a repository, that no CI can expose secrets to a `factory/*` branch. The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
+`factory doctor [repo] [--json]` (current repository by default) checks, before entrusting a repository, that no CI can expose secrets to the factory's branches. The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
+
+Since ORC-283 the factory's branches follow the team's convention, `feat/<id>-<slug>` or `fix/<id>-<slug>` by default, or the repository's own `branches.pattern` ([repository configuration](repository-configuration.md#branch-names)). They no longer live in a space of their own: a branch filter can no longer tell them from a human's. So `doctor` accepts a job that sees a secret or a writable `GITHUB_TOKEN` on these branches only if a human approves each of its runs: the job runs under an environment with required reviewers. A condition on the actor (`if: github.actor != '<app-slug>[bot]'`) is not credited: a human can start a run on the agent's code (a push on top of its commits, re-opening or labelling its PR), and that run's actor is the human. A ticket whose PR was already open on `factory/<id>-<slug>` keeps that branch, so `doctor` still counts `factory/*` among the factory's branches.
 
 The command resolves `owner/name` with `git remote get-url origin`, then reads with the GitHub App:
 
 - `.github/workflows/*.yml` and `*.yaml` (Contents API, default branch);
 - `GET /repos/{owner}/{repo}/environments` and their `protection_rules`.
 
+It reads the repository's branch naming in `.factory/config.yml` on the default branch, as the local clone last fetched it (`origin/HEAD`, no `fetch`); an invalid file makes `doctor` refuse.
+
 It requires the GitHub App (`github.*` or `GH_APP_*`): no `gh` fallback for this check. Exit code `0` if the repository is accepted, `1` if it is refused or if a read fails.
 
 ### Rule
 
-Each workflow is read as YAML. A workflow **with secrets** (a `secrets.X`, `secrets['X']` or the whole `secrets` context in an expression, `${{ … }}` or an `if:`, or `secrets: inherit` on a reusable workflow call) or **with a writable `GITHUB_TOKEN`** is refused if it can run on a factory branch. A shell text that names a secret outside an expression references none; `secrets.GITHUB_TOKEN` is the token, judged by its rights. The token's rights come from `permissions:`, the job's or else the workflow's: `read-all`, `{}` or scopes at `read`/`none` are read only; `write-all` or a scope at `write` can write. Without `permissions:`, the token has the repository's default rights, which the App cannot read (that read needs the *Administration* permission, which the App does not have): doctor counts it as writable, and says to declare `permissions:` (ORC-353). The triggers that reach a factory branch:
+Each workflow is read as YAML. A workflow **with secrets** (a `secrets.X`, `secrets['X']` or the whole `secrets` context in an expression, `${{ … }}` or an `if:`, or `secrets: inherit` on a reusable workflow call) or **with a writable `GITHUB_TOKEN`** is refused if it can run on a factory branch, unless every job that sees one is protected (see *Accepted* below). A shell text that names a secret outside an expression references none; `secrets.GITHUB_TOKEN` is the token, judged by its rights. The token's rights come from `permissions:`, the job's or else the workflow's: `read-all`, `{}` or scopes at `read`/`none` are read only; `write-all` or a scope at `write` can write. Without `permissions:`, the token has the repository's default rights, which the App cannot read (that read needs the *Administration* permission, which the App does not have): doctor counts it as writable, and says to declare `permissions:` (ORC-353). The triggers that reach a factory branch:
 
-- `pull_request` and `pull_request_target`: always considered risky, because a PR from `factory/*` can trigger them; a pull request's `branches` filter applies to the base branch, not the head branch;
+- `pull_request` and `pull_request_target`: always considered risky, because a PR from a factory branch can trigger them; a pull request's `branches` filter applies to the base branch, not the head branch;
 - `push` without a filter: all branches;
-- `push` whose `branches` filter can reach `factory/*` (`factory/**`, `*/*`, `**`…) or whose `branches-ignore` does not fully exclude it. The filters are tried on branch names the factory's own naming makes (`factory/<id>-<slug>`, `branchName`, ORC-353): a pattern under `factory/` always counts as reaching (it may name a team key no example has), and a negation excludes the factory's branches when it matches every one of them (`!factory/*-*` does);
-- `workflow_run` without a filter, or with a filter that reaches `factory/*` (extra protection against the same family of risk).
+- `push` whose `branches` filter can reach a factory branch (`feat/**`, `*/*`, `**`…) or whose `branches-ignore` does not fully exclude them. The filters are tried on branch names the factory makes (`branchName`, ORC-353, ORC-283): by the repository's naming, for every type it can give, and the legacy `factory/<id>-<slug>`. A pattern under the fixed beginning of one of them (`feat/`, `fix/`, `factory/` by default) always counts as reaching (it may name a team key no example has), and a negation excludes the factory's branches when it matches every one of them (`!feat/*-*`, `!fix/*-*` and `!factory/*-*` together do);
+- `workflow_run` without a filter, or with a filter that reaches a factory branch (extra protection against the same family of risk).
 
-Conversely, a `push` limited to non-factory branches (`main`, `release/*`) or to tags only does not see secrets on a `factory/*` branch.
+Conversely, a `push` limited to branches the factory never names (`main`, `release/*`) or to tags only does not see secrets on a factory branch. With the default naming, a workflow that runs on `feat/**` or `fix/**` for the team's own branches reaches the factory's too.
 
 Accepted:
 
 1. a dedicated CI **without secrets**, its `GITHUB_TOKEN` read only, on these branches;
-2. a workflow with secrets or a writable token where **every job that sees one** is attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer: human approval blocks the job before it reads the secret;
-3. a workflow with secrets that only runs on non-factory branches, or only on tags.
+2. a workflow with secrets or a writable token where **every job that sees one** is attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer: human approval blocks the job before it reads the secret, whoever started the run;
+3. a workflow with secrets that only runs on branches the factory never names (the default branch, `release/*`), or only on tags.
+
+Nothing else protects a job (ORC-283). A job-level or step-level `if:` on `github.actor`, `github.triggering_actor` or the PR's author is not credited, nor is a `needs:` on a protected job: each job that sees a secret runs under its own protected environment. The job keeps its condition if the team wants it; `doctor` reads past it.
 
 When in doubt, `doctor` refuses: invalid or ambiguous YAML (multi-document, dynamic `on`, mistyped filters), environment not found or without required reviewers, `secrets: inherit` without a protected environment, `permissions:` it cannot read, a `GITHUB_TOKEN` without `permissions:`, GitHub API error, unreadable API response (never read as "no workflow", "no environment", "no reviewer" or "protected"), more than 1000 environments. A 404 on `.github/workflows` means "no CI"; a 404 on the App's installation or on its token is a configuration error: `doctor` refuses.
 
@@ -230,7 +236,7 @@ GitHub Actions workflows: 1
   GITHUB_TOKEN: test (repository default)
   environments: none
   protected environment: no
-  verdict: refused — secrets and a writable GITHUB_TOKEN exposed on the factory's branches (pull_request can run the CI on a `factory/*` branch) without human approval
+  verdict: refused — secrets and a writable GITHUB_TOKEN exposed on the factory's branches (pull_request can run the CI on the factory's branches) without human approval job(s) without an environment: test …
   ...
 Result: refused — 1 workflow(s) of 1 can expose secrets or a writable GITHUB_TOKEN to the factory's branches.
 ```
@@ -249,13 +255,13 @@ jobs:
           TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-`factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`.
+`factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`. The CI without secrets can still run on the factory's branches beside it, in another job or workflow, without approval.
 
 `--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
 
 ### Limitations
 
-- Reading targets the **default branch** (Contents API without `ref`): the `pull_request` workflows are indeed the ones GitHub uses for a PR from `factory/*`; a workflow that only exists on a pushed branch is not seen.
+- Reading targets the **default branch** (Contents API without `ref`): the `pull_request` workflows are indeed the ones GitHub uses for a PR from a factory branch; a workflow that only exists on a pushed branch is not seen.
 - The App cannot list the repository's secrets: `doctor` detects **references** to secrets, not their existence.
 - Called reusable workflows are not downloaded: `secrets: inherit` is treated as a secret, and a reusable workflow called without `secrets:` receives no secret.
 - This check does not replace branch protection: it only guarantees that CI does not read a secret on a factory branch without approval.
