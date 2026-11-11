@@ -87,7 +87,7 @@ describe('attempt labels', () => {
 
   it('fingerprints the knowledge index the attempt read, null when it read none (ORC-232)', () => {
     expect(attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null }).fingerprints.knowledgeIndex).toBeNull();
-    const l = attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null, systemPrompt: '# Knowledge base (index)' });
+    const l = attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null, knowledgeIndex: '# Knowledge base (index)' });
     expect(l.fingerprints.knowledgeIndex).toBe(hashText('# Knowledge base (index)'));
   });
 

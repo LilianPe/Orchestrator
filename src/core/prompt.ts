@@ -113,8 +113,11 @@ export function buildPrompt(p: PromptInput): string {
 }
 
 const CONVENTIONS_TAG = 'repo-conventions';
-/** The closing tag in any case and spacing; the tag has no regex metacharacter. */
-const CONVENTIONS_END = new RegExp(`<\\s*/\\s*${CONVENTIONS_TAG}`, 'gi');
+
+/** `text` with every closing `tag` (any case and spacing) broken, so data fenced in `tag` cannot close its fence early. `tag` has no regex metacharacter. */
+export function unfenced(tag: string, text: string): string {
+  return text.replace(new RegExp(`<\\s*/\\s*${tag}`, 'gi'), '</…');
+}
 /** Bytes, all files together. Proposal: the cap is settled with the prompt budget (ORC-254). */
 export const CONVENTIONS_MAX = 8000;
 
@@ -154,7 +157,7 @@ export function readConventions(dir: string): string | undefined {
       budget -= n;
       more += Math.max(0, st.size - n);
       const text = new TextDecoder().decode(buf.subarray(0, n), { stream: true }).trimEnd();
-      if (text) parts.push(`### ${name}\n${text.replace(CONVENTIONS_END, '</…')}`);
+      if (text) parts.push(`### ${name}\n${unfenced(CONVENTIONS_TAG, text)}`);
     } catch {
       // skipped, see above
     }

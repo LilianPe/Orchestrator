@@ -216,8 +216,8 @@ export interface AttemptLabelInput {
   factoryCommit?: string | null;
   /** The ticket's risk when the attempt starts (ORC-206): null before `intake` assessed it. */
   risk?: string | null;
-  /** The runner's system prompt, the knowledge index (ORC-232): absent when the attempt read none. */
-  systemPrompt?: string;
+  /** The knowledge index as the session's system prompt carries it (`knowledgePrompt`, ORC-232): absent when the attempt read none. */
+  knowledgeIndex?: string;
 }
 
 export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
@@ -240,7 +240,7 @@ export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
       skills,
       workflow: workflowFingerprint(i.workflow),
       config,
-      knowledgeIndex: i.systemPrompt ? hashText(i.systemPrompt) : null,
+      knowledgeIndex: i.knowledgeIndex ? hashText(i.knowledgeIndex) : null,
     },
   };
 }

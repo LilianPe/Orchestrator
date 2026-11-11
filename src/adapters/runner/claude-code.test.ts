@@ -721,12 +721,12 @@ describe('childEnv: a run on the host (ORC-211)', () => {
         AWS_SECRET_ACCESS_KEY: 'a', GITHUB_TOKEN: 'gt', NPM_TOKEN: 'n', DATABASE_URL: 'postgres://u:p@h/d', ANTHROPIC_BASE_URL: 'https://gateway', SOME_DAEMON_VAR: 'v',
         LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', FACTORY_HOME: '/data', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRET: 's',
       },
-      { FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app', PATH: '/app/bin:/bin' },
+      { FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_ROOT: '/app', PATH: '/app/bin:/bin' },
     );
     expect(env).toEqual({
       HOME: '/h', PATH: '/app/bin:/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
       CLAUDE_CODE_OAUTH_TOKEN: 'c',
-      FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_KNOWLEDGE: '', FACTORY_ROOT: '/app',
+      FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1', FACTORY_ROOT: '/app',
       ...NO_PUSH,
     });
   });

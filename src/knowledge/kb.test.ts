@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { execCmd, type Exec } from '../adapters/exec.js';
 import { KB_INDEX_MAX, KnowledgeBase, knowledgePrompt } from './kb.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
@@ -100,19 +101,23 @@ describe('KnowledgeBase', () => {
     expect(kb.readIndex().text).toBe('- one\n');
   });
 
-  it('shares one refresh between launches that ask together', async () => {
+  it('shares one refresh between launches that ask together, and with those right after it', async () => {
     const { repo } = kbRepo();
     let fetches = 0;
-    const kb = new KnowledgeBase(repo, async (cmd, args, opts) => {
+    const counting: Exec = (cmd, args, opts) => {
       if (args.includes('fetch')) fetches++;
-      const { execCmd } = await import('../adapters/exec.js');
       return execCmd(cmd, args, opts);
-    });
+    };
+    const kb = new KnowledgeBase(repo, counting, 0);
     const [a, b] = await Promise.all([kb.refresh(), kb.refresh()]);
     expect(a).toBe(b);
     expect(fetches).toBe(1);
     await kb.refresh();
     expect(fetches).toBe(2);
+    const fresh = new KnowledgeBase(repo, counting);
+    await fresh.refresh();
+    await fresh.refresh();
+    expect(fetches).toBe(3);
   });
 
   it('never cuts the index in half a surrogate pair', () => {

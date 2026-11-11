@@ -39,7 +39,7 @@ function setup(
     perTicketTokens?: number;
     onUsageLimit?: 'wait';
     account?: () => string | undefined;
-    knowledgeIndex?: () => Promise<{ text: string; more: number; warning?: string } | undefined>;
+    knowledgeIndex?: () => Promise<{ text: string; more: number; warning?: string }>;
   } = {},
 ) {
   // `dev` straight to Human Review, as the harness has it: the AI review's own scenarios are test/scenarios/review.test.ts (ORC-183).

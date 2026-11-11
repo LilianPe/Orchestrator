@@ -276,7 +276,7 @@ export interface OrchestratorDeps {
    * The knowledge index, read at each launch (ORC-232): the server pulls the knowledge repository and reads its INDEX.md,
    * capped. The session gets it in its system prompt, and the rest through the MCP's `kb_search`. Absent: no knowledge base.
    */
-  knowledgeIndex?: () => Promise<KbIndex | undefined>;
+  knowledgeIndex?: () => Promise<KbIndex>;
   /**
    * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
@@ -1422,18 +1422,15 @@ export class Orchestrator {
   }
 
   /** The knowledge index for a session's system prompt (ORC-232), its cut logged: a read that fails launches without it, and says so. */
-  private async readKnowledgePrompt(ticketId: string, job: string): Promise<string | undefined> {
-    if (!this.d.knowledgeIndex) return undefined;
-    try {
-      const index = await this.d.knowledgeIndex();
-      if (index?.warning) this.log('warn', `${ticketId} ${job}: ${index.warning}`);
-      const prompt = index && knowledgePrompt(index);
-      if (prompt && index.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
-      return prompt;
-    } catch (err) {
-      this.log('warn', `${ticketId} ${job}: knowledge index not read, the session starts without it: ${(err as Error).message}`);
+  private knowledgePromptOf(index: KbIndex | Error, ticketId: string, job: string): string | undefined {
+    if (index instanceof Error) {
+      this.log('warn', `${ticketId} ${job}: knowledge index not read, the session starts without it: ${index.message}`);
       return undefined;
     }
+    if (index.warning) this.log('warn', `${ticketId} ${job}: ${index.warning}`);
+    const prompt = knowledgePrompt(index);
+    if (prompt && index.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
+    return prompt;
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -2641,6 +2638,8 @@ export class Orchestrator {
 
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
+    // Likewise the knowledge index (ORC-232), its failure kept for the launch to say: a launch that stops early drops it.
+    const knowledge = this.d.knowledgeIndex?.().catch((err: Error) => err);
 
     // Up to the workspace: a launch that lost does nothing.
     const head = await (async () => {
@@ -2865,8 +2864,8 @@ export class Orchestrator {
         ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
-      const systemPrompt = await this.readKnowledgePrompt(ticketId, job.name);
-      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null, ...(systemPrompt ? { systemPrompt } : {}) });
+      const systemPrompt = knowledge && this.knowledgePromptOf(await knowledge, ticketId, job.name);
+      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null, ...(systemPrompt ? { knowledgeIndex: systemPrompt } : {}) });
       // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
       const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;
 
