@@ -749,11 +749,6 @@ export class SqliteStore implements Store {
     return !!row && row.until >= now;
   }
 
-  async costSince(ts: number): Promise<number> {
-    const row = this.db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS total FROM runs WHERE started_at >= ?').get(ts) as { total: number };
-    return row.total;
-  }
-
   async markAcked(eventId: string, at: number): Promise<void> {
     this.db.prepare('UPDATE inbox SET acked_at = ? WHERE id = ? AND acked_at IS NULL').run(at, eventId);
   }

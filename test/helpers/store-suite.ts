@@ -164,7 +164,6 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putRun(run({ id: 'r2', token: 't2', status: 'success', costUsd: 1.5, startedAt: 200 }));
     expect((await s.findRunByToken('t2'))!.id).toBe('r2');
     expect((await s.runsByStatus('running')).map((r) => r.id)).toEqual(['r1']);
-    expect(await s.costSince(150)).toBe(1.5);
   });
 
   it('reads the runs of one ticket of one project, oldest first (ORC-196)', async () => {

@@ -846,17 +846,6 @@ export class PgStore implements AsyncStore {
     return result.rows[0]?.data;
   }
 
-  async costSince(ts: number): Promise<number> {
-    const result = await this.db.execute<{ total: number | string }>(
-      sql`
-        select coalesce(sum(cost_usd), 0) as total
-        from attempts
-        where started_at >= to_timestamp(${ts / 1000})
-      `,
-    );
-    return Number(result.rows[0]?.total ?? 0);
-  }
-
   async markAcked(eventId: string, at: number): Promise<void> {
     await this.db.execute(sql`update inbox set acked_at = to_timestamp(${at / 1000}) where id = ${eventId} and acked_at is null`);
   }

@@ -1,12 +1,10 @@
-import { CAUSE_LABELS, plural } from './Flow.js';
+import { CAUSE_LABELS, percent, plural } from './Flow.js';
 import type { BlockParetoView, RunSecurityView, SecurityPeriodView } from './types.js';
 
 /** What the security log of the MVP doc asks for that nothing in the factory records yet, and the ticket of its source. */
 export const NO_SECURITY_SOURCE = [
   { label: 'Dependencies added and refused', ticket: 'ORC-165', why: 'the dependency check exists, but verify does not run it yet: nothing records what it finds' },
 ] as const;
-
-export const percent = (share: number): string => `${Math.round(share * 100)}%`;
 
 const time = (at: number) => new Date(at).toLocaleString();
 

@@ -5,7 +5,7 @@ import { Inspection } from './Inspection.js';
 import type { FeedLine, WorkingRunView } from './types.js';
 
 const run: WorkingRunView = {
-  projectId: 'p', ticketId: 'REL-1', title: 'Export', runId: 'r1', step: 'build', verifying: false, stoppable: true, durationMs: 65_000, measured: true, tokens: null, attemptsWithoutTokens: 0, costUsd: 0,
+  projectId: 'p', ticketId: 'REL-1', title: 'Export', runId: 'r1', step: 'build', verifying: false, stoppable: true, durationMs: 65_000, measured: true, tokens: null, attemptsWithoutTokens: 0, usageLimitShare: null, costUsd: 0,
 };
 const feed: FeedLine[] = [
   { kind: 'activity', runId: 'r1', action: 'Reading the code', parameter: 'step build', at: Date.UTC(2026, 10, 9, 9, 0, 0) },

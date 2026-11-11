@@ -23,7 +23,6 @@ export interface Snapshot {
   linearConnected: boolean;
   queue: QueueView[];
   activeRuns: RunView[];
-  costTodayUsd: number;
   capacity: { dev: { used: number; total: number }; questions: { used: number; total: number } };
 }
 
@@ -34,15 +33,13 @@ export interface FlowTicketView {
   prUrl?: string;
 }
 
-export interface WorkingRunView extends FlowTicketView {
+export interface WorkingRunView extends FlowTicketView, Pick<TicketMeasuresView, 'tokens' | 'attemptsWithoutTokens' | 'usageLimitShare'> {
   runId: string;
   step: string;
   verifying: boolean;
   stoppable: boolean;
   durationMs: number;
   measured: boolean;
-  tokens: TokensView | null;
-  attemptsWithoutTokens: number;
   costUsd: number;
 }
 
@@ -110,6 +107,7 @@ export interface TicketMeasuresView {
   tokens: TokensView | null;
   attempts: number;
   attemptsWithoutTokens: number;
+  usageLimitShare: number | null;
   firstTry: boolean | null;
   reworks: { cause: string; id: string }[];
   revertedWithin14Days: boolean | null;

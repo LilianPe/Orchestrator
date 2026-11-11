@@ -30,7 +30,7 @@ const updatedAt = () => timestamp('updated_at', { withTimezone: true, mode: 'dat
  * workflow, attempt, evidence and artifact tables the engine will fill in later tickets.
  *
  * Legacy compatibility columns (`attempts.data`, `attempts.token`) keep the current `Store`
- * methods (`putRun`, `getRun`, `costSince`) working while SQLite is still the wired store. They
+ * methods (`putRun`, `getRun`) working while SQLite is still the wired store. They
  * go away with those methods.
  */
 export const inbox = pgTable(
@@ -227,7 +227,7 @@ export const attempts = pgTable(
     status: text('status').notNull(),
     /** Legacy `RunRecord` payload, removed with the synchronous store (ORC-178). */
     data: jsonb('data').$type<unknown>().notNull().default(sql`'{}'::jsonb`),
-    /** Legacy run cost, queried by `costSince` until cost moves to attempts. */
+    /** The run's cost in dollars, as `claude -p` reports it: a measure, never a budget (ORC-194). */
     costUsd: doublePrecision('cost_usd').notNull().default(0),
     /** Tokens `claude -p` reported for the attempt (ORC-235); null when it reported none. */
     inputTokens: bigint('input_tokens', { mode: 'number' }),

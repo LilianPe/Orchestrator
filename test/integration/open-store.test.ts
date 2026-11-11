@@ -60,7 +60,8 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { [DATABASE_URL_ENV]: db.url } });
     try {
       const state = await (await fetch('http://127.0.0.1:4187/api/state')).json();
-      expect(state).toMatchObject({ paused: false, tickets: [], queue: [], activeRuns: [], costTodayUsd: 0 });
+      expect(state).toMatchObject({ paused: false, tickets: [], queue: [], activeRuns: [] });
+      expect(state).not.toHaveProperty('costTodayUsd');
     } finally {
       await app.stop();
     }

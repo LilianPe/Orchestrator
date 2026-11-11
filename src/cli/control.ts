@@ -17,7 +17,6 @@ interface State {
   linearConnected: boolean;
   paused: boolean;
   capacity: { dev: { used: number; total: number } };
-  costTodayUsd: number;
   queue: unknown[];
   tickets: (TicketState & { title: string })[];
   activeRuns: Omit<RunRecord, 'token'>[];
@@ -33,7 +32,7 @@ function runLine(run: Omit<RunRecord, 'token'>, now: number): string {
 
 function formatStatus(s: State, now: number): string[] {
   const lines = [
-    `Linear: ${s.linearConnected ? 'connected' : 'not connected'} · queue: ${s.paused ? 'paused' : 'active'} (${s.queue.length} waiting) · dev slots ${s.capacity.dev.used}/${s.capacity.dev.total} · cost today ${s.costTodayUsd.toFixed(2)} $`,
+    `Linear: ${s.linearConnected ? 'connected' : 'not connected'} · queue: ${s.paused ? 'paused' : 'active'} (${s.queue.length} waiting) · dev slots ${s.capacity.dev.used}/${s.capacity.dev.total}`,
   ];
   for (const t of s.tickets) {
     lines.push(`  ${t.ticketId}  ${t.logical}${t.blocked ? ' (blocked)' : ''}${t.verifyingRunId ? ' (check running)' : ''}  ${t.title}`);

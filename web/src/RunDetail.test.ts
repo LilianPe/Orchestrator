@@ -75,7 +75,7 @@ describe('the run detail page (ORC-298)', () => {
     expect(runIdOf('#measures')).toBeUndefined();
     // A malformed link opens no run, and throws nothing into the render.
     expect(runIdOf('#run/%E0')).toBeUndefined();
-    const m = { mergedAt: null, tokens, attempts: 1, attemptsWithoutTokens: 0, firstTry: null, reworks: [], revertedWithin14Days: null, ciCost: null, messages: [], startedAt: 0, leadTimeMs: null, workMs: 60_000, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [attempt()] } satisfies TicketMeasuresView;
+    const m = { mergedAt: null, tokens, attempts: 1, attemptsWithoutTokens: 0, usageLimitShare: null, firstTry: null, reworks: [], revertedWithin14Days: null, ciCost: null, messages: [], startedAt: 0, leadTimeMs: null, workMs: 60_000, costUsd: 0, reviewRounds: { ai: 0, human: 0 }, runs: [attempt()] } satisfies TicketMeasuresView;
     const t: MeasuredTicketView = { projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'dev', blocked: false, blockCause: null, measures: m };
     const html = renderToStaticMarkup(createElement(Measures, { tickets: [t], now: 0, selected: 'p/REL-1', onSelect: () => undefined }));
     expect(html).toContain('href="#run/r1"');
