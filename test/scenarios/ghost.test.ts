@@ -121,7 +121,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
 
   it('criterion 1: each ticket runs the fantome pipeline on its historical clone, nothing reaches Linear or GitHub, and collect sees its run', async () => {
     const { h, ghost, CLONE } = replayed();
-    expect(await ghost(['start', 'p', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);
+    expect(await ghost(['start', 'p', '--threshold', '0.6', '--as-is', '0.3', '--tickets', 'REL-1=12'])).toBe(0);
     h.checks.failNext('AssertionError: expected 1 to be 2');
     h.runner.enqueue(out({ intake: { size: 's', risk: 'low', complete: true, missing: [], screen: false } }), out({ spec: SPEC }), {}, out({ summary: 'Audits export to CSV.' }));
     await h.delegateReplays();
@@ -152,7 +152,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
 
   it('criterion 2: a daemon without sandboxes, the replay is refused with the reason', async () => {
     const { h, ghost, lines } = replayed();
-    expect(await ghost(['start', 'p', '--threshold', '0.6', '--tickets', 'REL-1=12'], { sandboxes: async () => false })).toBe(1);
+    expect(await ghost(['start', 'p', '--threshold', '0.6', '--as-is', '0.3', '--tickets', 'REL-1=12'], { sandboxes: async () => false })).toBe(1);
     expect(lines.at(-1)).toMatch(/no sandboxes/);
     await h.delegateReplays();
     expect(h.runner.requests).toEqual([]);

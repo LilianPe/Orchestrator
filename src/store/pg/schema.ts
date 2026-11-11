@@ -440,13 +440,15 @@ export const reviewDefects = pgTable(
 );
 
 /**
- * A replay of closed tickets (ORC-231), written once with its threshold, which nothing updates: written before the replay, never
+ * A replay of closed tickets (ORC-231), written once with its thresholds, which nothing updates: written before the replay, never
  * changed after. `seed` draws the blind order of the pairs; `tickets`, the tickets it replays.
  */
 export const ghostReplays = pgTable('ghost_replays', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull(),
   threshold: doublePrecision('threshold').notNull(),
+  /** The share mergeable as is (ORC-385); null on a replay recorded with one threshold: not set. */
+  asIsThreshold: doublePrecision('as_is_threshold'),
   memory: boolean('memory').notNull(),
   seed: text('seed').notNull(),
   tickets: jsonb('tickets').$type<string[]>().notNull(),

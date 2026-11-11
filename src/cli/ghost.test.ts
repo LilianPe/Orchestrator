@@ -18,6 +18,8 @@ const PRS: Record<number, HumanPr> = {
   34: { number: 34, url: 'https://github.test/pr/34', author: 'lilian', mergeSha: 'merge34', commits: ['only'] },
   56: { number: 56, url: 'https://github.test/pr/56', author: 'lilian', commits: [] },
 };
+/** The two thresholds `start` requires (ORC-385), for the tests about something else. */
+const THRESHOLDS = ['--threshold', '0.6', '--as-is', '0.3'];
 /** When the runs and the kept PRs of the tests are dated: the replay's start, which `now` gives. */
 const NOW = 1_710_000_000_000;
 
@@ -58,76 +60,90 @@ describe('factory ghost start (ORC-231)', () => {
     expect(await ghost(['start', 'ghost', '--tickets', 'REL-1=12'])).toBe(1);
     expect(lines.join('\n')).toContain('--threshold');
     expect(await store.ghostReplays()).toEqual([]);
-    expect(await ghost(['start', 'ghost', '--threshold', 'high', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(await ghost(['start', 'ghost', '--threshold', 'high', '--as-is', '0.3', '--tickets', 'REL-1=12'])).toBe(1);
     expect(await store.ghostReplays()).toEqual([]);
+  });
+
+  it('ORC-385 criterion 1: refuses a replay without its as-is threshold, or with one above the mergeable threshold', async () => {
+    const { store, lines, ghost, environments } = withGhost();
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(lines.at(-1)).toContain('--as-is is required');
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--as-is', 'some', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(lines.at(-1)).toContain('« some »');
+    // The PRs mergeable as is are some of the mergeable ones: an as-is share above the mergeable one is a mistake, refused.
+    expect(await ghost(['start', 'ghost', '--threshold', '0.3', '--as-is', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(lines.at(-1)).toContain('above');
+    expect(await store.ghostReplays()).toEqual([]);
+    expect(environments).toEqual([]);
   });
 
   it('writes the replay with its threshold, then the environment of each ticket at the parent of its merge commit', async () => {
     const { store, lines, ghost, environments } = withGhost();
-    expect(await ghost(['start', 'ghost', '--threshold', '60%', '--tickets', 'REL-1=12,REL-2=34'])).toBe(0);
-    expect(await store.ghostReplay('g1')).toMatchObject({ projectId: 'ghost', threshold: 0.6, memory: true, tickets: ['REL-1', 'REL-2'], startedAt: NOW, startedBy: 'armand' });
+    expect(await ghost(['start', 'ghost', '--threshold', '60%', '--as-is', '30%', '--tickets', 'REL-1=12,REL-2=34'])).toBe(0);
+    expect(await store.ghostReplay('g1')).toMatchObject({ projectId: 'ghost', threshold: 0.6, asIsThreshold: 0.3, memory: true, tickets: ['REL-1', 'REL-2'], startedAt: NOW, startedBy: 'armand' });
     expect(await store.ghostTickets('g1')).toEqual([
       expect.objectContaining({ ticketId: 'REL-1', mergeSha: 'merge12', start: 'parent-of-merge12', knowledge: 'kb1', env: 'unchecked', outcome: 'pending', humanPr: { number: 12, url: 'https://github.test/pr/12', author: 'lilian' } }),
       expect.objectContaining({ ticketId: 'REL-2', start: 'parent-of-merge34' }),
     ]);
     // The PR's commits go with it: a rebase merge starts before the first of them.
     expect(environments).toEqual([{ ticketId: 'REL-1', prCommits: ['one', 'two'] }, { ticketId: 'REL-2', prCommits: ['only'] }]);
-    expect(lines.join('\n')).toContain('threshold 60%');
+    expect(lines.join('\n')).toContain('thresholds 60% mergeable, as is 30%');
     expect(lines.join('\n')).toContain('ORC-208');
   });
 
-  it('criterion 4: the threshold of a started replay cannot change, not even by starting it again', async () => {
+  it('criterion 4, ORC-385 criterion 3: neither threshold of a started replay can change, not even by starting it again', async () => {
     const { store, ghost } = withGhost();
-    await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12', '--id', 'pilot']);
-    expect(await ghost(['start', 'ghost', '--threshold', '0.1', '--tickets', 'REL-1=12', '--id', 'pilot'])).toBe(1);
-    expect((await store.ghostReplay('pilot'))!.threshold).toBe(0.6);
+    await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12', '--id', 'pilot']);
+    expect(await ghost(['start', 'ghost', '--threshold', '0.1', '--as-is', '0.3', '--tickets', 'REL-1=12', '--id', 'pilot'])).toBe(1);
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--as-is', '0.1', '--tickets', 'REL-1=12', '--id', 'pilot'])).toBe(1);
+    expect(await store.ghostReplay('pilot')).toMatchObject({ threshold: 0.6, asIsThreshold: 0.3 });
   });
 
   it('a replay runs on a project on the factory/fantome preset only, and on merged PRs only', async () => {
     const { store, lines, ghost } = withGhost();
-    expect(await ghost(['start', 'live', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(await ghost(['start', 'live', ...THRESHOLDS, '--tickets', 'REL-1=12'])).toBe(1);
     expect(lines.at(-1)).toContain('factory/fantome');
-    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=56'])).toBe(1);
+    expect(await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=56'])).toBe(1);
     expect(lines.at(-1)).toContain('#56 is not merged');
     expect(await store.ghostReplays()).toEqual([]);
   });
 
   it('ORC-376 criterion 2: a daemon without sandboxes, the replay is refused with the reason, before anything is written', async () => {
     const host = withGhost({ sandboxes: false });
-    expect(await host.ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(await host.ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12'])).toBe(1);
     expect(host.lines.at(-1)).toMatch(/no sandboxes.*could push by itself/);
     expect(await host.store.ghostReplays()).toEqual([]);
     expect(host.environments).toEqual([]);
     // No daemon has said yet: refused too, not run on a guess.
     const unknown = withGhost({ sandboxes: undefined });
-    expect(await unknown.ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(await unknown.ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12'])).toBe(1);
     expect(unknown.lines.at(-1)).toContain('sandboxes');
     expect(await unknown.store.ghostReplays()).toEqual([]);
   });
 
   it('ORC-376: a ticket replays once per project: another replay of it there is refused, before anything is written', async () => {
     const { store, lines, ghost } = withGhost();
-    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);
-    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-2=34,REL-1=12'])).toBe(1);
+    expect(await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12'])).toBe(0);
+    expect(await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-2=34,REL-1=12'])).toBe(1);
     expect(lines.at(-1)).toContain('REL-1: ghost replayed it already (g1)');
     expect((await store.ghostReplays()).map((r) => r.id)).toEqual(['g1']);
   });
 
   it('ORC-376: says that the daemon delegates each ticket rebuilt to the project', async () => {
     const { lines, ghost } = withGhost();
-    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);
+    expect(await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12'])).toBe(0);
     expect(lines.join('\n')).toContain('The daemon delegates each ticket rebuilt to ghost');
   });
 
   it('an environment that cannot be rebuilt: the ticket is counted apart, with why', async () => {
     const { store, ghost } = withGhost();
-    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-3=12'])).toBe(0);
+    expect(await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-3=12'])).toBe(0);
     expect(await store.ghostTickets('g1')).toEqual([expect.objectContaining({ ticketId: 'REL-3', env: 'failed', envReason: 'fetch refused' })]);
   });
 
   it('memory off: no knowledge base given', async () => {
     const { store, ghost } = withGhost();
-    await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12', '--memory', 'off']);
+    await ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12', '--memory', 'off']);
     expect(await store.ghostReplay('g1')).toMatchObject({ memory: false });
     expect((await store.ghostTickets('g1'))[0]).not.toHaveProperty('knowledge');
   });
@@ -137,7 +153,7 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
   /** A replay of REL-1 and REL-2, both run on the ghost project: each with a run's cost, its spec's assumptions and its kept PR. */
   async function replayed() {
     const g = withGhost();
-    await g.ghost(['start', 'ghost', '--threshold', '0.5', '--tickets', 'REL-1=12,REL-2=34']);
+    await g.ghost(['start', 'ghost', '--threshold', '0.5', '--as-is', '0.25', '--tickets', 'REL-1=12,REL-2=34']);
     for (const id of ['REL-1', 'REL-2']) {
       const spec = { job: 'spec', version: 1, at: 0, spec: { assumed: ['a', 'Unasked: b'] } };
       await g.store.putTicket({ ...newTicketState('ghost', id, 'Export CSV', 'dev', 0), spec });
@@ -162,7 +178,7 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
     const g = withGhost();
     await g.store.putRun({ id: 'old', projectId: 'ghost', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'success', claudeSessionId: 's', startedAt: NOW - 1, costUsd: 9, turns: 1, lastText: '', token: 't', cwd: '/w' } as RunRecord);
     await g.store.putArtifact({ id: 'kept:old', ticketId: 'REL-1', kind: KEPT_PR, path: '/nowhere', sha256: 'x', createdAt: NOW - 1 });
-    await g.ghost(['start', 'ghost', '--threshold', '0.5', '--tickets', 'REL-1=12']);
+    await g.ghost(['start', 'ghost', '--threshold', '0.5', '--as-is', '0.25', '--tickets', 'REL-1=12']);
     await g.ghost(['collect', 'g1']);
     expect(await g.store.ghostTickets('g1')).toEqual([expect.objectContaining({ ticketId: 'REL-1', outcome: 'pending', costUsd: 0 })]);
     expect((await g.store.ghostTickets('g1'))[0]).not.toHaveProperty('factoryPr');
@@ -223,10 +239,26 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
     expect(await ghost(['report', 'g1'])).toBe(0);
     const report = lines.join('\n');
     expect(report).toContain('REL-1');
-    expect(report).toContain('threshold 50%');
+    expect(report).toContain('thresholds 50% mergeable, as is 25%');
+    // Both shares, each against its threshold.
+    expect(report).toContain('Mergeable factory PRs: 2 of 2 compared (100%), threshold 50%.');
+    expect(report).toContain('Mergeable as is: 2 of 2 compared (100%), threshold 25%.');
     expect(report).toContain('Total cost: $1.50');
     expect(report).toContain('Verdict: met');
     expect(report).toContain('Environment failures (out of the comparison): none');
+  });
+
+  it('ORC-385: a replay recorded with one threshold is still listed and reported, its as-is threshold not set', async () => {
+    const { store, lines, ghost } = withGhost();
+    await store.putGhostReplay({ id: 'old', projectId: 'ghost', threshold: 0.6, memory: true, seed: 's', tickets: [], startedAt: NOW, startedBy: 'armand' });
+    expect(await ghost(['list'])).toBe(0);
+    expect(lines.at(-1)).toContain('thresholds 60% mergeable, as is not set');
+    lines.length = 0;
+    expect(await ghost(['report', 'old'])).toBe(0);
+    const report = lines.join('\n');
+    expect(report).toContain('thresholds 60% mergeable, as is not set');
+    expect(report).toContain('Mergeable as is: 0 of 0 compared (0%), threshold not set.');
+    expect(report).toContain('no as-is threshold was set');
   });
 
   it('prints its usage for an unknown command', async () => {
