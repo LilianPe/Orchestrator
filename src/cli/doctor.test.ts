@@ -35,14 +35,7 @@ class FakeApi implements DoctorApi {
     if (this.options.failEnvironments) throw new Error('403 Resource not accessible');
     return this.environments;
   }
-
-  async appLogin(): Promise<string> {
-    return BOT;
-  }
 }
-
-/** The factory's App as GitHub names the actor of its pushes and PRs. */
-const BOT = 'factory-app[bot]';
 
 function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowSource {
   return { path, content };
@@ -394,7 +387,6 @@ jobs:
           ? { body: { type: 'file', encoding: 'base64', content: Buffer.from(ci).toString('base64') } }
           : undefined,
       (url) => (url.pathname === '/repos/acme/app/environments' ? { body: { total_count: 0, environments: [] } } : undefined),
-      (url) => (url.pathname === '/app' ? { body: { slug: 'factory-app' } } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -488,68 +480,44 @@ jobs:
     });
   });
 
-  describe("the factory's App excluded by its actor (ORC-283)", () => {
-    const guarded = (condition: string, trigger = 'pull_request'): string => `on: ${trigger}
-permissions: read-all
-jobs:
-  test:
-    if: ${JSON.stringify(condition)}
-    steps:
-      - run: echo "\${{ secrets.NPM_TOKEN }}"
-`;
-
-    it("accepts a job with secrets whose `if:` keeps the factory's App out, as an expression or bare, beside other conditions", async () => {
-      for (const condition of [
-        `github.actor != '${BOT}'`,
-        `\${{ github.actor != '${BOT}' }}`,
-        `github.event_name == 'push' && github.actor != '${BOT}'`,
-        `(github.actor != 'Factory-App[bot]') && (always() || failure())`,
-        `'${BOT}' != github.actor`,
-      ]) {
-        const result = await doctor([workflow(guarded(condition))]);
-        expect(result.code, condition).toBe(0);
-        expect(result.text).toContain("exclude the factory's App");
-      }
-      expect((await doctor([workflow(guarded(`github.actor != '${BOT}'`, 'push'))])).code).toBe(0);
-    });
-
-    it('lists the jobs it excludes in the JSON report', async () => {
-      const result = await doctor([workflow(guarded(`github.actor != '${BOT}'`))], [], { json: true });
-      const report = JSON.parse(result.text) as { workflows: { actorExcluded: string[] }[] };
-      expect(report.workflows[0]!.actorExcluded).toEqual(['test']);
-    });
-
-    it('refuses a condition that can still let the App in, or names another actor', async () => {
-      for (const condition of [
-        `github.actor != '${BOT}' || github.event_name == 'push'`,
-        `github.actor == '${BOT}'`,
-        `github.actor != 'someone-else[bot]'`,
-        `github.triggering_actor != '${BOT}'`,
-        `!(github.actor == '${BOT}')`,
-        `\${{ github.actor != '${BOT}' }} && true`,
-      ]) {
-        const result = await doctor([workflow(guarded(condition))]);
-        expect(result.code, condition).toBe(1);
-        expect(result.text).toContain(`if: github.actor != '${BOT}'`);
-      }
-    });
-
-    it('refuses when one job with secrets has no such condition, or has it on a step only', async () => {
-      const two = `on: pull_request
+  describe('a protected environment, the only approval doctor credits (ORC-283)', () => {
+    const BOT = 'factory-app[bot]';
+    const guarded = (trigger: string, environment?: string): string => `on: ${trigger}
 permissions: read-all
 jobs:
   test:
     if: github.actor != '${BOT}'
-    steps:
+${environment ? `    environment: ${environment}\n` : ''}    steps:
       - run: echo "\${{ secrets.NPM_TOKEN }}"
-  deploy:
-    steps:
-      - if: github.actor != '${BOT}'
-        run: echo "\${{ secrets.DEPLOY_KEY }}"
 `;
-      const result = await doctor([workflow(two)]);
-      expect(result.code).toBe(1);
-      expect(result.text).toContain('job(s) without an environment: deploy');
+    const TRIGGERS = ['pull_request', 'pull_request_target', 'push', 'workflow_run'];
+
+    it("refuses a job with secrets that keeps the factory's App out by its actor, on every trigger that reaches the agent's branches", async () => {
+      for (const trigger of TRIGGERS) {
+        const result = await doctor([workflow(guarded(trigger))], [], { json: true });
+        expect(result.code, trigger).toBe(1);
+        const report = JSON.parse(result.text) as { workflows: Record<string, unknown>[] };
+        expect(report.workflows[0]!['verdict'], trigger).toBe('refused');
+        expect(report.workflows[0]!, trigger).not.toHaveProperty('actorExcluded');
+      }
+    });
+
+    it('says the environment is the way, and does not offer the actor exclusion', async () => {
+      const result = await doctor([workflow(guarded('pull_request'))]);
+      expect(result.text).toContain('attach each of these jobs to an environment with required reviewers');
+      expect(result.text).not.toContain('github.actor');
+      expect(result.text).not.toContain("App excluded");
+    });
+
+    it('accepts the same job under an environment with required reviewers, on every trigger', async () => {
+      for (const trigger of TRIGGERS) {
+        const result = await doctor([workflow(guarded(trigger, 'ci'))], [{ name: 'ci', requiredReviewers: true }]);
+        expect(result.code, trigger).toBe(0);
+      }
+    });
+
+    it('accepts secrets on a push limited to the default branch, which the agent never pushes to', async () => {
+      expect((await doctor([workflow(guarded('{ push: { branches: [main] } }'))])).code).toBe(0);
     });
   });
 
