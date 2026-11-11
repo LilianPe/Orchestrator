@@ -108,7 +108,7 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
     const { h, settled, result } = replaying('ack', { acknowledge: 'reaction' });
     await h.send('session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L', ack: true, commentId: 'c-1' });
     await settled();
-    expect(h.tracker.reactions('c-1')).toEqual(['👀']);
+    expect(h.tracker.reactions('c-1')).toEqual(['eyes']);
     expect(h.tracker.comments('REL-1')).toEqual([]);
     expect(h.tracker.activities('ls-q').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true, ref: 'reaction-c-1-1' });

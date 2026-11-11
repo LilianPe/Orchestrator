@@ -2020,7 +2020,8 @@ export class Orchestrator {
    * Linear refuses is logged, neither retried nor blocking. The one key on every write: a replay finds what its first
    * execution wrote of each. The time a measure reads (ORC-235) is the human's first sign of life, before the plan.
    * `acknowledge: reaction` (ORC-380) reacts on the message in place of the comment; a message with no comment to react
-   * on, or a reaction Linear refuses, gets the comment, logged. The session's thought stays: Linear asks for an activity.
+   * on, or a reaction Linear refuses, gets the comment, logged; a delegation, which has no message, keeps its comment
+   * unlogged. The session's thought stays: Linear asks for an activity.
    */
   private async ack(t: TicketState, c: Extract<Effect, { kind: 'ack' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const outcomes: (EffectOutcome | void)[] = [];
@@ -2031,20 +2032,18 @@ export class Orchestrator {
         this.log('warn', `${what} of the ack of ${t.ticketId} not written: ${(err as Error).message}`);
       }
     };
-    let comment = !!c.comment;
-    if (this.d.acknowledge === 'reaction') {
-      comment = true;
-      if (!c.commentId) this.log('info', `no message to put a reaction on for the ack of ${t.ticketId}: a comment instead`);
-      else {
-        try {
-          outcomes.push(await this.reactOnce(c.commentId, key));
-          comment = false;
-        } catch (err) {
-          this.log('warn', `the reaction of the ack of ${t.ticketId} refused on comment ${c.commentId}, a comment instead: ${(err as Error).message}`);
-        }
+    const reaction = this.d.acknowledge === 'reaction';
+    let reacted = false;
+    if (reaction && c.commentId) {
+      try {
+        outcomes.push(await this.reactOnce(c.commentId, key));
+        reacted = true;
+      } catch (err) {
+        this.log('warn', `the reaction of the ack of ${t.ticketId} refused on comment ${c.commentId}, a comment instead: ${(err as Error).message}`);
       }
-    }
-    if (comment) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    } else if (reaction && !c.comment) this.log('info', `no message to put a reaction on for the ack of ${t.ticketId}: a comment instead`);
+    // A delegation has no message of its own: it keeps its comment in either mode.
+    if ((c.comment || reaction) && !reacted) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
     await attempt('activity', () => this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key));
     if (outcomes.length > 0) await this.d.store.markAcked(key.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${key.eventId} posted, its time not recorded: ${err.message}`));
     if (c.plan) await this.openPlan(t, c.linearSessionId);
