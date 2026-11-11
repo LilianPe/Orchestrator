@@ -39,7 +39,7 @@ function setup(
     perTicketTokens?: number;
     onUsageLimit?: 'wait';
     account?: () => string | undefined;
-    knowledgeIndex?: () => Promise<{ text: string; more: number } | undefined>;
+    knowledgeIndex?: () => Promise<{ text: string; more: number; warning?: string } | undefined>;
   } = {},
 ) {
   // `dev` straight to Human Review, as the harness has it: the AI review's own scenarios are test/scenarios/review.test.ts (ORC-183).
@@ -224,13 +224,15 @@ describe('Orchestrator', () => {
     });
 
     it('marks an index over its cap in the system prompt and logs the cut, never silently', async () => {
-      const { tracker, runner, orch, bus } = setup({ knowledgeIndex: async () => ({ text: '- [Scores](notes/scores.md)\n', more: 4321 }) });
+      const { tracker, runner, orch, bus } = setup({ knowledgeIndex: async () => ({ text: '- [Scores](notes/scores.md)\n', more: 4321, warning: 'Knowledge base: no remote' }) });
       const logs = logsOf(bus);
       tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
       await orch.accept(delegated());
       await orch.drained();
       expect(runner.requests[0]!.systemPrompt).toContain('4321 more not shown');
       expect(logs).toContainEqual(expect.stringMatching(/REL-1.*INDEX\.md.*4321 characters/));
+      // What kept the pull from happening, on the bus the dashboard reads.
+      expect(logs).toContainEqual(expect.stringMatching(/REL-1.*Knowledge base: no remote/));
     });
 
     it('launches without an index it could not read, and says so; nothing without a knowledge base', async () => {

@@ -231,7 +231,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
-      ...(kb ? { knowledgeIndex: () => kb.refresh(log) } : {}),
+      ...(kb ? { knowledgeIndex: () => kb.refresh() } : {}),
       store,
       clock,
       bus,

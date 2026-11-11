@@ -56,8 +56,12 @@ async function callTool(name: unknown, args: Record<string, unknown>, run: RunRe
   if (name === 'kb_search') {
     if (typeof args['query'] !== 'string' || !args['query']) return text('query: required', true);
     if (!d.kbSearch) return text('This factory has no knowledge base.');
-    const hits = await d.kbSearch(args['query']);
-    return text(hits.length ? hits.map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n') : 'No note matches.');
+    try {
+      const hits = await d.kbSearch(args['query']);
+      return text(hits.length ? hits.map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n') : 'No note matches.');
+    } catch (err) {
+      return text(`Knowledge base search failed: ${(err as Error).message}`, true);
+    }
   }
   return undefined;
 }

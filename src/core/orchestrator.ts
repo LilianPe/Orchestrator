@@ -1422,12 +1422,14 @@ export class Orchestrator {
   }
 
   /** The knowledge index for a session's system prompt (ORC-232), its cut logged: a read that fails launches without it, and says so. */
-  private async knowledgePrompt(ticketId: string, job: string): Promise<string | undefined> {
+  private async readKnowledgePrompt(ticketId: string, job: string): Promise<string | undefined> {
     if (!this.d.knowledgeIndex) return undefined;
     try {
       const index = await this.d.knowledgeIndex();
-      if (index?.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
-      return index && knowledgePrompt(index);
+      if (index?.warning) this.log('warn', `${ticketId} ${job}: ${index.warning}`);
+      const prompt = index && knowledgePrompt(index);
+      if (prompt && index.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
+      return prompt;
     } catch (err) {
       this.log('warn', `${ticketId} ${job}: knowledge index not read, the session starts without it: ${(err as Error).message}`);
       return undefined;
@@ -2863,7 +2865,7 @@ export class Orchestrator {
         ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
-      const systemPrompt = await this.knowledgePrompt(ticketId, job.name);
+      const systemPrompt = await this.readKnowledgePrompt(ticketId, job.name);
       const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null, ...(systemPrompt ? { systemPrompt } : {}) });
       // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
       const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;

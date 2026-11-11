@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
 
 export interface KbHit {
   file: string;
@@ -8,11 +8,15 @@ export interface KbHit {
   text: string;
 }
 
-/** The index as read, cut at its cap: `more`, the characters left out (0 when whole). */
+/** The index as read, cut at its cap: `more`, the characters left out (0 when whole); `warning`, why it was not pulled. */
 export interface KbIndex {
   text: string;
   more: number;
+  warning?: string;
 }
+
+/** A fetch that hangs holds every launch behind it: a short deadline, the index read as it is past it. */
+const FETCH_TIMEOUT_MS = 60_000;
 
 /** Characters of INDEX.md a session gets in its system prompt (ORC-38). Proposal: settled with the prompt budget (ORC-254). */
 export const KB_INDEX_MAX = 8000;
@@ -20,6 +24,9 @@ export const KB_INDEX_MAX = 8000;
 const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 export class KnowledgeBase {
+  /** The refresh in flight: launches together share it, never two git commands at once in the same clone. */
+  private refreshing: Promise<KbIndex> | undefined;
+
   constructor(
     private repoPath: string,
     private exec: Exec = execCmd,
@@ -30,30 +37,37 @@ export class KnowledgeBase {
    * did not, without touching it (ORC-38): a repository without a remote, or on another branch, is read as it is.
    */
   async pull(): Promise<string | undefined> {
-    const git = (...args: string[]) => this.exec('git', ['-C', this.repoPath, ...args]);
+    // Hardened as every git the daemon runs on the host: no hook nor fsmonitor of the clone runs as the daemon.
+    const args = (...a: string[]) => [...HARDENING.flatMap((c) => ['-c', c]), '-C', this.repoPath, ...a];
+    const git = (...a: string[]) => this.exec('git', args(...a));
     if (!(await git('remote')).stdout.trim()) return 'no remote: it is never pulled, the agents read it as it is';
-    await mustExec(this.exec, 'git', ['-C', this.repoPath, 'fetch', 'origin']);
-    // In full, never a tag of its name (ORC-354).
-    const head = await git('symbolic-ref', 'refs/remotes/origin/HEAD');
+    await mustExec(this.exec, 'git', args('fetch', 'origin'), { timeoutMs: FETCH_TIMEOUT_MS });
+    // In full, never a tag of its name (ORC-354). A clone without origin/HEAD asks the remote its default branch once.
+    let head = await git('symbolic-ref', 'refs/remotes/origin/HEAD');
+    if (head.code !== 0 && (await git('remote', 'set-head', 'origin', '--auto')).code === 0) head = await git('symbolic-ref', 'refs/remotes/origin/HEAD');
     const trunk = head.code === 0 ? head.stdout.trim() : 'refs/remotes/origin/main';
     const branch = trunk.replace(/^refs\/remotes\/origin\//, '');
     const current = (await git('branch', '--show-current')).stdout.trim();
     if (current !== branch) return `on ${current || 'a detached HEAD'}, not on its default branch ${branch}: not pulled, the agents read it as it is`;
-    await mustExec(this.exec, 'git', ['-C', this.repoPath, 'merge', '--ff-only', trunk]);
+    await mustExec(this.exec, 'git', args('merge', '--ff-only', trunk));
     return undefined;
   }
 
-  /** Pulls, then reads the index: a pull that fails or is skipped is logged, never in the way of the run. */
-  async refresh(log: (message: string) => void, maxChars = KB_INDEX_MAX): Promise<KbIndex> {
-    const why = await this.pull().catch((err: Error) => `not pulled, the agents read it as it is: ${err.message}`);
-    if (why) log(`Knowledge base: ${why}`);
-    return this.readIndex(maxChars);
+  /** Pulls, then reads the index: a pull that fails or is skipped is said in `warning`, never in the way of the run. */
+  refresh(maxChars = KB_INDEX_MAX): Promise<KbIndex> {
+    this.refreshing ??= (async () => {
+      const why = await this.pull().catch((err: Error) => `not pulled, the agents read it as it is: ${err.message}`);
+      return { ...this.readIndex(maxChars), ...(why ? { warning: `Knowledge base: ${why}` } : {}) };
+    })().finally(() => (this.refreshing = undefined));
+    return this.refreshing;
   }
 
   readIndex(maxChars = KB_INDEX_MAX): KbIndex {
     const f = join(this.repoPath, 'INDEX.md');
     const all = existsSync(f) ? readFileSync(f, 'utf8') : '';
-    return { text: all.slice(0, maxChars), more: Math.max(0, all.length - maxChars) };
+    // Never half a surrogate pair at the cut.
+    const cut = /[\uD800-\uDBFF]/.test(all.charAt(maxChars - 1)) ? maxChars - 1 : maxChars;
+    return { text: all.slice(0, cut), more: Math.max(0, all.length - cut) };
   }
 
   async search(query: string, limit = 20): Promise<KbHit[]> {

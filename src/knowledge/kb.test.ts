@@ -58,9 +58,9 @@ describe('KnowledgeBase', () => {
     git(repo, 'remote', 'remove', 'origin');
     const kb = new KnowledgeBase(repo);
     expect(await kb.pull()).toMatch(/no remote/);
-    const logs: string[] = [];
-    expect((await kb.refresh((m) => logs.push(m))).text).toContain('agrégats');
-    expect(logs).toEqual([expect.stringMatching(/^Knowledge base: .*no remote/)]);
+    const index = await kb.refresh();
+    expect(index.text).toContain('agrégats');
+    expect(index.warning).toMatch(/^Knowledge base: .*no remote/);
   });
 
   it('signals a knowledge repository off its default branch, and merges nothing into that branch', async () => {
@@ -80,12 +80,53 @@ describe('KnowledgeBase', () => {
     expect(git(repo, 'branch', '--show-current').trim()).toBe('draft');
   });
 
+  it('asks the remote its default branch when the clone has no origin/HEAD, master included', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'factory-kbt-'));
+    const origin = join(base, 'origin.git');
+    git(base, 'init', '--bare', '-b', 'master', origin);
+    const seed = join(base, 'seed');
+    git(base, 'clone', origin, seed);
+    git(seed, 'config', 'user.email', 't@t');
+    git(seed, 'config', 'user.name', 't');
+    writeFileSync(join(seed, 'INDEX.md'), '- one\n');
+    git(seed, 'add', '.');
+    git(seed, 'commit', '-m', 'init');
+    git(seed, 'push', '-u', 'origin', 'master');
+    const repo = join(base, 'kb');
+    git(base, 'init', '-b', 'master', repo);
+    git(repo, 'remote', 'add', 'origin', origin);
+    const kb = new KnowledgeBase(repo);
+    expect(await kb.pull()).toBeUndefined();
+    expect(kb.readIndex().text).toBe('- one\n');
+  });
+
+  it('shares one refresh between launches that ask together', async () => {
+    const { repo } = kbRepo();
+    let fetches = 0;
+    const kb = new KnowledgeBase(repo, async (cmd, args, opts) => {
+      if (args.includes('fetch')) fetches++;
+      const { execCmd } = await import('../adapters/exec.js');
+      return execCmd(cmd, args, opts);
+    });
+    const [a, b] = await Promise.all([kb.refresh(), kb.refresh()]);
+    expect(a).toBe(b);
+    expect(fetches).toBe(1);
+    await kb.refresh();
+    expect(fetches).toBe(2);
+  });
+
+  it('never cuts the index in half a surrogate pair', () => {
+    const { repo } = kbRepo();
+    writeFileSync(join(repo, 'INDEX.md'), 'abcd😀ef');
+    expect(new KnowledgeBase(repo).readIndex(5)).toEqual({ text: 'abcd', more: 4 });
+  });
+
   it('logs a failed pull and still reads the index it has', async () => {
     const { origin, repo } = kbRepo();
     git(repo, 'remote', 'set-url', 'origin', `${origin}-gone`);
-    const logs: string[] = [];
-    expect((await new KnowledgeBase(repo).refresh((m) => logs.push(m))).text).toContain('agrégats');
-    expect(logs).toEqual([expect.stringMatching(/^Knowledge base: not pulled, the agents read it as it is: /)]);
+    const index = await new KnowledgeBase(repo).refresh();
+    expect(index.text).toContain('agrégats');
+    expect(index.warning).toMatch(/^Knowledge base: not pulled, the agents read it as it is: /);
   });
 });
 

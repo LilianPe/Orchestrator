@@ -721,6 +721,8 @@ describe('server', () => {
       const none = await call((await setup()).app, 'kb_search', { query: 'scores' });
       expect(none.content[0].text).toBe('This factory has no knowledge base.');
       expect(none.isError).toBeUndefined();
+      const broken = await call((await setup({ knowledgeSearch: async () => Promise.reject(new Error('EISDIR: notes/old.md')) })).app, 'kb_search', { query: 'scores' });
+      expect(broken).toEqual({ content: [{ type: 'text', text: 'Knowledge base search failed: EISDIR: notes/old.md' }], isError: true });
     });
 
     it('submit_result stores a valid output for the run of the token, the last one winning', async () => {
