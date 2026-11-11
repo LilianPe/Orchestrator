@@ -7,6 +7,7 @@ import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { perStepToolViolations } from '../presets/tools.js';
+import { branchNamingErrors, DEFAULT_BRANCH_NAMING, type BranchNaming } from '../core/naming.js';
 
 /**
  * `.factory/config.yml` (ORC-209): what a repository declares to the factory, optional. It can add controls or
@@ -42,6 +43,8 @@ export interface RepoConfig {
    * at the launch); a tool the step may never have is refused here. Absent: the step keeps its tools.
    */
   tools?: { perStep: Record<string, readonly string[]> };
+  /** How the factory names the ticket's branch (ORC-283): the team's convention, `{type}/{id}-{slug}`, unless the repository sets its own. */
+  branches: BranchNaming;
 }
 
 /** The repository picks its level; `full` is reserved to `setup`, never for the agent. */
@@ -83,7 +86,7 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'tools'];
+const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
 const strings = z.array(z.string().min(1));
 
 const VARIABLE = /^[A-Z][A-Z0-9_]*$/;
@@ -105,8 +108,11 @@ const RESERVED = new RegExp(
 
 const at = (path: PropertyKey[]): string => path.map((p) => (typeof p === 'number' ? `[${p}]` : `.${String(p)}`)).join('');
 
-/** Validates a `.factory/config.yml` (undefined: no file) and merges it over the socle; throws a RepoConfigError listing every violation. */
-export function parseRepoConfig(text: string | undefined): RepoConfig {
+/**
+ * Validates a `.factory/config.yml` (undefined: no file) and merges it over the socle; throws a RepoConfigError listing every
+ * violation. `defaultBranch`: the repository's, which the factory's branch names must not collide with (ORC-283), when known.
+ */
+export function parseRepoConfig(text: string | undefined, o: { defaultBranch?: string } = {}): RepoConfig {
   let raw: unknown;
   try {
     raw = text === undefined ? null : parse(text);
@@ -173,6 +179,7 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   // A repository at none runs every step at none: no WebFetch. Its ceiling (`repoNetworkCeiling`) is otherwise its steps' own.
   const repoNone = network.level === 'none';
   violations.push(...perStepToolViolations(tools?.per_step ?? {}, factoryDefault.steps, factoryDefault.name, (s) => (repoNone ? 'none' : s.network ?? 'none')));
+  const branches = branchesOf(r['branches'], violations, o.defaultBranch);
   let maxDiff = resolveMaxDiff();
   try {
     maxDiff = resolveMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);
@@ -199,7 +206,32 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     visualPaths: visualPaths ?? [],
     dependencies: { allow: dependencies?.allow ?? {} },
     ...(tools ? { tools: { perStep: tools.per_step } } : {}),
+    branches,
   };
+}
+
+/**
+ * `branches` (ORC-283): `pattern` over {type}, {id} and {slug}, `types` from a Linear label to a type, `default` the type of
+ * a ticket with none of them. Each part left out keeps the convention's; `types`, set, replaces its map whole.
+ */
+function branchesOf(raw: unknown, violations: string[], defaultBranch: string | undefined): BranchNaming {
+  let naming = DEFAULT_BRANCH_NAMING;
+  if (raw !== undefined && raw !== null) {
+    const res = z.strictObject({ pattern: z.string().min(1).optional(), types: z.record(z.string(), z.string().min(1)).optional() }).safeParse(raw);
+    if (!res.success) {
+      const path = res.error.issues[0]?.path ?? [];
+      violations.push(path[0] === 'types' && path.length === 2 ? `branches${at(path)}: a type, as text, expected` : 'branches: `{ pattern, types }` expected');
+      return naming;
+    }
+    const { pattern, types } = res.data;
+    naming = {
+      pattern: pattern ?? naming.pattern,
+      types: types ? Object.entries(types).filter(([label]) => label !== 'default') : naming.types,
+      fallback: types?.['default'] ?? naming.fallback,
+    };
+  }
+  for (const e of branchNamingErrors(naming, defaultBranch)) violations.push(`branches.pattern: ${e}`);
+  return naming;
 }
 
 function networkOf(raw: unknown, violations: string[]): RepoConfig['network'] {

@@ -59,8 +59,8 @@ import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } fr
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
-import { formatReuse, ownWork } from './intake-checks.js';
-import { ownBranchPrefix } from './naming.js';
+import { formatReuse, ownWork, ticketBranches } from './intake-checks.js';
+import { branchName, namesTicket } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
@@ -2775,15 +2775,23 @@ export class Orchestrator {
       const intake = job.step === 'intake';
       const guarded = (intake || job.pickup) && !t.claudeSessionId;
       const checks = wf.tracker.pickup.checks;
+      // The repository's branch naming (ORC-283), from its config on the default branch: a worktree's branch, and the
+      // ticket's own branches on the forge. A worktree's launch reads it here once, fetching the forge for the launch,
+      // which its `prepare` then does not do again; another launch reads the config again once its workspace is there.
+      const worktree = job.workspace === 'worktree';
+      const early = worktree || guarded ? await this.repoConfigOf(project, { fetch: worktree }) : undefined;
+      // Fetched by that read only when a reader of the repository is wired: without one, `prepare` fetches as before.
+      const fetched = worktree && !!this.d.repoConfig;
+      const naming = early?.branches;
       // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together. Neither for a
       // replayed ticket (ORC-376): the forge and the tracker hold now the human's PR and branch, the very work it is compared with.
       const [search, ownBranches] = guarded && !project.replayed
         ? await Promise.all([
-            intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined,
-            checks.includes('not_started') ? forge.branches(project.repoPath, ownBranchPrefix(issue.identifier)) : undefined,
+            intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }, naming) : undefined,
+            checks.includes('not_started') ? ticketBranches(forge, project.repoPath, issue.identifier, naming) : undefined,
           ])
         : [];
-      const failures = guarded ? pickupFailures(checks, issue, ownBranches && ownWork(issue.identifier, ownBranches, search?.prs ?? [])) : [];
+      const failures = guarded ? pickupFailures(checks, issue, ownBranches && ownWork(issue.identifier, ownBranches, search?.prs ?? [], naming)) : [];
       const blockers = guarded ? openBlockers(issue) : [];
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
@@ -2812,7 +2820,11 @@ export class Orchestrator {
       }
       // An AI review reads the commit the factory published, the one `verify` found green (ORC-183): never the agent's worktree.
       const reviewed = job.workspace === 'published' ? t.verifiedSha : undefined;
-      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}) };
+      // A worktree's branch: the one recorded on the ticket, so that a label or a naming changed since opens no second PR (ORC-283),
+      // when it names the ticket: the agent's HEAD is recorded as it left it, detached or on a branch of its own.
+      const recorded = t.branch && namesTicket(issue.identifier, t.branch) ? t.branch : undefined;
+      const branch = worktree ? (recorded ?? branchName(issue.identifier, issue.title, issue.labels, naming)) : undefined;
+      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
       // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
@@ -2821,7 +2833,7 @@ export class Orchestrator {
         await state(store.setMeta(setupPendingKey(ws.path), ''));
         ws = await workspaces.prepare(asked);
       }
-      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, reviewed, activeWork: search?.activeWork };
+      return { issue, ws, lost: undefined, pickup: intake && failures.length ? failures : undefined, blockedBy: intake && blockers.length ? blockers : undefined, reviewed, activeWork: search?.activeWork, config: worktree ? early : undefined };
     })();
     if (!head) return undefined;
     if (head.lost) return lose(head.lost);
@@ -2835,9 +2847,9 @@ export class Orchestrator {
     // Until pump has it, the sandbox is the launch's: whatever ends the launch before destroys it.
     let handedOver = false;
     try {
-      // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch, and a fresh worktree goes with
-      // it. A fresh worktree's `prepare` has just fetched the forge, as a question's trunk always does.
-      const config = await this.repoConfigOf(project, { fetch: !ws.fresh && job.workspace !== 'trunk-readonly' && job.workspace !== 'published' });
+      // Read once, on the default branch (ORC-209 C): an invalid file refuses the launch. A worktree's launch read it before
+      // its `prepare`, for the branch's name (ORC-283); a question's or a review's trunk has just been fetched.
+      const config = head.config ?? (await this.repoConfigOf(project, { fetch: false }));
       // Provided, or no run starts (ORC-282): never a setup nor an agent in an environment poorer than the repository declares.
       const declared = [...new Set(config.services)];
       const unprovided = this.d.sandboxes ? this.d.sandboxes.unprovided(declared) : declared;

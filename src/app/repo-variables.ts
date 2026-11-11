@@ -30,14 +30,16 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     // `ls-tree` tells a file absent from a branch it could not read, which `git show` answers alike.
     const entryOf = (path: string) => git(['ls-tree', '-z', ref, '--', path], () => unreadable);
     // `ls-tree` does not go through a `.factory` that is a link: the file under it would read as absent.
+    // The branch names the factory makes must not collide with it (ORC-283): `origin/main` is the branch `main`.
+    const defaultBranch = name.replace(/^origin\//, '');
     const dir = await entryOf(REPO_CONFIG_DIR);
-    if (!dir) return parseRepoConfig(undefined);
+    if (!dir) return parseRepoConfig(undefined, { defaultBranch });
     if (!dir.startsWith('040000 tree ')) throw new RepoConfigError([`${REPO_CONFIG_DIR} is not a folder on ${name} (symbolic link, file or submodule)`]);
     const entry = await entryOf(REPO_CONFIG_PATH);
-    if (!entry) return parseRepoConfig(undefined);
+    if (!entry) return parseRepoConfig(undefined, { defaultBranch });
     const blob = /^100(?:644|755) blob ([0-9a-f]+)\t/.exec(entry)?.[1];
     if (!blob) throw new RepoConfigError([`${REPO_CONFIG_PATH} is not a file on ${name} (symbolic link, folder or submodule)`]);
-    const config = parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} unreadable on ${name} (git object missing or damaged)`));
+    const config = parseRepoConfig(await git(['cat-file', 'blob', blob], () => `${REPO_CONFIG_PATH} unreadable on ${name} (git object missing or damaged)`), { defaultBranch });
     for (const w of config.sensitivePathWarnings ?? []) o.log?.(`${REPO_CONFIG_PATH} on ${name}: ignored ${w}; a branch that took untrusted content is refused until it is fixed`);
     return config;
   };

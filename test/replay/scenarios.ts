@@ -96,7 +96,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       await delegated(h);
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Synthèse : 2 rounds, CI verte.' }] });
       await h.send('status.changed', { from: 'human_review', to: 'ai_review' });
-      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1-export-csv' });
+      await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv' });
     },
   },
   /** Red CI past its bound blocks the ticket; a human stop. */
@@ -104,7 +104,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
     preset: testPreset({ ciFixAttempts: 1 }),
     run: async (h) => {
       await delegated(h);
-      const red = { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv', failures: ['test'] };
+      const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
       await h.send('pr.checks_failed', red);
       await h.send('pr.checks_failed', red);
       await h.send('label.changed', { label: 'agent:stop', change: 'added' });

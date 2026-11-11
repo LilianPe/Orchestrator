@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { compilePreset } from '../presets/preset.js';
 import { factoryDefault } from '../presets/factory-default.js';
+import { DEFAULT_BRANCH_NAMING } from '../core/naming.js';
 import { parseRepoConfig, RepoConfigError, repoNetworkCeiling, SOCLE_FORBIDDEN_PATHS } from './repo-config.js';
 
-function violations(yaml: string): string[] {
+function violations(yaml: string, defaultBranch?: string): string[] {
   try {
-    parseRepoConfig(yaml);
+    parseRepoConfig(yaml, defaultBranch === undefined ? {} : { defaultBranch });
     return [];
   } catch (err) {
     if (err instanceof RepoConfigError) return err.violations;
@@ -57,8 +58,46 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
         network: { level: 'limited', allow: [] },
         visualPaths: [],
         dependencies: { allow: {} },
+        branches: DEFAULT_BRANCH_NAMING,
       });
     }
+  });
+
+  describe("the names of the factory's branches (ORC-283)", () => {
+    it("defaults to the team's convention: {type}/{id}-{slug}, Bug giving fix, anything else feat", () => {
+      expect(parseRepoConfig(undefined).branches).toEqual({ pattern: '{type}/{id}-{slug}', types: [['Bug', 'fix']], fallback: 'feat' });
+      expect(parseRepoConfig('branches: { pattern: "agent/{id}" }').branches).toEqual({ pattern: 'agent/{id}', types: [['Bug', 'fix']], fallback: 'feat' });
+    });
+
+    it('reads a custom pattern and its types, in the order they are declared, `default` naming the fallback', () => {
+      const c = parseRepoConfig('branches:\n  pattern: "{type}/{id}"\n  types: { Security: sec, Bug: bugfix, default: work }\n', { defaultBranch: 'main' });
+      expect(c.branches).toEqual({ pattern: '{type}/{id}', types: [['Security', 'sec'], ['Bug', 'bugfix']], fallback: 'work' });
+      expect(parseRepoConfig('branches: { types: { Chore: chore } }').branches).toEqual({ pattern: '{type}/{id}-{slug}', types: [['Chore', 'chore']], fallback: 'feat' });
+    });
+
+    it('refuses a pattern without {id}, which two tickets would share', () => {
+      expect(violations('branches: { pattern: "{type}/{slug}" }')).toEqual(['branches.pattern: {id} is required: without it, two tickets would share a branch']);
+    });
+
+    it('refuses an unknown variable', () => {
+      expect(violations('branches: { pattern: "{type}/{id}-{title}" }').join()).toContain('branches.pattern: unknown variable(s) {title}');
+    });
+
+    it('refuses a name git does not take', () => {
+      expect(violations('branches: { pattern: "{type}..{id}" }').join()).toContain('git check-ref-format');
+      expect(violations('branches: { types: { Bug: "a b" } }').join()).toContain('git check-ref-format');
+    });
+
+    it('refuses a name that collides with the default branch', () => {
+      expect(violations('branches: { pattern: "main/{id}-{slug}" }', 'main')).toEqual(['branches.pattern: "main/orc-1-ticket" collides with the default branch main']);
+      expect(violations('', 'fix').join()).toContain('collides with the default branch fix');
+    });
+
+    it('refuses another shape', () => {
+      expect(violations('branches: "{id}"')).toEqual(['branches: `{ pattern, types }` expected']);
+      expect(violations('branches: { pattern: "{id}", prefix: x }')).toEqual(['branches: `{ pattern, types }` expected']);
+      expect(violations('branches: { types: { Bug: 3 } }')).toEqual(['branches.types.Bug: a type, as text, expected']);
+    });
   });
 
   describe('the dependencies a branch may add (ORC-371)', () => {
