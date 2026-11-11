@@ -117,6 +117,9 @@ export function signedActor(body: any): SignedActor {
 /** A session Linear opened on a delegation: no comment opened it. */
 const isDelegation = (body: any): boolean => body.type === 'AgentSessionEvent' && body.action === 'created' && !body.agentSession.comment;
 
+/** The comment a message was written in, for an ack by reaction to react on it (ORC-380). */
+const commentRef = (id: unknown): { commentId?: string } => (typeof id === 'string' ? { commentId: id } : {});
+
 const delegationPayload = (body: any) => ({ linearSessionId: body.agentSession.id as string, promptContext: body.promptContext as string | undefined });
 
 /**
@@ -144,8 +147,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     if (!comment) return [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true } }];
     const text = stripMention(comment.body ?? '');
     const command = parseCommand(text);
-    // The comment the message was written in: an ack by reaction reacts on it (ORC-380).
-    const commentId = typeof comment.id === 'string' ? { commentId: comment.id as string } : {};
+    const commentId = commentRef(comment.id);
     if ([...FACTORY_COMMANDS, ...ctx.commands(projectId)].includes(command.name)) {
       return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ...commentId, ack: true, kind: 'command' } }];
     }
@@ -161,8 +163,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const said = message(reply);
     const bare = classifiedText('session.prompted', said.body);
     const kind = classifyMessage(bare);
-    const source = body.agentActivity?.sourceCommentId;
-    const commentId = typeof source === 'string' ? { commentId: source } : {};
+    const commentId = commentRef(body.agentActivity?.sourceCommentId);
     // A command is read by its first word: without the mention it may open with.
     return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ...commentId, ack: true, kind } }];
   }

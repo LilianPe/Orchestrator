@@ -99,7 +99,7 @@ export interface Tracker {
   /** The id of the ticket's comment written for `effectId`, if there is one. */
   findComment(identifier: string, effectId: string): Promise<string | undefined>;
   /**
-   * Puts `emoji` on the comment `commentId` (ORC-380); with `effectId`, under an id derived from it, for `findReaction` to
+   * Puts `emoji`, by its name (`eyes`), on the comment `commentId` (ORC-380); with `effectId`, under an id derived from it, for `findReaction` to
    * find it. Rejects when the tracker refuses the reaction on that comment.
    */
   react(commentId: string, emoji: string, effectId?: string): Promise<void>;

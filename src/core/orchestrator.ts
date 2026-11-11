@@ -57,7 +57,7 @@ import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
 import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { ACK_REACTION, blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork } from './intake-checks.js';
@@ -2025,26 +2025,26 @@ export class Orchestrator {
    */
   private async ack(t: TicketState, c: Extract<Effect, { kind: 'ack' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const outcomes: (EffectOutcome | void)[] = [];
-    const attempt = async (what: string, write: () => Promise<EffectOutcome | void>) => {
+    const attempt = async (what: string, write: () => Promise<EffectOutcome | void>, failed = 'not written'): Promise<boolean> => {
       try {
         outcomes.push(await write());
+        return true;
       } catch (err) {
-        this.log('warn', `${what} of the ack of ${t.ticketId} not written: ${(err as Error).message}`);
+        this.log('warn', `${what} of the ack of ${t.ticketId} ${failed}: ${(err as Error).message}`);
+        return false;
       }
     };
-    const reaction = this.d.acknowledge === 'reaction';
-    let reacted = false;
-    if (reaction && c.commentId) {
-      try {
-        outcomes.push(await this.reactOnce(c.commentId, key));
-        reacted = true;
-      } catch (err) {
-        this.log('warn', `the reaction of the ack of ${t.ticketId} refused on comment ${c.commentId}, a comment instead: ${(err as Error).message}`);
-      }
-    } else if (reaction && !c.comment) this.log('info', `no message to put a reaction on for the ack of ${t.ticketId}: a comment instead`);
-    // A delegation has no message of its own: it keeps its comment in either mode.
-    if ((c.comment || reaction) && !reacted) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    const comment = () => attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    // A delegation has no message of its own: it keeps its comment, first, in either mode.
+    if (c.comment) await comment();
     await attempt('activity', () => this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key));
+    // The reaction comes after the thought, which Linear waits for within 10 s.
+    if (this.d.acknowledge === 'reaction' && !c.comment) {
+      const { commentId } = c;
+      if (!commentId) this.log('info', `no message to put a reaction on for the ack of ${t.ticketId}: a comment instead`);
+      const reacted = !!commentId && (await attempt('the reaction', () => this.reactOnce(commentId, key), `refused on comment ${commentId}, a comment instead`));
+      if (!reacted) await comment();
+    }
     if (outcomes.length > 0) await this.d.store.markAcked(key.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${key.eventId} posted, its time not recorded: ${err.message}`));
     if (c.plan) await this.openPlan(t, c.linearSessionId);
     // Already made only if nothing was written here.
@@ -2068,11 +2068,11 @@ export class Orchestrator {
     }
   }
 
-  /** The ack's reaction on a message (ORC-380), put unless its first execution already put it (ORC-162). */
+  /** The ack's reaction on a message (ORC-380): 👀, by its name, put unless its first execution already put it (ORC-162). */
   private async reactOnce(commentId: string, key: EffectKey): Promise<EffectOutcome | void> {
     const found = key.replay ? await this.d.tracker.findReaction(commentId, key.id) : undefined;
     if (found !== undefined) return { deduplicated: true, ref: found };
-    await this.d.tracker.react(commentId, ACK_REACTION, key.id);
+    await this.d.tracker.react(commentId, 'eyes', key.id);
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */

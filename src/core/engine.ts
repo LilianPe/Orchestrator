@@ -1673,9 +1673,6 @@ const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'c
 /** What the factory answers a trigger within 10 s (ORC-171); `acknowledge: reaction` puts a reaction in place of its comment (ORC-380). */
 export const ACK_BODY = 'Got it.';
 
-/** The reaction `acknowledge: reaction` puts on a human message (ORC-380): 👀, by its name, as Linear's `Reaction.emoji` holds it. */
-export const ACK_REACTION = 'eyes';
-
 /**
  * The ack of a trigger the webhook brought, first of its decision (ORC-171): a delegation gets the comment, and the
  * plan when it starts a run; any other trigger only the session's. An event already answered in its session (a

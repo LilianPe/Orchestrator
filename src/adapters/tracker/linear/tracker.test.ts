@@ -350,12 +350,12 @@ describe('LinearTracker', () => {
     const t = new LinearTracker(api, 'app-1');
     const id = effectUuid('reaction', 'REL-1:2:1');
     expect(await t.findReaction('c-1', 'REL-1:2:1')).toBeUndefined();
-    await t.react('c-1', '👀', 'REL-1:2:1');
+    await t.react('c-1', 'eyes', 'REL-1:2:1');
     reactions = [...reactions, { id }];
     expect(await t.findReaction('c-1', 'REL-1:2:1')).toBe(id);
     expect(calls.map((c) => c.vars)).toEqual([
       { commentId: 'c-1' },
-      { input: { commentId: 'c-1', emoji: '👀', id } },
+      { input: { commentId: 'c-1', emoji: 'eyes', id } },
       { commentId: 'c-1' },
     ]);
   });
