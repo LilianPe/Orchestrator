@@ -376,11 +376,12 @@ interface StartFrom {
  * factory's own state failed (ORC-339), or anything it called failed transiently (`isTransient`: GitHub, Linear or the
  * database down, ORC-343). The start is tried again (the effect's retry, the drain's bounded one) instead of blocking
  * the ticket. A launch's own failure (a worktree, a setup, the repository's config) still blocks it at once: retried,
- * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads.
+ * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads. Its message is what a launch
+ * error tells the ticket (`launchErrorTold`): its retries spent, the effect's failure reaches it as such (ORC-364).
  */
 class RetryableStart extends Error {
   constructor(readonly failure: unknown) {
-    super(failure instanceof Error ? failure.message : String(failure), { cause: failure });
+    super(failure instanceof Error ? launchErrorTold(failure) : String(failure), { cause: failure });
   }
 }
 
@@ -2702,7 +2703,11 @@ export class Orchestrator {
     try {
       return await this.launchRun(project, ticketId, job, opts, slot, key, runId, at, recorded);
     } catch (err) {
-      if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) throw new RetryableStart(err);
+      if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) {
+        // The whole of it in the daemon's log: the start's own message, which may reach the ticket, says less.
+        this.log('warn', `launch of ${job.name} on ${ticketId}, to try again: ${causeChain(err)}`);
+        throw new RetryableStart(err);
+      }
       throw err;
     } finally {
       // Ended without taking the ticket: the next launch need not wait for the hold to run out (ORC-359), which it does if this write fails.

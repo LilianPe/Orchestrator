@@ -352,6 +352,21 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.logs.map((l) => l.message).join('\n')).toContain('git -C /srv/factory/repos/p rev-list --count refs/remotes/origin/main..refs/heads/factory/rel-1: fatal: bad revision');
   });
 
+  it("a transient git failure of the launch's preparation, its retries spent, tells the ticket neither the server's path nor the command", async () => {
+    const h = createHarness();
+    const args = ['-C', '/srv/factory/worktrees/p/REL-1.new', 'checkout', '--quiet', 'factory/rel-1'];
+    h.workspaces.prepare = async () => {
+      throw execFailure('git', args, { stdout: '', stderr: 'fatal: unable to access the forge: Could not resolve host: forge', code: 128 });
+    };
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: git failed (code 128); the command and its output are in the daemon log.' });
+    const told = [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? a.body : ''))].join('\n');
+    expect(told).toContain('git failed (code 128)');
+    expect(told).not.toMatch(/\/srv\/factory|checkout|resolve host/);
+    expect(h.logs.map((l) => l.message).join('\n')).toContain('git -C /srv/factory/worktrees/p/REL-1.new checkout --quiet factory/rel-1: fatal: unable to access the forge: Could not resolve host: forge');
+  });
+
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
     const h = createHarness({ sandboxed: true, projectYaml: SETUP });
     // The factory's clock past the cap while the command runs: an expiry, as the factory sees one (ORC-348).
