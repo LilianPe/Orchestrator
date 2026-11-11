@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
+import type { AckMode } from '../../src/config/factory-yml.js';
 import type { EventPayloads } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { EffectOutcome } from '../../src/store/types.js';
@@ -40,7 +41,7 @@ class LosingStore extends SqliteStore {
 }
 
 /** A harness whose rows of `kind` are each executed twice, the second time once the first lease expired. */
-function replaying(kind: string, opts: { projectYaml?: string } = {}) {
+function replaying(kind: string, opts: { projectYaml?: string; acknowledge?: AckMode } = {}) {
   const store = new LosingStore(kind);
   const h = createHarness({ store, effectLeaseMs: LEASE_MS, ...opts });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -102,6 +103,16 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
     expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
     expect(h.tracker.activities('ls-1').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true, ref: 'comment-REL-1-1' });
+  });
+
+  it('Accusé par réaction (ORC-380): a replayed ack finds its reaction and its activity, writes neither again', async () => {
+    const { h, settled, result } = replaying('ack', { acknowledge: 'reaction' });
+    await h.send('session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ?', author: 'L', ack: true, commentId: 'c-1' });
+    await settled();
+    expect(h.tracker.reactions('c-1')).toEqual(['eyes']);
+    expect(h.tracker.comments('REL-1')).toEqual([]);
+    expect(h.tracker.activities('ls-q').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Got it.' }]);
+    expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true });
   });
 
   it('Labels: a replayed label change finds the final state already there and writes nothing', async () => {

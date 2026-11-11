@@ -181,6 +181,7 @@ repos:
     secrets: { NPM_TOKEN: env:ORC_NPM_TOKEN } # and under setup_secrets: env:NAME only, at least 8 characters
 read_guard: { max_lines: 350 }
 audit: { serious_defect: "..." }   # the definition of a serious defect (ORC-153): absent, nothing is counted
+acknowledge: reaction              # how a human message is acknowledged (ORC-380): comment (default) or reaction
 ```
 
 | Section | Effect today |
@@ -193,6 +194,7 @@ audit: { serious_defect: "..." }   # the definition of a serious defect (ORC-153
 | `max_diff` | **Applied** (ORC-381): only `off` exists. It disables the baseline of `factory/taille-du-diff` (15 files, 400 lines outside tests) in `verify`: a diff is then bounded only where the repository's own `max_diff` sets a bound. Without it, the baseline applies. A repository's `.factory/config.yml` cannot set `off`. |
 | `repos` | **`env` and `secrets` applied** (ORC-211), the entry being found through the project's `origin` remote: see [`repository-configuration.md`](repository-configuration.md#variables-and-secrets). For the rest, `projects[].repoPath` in `config.yaml` remains the working copy as long as the runner does not clone by itself (ORC-204). |
 | `audit` | **Applied** (ORC-229): `serious_defect` is the definition of a serious defect, as written (a non-empty text). Absent by default, and until ORC-153 decides it: the defects entered on the audit sheets are kept but none is counted, and the Overview shows the AI reviewers' miss rate as **not counted**, with why ([interface](interface-and-security.md)). Each defect is kept with the definition in force when it was entered; only those entered under the definition in force are counted. It counts from the next startup. |
+| `acknowledge` | **Applied** (ORC-380): `comment` (the default) or `reaction`. With `reaction`, a human message gets 👀 on its Linear comment in place of the ack's comment; a message with no comment to react on, or a reaction Linear refuses, gets the comment, logged. A delegation has no message: it keeps its comment « Got it. ». The session's `thought` stays in both modes. See [`linear.md`](linear.md#triggering). It counts from the next startup. |
 | `read_guard` | **Applied**: `max_lines` (positive integer, 350 without this key) is the number of lines beyond which the pack's hook refuses a full read ([ORC-279](pack-and-skills.md#full-read-of-a-large-file)). It counts from the next startup. |
 
 `factory.yml` is only ever read: `init` and token writing never copy any of its values into `config.yaml` or `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.

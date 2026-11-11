@@ -117,6 +117,9 @@ export function signedActor(body: any): SignedActor {
 /** A session Linear opened on a delegation: no comment opened it. */
 const isDelegation = (body: any): boolean => body.type === 'AgentSessionEvent' && body.action === 'created' && !body.agentSession.comment;
 
+/** The comment a message was written in, for an ack by reaction to react on it (ORC-380). */
+const commentRef = (id: unknown): { commentId?: string } => (typeof id === 'string' ? { commentId: id } : {});
+
 const delegationPayload = (body: any) => ({ linearSessionId: body.agentSession.id as string, promptContext: body.promptContext as string | undefined });
 
 /**
@@ -144,11 +147,12 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     if (!comment) return [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true } }];
     const text = stripMention(comment.body ?? '');
     const command = parseCommand(text);
+    const commentId = commentRef(comment.id);
     if ([...FACTORY_COMMANDS, ...ctx.commands(projectId)].includes(command.name)) {
-      return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ack: true, kind: 'command' } }];
+      return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ...commentId, ack: true, kind: 'command' } }];
     }
     const said = message(text);
-    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ack: true, kind: classifyMessage(classifiedText('session.mentioned', said.body)) } }];
+    return [{ type: 'session.mentioned', payload: { ...said, linearSessionId: sessionId, author, ...commentId, ack: true, kind: classifyMessage(classifiedText('session.mentioned', said.body)) } }];
   }
   if (body.action === 'prompted') {
     if (body.agentActivity?.signal === 'stop') return [{ type: 'session.stopped', payload: { linearSessionId: sessionId } }];
@@ -159,8 +163,9 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const said = message(reply);
     const bare = classifiedText('session.prompted', said.body);
     const kind = classifyMessage(bare);
+    const commentId = commentRef(body.agentActivity?.sourceCommentId);
     // A command is read by its first word: without the mention it may open with.
-    return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ack: true, kind } }];
+    return [{ type: 'session.prompted', payload: { ...said, body: kind === 'command' ? bare : said.body, linearSessionId: sessionId, author, ...commentId, ack: true, kind } }];
   }
   return [];
 }
