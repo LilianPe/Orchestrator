@@ -4,16 +4,16 @@ import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import { createHarness } from '../helpers/harness.js';
 import { crashAfterAck, linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, PG_URL } from '../helpers/pg-database.js';
 
 // ORC-147 on Postgres: the webhook answers once the inbox row is committed, and a daemon killed
 // with SIGKILL right after the answer loses nothing.
 describe.skipIf(!PG_URL)('inbox on PgStore', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_inbox');
+    db = await createTestSchema('factory_inbox');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });

@@ -1,19 +1,19 @@
 /**
  * Setup file of the `scenarios-pg` project (ORC-228): the scenarios of test/scenarios, run again
- * with each harness on a Postgres database of its own (cloned from a migrated template), the
- * worker, the outbox and the timers going through PgStore. Without DATABASE_URL, they are skipped.
+ * with each harness on a Postgres schema of its own (ORC-334), migrated, the worker, the outbox
+ * and the timers going through PgStore. Without DATABASE_URL, they are skipped.
  */
 import { Pool } from 'pg';
-import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
+import { afterAll, afterEach, beforeEach } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import type { Store } from '../../src/store/types.js';
 import { useHarnessDatabases } from './harness.js';
-import { createTestDatabase, PG_URL, queryOn } from './pg-database.js';
+import { createSchema, dropTestSchema, EMPTY_ALL, endConnections, PG_URL, queryOn, testSchemaName, testSchemaUrl } from './pg-database.js';
 
-let template: Awaited<ReturnType<typeof createTestDatabase>> | undefined;
 interface Database {
-  name: string;
+  /** Its schema, once taken. */
+  schema: Promise<string>;
   pool: Promise<Pool>;
   /** Set once its test is over. */
   closed: boolean;
@@ -21,15 +21,37 @@ interface Database {
   lost?: Error;
 }
 
-/** The databases of the current test: dropped once it ends. */
+/** The databases of the current test: their schemas are emptied and given back once it ends. */
 let open: Database[] = [];
-let n = 0;
+/**
+ * This file's migrated schemas that no test holds, empty. Migrating a schema is ~0.8 s of DDL on a
+ * Docker Desktop Postgres, emptying it ~3 ms (ORC-334): a schema serves the tests one after the other.
+ */
+const free: string[] = [];
+
+async function takeSchema(): Promise<string> {
+  const reused = free.pop();
+  if (reused) return reused;
+  const name = testSchemaName('factory_h');
+  await createSchema(name);
+  const pool = new Pool({ connectionString: testSchemaUrl(name), max: 1 });
+  try {
+    await migratePgStore(pool);
+  } catch (err) {
+    await pool.end();
+    await dropTestSchema(name);
+    throw err;
+  }
+  await pool.end();
+  return name;
+}
+
 const never = new Promise<never>(() => {});
 
 /**
- * A store whose database is still being created: each call waits for it. Once the test is over,
+ * A store whose schema is still being created: each call waits for it. Once the test is over,
  * calls left over by its background work (a run still streaming, a timer) never resolve, and
- * those under way never answer, rather than fail on a dropped database.
+ * those under way never answer, rather than fail on connections ended.
  */
 function deferred(db: Database, store: Promise<Store>): Store {
   const settle = (v: unknown) => (db.closed ? never : v);
@@ -47,59 +69,52 @@ function deferred(db: Database, store: Promise<Store>): Store {
 }
 
 function pgDatabase() {
-  if (!template) throw new Error('scenarios-pg: create the harness inside a test, once the template database exists');
-  const from = template.name;
-  const name = `${from}_${++n}`;
-  const pool = queryOn(PG_URL, (c) => c.query(`create database "${name}" template "${from}"`)).then(() => {
-    const u = new URL(PG_URL);
-    u.pathname = `/${name}`;
-    return new Pool({ connectionString: u.toString(), max: 4 });
-  });
-  const db: Database = { name, pool, closed: false };
+  const schema = takeSchema();
+  const pool = schema.then((name) => new Pool({ connectionString: testSchemaUrl(name), max: 4 }));
+  const db: Database = { schema, pool, closed: false };
   open.push(db);
-  // One PgStore per database, reused by every life of the harness (its clock is the harness's).
+  // One PgStore per schema, reused by every life of the harness (its clock is the harness's).
   let store: Store | undefined;
-  // PgStore hears every client, a checked-out one included (ORC-290). The forced drop at the end of the
-  // test cuts those its background work still holds: expected. Before that, a lost connection fails the test.
+  // PgStore hears every client, a checked-out one included (ORC-290). The end of the test ends the
+  // connections its background work still holds: expected. Before that, a lost connection fails the test.
   const onError = (err: Error) => {
     if (!db.closed) db.lost ??= err;
   };
   return (now: () => number): Store => (store ??= deferred(db, pool.then((p) => new PgStore({ pool: p, now, onError }))));
 }
 
-async function drop(db: Database): Promise<void> {
+/** Gives the schema back, emptied, once nothing of the test can write to it any more; dropped if that fails. */
+async function release(db: Database): Promise<void> {
+  const name = await db.schema.catch(() => undefined);
   try {
-    // Forced first: it ends the connections still held by the test's background work.
-    await queryOn(PG_URL, (c) => c.query(`drop database if exists "${db.name}" with (force)`));
+    // First: the connections still held by the test's background work, whose writes would reach the next test.
+    if (name) await endConnections(name);
   } finally {
     await db.pool.then((p) => p.end()).catch(() => {});
+  }
+  if (!name) return;
+  try {
+    await queryOn(testSchemaUrl(name), (c) => c.query(EMPTY_ALL));
+    free.push(name);
+  } catch {
+    await dropTestSchema(name);
   }
 }
 
 if (PG_URL) {
   useHarnessDatabases('postgres', pgDatabase);
 
-  beforeAll(async () => {
-    template = await createTestDatabase('factory_h');
-    const pool = new Pool({ connectionString: template.url, max: 1 });
-    try {
-      await migratePgStore(pool);
-    } finally {
-      await pool.end();
-    }
-  });
-
   afterEach(async () => {
     const dbs = open;
     open = [];
     for (const db of dbs) db.closed = true;
-    await Promise.all(dbs.map(drop));
+    await Promise.all(dbs.map(release));
     const lost = dbs.find((db) => db.lost)?.lost;
     if (lost) throw new Error(`scenarios-pg: a connection was lost during the test: ${lost.message}`);
   });
 
   afterAll(async () => {
-    await template?.drop();
+    await Promise.all(free.splice(0).map(dropTestSchema));
   });
 } else {
   beforeEach((ctx) => ctx.skip());

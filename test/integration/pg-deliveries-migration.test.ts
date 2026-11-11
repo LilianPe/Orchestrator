@@ -2,14 +2,14 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { createTestDatabase, migrationsUpTo, PG_URL } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, migrationsUpTo, PG_URL } from '../helpers/pg-database.js';
 
 describe.skipIf(!PG_URL)('the deliveries a database kept in its meta rows before their table (ORC-355)', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_deliveries');
+    db = await createTestSchema('factory_deliveries');
     pool = new Pool({ connectionString: db.url, max: 2 });
   });
 
