@@ -60,7 +60,7 @@ import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayChe
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork, ticketBranches } from './intake-checks.js';
-import { branchName } from './naming.js';
+import { branchName, ownBranchMatcher } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
@@ -2820,8 +2820,10 @@ export class Orchestrator {
       }
       // An AI review reads the commit the factory published, the one `verify` found green (ORC-183): never the agent's worktree.
       const reviewed = job.workspace === 'published' ? t.verifiedSha : undefined;
-      // A worktree's branch: the one recorded on the ticket, so that a label or a naming changed since opens no second PR (ORC-283).
-      const branch = worktree ? (t.branch ?? branchName(issue.identifier, issue.title, issue.labels, naming)) : undefined;
+      // A worktree's branch: the one recorded on the ticket, so that a label or a naming changed since opens no second PR (ORC-283),
+      // when it is one of the ticket's: the agent's HEAD is recorded as it left it, detached or on a branch of its own.
+      const recorded = t.branch && ownBranchMatcher(issue.identifier, naming)(t.branch) ? t.branch : undefined;
+      const branch = worktree ? (recorded ?? branchName(issue.identifier, issue.title, issue.labels, naming)) : undefined;
       const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
