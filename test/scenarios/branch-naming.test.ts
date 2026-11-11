@@ -53,6 +53,19 @@ describe("the ticket's branch name", () => {
     expect(worktrees.map((p) => p.branch)).toEqual(worktrees.map(() => 'feat/rel-1-export-csv'));
   });
 
+  it("never asks for a recorded branch that is not one of the ticket's: a detached HEAD or a branch the agent checked out", async () => {
+    for (const recorded of ['HEAD', 'release/1.0']) {
+      const h = createHarness();
+      await delegated(h, ['Feature']);
+      await h.store.putTicket({ ...(await h.ticket()), branch: recorded });
+      h.runner.enqueue({ output: DONE });
+      await h.send('pr.checks_failed', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] });
+      const worktrees = h.workspaces.prepared.filter((p) => p.kind === 'worktree');
+      expect(worktrees.length, recorded).toBeGreaterThanOrEqual(2);
+      expect(worktrees.at(-1)!.branch, recorded).toBe('feat/rel-1-export-csv');
+    }
+  });
+
   it("leaves the ticket's own branch and PR out of intake's duplicates by the repository's naming, `not_started` checked or not", async () => {
     const h = createHarness({
       projectYaml: 'version: 1\ntracker:\n  pickup:\n    checks: [has_description]\non:\n  ticket.delegated:\n    - { when: "state in [todo, dev] && !blocked", run: intake }\n',
