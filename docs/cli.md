@@ -176,8 +176,9 @@ The same period again is refused, the stored rows kept and no figure printed, un
 
 ### `factory ghost` (ORC-231)
 
-The replay of closed tickets: `start <project> --threshold <share> --tickets <ID>=<PR>,...` writes the replay and its threshold
-(required, never changed after) and rebuilds each ticket at the parent of its PR's merge commit, for a project on the
+The replay of closed tickets: `start <project> --threshold <share> --as-is <share> --tickets <ID>=<PR>,...` writes the replay and
+its two thresholds, the share of the factory's PRs to be mergeable and, of those, the share mergeable as is (both required, never
+changed after, ORC-385) and rebuilds each ticket at the parent of its PR's merge commit, for a project on the
 `factory/fantome` preset; the daemon then delegates each ticket to that project itself (ORC-376). It is refused when the daemon
 runs its agents on the host (no sandboxes), or has never started: the agent could push by itself. `collect`, `judge` (the blind screen, PR A and PR B on the grid mergeable as is / after edits / to reject) and `report` follow. See
 [the replay of closed tickets](ghost-replay.md). Like `flaky`, the command writes to the instance's database, without the daemon.

@@ -742,8 +742,8 @@ export interface Store {
   /** The baseline computed last, whichever project and period (ORC-230); null without one. */
   latestBaseline(): Promise<Baseline | null>;
   /**
-   * Writes a replay of closed tickets (ORC-231), its threshold with it, once: false, nothing written, when its id is kept already.
-   * There is no other write of it: a threshold written before the replay is never changed after (criterion 4).
+   * Writes a replay of closed tickets (ORC-231), its thresholds with it, once: false, nothing written, when its id is kept already.
+   * There is no other write of it: a threshold written before the replay is never changed after (criterion 4, ORC-385).
    */
   putGhostReplay(r: GhostReplay): Promise<boolean>;
   ghostReplay(id: string): Promise<GhostReplay | undefined>;

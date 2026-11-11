@@ -357,13 +357,19 @@ export function storeContract(store: () => Store | Promise<Store>): void {
 
   it('keeps a replay of closed tickets with its threshold, written once and never changed; its tickets and judgments (ORC-231)', async () => {
     const s = await store();
-    const replay: GhostReplay = { id: 'g1', projectId: 'p', threshold: 0.6, memory: false, seed: 'abc', tickets: ['REL-1', 'REL-2'], startedAt: 1_710_000_000_000, startedBy: 'armand' };
+    const replay: GhostReplay = { id: 'g1', projectId: 'p', threshold: 0.6, asIsThreshold: 0.3, memory: false, seed: 'abc', tickets: ['REL-1', 'REL-2'], startedAt: 1_710_000_000_000, startedBy: 'armand' };
     expect(await s.ghostReplay('g1')).toBeUndefined();
     expect(await s.putGhostReplay(replay)).toBe(true);
-    // Criterion 4: the threshold cannot change once the replay started, not even by writing the replay again.
+    // Criterion 4 (ORC-385 criterion 3): neither threshold can change once the replay started, not even by writing it again.
     expect(await s.putGhostReplay({ ...replay, threshold: 0.1 })).toBe(false);
+    expect(await s.putGhostReplay({ ...replay, asIsThreshold: 0.1 })).toBe(false);
     expect(await s.ghostReplay('g1')).toEqual(replay);
     expect(await s.ghostReplays()).toEqual([replay]);
+    // A replay recorded with one threshold (before ORC-385) reads back without the as-is one: not set.
+    const { asIsThreshold: _, ...single } = { ...replay, id: 'g0', startedAt: replay.startedAt - 1 };
+    expect(await s.putGhostReplay(single)).toBe(true);
+    expect(await s.ghostReplay('g0')).not.toHaveProperty('asIsThreshold');
+    expect(await s.ghostReplays()).toEqual([replay, single]);
 
     const t: GhostTicket = { replayId: 'g1', ticketId: 'REL-1', humanPr: { number: 7, url: 'https://github.test/pr/7', author: 'lilian' }, mergeSha: 'm', start: 's', env: 'unchecked', outcome: 'pr', factoryPr: 'kept:x', costUsd: 1.5, assumptions: 2, at: 1_710_000_000_500 };
     await s.putGhostTicket(t);

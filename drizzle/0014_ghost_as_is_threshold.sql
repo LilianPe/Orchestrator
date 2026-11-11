@@ -1,0 +1,1 @@
+ALTER TABLE "ghost_replays" ADD COLUMN "as_is_threshold" double precision;
