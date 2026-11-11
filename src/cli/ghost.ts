@@ -7,16 +7,19 @@ import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
-import { cloneAtStart, knowledgeAt } from '../ghost/history.js';
+import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
+import { HOST_RUNS_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
+import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
 import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
-import { projectEffects } from '../presets/fantome.js';
+import { isFantome } from '../presets/fantome.js';
 import { openStore } from '../store/open.js';
 import { KEPT_PR, type Store } from '../store/types.js';
 
 export const GHOST_USAGE = `Usage: factory ghost <command>
   start <project> --threshold <share> --tickets <ID>=<PR>,... [--memory off] [--id <replay>]
               write the replay and its threshold (0.6, or 60%: the share of the factory's PRs to be mergeable), before any
-              ticket runs; then rebuild each ticket at the parent of its PR's merge commit. The threshold never changes after.
+              ticket runs; then rebuild each ticket at the parent of its PR's merge commit, which the daemon delegates to the
+              project on factory/fantome, with sandboxes only. The threshold never changes after.
   collect <replay>  read what each ticket ran to on the project without effects: its kept PR, its cost, its assumptions
   judge <replay> --judge <GitHub login>  the blind screen: each pair as PR A and PR B, graded 1 mergeable as is, 2 after edits,
               3 to reject; the PRs the judge wrote are left to another judge
@@ -42,8 +45,13 @@ export interface GhostOptions {
   newId: () => string;
   /** Where each replay keeps its tickets' environments: `<dir>/<replay>/<ticket>/`. */
   dir: string;
-  /** The instance's projects: a replay runs on one without effects only. */
-  projects: readonly { id: string; repoPath: string; noEffect: boolean }[];
+  /** The instance's projects: a replay runs on one on the `factory/fantome` preset only, which has no effects. */
+  projects: readonly { id: string; repoPath: string; fantome: boolean }[];
+  /**
+   * Whether the daemon's runs have sandboxes, as it said at its last start (ORC-376); undefined when no daemon has said yet. A replay
+   * runs with sandboxes only: on the host, the agent could push by itself.
+   */
+  sandboxes(): Promise<boolean | undefined>;
   humanPr(repoPath: string, number: number): Promise<HumanPr>;
   /** The diff of a human PR, read when it is judged. */
   humanDiff(repoPath: string, number: number): Promise<string>;
@@ -75,8 +83,8 @@ function parseTickets(raw: string | undefined): { ticketId: string; pr: number }
 
 /**
  * `factory ghost` (ORC-231): the replay of closed tickets. `start` writes the replay with its threshold before anything runs, and
- * rebuilds each ticket's environment; the tickets run on a project without effects (`effects: none`, the `factory/fantome` preset),
- * whose PRs stay artifacts; `collect` reads them back; `judge` grades the pairs blind; `report` says how the factory did.
+ * rebuilds each ticket's environment, which the daemon delegates to the project on the `factory/fantome` preset (ORC-376), without
+ * effects: their PRs stay artifacts; `collect` reads them back; `judge` grades the pairs blind; `report` says how the factory did.
  */
 export async function runGhost(o: GhostOptions): Promise<number> {
   const { positionals, values } = parseArgs({
@@ -121,7 +129,14 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
   if (values.memory !== undefined && values.memory !== 'on' && values.memory !== 'off') return refuse(o, '--memory: on or off.');
   const project = o.projects.find((p) => p.id === projectId);
   if (!project) return refuse(o, `No project ${projectId}.`);
-  if (!project.noEffect) return refuse(o, `${projectId} has effects: a replay runs on a project with \`effects: none\` or the factory/fantome preset, which push nothing, open no PR and write no comment.`);
+  if (!project.fantome) return refuse(o, `${projectId} is not on the factory/fantome preset: a replay runs on such a project, which asks nothing, pushes nothing, opens no PR and writes no comment.`);
+  const sandboxes = await o.sandboxes();
+  if (sandboxes === undefined) return refuse(o, 'Replay refused: no daemon has started on this instance yet, so whether its runs have sandboxes is unknown; a replay runs with sandboxes only. Start the daemon (`factory up`), then the replay.');
+  if (!sandboxes) return refuse(o, `Replay refused: ${HOST_RUNS_REFUSED}`);
+  // A ticket replays once per project (ORC-376): a second run would start on the state of the first, its session and its branch.
+  const earlier = (await o.store.ghostReplays()).filter((r) => r.projectId === projectId && r.id !== values.id);
+  const again = tickets.map((t) => ({ t, r: earlier.find((r) => r.tickets.includes(t.ticketId)) })).find((x) => x.r);
+  if (again) return refuse(o, `${again.t.ticketId}: ${projectId} replayed it already (${again.r!.id}): a ticket replays once per project, its run would start on the state of the first. Replay it on another project on factory/fantome.`);
   // Every PR read before anything is written: a replay is never left half-made by a ticket that cannot be replayed.
   const prs = await Promise.all(tickets.map(async (t) => ({ ...t, read: await o.humanPr(project.repoPath, t.pr) })));
   const unmerged = prs.find((t) => !t.read.mergeSha);
@@ -158,6 +173,7 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
     }
   }
   o.print('Environments not checked by a dry run yet (ORC-208): the report counts them as unchecked.');
+  o.print(`The daemon delegates each ticket rebuilt to ${projectId} at its next pass, on its clone, with its text and linked tickets as of its start; \`factory ghost collect ${replay.id}\` reads what they ran to.`);
   return 0;
 }
 
@@ -282,6 +298,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   // Opened for the judge's answers only: the long clones of `start` hold no terminal.
   let rl: ReturnType<typeof createInterface> | undefined;
+  // Each project's default branch, read once for all its tickets.
+  const branches: Record<string, Promise<string>> = {};
   try {
     let user = 'cli';
     try {
@@ -291,16 +309,24 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
     }
     return await runGhost({
       args, store, user, print: (l) => console.log(l), now: () => Date.now(), newId: () => `ghost-${randomUUID().slice(0, 8)}`,
-      dir: join(home, 'ghost'),
-      projects: instance.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, noEffect: projectEffects(p) === 'none' })),
+      dir: homePaths(home).ghost,
+      projects: instance.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, fantome: isFantome(p) })),
+      sandboxes: async () => {
+        const said = await store.getMeta(SANDBOXES_META);
+        return said === undefined ? undefined : said === '1';
+      },
       humanPr: ghHumanPr,
       humanDiff: (repoPath, number) => mustExec(execCmd, 'gh', ['pr', 'diff', String(number)], { cwd: repoPath }),
       environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
         const remote = (await mustExec(execCmd, 'git', ['-C', repoPath, 'remote', 'get-url', 'origin'])).trim();
-        const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: join(dir, 'repo') });
+        const repo = join(dir, 'repo');
+        const start = await cloneAtStart({ remote, mergeSha, prCommits, dir: repo });
+        // The run's repository (ORC-376): the start on the project's default branch, its own origin.
+        branches[repoPath] ??= originHeadOf(execCmd, repoPath).then((h) => h.name.replace(/^origin\//, ''));
+        await asRepository({ dir: repo, branch: await branches[repoPath] });
         if (!memory || !instance.knowledge) return { start };
         // Transaction time: the knowledge base as it stood when the start commit was made.
-        const at = Number((await mustExec(execCmd, 'git', ['-C', join(dir, 'repo'), 'log', '-1', '--format=%ct', start])).trim()) * 1000;
+        const at = await startTime({ dir: repo, sha: start });
         const knowledge = await knowledgeAt({ repo: instance.knowledge.repoPath, before: at, dir: join(dir, 'knowledge') });
         return { start, ...(knowledge ? { knowledge } : {}) };
       },

@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cloneAtStart, knowledgeAt, linkedAsOf } from './history.js';
+import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
+import { asRepository, cloneAtStart, formatHistory, historyAsOf, knowledgeAt, linkedAsOf, startTime } from './history.js';
 
 const dirs: string[] = [];
 const temp = () => {
@@ -37,7 +38,7 @@ function origin(): string {
 describe('the historical environment of a replayed ticket (ORC-231)', () => {
   it('criterion 2: the clone holds the parent of the merge commit and no commit after it', async () => {
     const repo = origin();
-    commit(repo, 'a.txt');
+    const first = commit(repo, 'a.txt');
     const base = commit(repo, 'b.txt');
     git(repo, ['checkout', '-qb', 'feature']);
     const work = commit(repo, 'feature.txt');
@@ -49,7 +50,9 @@ describe('the historical environment of a replayed ticket (ORC-231)', () => {
     const dir = join(temp(), 'clone');
     expect(await cloneAtStart({ remote: repo, mergeSha: merge, dir })).toBe(base);
     expect(git(dir, ['rev-parse', 'HEAD'])).toBe(base);
-    expect(git(dir, ['rev-list', '--all']).split('\n')).toEqual([base]);
+    // The start and its history (ORC-376): a complete repository the run's worktree is fetched from, nothing after the start.
+    expect(git(dir, ['rev-list', '--all']).split('\n')).toEqual([base, first]);
+    expect(existsSync(join(dir, '.git', 'shallow'))).toBe(false);
     for (const sha of [merge, work, later]) expect(() => git(dir, ['cat-file', '-e', sha])).toThrow();
     expect(existsSync(join(dir, 'b.txt'))).toBe(true);
     expect(existsSync(join(dir, 'feature.txt'))).toBe(false);
@@ -117,5 +120,50 @@ describe('the historical environment of a replayed ticket (ORC-231)', () => {
       start,
     );
     expect(linked).toEqual([{ identifier: 'REL-2', title: 'Before', description: 'd', createdAt: 500, comments: [{ body: 'old', createdAt: 600 }] }]);
+  });
+
+  it("ORC-376: the clone stands for the project's repository: the ticket's worktree is made from it, on the start, and nothing after", async () => {
+    const repo = origin();
+    const t0 = 1_700_000_000;
+    commit(repo, 'a.txt', t0);
+    const base = commit(repo, 'b.txt', t0 + 60);
+    const squash = commit(repo, 'squashed.txt', t0 + 120);
+    commit(repo, 'later.txt', t0 + 180);
+    const dir = join(temp(), 'repo');
+    expect(await cloneAtStart({ remote: repo, mergeSha: squash, dir })).toBe(base);
+    await asRepository({ dir, branch: 'main' });
+    expect(git(dir, ['symbolic-ref', 'refs/remotes/origin/HEAD'])).toBe('refs/remotes/origin/main');
+    expect(git(dir, ['rev-parse', 'origin/main'])).toBe(base);
+    expect(await startTime({ dir, sha: base })).toBe((t0 + 60) * 1000);
+
+    const ws = new GitWorkspaces({ root: temp() });
+    const made = await ws.prepare({ projectId: 'ghost', repoPath: dir, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree', slot: 0, portBase: 3000, runId: 'r1' });
+    expect(made.fresh).toBe(true);
+    expect(git(made.path, ['rev-parse', 'HEAD'])).toBe(base);
+    expect(existsSync(join(made.path, 'b.txt'))).toBe(true);
+    for (const f of ['squashed.txt', 'later.txt']) expect(existsSync(join(made.path, f))).toBe(false);
+    for (const sha of [squash]) expect(() => git(made.path, ['cat-file', '-e', sha])).toThrow();
+  });
+
+  it('ORC-376: the ticket as of its start: its comments and its linked tickets of before, written for the agent', () => {
+    const start = 1000;
+    const h = historyAsOf(
+      {
+        issue: { identifier: 'REL-1', title: 'Export', description: 'd', createdAt: 100, comments: [{ body: 'Which format?', createdAt: 900 }, { body: 'Done in #12', createdAt: 1100 }] },
+        linked: [
+          { identifier: 'REL-2', title: 'Audit list', description: 'The list.', createdAt: 500, comments: [{ body: 'old', createdAt: 600 }, { body: 'later', createdAt: 1500 }] },
+          { identifier: 'REL-3', title: 'After', description: 'd', createdAt: 1200, comments: [] },
+        ],
+      },
+      start,
+    );
+    expect(h.issue.comments).toEqual([{ body: 'Which format?', createdAt: 900 }]);
+    expect(h.linked.map((l) => l.identifier)).toEqual(['REL-2']);
+    const text = formatHistory(h)!;
+    expect(text).toContain('Which format?');
+    expect(text).toContain('### REL-2 — Audit list');
+    expect(text).toContain('old');
+    for (const later of ['Done in #12', 'later', 'REL-3']) expect(text).not.toContain(later);
+    expect(formatHistory({ issue: { ...h.issue, comments: [] }, linked: [] })).toBeUndefined();
   });
 });

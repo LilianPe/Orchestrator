@@ -1212,7 +1212,7 @@ function authorize(out: Decision, event: FactoryEvent, ticket: TicketState | und
  * an event without roles is not checked.
  */
 export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
-  if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && event.payload.noRepo)) return false;
+  if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && (event.payload.noRepo || event.payload.replay))) return false;
   // A review that asks nothing (an approval, no words) is decided without the matrix: no read of Linear or GitHub for it (ORC-190).
   if (event.type === 'pr.reviewed') return asksForFix(event.payload);
   if (event.type !== 'label.changed' && event.type !== 'status.changed') return true;

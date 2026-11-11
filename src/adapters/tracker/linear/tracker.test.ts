@@ -55,6 +55,25 @@ describe('LinearTracker', () => {
     });
   });
 
+  it('reads the thread of an issue and of its related ones, both ways, each dated, a ticket related twice read once (ORC-376)', async () => {
+    const dated = (identifier: string, comments: { body: string; createdAt: string }[] = []) => ({
+      identifier, title: `T ${identifier}`, description: null, createdAt: '2026-10-01T08:00:00.000Z', comments: { nodes: comments },
+    });
+    const issue = {
+      ...dated('REL-1', [{ body: 'Which format?', createdAt: '2026-10-02T08:00:00.000Z' }]), trashed: null,
+      relations: { nodes: [{ relatedIssue: dated('REL-2', [{ body: 'Done in #12', createdAt: '2026-10-03T08:00:00.000Z' }]) }, { relatedIssue: dated('REL-3') }] },
+      inverseRelations: { nodes: [{ issue: dated('REL-3') }, { issue: null }] },
+    };
+    const { api, calls } = fakeLinear({ IssueHistory: () => ({ issue }) });
+    const h = await new LinearTracker(api, 'app-1').history('REL-1');
+    expect(calls.at(-1)?.vars).toEqual({ id: 'REL-1' });
+    expect(h.issue).toEqual({ identifier: 'REL-1', title: 'T REL-1', description: '', createdAt: Date.parse('2026-10-01T08:00:00.000Z'), comments: [{ body: 'Which format?', createdAt: Date.parse('2026-10-02T08:00:00.000Z') }] });
+    expect(h.linked.map((l) => l.identifier)).toEqual(['REL-2', 'REL-3']);
+    expect(h.linked[0]!.comments).toEqual([{ body: 'Done in #12', createdAt: Date.parse('2026-10-03T08:00:00.000Z') }]);
+    const trashed = fakeLinear({ IssueHistory: () => ({ issue: { ...issue, trashed: true } }) });
+    await expect(new LinearTracker(trashed.api, 'app-1').history('REL-1')).rejects.toBeInstanceOf(IssueNotFoundError);
+  });
+
   it('reads who created the issue, the requester the after_merge step mentions by their profile (ORC-197)', async () => {
     const creator = { id: 'u-1', name: 'Lilian', url: 'https://linear.app/x/profiles/lilian' };
     const { api } = fakeLinear({ Issue: () => ({ issue: { ...node, creator } }) });

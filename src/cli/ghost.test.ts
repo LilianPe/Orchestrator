@@ -21,7 +21,7 @@ const PRS: Record<number, HumanPr> = {
 /** When the runs and the kept PRs of the tests are dated: the replay's start, which `now` gives. */
 const NOW = 1_710_000_000_000;
 
-function withGhost() {
+function withGhost(o: { sandboxes?: boolean } = {}) {
   const store = new SqliteStore(':memory:');
   const lines: string[] = [];
   const answers: string[] = [];
@@ -36,7 +36,9 @@ function withGhost() {
     user: 'armand',
     newId: () => `g${++ids}`,
     dir,
-    projects: [{ id: 'ghost', repoPath: '/repo', noEffect: true }, { id: 'live', repoPath: '/repo', noEffect: false }],
+    projects: [{ id: 'ghost', repoPath: '/repo', fantome: true }, { id: 'live', repoPath: '/repo', fantome: false }],
+    // What the daemon last said of its runs (ORC-376): with sandboxes, unless a test says otherwise.
+    sandboxes: async () => ('sandboxes' in o ? o.sandboxes : true),
     humanPr: async (_repo, n) => PRS[n] ?? Promise.reject(new Error(`no PR #${n}`)),
     humanDiff: async (_repo, n) => `diff --git a/x${n}`,
     environment: async ({ ticketId, mergeSha, prCommits, memory }) => {
@@ -81,13 +83,40 @@ describe('factory ghost start (ORC-231)', () => {
     expect((await store.ghostReplay('pilot'))!.threshold).toBe(0.6);
   });
 
-  it('a replay runs on a project without effects only, and on merged PRs only', async () => {
+  it('a replay runs on a project on the factory/fantome preset only, and on merged PRs only', async () => {
     const { store, lines, ghost } = withGhost();
     expect(await ghost(['start', 'live', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
-    expect(lines.at(-1)).toContain('effects');
+    expect(lines.at(-1)).toContain('factory/fantome');
     expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=56'])).toBe(1);
     expect(lines.at(-1)).toContain('#56 is not merged');
     expect(await store.ghostReplays()).toEqual([]);
+  });
+
+  it('ORC-376 criterion 2: a daemon without sandboxes, the replay is refused with the reason, before anything is written', async () => {
+    const host = withGhost({ sandboxes: false });
+    expect(await host.ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(host.lines.at(-1)).toMatch(/no sandboxes.*could push by itself/);
+    expect(await host.store.ghostReplays()).toEqual([]);
+    expect(host.environments).toEqual([]);
+    // No daemon has said yet: refused too, not run on a guess.
+    const unknown = withGhost({ sandboxes: undefined });
+    expect(await unknown.ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(1);
+    expect(unknown.lines.at(-1)).toContain('sandboxes');
+    expect(await unknown.store.ghostReplays()).toEqual([]);
+  });
+
+  it('ORC-376: a ticket replays once per project: another replay of it there is refused, before anything is written', async () => {
+    const { store, lines, ghost } = withGhost();
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-2=34,REL-1=12'])).toBe(1);
+    expect(lines.at(-1)).toContain('REL-1: ghost replayed it already (g1)');
+    expect((await store.ghostReplays()).map((r) => r.id)).toEqual(['g1']);
+  });
+
+  it('ORC-376: says that the daemon delegates each ticket rebuilt to the project', async () => {
+    const { lines, ghost } = withGhost();
+    expect(await ghost(['start', 'ghost', '--threshold', '0.6', '--tickets', 'REL-1=12'])).toBe(0);
+    expect(lines.join('\n')).toContain('The daemon delegates each ticket rebuilt to ghost');
   });
 
   it('an environment that cannot be rebuilt: the ticket is counted apart, with why', async () => {

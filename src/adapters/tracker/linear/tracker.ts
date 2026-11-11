@@ -3,7 +3,7 @@ import type { PlanStep } from '../../../core/session-plan.js';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
 import type { CompletedIssue } from '../../../core/baseline.js';
-import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
+import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type DatedIssue, type IssueHistory, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
 import { allNodes, type Connection } from '../../graphql-pages.js';
 import { Q } from './queries.js';
@@ -101,6 +101,23 @@ function toIssue(n: IssueNode): TrackerIssue {
   };
 }
 
+/** A ticket as `Q.issueHistory` reads it (ORC-376). */
+interface DatedNode {
+  identifier: string;
+  title: string;
+  description: string | null;
+  createdAt: string;
+  comments: { nodes: { body: string; createdAt: string }[] };
+}
+
+const dated = (n: DatedNode): DatedIssue => ({
+  identifier: n.identifier,
+  title: n.title,
+  description: n.description ?? '',
+  createdAt: Date.parse(n.createdAt),
+  comments: n.comments.nodes.map((c) => ({ body: c.body, createdAt: Date.parse(c.createdAt) })),
+});
+
 interface MembersPage {
   teams: { nodes: { members: Connection<{ id: string; active: boolean }> }[] };
 }
@@ -120,16 +137,22 @@ export class LinearTracker implements Tracker, TeamDirectory {
 
   /** `relations`: every page of its relations too, for a read of the ticket; a write needs its labels only. */
   private async node(identifier: string, relations = false): Promise<IssueNode> {
-    let issue: IssueNode | null = null;
+    const issue = await this.queryIssue<IssueNode>(Q.issue, identifier);
+    this.issueIds.set(identifier, issue.id);
+    return this.withAllPages(issue, relations);
+  }
+
+  /** The issue `query` reads by its identifier; `IssueNotFoundError` when Linear has none. */
+  private async queryIssue<N>(query: string, identifier: string): Promise<N> {
+    let issue: N | null = null;
     try {
-      ({ issue } = await this.api.gql<{ issue: IssueNode | null }>(Q.issue, { id: identifier }));
+      ({ issue } = await this.api.gql<{ issue: N | null }>(query, { id: identifier }));
     } catch (err) {
       // Linear answers an unknown or deleted issue with an error, not with null.
       if (!(err instanceof LinearApiError && err.errors.some(isNotFound))) throw err;
     }
     if (!issue) throw new IssueNotFoundError(`Linear ticket not found: ${identifier}`);
-    this.issueIds.set(identifier, issue.id);
-    return this.withAllPages(issue, relations);
+    return issue;
   }
 
   /** Every node of a list `query` reads under `key`, page after page (ORC-347). */
@@ -228,6 +251,16 @@ export class LinearTracker implements Tracker, TeamDirectory {
     // Deleted in Linear: kept in the trash, and still answered, for 30 days.
     if (issue.trashed) throw new IssueNotFoundError(`Linear ticket deleted: ${identifier}`);
     return toIssue(issue);
+  }
+
+  async history(identifier: string): Promise<IssueHistory> {
+    type Node = DatedNode & { trashed: boolean | null; relations: { nodes: { relatedIssue: DatedNode | null }[] }; inverseRelations: { nodes: { issue: DatedNode | null }[] } };
+    const issue = await this.queryIssue<Node>(Q.issueHistory, identifier);
+    // Deleted in Linear, as `getIssue` says.
+    if (issue.trashed) throw new IssueNotFoundError(`Linear ticket deleted: ${identifier}`);
+    const linked = [...issue.relations.nodes.map((r) => r.relatedIssue), ...issue.inverseRelations.nodes.map((r) => r.issue)].filter((n): n is DatedNode => !!n);
+    // A ticket related twice (a relation each way) is read once.
+    return { issue: dated(issue), linked: [...new Map(linked.map((n) => [n.identifier, dated(n)])).values()] };
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {

@@ -16,7 +16,7 @@ import { TAKEN_OVER } from '../core/block-cause.js';
 /** The HTTP Basic header the UI password asks for; its user is free. */
 const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -696,6 +696,17 @@ describe('server', () => {
     expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
   });
 
+  it("a replayed ticket's run reads the ticket as of its start, and searches no tracker, which holds what came after (ORC-376)", async () => {
+    const replayed = { repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue: { identifier: 'REL-1', title: 'Export, as it was', description: 'Before.', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 } };
+    const { app, tracker } = await setup({ replays: { of: async (p, t) => (p === 'p' && t === 'REL-1' ? replayed : undefined) } });
+    tracker.addIssue({ identifier: 'REL-2', title: 'Export follow-up, after the PR' });
+    const issue = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
+    expect(await issue.json()).toMatchObject({ identifier: 'REL-1', title: 'Export, as it was', description: 'Before.' });
+    const search = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
+    expect(search.status).toBe(403);
+    expect(((await search.json()) as { error: string }).error).toContain('replayed');
+  });
+
   it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {
     const { app, tracker } = await setup();
     tracker.addIssue({ identifier: 'REL-2', title: 'Export to CSV' });
@@ -816,6 +827,19 @@ describe('server', () => {
       expect(none.isError).toBeUndefined();
       const broken = await call((await setup({ knowledgeSearch: async () => Promise.reject(new Error('EISDIR: notes/old.md')) })).app, 'kb_search', { query: 'scores' });
       expect(broken).toEqual({ content: [{ type: 'text', text: 'Knowledge base search failed: EISDIR: notes/old.md' }], isError: true });
+    });
+
+    it("kb_search of a replayed ticket's run searches the knowledge base at its start, none with --memory off (ORC-376)", async () => {
+      const issue = { identifier: 'REL-1', title: 'Export, as it was', description: '', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 };
+      const searched: (string | undefined)[] = [];
+      const knowledgeSearch = async (_q: string, repo?: string) => (searched.push(repo), [{ file: 'notes/csv.md', line: 1, text: repo ? 'CSV, then' : 'CSV, learned from its PR' }]);
+      const then = await setup({ replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) }, knowledgeSearch });
+      // Never the knowledge base of now, which may hold a note learned from the ticket's own PR.
+      expect((await call(then.app, 'kb_search', { query: 'export' })).content[0].text).toBe('notes/csv.md:1: CSV, then');
+      expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
+      const off = await setup({ replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', issue }) }, knowledgeSearch });
+      expect((await call(off.app, 'kb_search', { query: 'export' })).content[0].text).toBe('No note matches.');
+      expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
     });
 
     it('submit_result stores a valid output for the run of the token, the last one winning', async () => {

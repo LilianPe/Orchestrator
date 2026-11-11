@@ -1,5 +1,5 @@
 import type { PlanStep } from '../core/session-plan.js';
-import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
+import type { ActivityInput, IssueHistory, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 
 export class TrackerSwitch implements Tracker {
   current: Tracker | undefined;
@@ -16,6 +16,7 @@ export class TrackerSwitch implements Tracker {
   }
 
   getIssue(id: string): Promise<TrackerIssue> { return Promise.resolve().then(() => this.t().getIssue(id)); }
+  history(id: string): Promise<IssueHistory> { return Promise.resolve().then(() => this.t().history(id)); }
   listDelegated(k: string): Promise<TrackerIssue[]> { return Promise.resolve().then(() => this.t().listDelegated(k)); }
   search(q: string, k: string): Promise<SearchHit[]> { return Promise.resolve().then(() => this.t().search(q, k)); }
   moveTo(id: string, s: string): Promise<void> { return Promise.resolve().then(() => this.t().moveTo(id, s)); }

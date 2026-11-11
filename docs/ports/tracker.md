@@ -11,6 +11,7 @@ Ticket tracking: read a ticket, move it, label it, comment, and talk in its agen
 | Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
 | `getIssue(id)` | the ticket, `teamKey` = prefix of the identifier; a copy the caller may modify; `blockedBy`: the tickets it is « blocked by », each with its status name and type, all of them (ORC-363; on Linear, the `blocks` relations where it is the related issue, every page) | read | rejects on an unknown ticket with `IssueNotFoundError`, distinct from a read error |
+| `history(id)` | the ticket with its comments, and the tickets related to it (each relation, both ways, « blocked by » included) with theirs, each dated (ORC-376): what the replay of a closed ticket keeps of before its start; on Linear, first pages only: 100 comments of the ticket, 25 relations each way, 25 comments of each related ticket | read | rejects on an unknown ticket with `IssueNotFoundError` |
 | `listDelegated(teamKey)` | the team's tickets delegated to the app, and only those, each read as `getIssue` reads it | read | — |
 | `search(term)` | the tickets the term finds, including those that have it in their title, with URL and status | read | — |
 | `moveTo(id, status)` | the ticket is in that status | no further effect | rejects on an unknown ticket; on a status the team does not have, rejects and leaves the status |
@@ -42,4 +43,4 @@ None. `FakeTracker` accepted any status name: since ORC-189, it has a catalog pe
 - By default, each team has the statuses of the standard workflow (`STANDARD_STATES`, `packs/standard/workflow.yml`; a test checks that they do not diverge). The scenario harness passes those of the workflow config it loads.
 - The catalog only carries the statuses the workflow names; a real Linear team has others (Backlog, Canceled…). A scenario that needs a status outside the catalog declares it: `h.tracker.setStates('REL', [...h.tracker.statesOf('REL'), 'Backlog'])` (keeps the statuses of the loaded workflow), or `new FakeTracker([...])` for all teams.
 
-The live `LinearTracker` runs read-only (without statuses): `getIssue`, `search` and `listDelegated`, with the token's user as the app; variables in [the index](README.md#live-tests). Its writes, and therefore their effects, go through no suite.
+The live `LinearTracker` runs read-only (without statuses): `getIssue`, `history`, `search` and `listDelegated`, with the token's user as the app; variables in [the index](README.md#live-tests). Its writes, and therefore their effects, go through no suite.

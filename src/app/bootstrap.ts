@@ -36,7 +36,9 @@ import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveL
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
-import { asFantome, fantome, projectEffects } from '../presets/fantome.js';
+import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
+import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
+import { startTime } from '../ghost/history.js';
 import { EventBus } from '../core/bus.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
@@ -107,11 +109,15 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       repoPath: p.repoPath,
       teamKey: p.linearTeamKey,
       // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
-      workflow: p.preset === fantome.name ? asFantome(workflow) : workflow,
+      workflow: isFantome(p) ? asFantome(workflow) : workflow,
       ...(projectEffects(p) ? { effects: 'none' as const } : {}),
     };
   });
   const limits = projects[0]?.workflow.limits;
+  // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
+  // of the same team stay the other projects'.
+  const replaying = instance.projects.filter(isFantome).map((p) => p.id);
+  const fromLinear = projects.filter((p) => !replaying.includes(p.id));
 
   const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle'), log });
   log(kind === 'postgres' ? 'store: Postgres (Drizzle migrations applied)' : `store: SQLite (${paths.db})`);
@@ -230,13 +236,22 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // Before any run of this process: `verify` reads the base branch at this URL, whatever an agent writes in the repository's config (ORC-151).
     const originUrl = makeOriginUrl();
     if (sandboxes) await Promise.all(projects.map((p) => originUrl(p).catch((err: Error) => log(`Warning: ${p.id}: unreadable origin, verify will read it again: ${err.message}`))));
+    // What `factory ghost start` reads before a replay (ORC-376): a replay runs with sandboxes only.
+    await store.setMeta(SANDBOXES_META, sandboxes ? '1' : '0');
+    const replays = new Replays({
+      store, tracker: trackerSwitch, projects: replaying, dir: paths.ghost, sandboxes: !!sandboxes,
+      accept: (e): Promise<boolean> => orchestrator.accept(e), now: () => clock.now(), log: (level, m) => log(`${level === 'warn' ? 'Warning: ' : ''}replay: ${m}`),
+      startTime,
+    });
     const orchestrator = new Orchestrator({
+      replays,
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
       keptEffectsDir: paths.kept,
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
-      ...(kb ? { knowledgeIndex: () => kb.refresh() } : {}),
+      // A replayed ticket's (ORC-376): its checkout at transaction time, read as it is, never pulled.
+      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()) } : {}),
       store,
       clock,
       bus,
@@ -328,8 +343,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       accept,
       log,
       ctx: {
-        projectsOfTeam: (k) => projects.filter((p) => p.teamKey === k).map((p) => p.id),
-        firstProject: () => projects[0]?.id,
+        projectsOfTeam: (k) => fromLinear.filter((p) => p.teamKey === k).map((p) => p.id),
+        firstProject: () => fromLinear[0]?.id,
         labelsOf: async (id) => (await trackerSwitch.getIssue(id)).labels,
         ticket: (pid, id) => store.getTicket(pid, id),
         logicalFor: (pid, name) => {
@@ -350,11 +365,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       },
     });
 
-    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects, submit: accept, clock, log, serial: labelsTurn });
+    const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects: fromLinear, submit: accept, clock, log, serial: labelsTurn });
     const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
-      await reconcileOnce({ tracker: trackerSwitch, store, projects, only: p.id, submit: accept, clock, log, serial: labelsTurn });
+      await reconcileOnce({ tracker: trackerSwitch, store, projects: fromLinear, only: p.id, submit: accept, clock, log, serial: labelsTurn });
       await poller.pollOnce(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without
@@ -371,7 +386,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const takeOver = orchestrator.takeOverDesk();
     const app = createApp({
       ...(takeOver ? { takeOver } : {}),
-      knowledgeSearch: kb ? (q) => kb.search(q) : undefined,
+      // A replayed ticket's run searches its knowledge base at transaction time (ORC-376), `repo`.
+      ...(kb ? { knowledgeSearch: (q: string, repo?: string) => (repo ? new KnowledgeBase(repo) : kb).search(q) } : {}),
+      replays,
       store,
       bus,
       clock,
@@ -446,7 +463,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ingest.close();
       await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
-      await Promise.all([timers.stop(), poller.stop(), reconciler.stop()]);
+      await Promise.all([timers.stop(), poller.stop(), reconciler.stop(), replays.stop()]);
       orchestrator.stopAll();
       await orchestrator.drained();
       // The sandboxes it let run on keep their socket folders: the next start listens in them again (ORC-344).
@@ -499,6 +516,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
       // every second, for what another process wrote and for leases that expired.
       orchestrator.startWorker().catch((e: unknown) => log(`inbox: ${(e as Error).message}`));
+      // The replays `factory ghost start` wrote (ORC-376): each ticket rebuilt delegated to its project, at start and then each minute.
+      if (replaying.length) replays.start();
       if (!isUsableWebhookSecret(webhookSecret()))
         log('Warning: no Linear webhook secret configured, every webhook will be refused. Run factory init again to set it.');
       if (!isUsableWebhookSecret(githubSecret))

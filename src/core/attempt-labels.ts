@@ -90,6 +90,7 @@ export function promptTemplate(p: PromptInput): string {
     branch: p.branch && '<BRANCHE>',
     prUrl: p.prUrl && '<PR>',
     promptContext: p.promptContext && '<CONTEXTE>',
+    history: p.history && '<HISTORIQUE>',
     spec: p.spec && { approved: p.spec.approved, version: 0, text: '<SPEC>' },
     decisions: p.decisions && [{ question: '<QUESTION>', answer: '<REPONSE>', author: '<AUTEUR>' }],
     conventions: p.conventions && '<CONVENTIONS>',

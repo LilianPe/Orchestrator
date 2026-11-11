@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { execCmd, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
-import type { ActivityInput, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
+import type { ActivityInput, IssueHistory, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 import { agentOutputSchema, type AgentOutput } from '../core/agent-output.js';
 import { boxOpener, gitleaksArgv, gitleaksFindings, sandboxGitleaksArgv, withDeadline } from '../core/clean-verify.js';
 import type { PlanStep } from '../core/session-plan.js';
@@ -249,6 +249,7 @@ export class PolicedTracker implements Tracker {
   }
 
   getIssue(id: string): Promise<TrackerIssue> { return this.tracker.getIssue(id); }
+  history(id: string): Promise<IssueHistory> { return this.tracker.history(id); }
   listDelegated(teamKey: string): Promise<TrackerIssue[]> { return this.tracker.listDelegated(teamKey); }
   search(term: string, teamKey: string): Promise<SearchHit[]> { return this.tracker.search(term, teamKey); }
   moveTo(id: string, state: string): Promise<void> { return this.tracker.moveTo(id, state); }
