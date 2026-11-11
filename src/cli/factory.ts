@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { execCmd } from '../adapters/exec.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { startFactory } from '../app/bootstrap.js';
+import { makeRepoConfig } from '../app/repo-variables.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError, loadFactoryLimits, loadFactoryYml } from '../config/factory-yml.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
@@ -116,7 +117,10 @@ async function main(): Promise<number> {
       });
       // Read-only: the schema is the daemon's to migrate.
       const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
-      console.log(formatPlan(await planRows({ tracker, store, projects, workspaces: new GitWorkspaces({ root: homePaths(home).workspaces }) })));
+      // The branch naming as the daemon reads it on the default branch (ORC-283), without a fetch: a preview.
+      const repoConfig = makeRepoConfig();
+      const naming = async (p: { repoPath: string }) => (await repoConfig(p, { fetch: false })).branches;
+      console.log(formatPlan(await planRows({ tracker, store, projects, workspaces: new GitWorkspaces({ root: homePaths(home).workspaces }), naming })));
       await store.close();
       return 0;
     }

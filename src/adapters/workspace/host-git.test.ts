@@ -176,7 +176,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
       const f = fixture();
       const { path } = await f.ws.prepare(req(f.repo));
       plant(f, reach(path));
-      await whatever(f.ws.remoteBranchExists(f.repo, 'factory/rel-2-'));
+      await whatever(f.ws.remoteBranchExists(f.repo, (name) => name.startsWith('factory/rel-2-')));
       expect(f.fired()).toEqual([]);
     });
 
@@ -189,7 +189,7 @@ describe('what an agent wrote, under the commands the factory runs on the host (
         set(reach(path), 'remote.origin.url', `http://127.0.0.1:${(server.address() as AddressInfo).port}/x.git`);
         set(reach(path), 'http.proxy', '');
         set(reach(path), 'credential.helper', `!${f.trap('credential')}`);
-        await whatever(f.ws.remoteBranchExists(f.repo, 'factory/rel-2-'));
+        await whatever(f.ws.remoteBranchExists(f.repo, (name) => name.startsWith('factory/rel-2-')));
       } finally {
         server.close();
       }

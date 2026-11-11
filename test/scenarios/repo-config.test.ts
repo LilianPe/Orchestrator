@@ -63,8 +63,9 @@ describe("the repository's config at the launch", () => {
     const base = onDefaultBranch(BASE);
     const h = createHarness({ sandboxed: true, repoVariables, ...base });
     await delegate(h);
-    // A fresh worktree: `prepare` has just fetched the forge.
-    expect(base.reads).toEqual([{ fetch: false }]);
+    // Once, fetching the forge before the worktree, whose branch takes its name from it (ORC-283): `prepare` fetches no more.
+    expect(base.reads).toEqual([{ fetch: true }]);
+    expect(h.workspaces.prepared.map((p) => p.fetched)).toEqual([true]);
     expect(given).toEqual([parseRepoConfig(BASE)]);
     expect(h.runner.requests[0]!.env).toMatchObject({ NODE_ENV: 'test' });
   });
@@ -105,7 +106,8 @@ describe("the repository's config at the launch", () => {
     await delegate(h);
     expect(h.sandboxes.created).toEqual([]);
     expect(h.runner.requests).toEqual([]);
-    expect(h.workspaces.cleaned).toEqual(['REL-1']);
+    // Read before the worktree (ORC-283): none was made.
+    expect(h.workspaces.prepared).toEqual([]);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.comments('REL-1').at(-1)).toMatch(/Reason: Repository configuration to fix: \.factory\/config\.yml refused:[\s\S]*network\.level/);
     // The Flow shows it as the repository's to fix, not as a breakdown of the factory.
@@ -175,9 +177,8 @@ describe("the repository's config at the launch", () => {
       await delegate(h);
       expect(h.runner.requests).toHaveLength(2);
       expect(h.runner.requests[1]!.prompt).toContain('.factory/config.yml');
-      // Each launch read the default branch's file again, never the agent's: the second, on a worktree that already
-      // exists, fetches the forge first.
-      expect(reads).toEqual([{ fetch: false }, { fetch: true }]);
+      // Each launch read the default branch's file again, never the agent's, fetching the forge first (ORC-283).
+      expect(reads).toEqual([{ fetch: true }, { fetch: true }]);
       expect(agents(h).map((c) => [c.network, c.allow])).toEqual([
         ['limited', ['docs.exemple.com']],
         ['limited', ['docs.exemple.com']],

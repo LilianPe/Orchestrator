@@ -62,7 +62,7 @@ A control `factory.yml` disables (ORC-381) is named first: `Disabled in factory.
 
 ### `factory doctor [repo]`
 
-Check before entrusting a repository: refuses (exit code `1`) a CI that can expose secrets to a `factory/*` branch without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are under a protected environment with required reviewers.
+Check before entrusting a repository: refuses (exit code `1`) a CI that can expose secrets to the factory's branches (the repository's naming, `feat/*` and `fix/*` by default, and the legacy `factory/*`) without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are each under a protected environment with required reviewers (the only approval it credits, ORC-283).
 
 - Reads `.github/workflows` and `GET /repos/{owner}/{repo}/environments` with the GitHub App: no `gh` fallback.
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
