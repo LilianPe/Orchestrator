@@ -159,6 +159,42 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
     ]);
   });
 
+  describe('a control disabled in factory.yml (ORC-381)', () => {
+    const steps = budgeted().budgets!.perStepTokens;
+
+    it('says so, and still validates the rest', () => {
+      expect(run(repo(), { ...budgeted(), maxDiff: 'off' })).toEqual({
+        code: 0,
+        out: ['no .factory/config.yml: the factory/default baseline applies as is.', 'Disabled in factory.yml: max_diff.', WITHIN],
+      });
+    });
+
+    it('takes no ticket cap under `per_ticket_tokens: off`, but the repository may still set one', () => {
+      expect(run(repo(), { budgets: { perStepTokens: steps, perTicketTokens: 'off' } })).toEqual({
+        code: 0,
+        out: [
+          'no .factory/config.yml: the factory/default baseline applies as is.',
+          'Disabled in factory.yml: budgets.per_ticket_tokens.',
+          'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, under no ticket cap.',
+        ],
+      });
+      const lowered = run(repo('budgets: { per_ticket_tokens: 20000 }\n'), { budgets: { perStepTokens: steps, perTicketTokens: 'off' } });
+      expect(lowered.code).toBe(1);
+      expect(lowered.out.at(-1)).toContain('exceeds budgets.per_ticket_tokens 20000');
+    });
+
+    it('computes no worst case in tokens under `budgets: off`', () => {
+      expect(run(repo(), { maxDiff: 'off', budgets: { perStepTokens: 'off', perTicketTokens: 'off' } })).toEqual({
+        code: 0,
+        out: [
+          'no .factory/config.yml: the factory/default baseline applies as is.',
+          'Disabled in factory.yml: max_diff, budgets.per_step_tokens, budgets.per_ticket_tokens.',
+          'No worst case of factory/default in tokens: budgets.per_step_tokens is disabled.',
+        ],
+      });
+    });
+  });
+
   it('refuses an invalid factory.yml, one line per violation', () => {
     const out: string[] = [];
     const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw new FactoryYmlError(['budgets.per_ticket_tokens: a positive integer is expected']); } });

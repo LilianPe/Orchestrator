@@ -20,6 +20,8 @@ export interface Snapshot {
   paused: boolean;
   /** Until when (ms) the Claude account's usage limit holds every launch (ORC-340); null when it holds none. Absent from an older server. */
   usageLimitedUntil?: number | null;
+  /** The controls factory.yml disables (ORC-381): `max_diff`, `budgets.per_step_tokens`, `budgets.per_ticket_tokens`. Absent from an older server. */
+  disabledControls?: string[];
   linearConnected: boolean;
   queue: QueueView[];
   activeRuns: RunView[];

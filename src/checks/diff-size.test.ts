@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDiff } from './diff.js';
-import { DIFF_SIZE_CHECK, MAX_DIFF, MaxDiffConfigError, diffSizeCheck, measureDiff, resolveMaxDiff } from './diff-size.js';
+import { DIFF_SIZE_CHECK, MAX_DIFF, MaxDiffConfigError, diffSizeCheck, measureDiff, repoMaxDiff, resolveMaxDiff } from './diff-size.js';
 
 // A new file of `lines` added lines.
 function addedFile(path: string, lines: number): string {
@@ -84,6 +84,20 @@ describe('diffSizeCheck', () => {
     expect(result.ok).toBe(false);
     expect(result.summary).toContain('can only tighten');
     expect(result.summary).toContain('files');
+  });
+
+  it("blocks nothing for its size under factory.yml's `max_diff: off` (ORC-381)", () => {
+    const result = diffSizeCheck(files(30, 20), { off: true });
+    expect(result).toMatchObject({ ok: true, size: { files: 30, lines: 600 } });
+    expect(result.summary).toBe('30 file(s), 600 line(s) outside tests, not bounded: `max_diff` is disabled in factory.yml.');
+  });
+
+  it("keeps the repository's own bounds under `max_diff: off`, the other unbounded (ORC-381)", () => {
+    const result = diffSizeCheck(files(30, 20), { off: true, maxDiff: { files: 10 } });
+    expect(result).toMatchObject({ ok: false, limits: { files: 10, lines: Infinity } });
+    expect(result.summary).toContain('30 files outside tests, over 10');
+    expect(result.summary).toContain('fit under `max_diff` (10 files outside tests)');
+    expect(diffSizeCheck(files(30, 10), { off: true, maxDiff: { lines: 350 } })).toMatchObject({ ok: true, limits: { files: Infinity, lines: 350 } });
   });
 
   it('counts a deleted file and its removed lines', () => {
@@ -189,5 +203,26 @@ describe('resolveMaxDiff', () => {
       expect(() => resolveMaxDiff({ files: bad })).toThrow(MaxDiffConfigError);
     }
     expect(() => resolveMaxDiff({ lines: '100' as unknown as number })).toThrow(MaxDiffConfigError);
+  });
+
+  it("refuses `off`, which only factory.yml can set (ORC-381)", () => {
+    expect(() => resolveMaxDiff('off' as unknown as Partial<{ files: number }>)).toThrow(
+      'max_diff: `off` is refused here: only factory.yml, the server\'s configuration, disables `max_diff`; the repository configuration can only tighten it.',
+    );
+  });
+
+  it('starts from no bound under `max_diff: off`, the bounds still checked against the base (ORC-381)', () => {
+    expect(resolveMaxDiff(undefined, true)).toEqual({ files: Infinity, lines: Infinity });
+    expect(resolveMaxDiff({ lines: 100 }, true)).toEqual({ files: Infinity, lines: 100 });
+    expect(() => resolveMaxDiff({ files: 16 }, true)).toThrow(/can only tighten/);
+  });
+});
+
+describe('repoMaxDiff (ORC-381)', () => {
+  it('gives the bounds the repository sets, and only those', () => {
+    expect(repoMaxDiff(undefined)).toEqual({});
+    expect(repoMaxDiff(null)).toEqual({});
+    expect(repoMaxDiff({ files: 10 })).toEqual({ files: 10 });
+    expect(() => repoMaxDiff({ files: 16 })).toThrow(MaxDiffConfigError);
   });
 });

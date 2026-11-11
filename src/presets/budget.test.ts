@@ -41,6 +41,8 @@ describe('the worst case of a preset (ORC-216)', () => {
     // The review sends back to the build, whose check refills the counter the review spends: no end.
     const refilling: Preset = { ...loop, steps: loop.steps.map((s) => (s.id === 'review' ? { ...s, onFailure: { goto: 'build', counter: 'v' } } : s)) };
     expect(worstCase(refilling, { perStepTokens: { build: 1, review: 1, fix: 1 } })).toMatchObject({ unbounded: expect.any(String) });
+    // The per-step caps disabled in factory.yml (ORC-381) leave the loop as unbounded.
+    expect(checkBudgets(refilling, { perStepTokens: 'off', perTicketTokens: 'off' }).violations).toEqual([expect.stringMatching(/^worst case unbounded: a counter refills inside its own loop/)]);
   });
 
   it('counts the turns of a step as `max_turns` lowers them, never raises them', () => {
@@ -86,6 +88,14 @@ describe('the invariant « budget caps » of the core (ORC-216)', () => {
       ...AGENTS.map((s) => `budgets.per_step_tokens.${s}: not set; the worst case of factory/default has no bound without it`),
       'budgets.per_ticket_tokens: not set; the worst case of factory/default has no bound without it',
     ]);
+  });
+
+  it('passes a cap disabled in factory.yml, never one left unset (ORC-381)', () => {
+    expect(checkBudgets(factoryDefault, { perStepTokens: every(1_000), perTicketTokens: 'off' })).toMatchObject({ violations: [], worst: { tokens: 41_000 } });
+    // No worst case in tokens without the per-step caps: the ticket's cap, set, has nothing to bound.
+    expect(checkBudgets(factoryDefault, { perStepTokens: 'off', perTicketTokens: 1 })).toEqual({ violations: [] });
+    expect(checkBudgets(factoryDefault, { perStepTokens: 'off', perTicketTokens: 'off' })).toEqual({ violations: [] });
+    expect(checkBudgets(factoryDefault, { perStepTokens: 'off' }).violations).toEqual(['budgets.per_ticket_tokens: not set; the worst case of factory/default has no bound without it']);
   });
 
   it('is checked when the preset compiles with its budgets', () => {

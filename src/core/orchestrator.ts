@@ -284,6 +284,8 @@ export interface OrchestratorDeps {
   originUrl?: (project: ProjectRuntime) => Promise<string>;
   /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
   perTicketTokens?: number;
+  /** `max_diff: off` of factory.yml (ORC-381): `verify` bounds the diff's size only where the repository's `max_diff` does. */
+  maxDiff?: 'off';
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
   /** `acknowledge` of factory.yml (ORC-380): `reaction` reacts on the message in place of the ack's comment. Absent: `comment`. */
@@ -1171,6 +1173,7 @@ export class Orchestrator {
         commands: job.verify,
         gitleaks: true,
         semgrep: true,
+        ...(this.d.maxDiff ? { maxDiff: this.d.maxDiff } : {}),
         knownFlaky: await this.d.store.knownFlakyTests(project.id),
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),

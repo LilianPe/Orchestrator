@@ -43,7 +43,7 @@ branches: { pattern: "{type}/{id}-{slug}", types: { Bug: fix, default: feat } } 
 | `services` | list | `[]` | Services the factory starts next to each attempt: `postgres` only, with sandboxes (see [Services](#services)). Another name, or any on a daemon without sandboxes, refuses the launch. |
 | `sensitive_paths` | list of globs | `[]` | Globs from the root (`infra`, `src/auth*`, `**/migrations/**`, `src/**/*.sql`), dotfiles included and case ignored; a pattern that names a directory protects everything under it. What a branch changes in them once an untrusted run worked on it is refused by `verify` and the publication. A trusted branch may change them ([workflow](workflow.md#lifecycle-events-not-configurable)); its PR is then labelled `revue: requise` (ORC-198, [preset](preset.md#the-class-of-the-diff-and-the-review-label-orc-198)). |
 | `budgets.per_ticket_tokens` | integer > 0 | none | Token cap for the ticket's code runs (questions do not count): past it, the ticket is blocked before its next code run (ORC-340), kind `budget` (ORC-216). It can only lower the cap of `factory.yml`; `factory validate` refuses the preset when its worst case exceeds the lower of the two. |
-| `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Maximum diff size excluding tests; can only be tightened. |
+| `max_diff` | `{ files, lines }` | `{ 15, 400 }` | Maximum diff size excluding tests; can only be tightened. `off` is refused: only the server's `factory.yml` disables the baseline (ORC-381), and the bounds set here still apply then. |
 | `feature_flags.provider` | text | none | Feature flag provider. |
 | `visual_paths` | list of patterns | `[]` | Paths that require visual proof (ORC-176): a diff that touches one makes `verify` take captures before and after ([workflow.md](workflow.md#jobs)). Matched as `sensitive_paths`, from the root. |
 | `network` | `{ level, allow }` | `limited`, `[]` | The agent's network level: `none`, `limited` or `custom`. See [The agent's network](#the-agents-network). |
@@ -117,7 +117,8 @@ A configuration **adds** checks or prohibitions, it never **removes** any from t
 
 - an unknown key, such as `checks: { disable: [...] }`: nothing can turn off a baseline check, and a silently ignored key would suggest otherwise;
 - a negative pattern (`!…`) in `sensitive_paths` or `visual_paths`: it would remove a path;
-- a `max_diff` wider than the baseline (15 files, 400 lines);
+- a `max_diff` wider than the baseline (15 files, 400 lines), or `off`;
+- `budgets: off` or `per_ticket_tokens: off`: only `factory.yml` disables a token cap (ORC-381);
 - `network.level: full`, reserved for `setup`, never for the agent; in `network.allow`, anything that is not a hostname (`*`, `*.com`, `0.0.0.0/0`): a wildcard or a range would amount to `full`; and an `allow` list under a level other than `custom`, which would open nothing;
 - a pattern in `dependencies.allow` (`@org/*`): exact names only;
 - a preset other than `factory/default@1.0`.
