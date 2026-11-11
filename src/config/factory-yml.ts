@@ -25,8 +25,13 @@ export interface FactoryYml {
   };
   /** Tickets worked at once: the dev queue's capacity, over `parallel_sessions` of the workflow (ORC-203). */
   concurrency?: number;
-  /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340); `validate`'s worst case waits for ORC-216. */
-  budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
+  /**
+   * `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340).
+   * A token cap `off` is disabled (ORC-381), `budgets: off` both: unlike a cap left unset, `factory validate` accepts it. `on_usage_limit` is no cap of the factory's.
+   */
+  budgets?: { perStepTokens?: Record<string, number> | 'off'; perTicketTokens?: number | 'off'; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
+  /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
+  maxDiff?: 'off';
   /**
    * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and
    * `secrets` are the values of what the repository's `.factory/config.yml` declares (ORC-211).
@@ -132,9 +137,25 @@ export function claudeToken(value: string | undefined, from: string): string | u
   return token;
 }
 
-/** What the workflow's agent steps read of the file (ORC-136). */
+/** What the workflow's agent steps read of the file (ORC-136): no per-step cap when it is `off` (ORC-381). */
 export function stepSettings(yml: FactoryYml | undefined): StepSettings {
-  return { effort: yml?.claude?.effort, budgets: yml?.budgets };
+  const { perStepTokens, ...budgets } = yml?.budgets ?? {};
+  return { effort: yml?.claude?.effort, budgets: yml?.budgets && { ...budgets, ...(perStepTokens === 'off' ? {} : { perStepTokens }) } };
+}
+
+/** The ticket's token cap the orchestrator applies (ORC-340): none when it is unset or `off` (ORC-381). */
+export function ticketCapOf(yml: Pick<FactoryYml, 'budgets'> | undefined): number | undefined {
+  const cap = yml?.budgets?.perTicketTokens;
+  return cap === 'off' ? undefined : cap;
+}
+
+/** The controls the file disables (ORC-381), by their key: what `factory validate`, the dashboard and the daemon's start say. */
+export function disabledControls(yml: Pick<FactoryYml, 'budgets' | 'maxDiff'> | undefined): string[] {
+  return [
+    ...(yml?.maxDiff === 'off' ? ['max_diff'] : []),
+    ...(yml?.budgets?.perStepTokens === 'off' ? ['budgets.per_step_tokens'] : []),
+    ...(yml?.budgets?.perTicketTokens === 'off' ? ['budgets.per_ticket_tokens'] : []),
+  ];
 }
 
 export class FactoryYmlError extends Error {
@@ -149,6 +170,7 @@ const SECTIONS: Record<string, string[]> = {
   claude: ['runtime', 'accounts', 'active', 'default_model', 'per_step', 'effort'],
   concurrency: [],
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
+  max_diff: [],
   repos: [],
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
@@ -164,12 +186,15 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
 }
 
 /**
- * The `budgets` of `<home>/factory.yml` alone (ORC-216), validated as the daemon validates them: what `factory validate`
- * reads, without resolving the file's `env:` secrets, which the shell it runs in need not have. A read error is thrown as is.
+ * The `budgets` and `max_diff` of `<home>/factory.yml` alone (ORC-216, ORC-381), validated as the daemon validates them: what
+ * `factory validate` reads, without resolving the file's `env:` secrets, which the shell it runs in need not have. A read error is thrown as is.
  */
-export function loadFactoryBudgets(home: string): FactoryYml['budgets'] {
+export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'maxDiff'> {
   const text = factoryYmlText(home);
-  return text === undefined ? undefined : parseSection(text, 'budgets')?.budgets;
+  if (text === undefined) return {};
+  const budgets = parseSection(text, 'budgets')?.budgets;
+  const maxDiff = parseSection(text, 'max_diff')?.maxDiff;
+  return { ...(budgets ? { budgets } : {}), ...(maxDiff ? { maxDiff } : {}) };
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
@@ -275,10 +300,12 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   }
   const concurrency = leaf('concurrency', r['concurrency'], z.number().int().positive(), 'a positive integer is expected');
   if (concurrency !== undefined) out.concurrency = concurrency;
-  const budgets = section('budgets');
+  // `off` disables a token cap (ORC-381): `budgets: off` both.
+  const budgets = r['budgets'] === 'off' ? { per_step_tokens: 'off', per_ticket_tokens: 'off' } : typeof r['budgets'] === 'string' ? undefined : section('budgets');
+  if (typeof r['budgets'] === 'string' && r['budgets'] !== 'off') violations.push('budgets: an object is expected, or `off`');
   if (budgets) {
-    const perStepTokens = leaf('budgets.per_step_tokens', budgets['per_step_tokens'], counts, '`step: positive integer` expected');
-    const perTicketTokens = leaf('budgets.per_ticket_tokens', budgets['per_ticket_tokens'], z.number().int().positive(), 'a positive integer is expected');
+    const perStepTokens = leaf('budgets.per_step_tokens', budgets['per_step_tokens'], counts.or(z.literal('off')), '`step: positive integer` expected, or `off`');
+    const perTicketTokens = leaf('budgets.per_ticket_tokens', budgets['per_ticket_tokens'], z.number().int().positive().or(z.literal('off')), 'a positive integer is expected, or `off`');
     const maxTurns = leaf('budgets.max_turns', budgets['max_turns'], counts, '`step: positive integer` expected');
     const onUsageLimit = leaf('budgets.on_usage_limit', budgets['on_usage_limit'], z.literal('wait'), 'only `wait` exists');
     out.budgets = {
@@ -311,6 +338,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
     });
   }
+  const maxDiff = leaf('max_diff', r['max_diff'], z.literal('off'), 'only `off` exists here; without it, the baseline (15 files, 400 lines) applies, tightened by each repository');
+  if (maxDiff) out.maxDiff = maxDiff;
   const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'a positive integer is expected');
   if (maxLines !== undefined) out.readGuard = { maxLines };
   const seriousDefect = leaf('audit.serious_defect', section('audit')?.['serious_defect'], z.string().trim().min(1), 'a non-empty text is expected: the definition');

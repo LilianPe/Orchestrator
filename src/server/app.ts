@@ -62,6 +62,8 @@ export interface ServerDeps {
   takeOver?: TakeOverDesk;
   /** Why the configuration lets no ticket reach its end (ORC-350): the daemon then takes none. Empty or absent: it takes them. */
   configProblems?: readonly string[];
+  /** The controls factory.yml disables (`disabledControls`, ORC-381), shown by the dashboard. Absent: none. */
+  disabledControls?: readonly string[];
   /** The failed inbox rows the worker holds for a ticket (ORC-350), for its diagnosis. */
   heldRows?: (ticketId: string) => HeldRow[];
   /** The daemon's secret values (`transcriptSecrets`), masked in what the diagnosis tells with the secret shapes; read once per request. */
@@ -295,6 +297,7 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({
       paused,
       usageLimitedUntil: usageLimitedUntil ?? null,
+      disabledControls: d.disabledControls ?? [],
       linearConnected: d.linearConnected(),
       tickets,
       queue,

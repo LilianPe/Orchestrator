@@ -306,6 +306,11 @@ export function App() {
           Paused by the usage limit of the Claude account: no run starts until {new Date(snap.usageLimitedUntil).toLocaleString()}.
         </p>
       )}
+      {!!snap?.disabledControls?.length && (
+        <p className="usage-limit" role="status">
+          Disabled in factory.yml: {snap.disabledControls.join(', ')}.
+        </p>
+      )}
       {view === 'sheet' ? <main className="single"><SheetPage key={hash} {...auditTicketOf(hash)!} /></main> : view === 'audit' ? <main className="single"><AuditPage /></main> : view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}

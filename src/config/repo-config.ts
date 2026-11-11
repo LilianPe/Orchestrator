@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { isPackageName, type AllowList } from '../checks/deps.js';
-import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
+import { MaxDiffConfigError, repoMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
 
 /**
@@ -28,7 +28,8 @@ export interface RepoConfig {
   sensitivePathWarnings?: string[];
   /** Paths the agent never writes: the socle's, which no configuration removes. */
   forbiddenPaths: string[];
-  maxDiff: MaxDiff;
+  /** The bounds the repository's `max_diff` sets, and only those: `verify` resolves them on the base, or on none under factory.yml's `max_diff: off` (ORC-381). */
+  maxDiff: Partial<MaxDiff>;
   network: { level: RepoNetworkLevel; allow: string[] };
   budgets?: { perTicketTokens?: number };
   featureFlags?: { provider: string };
@@ -48,9 +49,12 @@ export function repoNetworkCeiling(config: RepoConfig): NetworkLevel {
   return config.network.level === 'none' ? 'none' : 'limited';
 }
 
-/** The ticket's token cap (ORC-340, ORC-216): factory.yml's, lowered by the repository's, never raised. Undefined without either. */
-export function ticketTokenCap(factoryCap: number | undefined, config: RepoConfig): number | undefined {
-  const caps = [factoryCap, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
+/**
+ * The ticket's token cap (ORC-340, ORC-216): factory.yml's, lowered by the repository's, never raised. Undefined without
+ * either. factory.yml's `off` (ORC-381) leaves the repository's own.
+ */
+export function ticketTokenCap(factoryCap: number | 'off' | undefined, config: RepoConfig): number | undefined {
+  const caps = [factoryCap === 'off' ? undefined : factoryCap, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
   return caps.length ? Math.min(...caps) : undefined;
 }
 
@@ -152,6 +156,11 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
       else if (key === 'sensitive_paths') enforced.push(p);
     });
   }
+  // `off` is factory.yml's alone (ORC-381): said as such, rather than as a malformed value.
+  if (r['budgets'] === 'off' || (r['budgets'] as Record<string, unknown> | null | undefined)?.['per_ticket_tokens'] === 'off') {
+    violations.push("budgets: `off` is refused here: only factory.yml, the server's configuration, disables a token cap; the repository configuration can only lower `per_ticket_tokens`.");
+    delete r['budgets'];
+  }
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');
   const featureFlags = read('feature_flags', z.strictObject({ provider: z.string().min(1) }), '`{ provider }` expected');
   const network = networkOf(r['network'], violations);
@@ -162,9 +171,9 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
       if (!isPackageName(ecosystem, name)) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is not an exact package name; patterns are refused`);
     });
   }
-  let maxDiff = resolveMaxDiff();
+  let maxDiff: Partial<MaxDiff> = {};
   try {
-    maxDiff = resolveMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);
+    maxDiff = repoMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);
   } catch (err) {
     if (!(err instanceof MaxDiffConfigError)) throw err;
     violations.push(err.message);

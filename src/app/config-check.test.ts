@@ -36,6 +36,11 @@ describe('configProblems (ORC-350)', () => {
     ]);
   });
 
+  it('finds none with the token caps disabled in factory.yml (ORC-381)', () => {
+    expect(configProblems({ ...sound, budgets: { perStepTokens: 'off', perTicketTokens: 'off' } })).toEqual([]);
+    expect(configProblems({ ...sound, budgets: { perStepTokens, perTicketTokens: 'off' } })).toEqual([]);
+  });
+
   it('finds none with the fake runner, which reaches no model, spends no token and publishes nothing real', () => {
     expect(configProblems({ fakeRunner: true, sandboxes: false, hostVerify: true, publisher: true, budgets: undefined })).toEqual([]);
   });

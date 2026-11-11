@@ -88,6 +88,14 @@ describe('the invariant « budget caps » of the core (ORC-216)', () => {
     ]);
   });
 
+  it('passes a cap disabled in factory.yml, never one left unset (ORC-381)', () => {
+    expect(checkBudgets(factoryDefault, { perStepTokens: every(1_000), perTicketTokens: 'off' })).toMatchObject({ violations: [], worst: { tokens: 41_000 } });
+    // No worst case in tokens without the per-step caps: the ticket's cap, set, has nothing to bound.
+    expect(checkBudgets(factoryDefault, { perStepTokens: 'off', perTicketTokens: 1 })).toEqual({ violations: [] });
+    expect(checkBudgets(factoryDefault, { perStepTokens: 'off', perTicketTokens: 'off' })).toEqual({ violations: [] });
+    expect(checkBudgets(factoryDefault, { perStepTokens: 'off' }).violations).toEqual(['budgets.per_ticket_tokens: not set; the worst case of factory/default has no bound without it']);
+  });
+
   it('is checked when the preset compiles with its budgets', () => {
     expect(() => compilePreset(factoryDefault, { budgets: capped(41_000) })).not.toThrow();
     expect(() => compilePreset(factoryDefault, { budgets: capped(1_000) })).toThrow(PresetError);

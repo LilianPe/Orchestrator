@@ -624,6 +624,18 @@ describe('runCleanVerify', () => {
         expect(sandboxes.ran).toEqual([]);
       });
 
+      it("criterion ORC-381: under factory.yml's `max_diff: off`, a diff of 30 files is not blocked for its size", async () => {
+        const { repo, req } = setup({ commands: [], maxDiff: 'off' });
+        files(repo, 30);
+        expect((await runCleanVerify(req)).failures).toEqual([]);
+      });
+
+      it("under `max_diff: off`, the base's own max_diff still bounds the diff (ORC-381)", async () => {
+        const { repo, req } = setup({ commands: [], maxDiff: 'off' }, 'max_diff: { files: 10 }\n');
+        files(repo, 30);
+        expect((await runCleanVerify(req)).failures).toEqual([expect.objectContaining({ command: 'factory/taille-du-diff', output: expect.stringContaining('31 files outside tests, over 10') })]);
+      });
+
       it("tightened by the base's max_diff; tests do not count", async () => {
         const { repo, req } = setup({ commands: [] }, 'max_diff: { files: 3 }\n');
         files(repo, 20, 'test');

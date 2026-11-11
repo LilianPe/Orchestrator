@@ -34,14 +34,14 @@ export class MaxDiffConfigError extends Error {
 }
 
 /**
- * The thresholds of a run: the base, tightened by the repository's `max_diff` (`.factory/config.yml`, read and
- * validated by ORC-209, which can reuse this). A bound left out keeps its base value. Throws `MaxDiffConfigError`
- * on a bound above the base: the configuration can only tighten.
+ * The bounds the repository's `max_diff` sets (`.factory/config.yml`, ORC-209), and only those. Throws `MaxDiffConfigError`
+ * on a bound above the base, or on `off`, which only factory.yml sets (ORC-381): the configuration can only tighten.
  */
-export function resolveMaxDiff(config?: Partial<MaxDiff> | null): MaxDiff {
-  const limits: MaxDiff = { ...MAX_DIFF };
+export function repoMaxDiff(config?: Partial<MaxDiff> | null): Partial<MaxDiff> {
+  const limits: Partial<MaxDiff> = {};
   // `max_diff:` with no value reads as null in YAML: no tightening.
   if (config === undefined || config === null) return limits;
+  if ((config as unknown) === 'off') throw new MaxDiffConfigError("max_diff: `off` is refused here: only factory.yml, the server's configuration, disables `max_diff`; the repository configuration can only tighten it.");
   if (typeof config !== 'object' || Array.isArray(config)) throw new MaxDiffConfigError('max_diff: an object `{ files, lines }` is expected.');
   const unknown = Object.keys(config).filter((k) => k !== 'files' && k !== 'lines');
   if (unknown.length > 0) throw new MaxDiffConfigError(`max_diff: unknown key(s) ${unknown.join(', ')}; only \`files\` and \`lines\` exist.`);
@@ -57,6 +57,14 @@ export function resolveMaxDiff(config?: Partial<MaxDiff> | null): MaxDiff {
     limits[key] = value;
   }
   return limits;
+}
+
+/**
+ * The thresholds of a run: the base, or no bound under factory.yml's `max_diff: off` (ORC-381), tightened by the
+ * repository's `max_diff`. A bound the repository leaves out keeps the base's. Throws as `repoMaxDiff` does.
+ */
+export function resolveMaxDiff(config?: Partial<MaxDiff> | null, off = false): MaxDiff {
+  return { ...(off ? { files: Infinity, lines: Infinity } : MAX_DIFF), ...repoMaxDiff(config) };
 }
 
 const LOCKFILES = new Set([
@@ -123,6 +131,8 @@ export function measureDiff(diff: string | DiffFile[]): DiffMeasure {
 export interface DiffSizeOptions {
   /** The repository's `max_diff`: it can only tighten the base. */
   maxDiff?: Partial<MaxDiff>;
+  /** factory.yml's `max_diff: off` (ORC-381): no base, only the repository's own bounds. */
+  off?: boolean;
 }
 
 export interface DiffSizeResult extends CheckResult {
@@ -141,6 +151,12 @@ function leftOut(m: DiffMeasure): string {
   return parts.length > 0 ? ` (${parts.join(', ')})` : '';
 }
 
+/** The bounds set, `15 files, 400 lines`: one `max_diff: off` left unbounded is not named. */
+function bounds(limits: MaxDiff): string {
+  const set = [...(Number.isFinite(limits.files) ? [`${limits.files} files`] : []), ...(Number.isFinite(limits.lines) ? [`${limits.lines} lines`] : [])];
+  return set.join(', ');
+}
+
 function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
   const over: string[] = [];
   if (m.size.files > limits.files) over.push(`${m.size.files} files outside tests, over ${limits.files}`);
@@ -152,7 +168,7 @@ function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
     `Largest files outside tests${m.counted.length > LISTED ? ` (${LISTED} of ${m.counted.length})` : ''}:`,
     ...biggest,
     '',
-    `Proposal: split the ticket into sub-tickets that each fit under \`max_diff\` (${limits.files} files, ${limits.lines} lines outside tests), for example one per module touched.`,
+    `Proposal: split the ticket into sub-tickets that each fit under \`max_diff\` (${bounds(limits)} outside tests), for example one per module touched.`,
     'Question: which part should ship first, or can the ticket be reduced?',
   ].join('\n');
 }
@@ -162,14 +178,17 @@ export function diffSizeCheck(diff: string | DiffFile[], options: DiffSizeOption
   const measure = measureDiff(diff);
   let limits: MaxDiff;
   try {
-    limits = resolveMaxDiff(options.maxDiff);
+    limits = resolveMaxDiff(options.maxDiff, options.off);
   } catch (err) {
     if (!(err instanceof MaxDiffConfigError)) throw err;
     return { check: DIFF_SIZE_CHECK, ok: false, size: measure.size, limits: { ...MAX_DIFF }, summary: `\`max_diff\` configuration refused: ${err.message}` };
   }
   const ok = measure.size.files <= limits.files && measure.size.lines <= limits.lines;
-  const summary = ok
-    ? `${measure.size.files} file(s), ${measure.size.lines} line(s) outside tests${leftOut(measure)}, within \`max_diff\` (${limits.files} files, ${limits.lines} lines).`
-    : blockedSummary(measure, limits);
+  const measured = `${measure.size.files} file(s), ${measure.size.lines} line(s) outside tests${leftOut(measure)}`;
+  const summary = !ok
+    ? blockedSummary(measure, limits)
+    : limits.files === Infinity && limits.lines === Infinity
+      ? `${measured}, not bounded: \`max_diff\` is disabled in factory.yml.`
+      : `${measured}, within \`max_diff\` (${bounds(limits)}).`;
   return { check: DIFF_SIZE_CHECK, ok, summary, size: measure.size, limits };
 }

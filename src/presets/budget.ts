@@ -1,13 +1,16 @@
 import { failureEdges, isAgentStep, type Preset, type Step } from './preset.js';
 
-/** What bounds a ticket's spending (ORC-216): `budgets` of factory.yml, the repository's `per_ticket_tokens` already folded in. */
+/**
+ * What bounds a ticket's spending (ORC-216): `budgets` of factory.yml, the repository's `per_ticket_tokens` already folded in.
+ * A token cap `off` is disabled in factory.yml (ORC-381): accepted, where one left unset is refused.
+ */
 export interface BudgetCaps {
   /** Tokens of one attempt, by agent step (`budgets.per_step_tokens`). */
-  perStepTokens?: Record<string, number>;
+  perStepTokens?: Record<string, number> | 'off';
   /** Lowers a step's `maxTurns` (`budgets.max_turns`). */
   maxTurns?: Record<string, number>;
   /** Tokens of all the ticket's runs (`budgets.per_ticket_tokens`). */
-  perTicketTokens?: number;
+  perTicketTokens?: number | 'off';
 }
 
 /** The most a ticket can spend on the preset: every failure edge taken as often as its counter allows, where it costs the most. */
@@ -71,12 +74,13 @@ const turnsOf = (s: AgentStep, caps: BudgetCaps): number => Math.min(s.maxTurns,
  * maximizes it. `missing` names the caps without which it has no bound: an agent step without `per_step_tokens`.
  * `unbounded`: a way back the counters do not bound, named by a step on it.
  */
-export function worstCase(preset: Preset, caps: BudgetCaps): WorstCase | { missing: string[] } | { unbounded: string } {
+export function worstCase(preset: Preset, caps: BudgetCaps & { perStepTokens?: Record<string, number> }): WorstCase | { missing: string[] } | { unbounded: string } {
   const agents = preset.steps.filter(isAgentStep);
-  const missing = agents.filter((s) => caps.perStepTokens?.[s.id] === undefined).map((s) => `budgets.per_step_tokens.${s.id}`);
+  const perStep = caps.perStepTokens ?? {};
+  const missing = agents.filter((s) => perStep[s.id] === undefined).map((s) => `budgets.per_step_tokens.${s.id}`);
   if (missing.length) return { missing };
   try {
-    const tokens = heaviest(preset, (s) => (isAgentStep(s) ? caps.perStepTokens![s.id]! : 0));
+    const tokens = heaviest(preset, (s) => (isAgentStep(s) ? perStep[s.id]! : 0));
     const turns = heaviest(preset, (s) => (isAgentStep(s) ? turnsOf(s, caps) : 0));
     return { tokens: tokens.total, turns: turns.total, attempts: Object.fromEntries(agents.map((s) => [s.id, tokens.attempts.get(s.id) ?? 0])) };
   } catch (err) {
@@ -87,16 +91,18 @@ export function worstCase(preset: Preset, caps: BudgetCaps): WorstCase | { missi
 
 /**
  * The invariant « budget caps » of the core (ORC-216): every agent step has its cap in tokens, the ticket has its own,
- * and the worst case stays under it. A cap still « to set » refuses, never passes. `worst`: when it has a bound.
+ * and the worst case stays under it. A cap still « to set » refuses, never passes; one disabled (`off`, ORC-381) passes,
+ * and without the per-step caps there is no worst case in tokens. `worst`: when it has a bound.
  */
 export function checkBudgets(preset: Preset, caps: BudgetCaps): { violations: string[]; worst?: WorstCase } {
-  const worst = worstCase(preset, caps);
   const unset = (key: string) => `${key}: not set; the worst case of ${preset.name} has no bound without it`;
-  const violations = 'missing' in worst ? worst.missing.map(unset) : [];
-  if ('unbounded' in worst) violations.push(`worst case unbounded: a counter refills inside its own loop, through step ${worst.unbounded}`);
-  if (caps.perTicketTokens === undefined) violations.push(unset('budgets.per_ticket_tokens'));
+  const violations = caps.perTicketTokens === undefined ? [unset('budgets.per_ticket_tokens')] : [];
+  if (caps.perStepTokens === 'off') return { violations };
+  const worst = worstCase(preset, { ...caps, perStepTokens: caps.perStepTokens });
+  if ('missing' in worst) violations.unshift(...worst.missing.map(unset));
+  if ('unbounded' in worst) violations.unshift(`worst case unbounded: a counter refills inside its own loop, through step ${worst.unbounded}`);
   if (!('tokens' in worst)) return { violations };
-  if (caps.perTicketTokens !== undefined && worst.tokens > caps.perTicketTokens) {
+  if (typeof caps.perTicketTokens === 'number' && worst.tokens > caps.perTicketTokens) {
     violations.push(`worst case ${worst.tokens} tokens per ticket exceeds budgets.per_ticket_tokens ${caps.perTicketTokens}: lower a step's per_step_tokens or a counter of ${preset.name}`);
   }
   return { violations, worst };

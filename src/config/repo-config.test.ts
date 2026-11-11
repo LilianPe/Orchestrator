@@ -53,7 +53,7 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
         services: [],
         sensitivePaths: [],
         forbiddenPaths: [...SOCLE_FORBIDDEN_PATHS],
-        maxDiff: { files: 15, lines: 400 },
+        maxDiff: {},
         network: { level: 'limited', allow: [] },
         visualPaths: [],
         dependencies: { allow: {} },
@@ -146,7 +146,19 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
     });
 
     it('takes a tighter max_diff', () => {
-      expect(parseRepoConfig('max_diff: { lines: 200 }\n').maxDiff).toEqual({ files: 15, lines: 200 });
+      expect(parseRepoConfig('max_diff: { lines: 200 }\n').maxDiff).toEqual({ lines: 200 });
+    });
+
+    it('refuses `max_diff: off`, which only factory.yml can set (ORC-381)', () => {
+      expect(violations('max_diff: off\n')).toEqual([
+        "max_diff: `off` is refused here: only factory.yml, the server's configuration, disables `max_diff`; the repository configuration can only tighten it.",
+      ]);
+    });
+
+    it('refuses `off` for the token caps, which only factory.yml can set (ORC-381)', () => {
+      const refused = "budgets: `off` is refused here: only factory.yml, the server's configuration, disables a token cap; the repository configuration can only lower `per_ticket_tokens`.";
+      expect(violations('budgets: off\n')).toEqual([refused]);
+      expect(violations('budgets: { per_ticket_tokens: off }\n')).toEqual([refused]);
     });
 
     it('refuses the full network level', () => {

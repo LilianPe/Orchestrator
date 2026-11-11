@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
+import { disabledControls, FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, ticketTokenCap, type RepoConfig } from '../config/repo-config.js';
 import { checkBudgets } from '../presets/budget.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -9,13 +9,16 @@ const FILE = REPO_CONFIG_PATH;
 /** A spelling the factory never reads: validating around it would pass a file nobody applies. */
 const MISSPELT = '.factory/config.yaml';
 
+/** What `factory validate` reads of `factory.yml`: its budgets, and the controls it disables (ORC-381). */
+type FactoryLimits = Pick<FactoryYml, 'budgets' | 'maxDiff'>;
+
 /**
  * `factory validate [repo]` (ORC-209): checks the repository's `.factory/config.yml` against the socle, then the worst
- * case of the preset against the ticket's budget (ORC-216), with `factory.yml`'s budgets (`factoryYml`, read when asked).
- * Exit code 1 when the file takes from the socle, is malformed or unreadable, or when a budget is unset or exceeded, one
- * line per violation; 0 otherwise.
+ * case of the preset against the ticket's budget (ORC-216), with `factory.yml`'s budgets (`factoryYml`, read when asked),
+ * and names the controls `factory.yml` disables (ORC-381). Exit code 1 when the file takes from the socle, is malformed
+ * or unreadable, or when a budget is unset or exceeded, one line per violation; 0 otherwise.
  */
-export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
+export function runValidateCommand(opts: { repoPath: string; out: (line: string) => void; factoryYml: () => FactoryLimits | undefined }): number {
   if (opts.repoPath.startsWith('-')) {
     opts.out('Usage: factory validate [repo] (no options)');
     return 1;
@@ -67,20 +70,27 @@ function list(out: (line: string) => void, head: string, violations: string[]): 
   return 1;
 }
 
-/** The invariant « budget caps » (ORC-216), on factory.yml's budgets and the repository's cap, which only lowers the ticket's. */
-function validateBudgets(config: RepoConfig, opts: { out: (line: string) => void; factoryYml: () => Pick<FactoryYml, 'budgets'> | undefined }): number {
-  let budgets: FactoryYml['budgets'];
+/**
+ * The invariant « budget caps » (ORC-216), on factory.yml's budgets and the repository's cap, which only lowers the ticket's.
+ * A control factory.yml disables is said first (ORC-381).
+ */
+function validateBudgets(config: RepoConfig, opts: { out: (line: string) => void; factoryYml: () => FactoryLimits | undefined }): number {
+  let yml: FactoryLimits | undefined;
   try {
-    budgets = opts.factoryYml()?.budgets;
+    yml = opts.factoryYml();
   } catch (err) {
     // A file it cannot read (EACCES, EISDIR) is refused as unreadable, as the repository's own file is.
     return list(opts.out, 'factory.yml refused:', err instanceof FactoryYmlError ? err.violations : [`unreadable: ${(err as Error).message}`]);
   }
+  const disabled = disabledControls(yml);
+  if (disabled.length) opts.out(`Disabled in factory.yml: ${disabled.join(', ')}.`);
+  const budgets = yml?.budgets;
   const perTicketTokens = ticketTokenCap(budgets?.perTicketTokens, config);
   const caps = { ...budgets, ...(perTicketTokens !== undefined ? { perTicketTokens } : {}) };
   // The preset's structure is compiled at load (`loadWorkflow`): only its budgets are left to check.
   const { violations, worst } = checkBudgets(factoryDefault, caps);
   if (violations.length) return list(opts.out, `Budgets of ${factoryDefault.name} refused:`, violations);
-  opts.out(`Worst case of ${factoryDefault.name}: ${worst!.tokens} tokens and ${worst!.turns} turns per ticket, within budgets.per_ticket_tokens ${perTicketTokens}.`);
+  if (!worst) opts.out(`No worst case of ${factoryDefault.name} in tokens: budgets.per_step_tokens is disabled.`);
+  else opts.out(`Worst case of ${factoryDefault.name}: ${worst.tokens} tokens and ${worst.turns} turns per ticket, ${perTicketTokens === undefined ? 'under no ticket cap' : `within budgets.per_ticket_tokens ${perTicketTokens}`}.`);
   return 0;
 }
