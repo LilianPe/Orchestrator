@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
 import type { EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
 import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
+import type { BranchNaming } from '../core/naming.js';
 import { runDoctor, runDoctorCommand, type DoctorApi } from './doctor.js';
 
 interface FakeOptions {
@@ -43,7 +44,7 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
@@ -52,6 +53,7 @@ async function doctor(
     api,
     out: (line) => lines.push(line),
     ...(options.json ? { json: true } : {}),
+    ...(options.naming ? { naming: options.naming } : {}),
   });
   return { code, lines, text: lines.join('\n'), api };
 }
@@ -164,7 +166,7 @@ jobs:
     expect(result.text).toContain('without required reviewers');
   });
 
-  it('accepts a push limited to branches outside factory/*', async () => {
+  it('accepts a push limited to branches the factory never names', async () => {
     const ci = `on:
   push:
     branches: [main, "release/*"]
@@ -186,37 +188,40 @@ jobs:
     expect(result.text).toContain('refused');
   });
 
-  it('refuses a push whose branch filter can reach factory/*', async () => {
-    const ci = `on:
+  it("refuses a push whose branch filter can reach the factory's branches: feat/, fix/, and the legacy factory/ (ORC-283)", async () => {
+    for (const filter of ['feat/*', 'fix/**', 'factory/*']) {
+      const ci = `on:
   push:
-    branches: ["factory/*"]
+    branches: ["${filter}"]
 jobs:
   test:
     steps:
       - run: echo "\${{ secrets.NPM_TOKEN }}"
 `;
-    const result = await doctor([workflow(ci)]);
-    expect(result.code).toBe(1);
-    expect(result.text).toContain('factory/*');
+      const result = await doctor([workflow(ci)]);
+      expect(result.code, filter).toBe(1);
+      expect(result.text).toContain("can run the CI on the factory's branches");
+    }
   });
 
-  it('accepts a push that explicitly ignores factory/*', async () => {
-    const ci = `on:
+  it('accepts a push that ignores every branch the factory names, and only then (ORC-283)', async () => {
+    const ignoring = (patterns: string) => `on:
   push:
-    branches-ignore: ["factory/**"]
+    branches-ignore: [${patterns}]
 jobs:
   test:
     steps:
       - run: echo "\${{ secrets.NPM_TOKEN }}"
 `;
-    const result = await doctor([workflow(ci)]);
-    expect(result.code).toBe(0);
+    expect((await doctor([workflow(ignoring('"feat/**", "fix/**", "factory/**"'))])).code).toBe(0);
+    // A ticket whose PR is open on a factory/ branch keeps it: the factory still pushes there.
+    expect((await doctor([workflow(ignoring('"feat/**", "fix/**"'))])).code).toBe(1);
   });
 
-  it('accepts branches filtered to everything except factory/*', async () => {
+  it("accepts branches filtered to everything except the factory's", async () => {
     const ci = `on:
   push:
-    branches: ["**", "!factory/**"]
+    branches: ["**", "!feat/**", "!fix/**", "!factory/**"]
 jobs:
   test:
     steps:
@@ -229,7 +234,7 @@ jobs:
   it('refuses a filter that re-includes a factory branch after excluding it', async () => {
     const ci = `on:
   push:
-    branches: ["**", "!factory/**", "factory/keep"]
+    branches: ["**", "!feat/**", "!fix/**", "!factory/**", "feat/keep"]
 jobs:
   test:
     steps:
@@ -242,7 +247,7 @@ jobs:
   it('refuses branches-ignore that re-includes a factory branch', async () => {
     const ci = `on:
   push:
-    branches-ignore: ["factory/**", "!factory/keep"]
+    branches-ignore: ["feat/**", "fix/**", "factory/**", "!fix/keep"]
 jobs:
   test:
     steps:
@@ -391,10 +396,15 @@ jobs:
       }
       throw new Error(`unexpected ${init.method} ${parsed.pathname}`);
     };
+    const gitCalls: string[][] = [];
     const exec: Exec = async (cmd, args) => {
       expect(cmd).toBe('git');
-      expect(args).toEqual(['remote', 'get-url', 'origin']);
-      return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
+      gitCalls.push(args);
+      if (args[0] === 'remote') return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
+      // The repository's branch naming, on its default branch as the clone last fetched it: no `.factory`, the convention.
+      if (args.includes('symbolic-ref')) return { stdout: 'refs/remotes/origin/main\n', stderr: '', code: 0 };
+      if (args.includes('ls-tree')) return { stdout: '', stderr: '', code: 0 };
+      throw new Error(`unexpected git ${args.join(' ')}`);
     };
 
     const lines: string[] = [];
@@ -409,6 +419,7 @@ jobs:
     });
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('verdict: accepted');
+    expect(gitCalls.some((a) => a.includes('fetch'))).toBe(false);
   });
 
   describe("the factory's real branch names (ORC-353)", () => {
@@ -422,31 +433,91 @@ jobs:
 `;
 
     it('refuses a filter that reaches the branches the factory names, though no made-up name matches it', async () => {
-      // factory/<id>-<slug>: at least two dashes after the prefix, as branchName writes them.
+      // <type>/<id>-<slug>: at least two dashes after the type, as branchName writes them.
       const result = await doctor([workflow(pushOn('    branches: ["*/*-*-*"]'))]);
       expect(result.code).toBe(1);
       expect(result.text).toContain('factory branches: reached');
     });
 
     it("says so when a filter excludes the factory's real branches, and accepts the workflow", async () => {
-      const ignored = await doctor([workflow(pushOn('    branches-ignore: ["factory/*-*"]'))]);
+      const ignored = await doctor([workflow(pushOn('    branches-ignore: ["feat/*-*", "fix/*-*", "factory/*-*"]'))]);
       expect(ignored.code).toBe(0);
       expect(ignored.text).toContain('factory branches: not reached');
 
-      const negated = await doctor([workflow(pushOn('    branches: ["**", "!factory/[a-z]*-*"]'))], [], { json: true });
+      const negated = await doctor([workflow(pushOn('    branches: ["**", "!f[aei]*/[a-z]*-*"]'))], [], { json: true });
       expect(negated.code).toBe(0);
       const report = JSON.parse(negated.text) as { workflows: { factoryBranches: boolean }[] };
       expect(report.workflows[0]!.factoryBranches).toBe(false);
     });
 
     it('keeps refusing a negation that leaves some of the real branches in', async () => {
-      for (const negation of ['!factory/[a-m]*', '!factory/[amoz]*', '!**[a-z]']) {
+      for (const negation of ['!f*/[a-m]*', '!f*/[amoz]*', '!**[a-z]']) {
         expect((await doctor([workflow(pushOn(`    branches: ["**", "${negation}"]`))])).code, negation).toBe(1);
       }
     });
 
     it('refuses a filter that reaches only the branches whose title ends in a digit', async () => {
       expect((await doctor([workflow(pushOn('    branches: ["**[0-9]"]'))])).code).toBe(1);
+    });
+  });
+
+  describe("a repository's own branch naming (ORC-283)", () => {
+    const pushOn = (branches: string): string => `on:
+  push:
+    branches: [${branches}]
+jobs:
+  test:
+    steps:
+      - run: echo "\${{ secrets.NPM_TOKEN }}"
+`;
+    const naming: BranchNaming = { pattern: 'agent/{type}-{id}', types: [['Bug', 'fix']], fallback: 'feat' };
+
+    it('tries the filters on the names that naming makes, and the legacy factory/ ones', async () => {
+      expect((await doctor([workflow(pushOn('"feat/**", "fix/**"'))], [], { naming })).code).toBe(0);
+      expect((await doctor([workflow(pushOn('"agent/fix-*"'))], [], { naming })).code).toBe(1);
+      expect((await doctor([workflow(pushOn('"agent/**"'))], [], { naming })).code).toBe(1);
+      expect((await doctor([workflow(pushOn('"factory/**"'))], [], { naming })).code).toBe(1);
+    });
+  });
+
+  describe('a protected environment, the only approval doctor credits (ORC-283)', () => {
+    const BOT = 'factory-app[bot]';
+    const guarded = (trigger: string, environment?: string): string => `on: ${trigger}
+permissions: read-all
+jobs:
+  test:
+    if: github.actor != '${BOT}'
+${environment ? `    environment: ${environment}\n` : ''}    steps:
+      - run: echo "\${{ secrets.NPM_TOKEN }}"
+`;
+    const TRIGGERS = ['pull_request', 'pull_request_target', 'push', 'workflow_run'];
+
+    it("refuses a job with secrets that keeps the factory's App out by its actor, on every trigger that reaches the agent's branches", async () => {
+      for (const trigger of TRIGGERS) {
+        const result = await doctor([workflow(guarded(trigger))], [], { json: true });
+        expect(result.code, trigger).toBe(1);
+        const report = JSON.parse(result.text) as { workflows: Record<string, unknown>[] };
+        expect(report.workflows[0]!['verdict'], trigger).toBe('refused');
+        expect(report.workflows[0]!, trigger).not.toHaveProperty('actorExcluded');
+      }
+    });
+
+    it('names the job without an environment, and does not offer the actor exclusion', async () => {
+      const result = await doctor([workflow(guarded('pull_request'))]);
+      expect(result.text).toContain('job(s) without an environment: test');
+      expect(result.text).not.toContain('github.actor');
+      expect(result.text).not.toContain("App excluded");
+    });
+
+    it('accepts the same job under an environment with required reviewers, on every trigger', async () => {
+      for (const trigger of TRIGGERS) {
+        const result = await doctor([workflow(guarded(trigger, 'ci'))], [{ name: 'ci', requiredReviewers: true }]);
+        expect(result.code, trigger).toBe(0);
+      }
+    });
+
+    it('accepts secrets on a push limited to the default branch, which the agent never pushes to', async () => {
+      expect((await doctor([workflow(guarded('{ push: { branches: [main] } }'))])).code).toBe(0);
     });
   });
 

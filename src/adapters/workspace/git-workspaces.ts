@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
-import { branchName } from '../../core/naming.js';
+import { BRANCH_NAME, branchName, legacyBranchName } from '../../core/naming.js';
 import { capDiff, DIFF_MAX } from '../../core/review.js';
 import { forkPoint, gitAt, gitReader, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
@@ -26,8 +26,6 @@ const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean
 /** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
 const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
 const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
-/** Git's own rules on a ref's name (`git check-ref-format`), as a name out of them cannot be its branch. Never `..`: it becomes a path. */
-const BRANCH_REF = /^refs\/heads\/(?!-|\.)(?!.*(\.\.|@\{|\/\.|\/\/|\.lock(\/|$)))[^\s\p{Cc}~^:?*[\\]+$/u;
 const MAX_REFS_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -66,8 +64,10 @@ function agentHead(work: string): { branch: string; sha?: string } | undefined {
   if (!head) return undefined;
   if (SHA.test(head)) return { branch: 'HEAD', sha: head };
   const ref = /^ref: (\S+)$/.exec(head)?.[1];
-  if (!ref || !BRANCH_REF.test(ref)) return undefined;
+  if (!ref?.startsWith('refs/heads/')) return undefined;
+  // Git's own rules on a branch's name, as a name out of them cannot be its branch (shared with the naming, ORC-283).
   const branch = ref.slice('refs/heads/'.length);
+  if (!BRANCH_NAME.test(branch)) return undefined;
   const loose = agentFile(gitDir, ref)?.trim();
   if (loose && SHA.test(loose)) return { branch, sha: loose };
   const packed = agentFile(gitDir, 'packed-refs')?.split('\n').find((l) => l.endsWith(` ${ref}`))?.split(' ')[0];
@@ -181,20 +181,24 @@ export class GitWorkspaces implements WorkspaceManager {
       if (!branch) throw new Error(`The git repository of ${path} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
       return { path, port, branch };
     }
-    await this.fetch(req.repoPath);
-    const branch = branchName(req.ticketId, req.title);
+    if (!req.fetched) await this.fetch(req.repoPath);
     const has = async (ref: string) =>
       (await this.exec('git', ['-C', req.repoPath, 'rev-parse', '--verify', '--quiet', ref])).code === 0;
     const trunk = await originHead(this.exec, req.repoPath);
+    // The name asked, else the legacy one a ticket already has (ORC-283): its open PR stays the one, never a second beside it.
+    const names = [...new Set([req.branch ?? branchName(req.ticketId, req.title), legacyBranchName(req.ticketId, req.title)])];
+    // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
+    const onForge = await findAsync(names, (n) => has(`refs/remotes/origin/${n}`));
+    const inRepo = onForge === undefined ? await findAsync(names, (n) => has(`refs/heads/${n}`)) : undefined;
+    const branch = onForge ?? inRepo ?? names[0]!;
     let existing: string | undefined;
     let checkout = ['--no-track', '-b', branch, trunk];
     let local: string | undefined;
-    // The forge first: an agent's commits reach it, never the repository's own branch, which can only lag behind.
-    if (await has(`refs/remotes/origin/${branch}`)) {
+    if (onForge !== undefined) {
       existing = `refs/remotes/origin/${branch}`;
       // In full, as the trunk: a short `origin/<branch>` resolves a tag of that name first.
       checkout = ['-b', branch, existing];
-    } else if (await has(`refs/heads/${branch}`)) {
+    } else if (inRepo !== undefined) {
       existing = local = `refs/heads/${branch}`;
       checkout = [branch];
     }
@@ -386,11 +390,17 @@ export class GitWorkspaces implements WorkspaceManager {
     else for (const e of entries) if (e !== 'CLAUDE.md') rmSync(join(dir, e), { recursive: true, force: true });
   }
 
-  async remoteBranchExists(repoPath: string, prefix: string): Promise<boolean> {
+  async remoteBranchExists(repoPath: string, matches: (name: string) => boolean): Promise<boolean> {
     const out = await this.git(repoPath, 'ls-remote', '--heads', 'origin');
     return out
       .split('\n')
       .map((l) => l.split('\t')[1]?.replace(/^refs\/heads\//, ''))
-      .some((name) => !!name && name.startsWith(prefix));
+      .some((name) => !!name && matches(name));
   }
+}
+
+/** The first of `items` that `test` takes, tried one after the other. */
+async function findAsync<T>(items: readonly T[], test: (item: T) => Promise<boolean>): Promise<T | undefined> {
+  for (const item of items) if (await test(item)) return item;
+  return undefined;
 }

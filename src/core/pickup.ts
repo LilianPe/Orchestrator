@@ -2,6 +2,7 @@ import type { Forge, OpenPr } from '../adapters/forge/types.js';
 import type { Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 import type { PickupCheck } from '../config/workflow-schema.js';
 import { formatActiveWork } from './intake-checks.js';
+import type { BranchNaming } from './naming.js';
 import type { Blocker } from './types.js';
 
 /**
@@ -75,7 +76,8 @@ export async function searchDuplicates(
   issue: TrackerIssue,
   repoPath: string,
   d: { forge: Pick<Forge, 'openPrs' | 'recentBranches'>; tracker: Pick<Tracker, 'search'> },
+  naming?: BranchNaming,
 ): Promise<{ prs: OpenPr[]; activeWork: string }> {
   const [prs, branches, tickets] = await Promise.all([d.forge.openPrs(repoPath), d.forge.recentBranches(repoPath), d.tracker.search(issue.title, issue.teamKey)]);
-  return { prs, activeWork: formatActiveWork(issue.identifier, { prs, branches, tickets }) };
+  return { prs, activeWork: formatActiveWork(issue.identifier, { prs, branches, tickets }, naming) };
 }
