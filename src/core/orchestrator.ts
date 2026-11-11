@@ -26,6 +26,7 @@ import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/wor
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
+import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
@@ -56,7 +57,7 @@ import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
 import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
+import { ACK_REACTION, blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
 import { codeRunTokens, runMeasure } from './measures.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork } from './intake-checks.js';
@@ -285,6 +286,8 @@ export interface OrchestratorDeps {
   perTicketTokens?: number;
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
+  /** `acknowledge` of factory.yml (ORC-380): `reaction` reacts on the message in place of the ack's comment. Absent: `comment`. */
+  acknowledge?: AckMode;
   /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
   configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
@@ -2014,8 +2017,10 @@ export class Orchestrator {
 
   /**
    * The ack of a trigger (ORC-171), best effort: a courtesy must not hold back or kill the run behind it, so a write
-   * Linear refuses is logged, neither retried nor blocking. The one key on both writes: a replay finds what its first
+   * Linear refuses is logged, neither retried nor blocking. The one key on every write: a replay finds what its first
    * execution wrote of each. The time a measure reads (ORC-235) is the human's first sign of life, before the plan.
+   * `acknowledge: reaction` (ORC-380) reacts on the message in place of the comment; a message with no comment to react
+   * on, or a reaction Linear refuses, gets the comment, logged. The session's thought stays: Linear asks for an activity.
    */
   private async ack(t: TicketState, c: Extract<Effect, { kind: 'ack' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const outcomes: (EffectOutcome | void)[] = [];
@@ -2026,7 +2031,20 @@ export class Orchestrator {
         this.log('warn', `${what} of the ack of ${t.ticketId} not written: ${(err as Error).message}`);
       }
     };
-    if (c.comment) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    let comment = !!c.comment;
+    if (this.d.acknowledge === 'reaction') {
+      comment = true;
+      if (!c.commentId) this.log('info', `no message to put a reaction on for the ack of ${t.ticketId}: a comment instead`);
+      else {
+        try {
+          outcomes.push(await this.reactOnce(c.commentId, key));
+          comment = false;
+        } catch (err) {
+          this.log('warn', `the reaction of the ack of ${t.ticketId} refused on comment ${c.commentId}, a comment instead: ${(err as Error).message}`);
+        }
+      }
+    }
+    if (comment) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
     await attempt('activity', () => this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key));
     if (outcomes.length > 0) await this.d.store.markAcked(key.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${key.eventId} posted, its time not recorded: ${err.message}`));
     if (c.plan) await this.openPlan(t, c.linearSessionId);
@@ -2049,6 +2067,13 @@ export class Orchestrator {
     } catch (err) {
       this.log('warn', `the requester of ${t.ticketId} not told of PR #${c.number}: ${(err as Error).message}`);
     }
+  }
+
+  /** The ack's reaction on a message (ORC-380), put unless its first execution already put it (ORC-162). */
+  private async reactOnce(commentId: string, key: EffectKey): Promise<EffectOutcome | void> {
+    const found = key.replay ? await this.d.tracker.findReaction(commentId, key.id) : undefined;
+    if (found !== undefined) return { deduplicated: true, ref: found };
+    await this.d.tracker.react(commentId, ACK_REACTION, key.id);
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */

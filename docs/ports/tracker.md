@@ -18,6 +18,8 @@ Ticket tracking: read a ticket, move it, label it, comment, and talk in its agen
 | `setLabels(id, add, remove)` | the final state: `add` applied (created if missing), `remove` removed; removing an absent label is ignored; a label from an exclusive group (Linear label group, `FakeTracker.setLabelGroup`) removes the other labels of its group, two labels from the same group in `add` are refused; nothing is written if the ticket already has it | writes nothing | rejects on an unknown ticket |
 | `comment(id, body, effectId?)` | a comment on the ticket; with `effectId`, it carries `<!-- factory:effect=<id> -->` (and, on Linear, a client id derived from the effect) | **writes a second comment**: the caller first looks with `findComment` | rejects on an unknown ticket |
 | `findComment(id, effectId)` | the id of the ticket's comment written for that effect, `undefined` otherwise | read | rejects on an unknown ticket |
+| `react(commentId, emoji, effectId?)` | the emoji on that comment (ORC-380); with `effectId`, on Linear, under a client id derived from the effect | **puts a second reaction**: the caller first looks with `findReaction` | rejects when the tracker refuses the reaction on that comment |
+| `findReaction(commentId, effectId)` | the id of the comment's reaction put for that effect, `undefined` otherwise | read | unspecified |
 | `ensureSession(id)` | an agent session identifier on the ticket | may open another session | rejects on an unknown ticket |
 | `activity(session, a, effectId?)` | an activity in the session (`thought`, `response`, `elicitation`, `error`, `action`, ephemeral or not); with `effectId`, under an id derived from the effect | writes a second activity: the caller first looks with `findActivity` | unspecified (the fake accepts an unknown session) |
 | `findActivity(session, effectId)` | the id of the session's activity written for that effect, `undefined` otherwise | read | unspecified |
@@ -26,7 +28,7 @@ Ticket tracking: read a ticket, move it, label it, comment, and talk in its agen
 
 ## Idempotence
 
-The writes that can be replayed without harm are those that write a final state: `moveTo`, `setLabels`, `addExternalUrl` and `setSessionPlan`. `comment` and `activity` for an outbox effect are keyed by the effect id (ORC-162): the engine looks with `findComment` / `findActivity` before writing, and a replay writes nothing. Without `effectId` (resume notices, replies outside the outbox, relaying a run's stream), or for `ensureSession`, a replay writes a duplicate. The details, and what the Linear API allows, are in [Idempotence of external effects](../idempotency.md); these cases are tested by `test/scenarios/idempotency.test.ts` and `linear/tracker.test.ts`, not yet by the conformance suite (ORC-189).
+The writes that can be replayed without harm are those that write a final state: `moveTo`, `setLabels`, `addExternalUrl` and `setSessionPlan`. `comment`, `activity` and `react` for an outbox effect are keyed by the effect id (ORC-162, ORC-380): the engine looks with `findComment` / `findActivity` / `findReaction` before writing, and a replay writes nothing. Without `effectId` (resume notices, replies outside the outbox, relaying a run's stream), or for `ensureSession`, a replay writes a duplicate. The details, and what the Linear API allows, are in [Idempotence of external effects](../idempotency.md); these cases are tested by `test/scenarios/idempotency.test.ts` and `linear/tracker.test.ts`, not yet by the conformance suite (ORC-189).
 
 ## Fencing
 

@@ -1670,8 +1670,11 @@ function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter
 /** Events that trigger the agent (ORC-186): a delegation, a mention, a command. */
 const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command']);
 
-/** What the factory answers a trigger within 10 s (ORC-171), a comment rather than a reaction until ORC-140 decides. */
+/** What the factory answers a trigger within 10 s (ORC-171); `acknowledge: reaction` puts a reaction in place of its comment (ORC-380). */
 export const ACK_BODY = 'Got it.';
+
+/** The reaction `acknowledge: reaction` puts on a human message (ORC-380): seen. */
+export const ACK_REACTION = '👀';
 
 /**
  * The ack of a trigger the webhook brought, first of its decision (ORC-171): a delegation gets the comment, and the
@@ -1680,7 +1683,7 @@ export const ACK_BODY = 'Got it.';
  * a row journaled before ORC-171 asks for none: it replays as it was decided.
  */
 function acknowledge(out: Decision, event: FactoryEvent, state: TicketState | undefined): void {
-  const { ack, linearSessionId, kind } = event.payload as { ack?: true; linearSessionId?: string; kind?: MessageKind };
+  const { ack, linearSessionId, kind, commentId } = event.payload as { ack?: true; linearSessionId?: string; kind?: MessageKind; commentId?: string };
   if (!ack || !linearSessionId) return;
   if (out.effects.some((e) => e.kind === 'activity' && e.linearSessionId === linearSessionId)) return;
   // A command of a reply is answered by what it does: `/stop` says so in the ticket's session, whichever one it came from.
@@ -1689,7 +1692,14 @@ function acknowledge(out: Decision, event: FactoryEvent, state: TicketState | un
   const plan = delegation && out.effects.some((e) => e.kind === 'start_run');
   // A mention that asks a question keeps the ack of a trigger (ORC-171).
   const body = kind === 'instruction' || (event.type === 'session.prompted' && kind) ? messageAck(out, state) : ACK_BODY;
-  out.effects.unshift({ kind: 'ack', body, linearSessionId, ...(delegation ? { comment: true as const } : {}), ...(plan ? { plan: true as const } : {}) });
+  out.effects.unshift({
+    kind: 'ack',
+    body,
+    linearSessionId,
+    ...(delegation ? { comment: true as const } : {}),
+    ...(plan ? { plan: true as const } : {}),
+    ...(commentId ? { commentId } : {}),
+  });
 }
 
 /**

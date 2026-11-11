@@ -31,6 +31,13 @@ describe('decide — the acknowledgement of a trigger (ORC-171)', () => {
     expect(kinds(out.effects)).toEqual(['ack', 'start_run']);
   });
 
+  it('names the comment the message was written in, for an ack by reaction to react on it (ORC-380)', () => {
+    const mention = decide(ticket(), ev('session.mentioned', { linearSessionId: 's-q', body: 'pourquoi ?', author: 'L', ack: true, commentId: 'c-1' }), workflow);
+    expect(mention.effects[0]).toEqual({ kind: 'ack', body: ACK_BODY, linearSessionId: 's-q', commentId: 'c-1' });
+    const reply = decide(ticket({ delegated: true, logical: 'dev' }), ev('session.prompted', { linearSessionId: 's-dev', body: 'trie par date', author: 'L', ack: true, kind: 'instruction', commentId: 'c-2' }), workflow);
+    expect(reply.effects.find((e) => e.kind === 'ack')).toMatchObject({ commentId: 'c-2' });
+  });
+
   it('gives no plan to a delegation that starts no run: a blocked ticket waits for a human', () => {
     const out = decide(ticket({ blocked: true, blockReason: 'x', delegated: true }), delegation(), workflow);
     expect(out.effects).toEqual([{ kind: 'ack', body: ACK_BODY, linearSessionId: 's-dev', comment: true }]);

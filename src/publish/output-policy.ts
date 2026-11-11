@@ -255,6 +255,8 @@ export class PolicedTracker implements Tracker {
   moveTo(id: string, state: string): Promise<void> { return this.tracker.moveTo(id, state); }
   setLabels(id: string, add: string[], remove: string[]): Promise<void> { return this.tracker.setLabels(id, add, remove); }
   findComment(id: string, effectId: string): Promise<string | undefined> { return this.tracker.findComment(id, effectId); }
+  react(commentId: string, emoji: string, effectId?: string): Promise<void> { return this.tracker.react(commentId, emoji, effectId); }
+  findReaction(commentId: string, effectId: string): Promise<string | undefined> { return this.tracker.findReaction(commentId, effectId); }
   findActivity(session: string, effectId: string): Promise<string | undefined> { return this.tracker.findActivity(session, effectId); }
   addExternalUrl(session: string, label: string, url: string): Promise<void> { return this.tracker.addExternalUrl(session, label, url); }
   ensureSession(id: string): Promise<string> { return this.tracker.ensureSession(id); }
