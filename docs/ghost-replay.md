@@ -90,9 +90,13 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
 
 ## Threshold, judging, report
 
-**Threshold** (criterion 4): the share of the compared tickets whose factory PR must be mergeable, as is or after edits. Its value
-is ORC-143's. It is a required input of `factory ghost start`, refused when missing or not a share, written with the replay before
-any ticket runs. The store writes a replay once: starting it again with another threshold is refused, the first one stays.
+**Thresholds** (criterion 4, ORC-385): two shares of the compared tickets, decided by ORC-143: at least 60% of the factory's PRs
+mergeable, as is or after edits (`--threshold`), and at least 30% mergeable as is (`--as-is`), both counted over the compared
+tickets: 60% mergeable but 20% as is is `below`. Both are required inputs of
+`factory ghost start`, refused when missing or not a share, and an as-is share above the mergeable one is refused too; they are
+written with the replay before any ticket runs. The store writes a replay once: starting it again with another threshold is
+refused, the first ones stay. A replay recorded before ORC-385 kept one threshold: it stays readable, its as-is threshold shown
+« not set » and its verdict given on the one threshold it was started with (adding one after the replay would change it after).
 
 **Blind judging** (criterion 5): `factory ghost judge` shows the pairs in an order drawn from the replay's seed, each pair's two PRs
 as PR A and PR B in a random order, by their diffs only (a branch, a description or an author would tell whose it is). Each PR is
@@ -100,13 +104,13 @@ graded on the fixed grid: 1 mergeable as is, 2 mergeable after edits, 3 to rejec
 GitHub login (`--judge`, required): the tickets whose human PR they wrote are left out of their screen.
 
 **Report**: ticket by ticket (grades, assumptions, cost, start commit), the environment failures apart and out of the comparison,
-the total cost, and the verdict: `met`, `below`, or `incomplete` while a ticket has not run (`pending`) or a pair waits for its
-grades. A ticket the factory left without a PR, or blocked, counts as not mergeable.
+the total cost, both shares (mergeable, and mergeable as is) each against its threshold, and the verdict: `met` when both reach
+their thresholds, `below` otherwise, or `incomplete` while a ticket has not run (`pending`) or a pair waits for its grades. A ticket the factory left without a PR, or blocked, counts as not mergeable.
 
 ## Commands
 
 ```
-factory ghost start <project> --threshold 0.6 --tickets REL-12=345,REL-14=351 [--memory off] [--id pilot]
+factory ghost start <project> --threshold 0.6 --as-is 0.3 --tickets REL-12=345,REL-14=351 [--memory off] [--id pilot]
 factory ghost collect <replay>
 factory ghost judge <replay> --judge <GitHub login>
 factory ghost report <replay>
@@ -126,4 +130,4 @@ from GitHub when judged.
 - **The dry run on each start commit** (criterion 3) needs ORC-208, which waits on ORC-209. Every ticket's environment is
   `unchecked` until then, and the report says how many: the hook is `GhostTicket.env` (`ok`, `failed`, `unchecked`), which the
   report already keeps out of the comparison when `failed`.
-- The threshold's value (ORC-143) and the pilot repository (ORC-137) are decisions still to take.
+- The pilot repository (ORC-137) is a decision still to take.

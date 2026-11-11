@@ -53,6 +53,8 @@ export interface CleanVerifyRequest {
   gitleaks: boolean;
   /** `factory/semgrep` (ORC-333), by the image's Semgrep. Only an isolation test on a public image without it turns it off. */
   semgrep: boolean;
+  /** factory.yml's `max_diff: off` (ORC-381): `factory/taille-du-diff` applies only the bounds the base's `max_diff` sets. */
+  maxDiff?: 'off';
   /** `factory/dependances` (ORC-371): the daemon's way to the package registries, never a sandbox's. Absent, a branch that adds a package has no verdict. */
   registries?: RegistryOpener;
   /** `factory/tests-gelés` (ORC-131), once the ticket has a freeze. */
@@ -202,7 +204,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // Only a verdict that passes carries it: a branch refused already is not read again.
     const diffClass = failures.length ? undefined : await classOfBranch(gitReader(git, BASE, from, sha), config);
     const diff = await readDiff(git, from, sha);
-    failures.push(...checkSize(diff, config));
+    failures.push(...checkSize(diff, config, req.maxDiff === 'off'));
     const manifests = failures.length ? [] : await changedManifests(git, from, sha);
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
     const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
@@ -490,10 +492,13 @@ async function readDiff(git: CloneGit, from: string, sha: string): Promise<DiffF
   return read === undefined ? undefined : parseDiff(read);
 }
 
-/** `factory/taille-du-diff` (ORC-145, ORC-333) against the base's `max_diff`. A diff too large to read is `factory/anti-triche`'s already, read with more context. */
-function checkSize(diff: DiffFile[] | undefined, config: RepoConfig): VerifyFailure[] {
+/**
+ * `factory/taille-du-diff` (ORC-145, ORC-333) against the base's `max_diff`, over no base when factory.yml disables it (`off`, ORC-381).
+ * A diff too large to read is `factory/anti-triche`'s already, read with more context.
+ */
+function checkSize(diff: DiffFile[] | undefined, config: RepoConfig, off: boolean): VerifyFailure[] {
   if (!diff) return [];
-  const r = diffSizeCheck(diff, { maxDiff: config.maxDiff });
+  const r = diffSizeCheck(diff, { maxDiff: config.maxDiff, off });
   return r.ok ? [] : [{ command: DIFF_SIZE_CHECK, exitCode: 1, output: r.summary }];
 }
 

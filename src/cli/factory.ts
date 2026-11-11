@@ -6,7 +6,7 @@ import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { startFactory } from '../app/bootstrap.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { repoRoot } from '../app/root.js';
-import { FactoryYmlError, loadFactoryBudgets, loadFactoryTools, loadFactoryYml } from '../config/factory-yml.js';
+import { FactoryYmlError, loadFactoryLimits, loadFactoryYml } from '../config/factory-yml.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
@@ -56,8 +56,8 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // Its own options, on the store and the projects; GitHub through gh, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
-  // The repository's file and the budgets of factory.yml (ORC-216), its secrets left unresolved: no running instance needed.
-  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => ({ budgets: loadFactoryBudgets(factoryHome()), tools: loadFactoryTools(factoryHome()) }) });
+  // The repository's file, the budgets, max_diff and tools of factory.yml (ORC-216, ORC-381, ORC-383), its secrets left unresolved: no running instance needed.
+  if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },

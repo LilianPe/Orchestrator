@@ -16,14 +16,15 @@ import { openStore } from '../store/open.js';
 import { KEPT_PR, type Store } from '../store/types.js';
 
 export const GHOST_USAGE = `Usage: factory ghost <command>
-  start <project> --threshold <share> --tickets <ID>=<PR>,... [--memory off] [--id <replay>]
-              write the replay and its threshold (0.6, or 60%: the share of the factory's PRs to be mergeable), before any
-              ticket runs; then rebuild each ticket at the parent of its PR's merge commit, which the daemon delegates to the
-              project on factory/fantome, with sandboxes only. The threshold never changes after.
+  start <project> --threshold <share> --as-is <share> --tickets <ID>=<PR>,... [--memory off] [--id <replay>]
+              write the replay and its two thresholds, shares of the compared tickets (0.6, or 60%: the factory's PRs to be
+              mergeable, as is or after edits; --as-is, those to be mergeable as is), before any ticket runs; then rebuild each
+              ticket at the parent of its PR's merge commit, which the daemon delegates to the project on factory/fantome,
+              with sandboxes only. The thresholds never change after.
   collect <replay>  read what each ticket ran to on the project without effects: its kept PR, its cost, its assumptions
   judge <replay> --judge <GitHub login>  the blind screen: each pair as PR A and PR B, graded 1 mergeable as is, 2 after edits,
               3 to reject; the PRs the judge wrote are left to another judge
-  report <replay>   ticket by ticket, environment failures apart, the total cost and the verdict against the threshold
+  report <replay>   ticket by ticket, environment failures apart, the total cost and the verdict against both thresholds
   list              the replays, the last started first`;
 
 /** The human PR of a replayed ticket, as the forge has it: its author's login, its merge commit, its commits' headlines oldest first. */
@@ -73,6 +74,17 @@ function refuse(o: GhostOptions, why: string): number {
 
 const percent = (v: number) => `${Math.round(v * 1000) / 10}%`;
 const dollars = (v: number) => `$${v.toFixed(2)}`;
+/** The as-is threshold, not set on a replay recorded with one threshold (before ORC-385). */
+const asIsLabel = (r: GhostReplay) => (r.asIsThreshold === undefined ? 'not set' : percent(r.asIsThreshold));
+const thresholds = (r: GhostReplay) => `thresholds ${percent(r.threshold)} mergeable, as is ${asIsLabel(r)}`;
+
+/** A threshold `start` requires (ORC-143), parsed; or why it is refused. */
+function requiredShare(flag: string, name: string, raw: string | undefined, example: string, what: string): number | string {
+  const v = parseThreshold(raw);
+  if (v !== undefined) return v;
+  const given = raw === undefined ? `No ${name}` : `No ${name} in « ${raw} »`;
+  return `${given}: ${flag} is required, a share (${example}) or a percentage (${percent(Number(example))}) of the factory's PRs to be ${what}, written before the replay and never changed after (ORC-143).`;
+}
 
 /** `REL-1=12,REL-2=34`: each ticket and its human PR's number; undefined when one is malformed. */
 function parseTickets(raw: string | undefined): { ticketId: string; pr: number }[] | undefined {
@@ -90,7 +102,7 @@ export async function runGhost(o: GhostOptions): Promise<number> {
   const { positionals, values } = parseArgs({
     args: [...o.args],
     allowPositionals: true,
-    options: { threshold: { type: 'string' }, tickets: { type: 'string' }, memory: { type: 'string' }, id: { type: 'string' }, judge: { type: 'string' } },
+    options: { threshold: { type: 'string' }, 'as-is': { type: 'string' }, tickets: { type: 'string' }, memory: { type: 'string' }, id: { type: 'string' }, judge: { type: 'string' } },
   });
   const [cmd, arg] = positionals;
   if (cmd === 'list') return list(o);
@@ -114,16 +126,16 @@ export async function runGhost(o: GhostOptions): Promise<number> {
 async function list(o: GhostOptions): Promise<number> {
   const replays = await o.store.ghostReplays();
   if (!replays.length) o.print('No replay yet.');
-  for (const r of replays) o.print(`${r.id}  ${r.projectId}  ${r.tickets.length} tickets  threshold ${percent(r.threshold)}  started ${new Date(r.startedAt).toISOString()} by ${r.startedBy}`);
+  for (const r of replays) o.print(`${r.id}  ${r.projectId}  ${r.tickets.length} tickets  ${thresholds(r)}  started ${new Date(r.startedAt).toISOString()} by ${r.startedBy}`);
   return 0;
 }
 
-async function start(o: GhostOptions, projectId: string, values: { threshold?: string | undefined; tickets?: string | undefined; memory?: string | undefined; id?: string | undefined }): Promise<number> {
-  const threshold = parseThreshold(values.threshold);
-  if (threshold === undefined) {
-    const given = values.threshold === undefined ? 'No threshold' : `No threshold in « ${values.threshold} »`;
-    return refuse(o, `${given}: --threshold is required, a share (0.6) or a percentage (60%) of the factory's PRs to be mergeable, written before the replay and never changed after (ORC-143).`);
-  }
+async function start(o: GhostOptions, projectId: string, values: { threshold?: string | undefined; 'as-is'?: string | undefined; tickets?: string | undefined; memory?: string | undefined; id?: string | undefined }): Promise<number> {
+  const threshold = requiredShare('--threshold', 'threshold', values.threshold, '0.6', 'mergeable, as is or after edits');
+  if (typeof threshold === 'string') return refuse(o, threshold);
+  const asIsThreshold = requiredShare('--as-is', 'as-is threshold', values['as-is'], '0.3', 'mergeable as is');
+  if (typeof asIsThreshold === 'string') return refuse(o, asIsThreshold);
+  if (asIsThreshold > threshold) return refuse(o, `--as-is ${percent(asIsThreshold)} is above --threshold ${percent(threshold)}: the PRs mergeable as is are some of the mergeable ones.`);
   const tickets = parseTickets(values.tickets);
   if (!tickets) return refuse(o, '--tickets: each ticket and its human PR, as REL-1=12,REL-2=34.');
   if (values.memory !== undefined && values.memory !== 'on' && values.memory !== 'off') return refuse(o, '--memory: on or off.');
@@ -145,6 +157,7 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
     id: values.id ?? o.newId(),
     projectId,
     threshold,
+    asIsThreshold,
     memory: values.memory !== 'off',
     seed: randomUUID(),
     tickets: tickets.map((t) => t.ticketId),
@@ -152,10 +165,10 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
     startedBy: o.user,
   };
   if (!(await o.store.putGhostReplay(replay))) {
-    o.print(`A replay ${replay.id} exists already: its threshold was written when it started, and stays as it is.`);
+    o.print(`A replay ${replay.id} exists already: its thresholds were written when it started, and stay as they are.`);
     return 1;
   }
-  o.print(`Replay ${replay.id} of ${projectId}: threshold ${percent(threshold)}, written now and never changed; memory ${replay.memory ? 'on' : 'off'}.`);
+  o.print(`Replay ${replay.id} of ${projectId}: ${thresholds(replay)}, written now and never changed; memory ${replay.memory ? 'on' : 'off'}.`);
   for (const { ticketId, read: pr } of prs) {
     const mergeSha = pr.mergeSha!;
     const base: GhostTicket = {
@@ -270,15 +283,16 @@ async function report(o: GhostOptions, id: string): Promise<number> {
   if (!replay) return 1;
   const r = ghostReport(replay, await o.store.ghostTickets(id), await o.store.ghostJudgments(id));
   const show = (g: string | null) => (g === null ? '—' : g in GRADE_LABELS ? GRADE_LABELS[g as GhostGrade] : g.replace('_', ' '));
-  o.print(`Replay ${replay.id} of ${replay.projectId}, started ${new Date(replay.startedAt).toISOString()} by ${replay.startedBy}, threshold ${percent(replay.threshold)}, memory ${replay.memory ? 'on' : 'off'}.`);
+  o.print(`Replay ${replay.id} of ${replay.projectId}, started ${new Date(replay.startedAt).toISOString()} by ${replay.startedBy}, ${thresholds(replay)}, memory ${replay.memory ? 'on' : 'off'}.`);
   for (const row of r.rows) o.print(`  ${row.ticketId}  factory: ${show(row.factory)}  human: ${show(row.human)}  ${row.assumptions} assumption(s)  ${dollars(row.costUsd)}  (${row.humanPr}${row.start ? `, from ${row.start.slice(0, 12)}` : ''})`);
   o.print(`Environment failures (out of the comparison): ${r.envFailures.length ? r.envFailures.map((f) => `${f.ticketId} (${f.envReason})`).join(', ') : 'none'}.`);
   if (r.pending) o.print(`Tickets not ended, or not collected, yet: ${r.pending}.`);
   if (r.envUnchecked) o.print(`Environments not checked by a dry run: ${r.envUnchecked} (ORC-208).`);
   o.print(`Mergeable factory PRs: ${r.mergeable} of ${r.compared} compared (${percent(r.share)}), threshold ${percent(r.threshold)}.${r.unjudged ? ` ${r.unjudged} pair(s) still to judge.` : ''}`);
+  o.print(`Mergeable as is: ${r.asIs} of ${r.compared} compared (${percent(r.asIsShare)}), threshold ${asIsLabel(replay)}.`);
   o.print(`Assumptions written in the specs: ${r.assumptions}.`);
   o.print(`Total cost: ${dollars(r.totalCostUsd)}.`);
-  o.print(`Verdict: ${r.verdict}.`);
+  o.print(`Verdict: ${r.verdict}${replay.asIsThreshold === undefined ? ', on the mergeable share only: no as-is threshold was set when this replay started' : ''}.`);
   return 0;
 }
 

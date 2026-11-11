@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeClaudeToken, claudeAccountReader, claudeToken, FactoryYmlError, loadFactoryBudgets, loadFactoryYml, parseFactoryYml, stepSettings } from './factory-yml.js';
+import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, stepSettings, ticketCapOf } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -145,6 +145,13 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('tools: { build: [Read] }')).toContain('tools.build: unknown key');
   });
 
+  it('reads how a human message is acknowledged, a comment by default (ORC-380)', () => {
+    expect(parseFactoryYml('acknowledge: reaction', ENV).acknowledge).toBe('reaction');
+    expect(parseFactoryYml('acknowledge: comment', ENV).acknowledge).toBe('comment');
+    expect(parseFactoryYml('concurrency: 1', ENV).acknowledge).toBeUndefined();
+    expect(violations('acknowledge: emoji')).toEqual(['acknowledge: `comment` or `reaction` expected']);
+  });
+
   it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {
     expect(stepSettings(undefined)).toEqual({});
     expect(stepSettings({ budgets: { maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });
@@ -198,15 +205,58 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(loadFactoryYml(home, ENV)).toEqual({ concurrency: 2 });
   });
 
-  it('gives factory validate its budgets alone, the secrets of the file left unresolved (ORC-216)', () => {
+  it('gives factory validate its budgets, max_diff and tools alone, the secrets of the file left unresolved (ORC-216, ORC-381, ORC-383)', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    expect(loadFactoryBudgets(home)).toBeUndefined();
-    writeFileSync(join(home, 'factory.yml'), 'linear:\n  client_secret: env:NOT_IN_THIS_SHELL\nbudgets:\n  per_ticket_tokens: 1000\n  per_step_tokens: { build: 10 }\n');
-    expect(loadFactoryBudgets(home)).toEqual({ perTicketTokens: 1000, perStepTokens: { build: 10 } });
-    writeFileSync(join(home, 'factory.yml'), 'budgets:\n  per_ticket_tokens: -1\n');
-    expect(() => loadFactoryBudgets(home)).toThrow(FactoryYmlError);
+    expect(loadFactoryLimits(home)).toEqual({});
+    writeFileSync(join(home, 'factory.yml'), 'linear:\n  client_secret: env:NOT_IN_THIS_SHELL\nmax_diff: off\nbudgets:\n  per_ticket_tokens: 1000\n  per_step_tokens: { build: 10 }\ntools:\n  per_step: { build: [Read, Edit] }\n');
+    expect(loadFactoryLimits(home)).toEqual({ maxDiff: 'off', budgets: { perTicketTokens: 1000, perStepTokens: { build: 10 } }, tools: { perStep: { build: ['Read', 'Edit'] } } });
+    writeFileSync(join(home, 'factory.yml'), 'budgets:\n  per_ticket_tokens: -1\nmax_diff: { files: 30 }\n');
+    // Both faults at once, as the daemon says them.
+    expect(() => loadFactoryLimits(home)).toThrow(expect.objectContaining({ violations: [expect.stringContaining('budgets.per_ticket_tokens'), expect.stringContaining('max_diff')] }));
     writeFileSync(join(home, 'factory.yml'), 'linear: {}\n');
-    expect(loadFactoryBudgets(home)).toBeUndefined();
+    expect(loadFactoryLimits(home)).toEqual({});
+  });
+
+  describe('the controls a server disables (ORC-381)', () => {
+    const notOff = 'max_diff: only `off` exists here; without it, the baseline (15 files, 400 lines) applies, tightened by each repository';
+
+    it('reads `max_diff: off`, and nothing else for max_diff', () => {
+      expect(parseFactoryYml('max_diff: off\n').maxDiff).toBe('off');
+      expect(violations('max_diff: { files: 30 }\n')).toEqual([notOff]);
+      expect(violations('max_diff: false\n')).toEqual([notOff]);
+    });
+
+    it('reads `budgets: off` as every token cap off', () => {
+      expect(parseFactoryYml('budgets: off\n').budgets).toEqual({ perStepTokens: 'off', perTicketTokens: 'off' });
+      expect(violations('budgets: none\n')).toEqual(['budgets: an object is expected, or `off`']);
+    });
+
+    it('reads `off` per cap, the others kept', () => {
+      expect(parseFactoryYml('budgets:\n  per_ticket_tokens: off\n  per_step_tokens: { build: 10 }\n  max_turns: { build: 5 }\n').budgets).toEqual({
+        perTicketTokens: 'off',
+        perStepTokens: { build: 10 },
+        maxTurns: { build: 5 },
+      });
+      expect(parseFactoryYml('budgets:\n  per_step_tokens: off\n').budgets).toEqual({ perStepTokens: 'off' });
+      expect(violations('budgets: { max_turns: off }\n')).toEqual(['budgets.max_turns: `step: positive integer` expected']);
+    });
+
+    it('names each disabled control, none by default', () => {
+      expect(disabledControls(undefined)).toEqual([]);
+      expect(disabledControls({ budgets: { perTicketTokens: 10 } })).toEqual([]);
+      expect(disabledControls({ maxDiff: 'off', budgets: { perStepTokens: 'off', perTicketTokens: 'off' } })).toEqual(['max_diff', 'budgets.per_step_tokens', 'budgets.per_ticket_tokens']);
+      expect(disabledControls({ budgets: { perTicketTokens: 'off' } })).toEqual(['budgets.per_ticket_tokens']);
+    });
+
+    it('hands no per-step cap to the agent steps when it is off', () => {
+      expect(stepSettings({ budgets: { perStepTokens: 'off', maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });
+    });
+
+    it('gives the orchestrator no ticket cap when it is off: no run is stopped for it', () => {
+      expect(ticketCapOf({ budgets: { perTicketTokens: 'off' } })).toBeUndefined();
+      expect(ticketCapOf({ budgets: { perTicketTokens: 1000 } })).toBe(1000);
+      expect(ticketCapOf(undefined)).toBeUndefined();
+    });
   });
 
   describe('the Claude account runs use (ORC-215)', () => {

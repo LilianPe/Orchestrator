@@ -20,7 +20,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory stop <ID>` | Stop a ticket's run. | yes |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
-| `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against a threshold written before. | no (the database, `gh`) |
+| `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
 
 The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. If `RELAIS_UI_PASSWORD` is set in your shell, they send it as HTTP Basic (necessary when the daemon listens beyond loopback). In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
@@ -59,6 +59,8 @@ Checks the repository's `.factory/config.yml` (the current repository by default
 It then shows the tools of each agent step (ORC-383): `Tools of each agent step of factory/default:`, then `- <step>: <tools>`, as the launch hands them out: those of `factory.yml` (`tools.per_step`) or the preset's, kept to the repository's list, without `WebFetch` for a repository at network `none`. A `factory.yml` that gives a step a tool it may not have is refused (`factory.yml refused:`), as the daemon refuses it at startup; a tool the repository names that `factory.yml` does not give the step is a warning, ignored by the launch.
 
 Last, it computes the worst case of the `factory/default` preset (ORC-216) with the `budgets` of `factory.yml` (in `FACTORY_HOME`) and the repository's `budgets.per_ticket_tokens`, which only lowers the ticket's cap: every way back taken as often as its counter allows, where it costs the most, Σ attempts × `per_step_tokens` over the agent steps (and the same in turns, with each step's `maxTurns` lowered by `max_turns`). It refuses (`Budgets of factory/default refused:`) a worst case over `per_ticket_tokens`, and refuses while a cap is still unset (`per_step_tokens` of an agent step, or `per_ticket_tokens`) rather than passing. Accepted, it prints `Worst case of factory/default: <tokens> tokens and <turns> turns per ticket, within budgets.per_ticket_tokens <cap>.` and exits 0. An invalid `factory.yml` is refused too.
+
+A control `factory.yml` disables (ORC-381) is named right after the repository's file, before the tools: `Disabled in factory.yml: max_diff, budgets.per_step_tokens, budgets.per_ticket_tokens.` (those that are `off`). A cap `off` is not refused as unset. With `per_ticket_tokens: off` and no cap of the repository's, the last line ends with `under no ticket cap.`; with `per_step_tokens: off`, it is `No worst case of factory/default in tokens: budgets.per_step_tokens is disabled.`
 
 ### `factory doctor [repo]`
 
@@ -178,8 +180,9 @@ The same period again is refused, the stored rows kept and no figure printed, un
 
 ### `factory ghost` (ORC-231)
 
-The replay of closed tickets: `start <project> --threshold <share> --tickets <ID>=<PR>,...` writes the replay and its threshold
-(required, never changed after) and rebuilds each ticket at the parent of its PR's merge commit, for a project on the
+The replay of closed tickets: `start <project> --threshold <share> --as-is <share> --tickets <ID>=<PR>,...` writes the replay and
+its two thresholds, shares of the compared tickets: the factory's PRs to be mergeable, and those to be mergeable as is (both required, never
+changed after, ORC-385) and rebuilds each ticket at the parent of its PR's merge commit, for a project on the
 `factory/fantome` preset; the daemon then delegates each ticket to that project itself (ORC-376). It is refused when the daemon
 runs its agents on the host (no sandboxes), or has never started: the agent could push by itself. `collect`, `judge` (the blind screen, PR A and PR B on the grid mergeable as is / after edits / to reject) and `report` follow. See
 [the replay of closed tickets](ghost-replay.md). Like `flaky`, the command writes to the instance's database, without the daemon.

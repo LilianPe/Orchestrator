@@ -10,8 +10,9 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 | Concurrent question runs | `limits.question_sessions` (workflow) | 2 | Same, `questions` queue. |
 | Turns per run | `limits.per_run.turns` / `jobs.*.limits.turns`, the step's `maxTurns` and `budgets.max_turns` | 150 | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
 | Run duration | `limits.per_run.duration` | `90m` | Run interrupted, result `limit`. |
-| Tokens per attempt | `budgets.per_step_tokens` (`factory.yml`) | none (to calibrate) | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
-| Tokens per ticket | `budgets.per_ticket_tokens` (`factory.yml`, lowered by the repository's) | none (to calibrate) | An attempt never gets more than what is left; once spent, the next code run is refused, ticket blocked, kind `budget`. `factory validate` refuses a preset whose worst case exceeds it. |
+| Tokens per attempt | `budgets.per_step_tokens` (`factory.yml`; `off` disables it, ORC-381) | none (to calibrate) | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
+| Diff size outside tests | `max_diff` (`.factory/config.yml`, tighten only); `max_diff: off` in `factory.yml` drops the baseline (ORC-381) | 15 files, 400 lines | `verify` fails `factory/taille-du-diff` with a split proposal: no PR. |
+| Tokens per ticket | `budgets.per_ticket_tokens` (`factory.yml`, lowered by the repository's; `off` disables it, ORC-381) | none (to calibrate) | An attempt never gets more than what is left; once spent, the next code run is refused, ticket blocked, kind `budget`. `factory validate` refuses a preset whose worst case exceeds it. |
 | Verification passes | `limits.verify_attempts` | 4 (preset: 3 retries) | Ticket blocked, failing commands posted in Linear. |
 | Same failure, unchanged worktree | preset (`sameFailure`) | 3 in a row | Ticket blocked with the cause « Loop », failing commands posted in Linear. |
 | Rounds of the review and CI loop | `limits.ci_fix_attempts` (preset `review_ci`) | 2 per run | Red CI (`fix-ci`), a conflict (`rebase`) and an AI review with a blocking finding (`fix-review`, ORC-184) share it: the next one relaunches nothing, the ticket is blocked, the failing checks or the review's count posted in Linear. Reset by another PR or a human who starts work on the ticket (blocked or not); a green CI only lifts the red-CI block. |
@@ -19,6 +20,8 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 | Duration of a `verify` / `setup` command | fixed | 15 min | Command counted as failed (`timeout`). |
 | Duration of any other subprocess of the daemon (git, `gh`, the container engine) | `DEFAULT_EXEC_TIMEOUT_MS` (`src/adapters/exec.ts`), unless the caller names its own | 30 min | Killed with its whole process group (POSIX), code 124 (ORC-344): the effect that ran it fails and is tried again, its ticket freed. |
 | Silence of an attempt | `silentAfterMs` (preset `silentRun`), otherwise `RUN_SILENT_MS` | 30 min | Its lease is no longer renewed: closed and relaunched once its lease runs out (ORC-344), unless the stagnation detector stopped it first. |
+
+A control `factory.yml` disables (`max_diff: off`, `budgets: off`, or `off` per token cap, ORC-381) is said at each start (`Disabled in factory.yml: <keys>.`), by `factory validate`, and by a banner of the dashboard. Only `factory.yml` disables one: a repository's `.factory/config.yml` that sets `off` is refused, and its own `max_diff` and `per_ticket_tokens` still apply. The usage limit of the Claude subscription is not one of these caps: it still holds the launches until its reset.
 
 After a `limit` result or a failure, a code run **blocks** the ticket and Relais writes in the Linear session to reply in the thread to resume; a question run replies « I could not finish (failure or limit reached). ». Details and settings: [`workflow.md`](workflow.md#limits). Budgets in tokens and turns: [`configuration.md`](configuration.md#budgets).
 

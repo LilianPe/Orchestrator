@@ -196,6 +196,15 @@ describe('mapLinearWebhook', () => {
     });
     expect((await mapLinearWebhook(fx('session-stop'), 'd5', ctx()))[0]).toMatchObject({ type: 'session.stopped', payload: { linearSessionId: 'as-1' } });
   });
+  it('names the comment a message was written in, for its ack to react on it (ORC-380); a delegation has none', async () => {
+    expect((await mapLinearWebhook(fx('session-created-mention'), 'd2', ctx()))[0]!.payload).toMatchObject({ commentId: 'c1' });
+    expect((await mapLinearWebhook(fx('session-created-command'), 'd3', ctx()))[0]!.payload).toMatchObject({ commentId: 'c2' });
+    const reply = fx('session-prompted');
+    expect((await mapLinearWebhook(reply, 'd4', ctx()))[0]!.payload).not.toHaveProperty('commentId');
+    reply.agentActivity.sourceCommentId = 'c3';
+    expect((await mapLinearWebhook(reply, 'd4', ctx()))[0]!.payload).toMatchObject({ commentId: 'c3' });
+    expect((await mapLinearWebhook(fx('session-created-delegation'), 'd1', ctx()))[0]!.payload).not.toHaveProperty('commentId');
+  });
   describe('classifies a message at its arrival, journaled with it (ORC-180, ORC-336)', () => {
     const reply = (text: string, c: MapContext = ctx()) => {
       const body = fx('session-prompted');

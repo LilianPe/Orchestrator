@@ -3,17 +3,22 @@ import type { GoldenVerdict } from '../golden/replay.js';
 
 /**
  * The replay of closed tickets (ORC-231): each ticket run again by the factory on the `factory/fantome` preset, in its historical
- * environment, without effects; its PR then judged blind against the human one. A replay is written once, its threshold with it,
- * before any ticket runs: nothing changes it after (`Store.putGhostReplay` refuses a second write).
+ * environment, without effects; its PR then judged blind against the human one. A replay is written once, its thresholds with it,
+ * before any ticket runs: nothing changes them after (`Store.putGhostReplay` refuses a second write).
  */
 export interface GhostReplay {
   id: string;
   projectId: string;
   /**
-   * The share of the compared tickets whose factory PR must be mergeable, as is or after edits (ORC-143 decides its value): a
-   * required input of the command, written with the replay and never changed.
+   * The share of the compared tickets whose factory PR must be mergeable, as is or after edits (ORC-143: 60%): a required input of
+   * the command, written with the replay and never changed.
    */
   threshold: number;
+  /**
+   * The share of the compared tickets whose factory PR must be mergeable as is (ORC-143: 30%, ORC-385): required by the command
+   * too, written with the replay and never changed. Absent from a replay recorded before it: not set.
+   */
+  asIsThreshold?: number;
   /** The knowledge base given to the runs (ORC-260): on, at transaction time; off, none. */
   memory: boolean;
   /** Draws the order of the pairs and of each pair's PRs (`blindPairs`): kept in the store, never shown to the judge. */
@@ -125,13 +130,20 @@ export interface GhostReport {
   /** Tickets whose environment no dry run checked (ORC-208 not there yet). */
   envUnchecked: number;
   compared: number;
+  /** The factory's PRs mergeable as is or after edits. */
   mergeable: number;
+  /** Of those, the ones mergeable as is. */
+  asIs: number;
   unjudged: number;
   /** Tickets not run, or not collected, yet. */
   pending: number;
   share: number;
+  asIsShare: number;
   threshold: number;
-  /** `incomplete` while a ticket has not run or a compared PR waits for its judgment: no verdict on part of the replay. */
+  /**
+   * `met` when both shares reach their thresholds, `below` otherwise; `incomplete` while a ticket has not run or a compared PR waits
+   * for its judgment: no verdict on part of the replay.
+   */
   verdict: 'met' | 'below' | 'incomplete';
   assumptions: number;
   totalCostUsd: number;
@@ -140,8 +152,9 @@ export interface GhostReport {
 const isMergeable = (g: GhostReportRow['factory']) => g === 'as_is' || g === 'after_edits';
 
 /**
- * The report (ORC-231): ticket by ticket, the environment failures apart, the total cost, and the verdict against the threshold
- * written before the replay. A ticket the factory left without a PR counts as not mergeable: the comparison is the factory's to win.
+ * The report (ORC-231): ticket by ticket, the environment failures apart, the total cost, and the verdict against the thresholds
+ * written before the replay (ORC-385: the share mergeable, and the share mergeable as is). A ticket the factory left without a PR
+ * counts as not mergeable: the comparison is the factory's to win.
  */
 export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[], judgments: readonly GhostJudgment[]): GhostReport {
   const grade = (ticketId: string, side: GhostSide) => judgments.find((j) => j.ticketId === ticketId && j.side === side)?.grade;
@@ -159,9 +172,15 @@ export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[]
     };
   });
   const mergeable = rows.filter((r) => isMergeable(r.factory)).length;
+  const asIs = rows.filter((r) => r.factory === 'as_is').length;
   const unjudged = rows.filter((r) => r.factory === 'unjudged' || r.human === 'unjudged').length;
   const pending = rows.filter((r) => r.factory === 'pending').length;
-  const share = rows.length ? mergeable / rows.length : 0;
+  const of = (n: number) => (rows.length ? n / rows.length : 0);
+  const share = of(mergeable);
+  const asIsShare = of(asIs);
+  // A replay recorded with one threshold is judged on that one: a threshold added after the replay would be one changed after.
+  // Both shares are of the compared tickets: 60% mergeable but 20% as is is below 30% as is (ORC-385, criterion 2).
+  const reached = share >= replay.threshold && asIsShare >= (replay.asIsThreshold ?? 0);
   return {
     replay,
     rows,
@@ -169,11 +188,13 @@ export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[]
     envUnchecked: kept.filter((t) => t.env === 'unchecked').length,
     compared: rows.length,
     mergeable,
+    asIs,
     unjudged,
     pending,
     share,
+    asIsShare,
     threshold: replay.threshold,
-    verdict: unjudged || pending || !rows.length ? 'incomplete' : share >= replay.threshold ? 'met' : 'below',
+    verdict: unjudged || pending || !rows.length ? 'incomplete' : reached ? 'met' : 'below',
     assumptions: rows.reduce((s, r) => s + r.assumptions, 0),
     totalCostUsd: tickets.reduce((s, t) => s + t.costUsd, 0),
   };

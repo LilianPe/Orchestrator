@@ -26,6 +26,7 @@ import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/wor
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../config/workflow-schema.js';
+import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
@@ -283,8 +284,12 @@ export interface OrchestratorDeps {
   originUrl?: (project: ProjectRuntime) => Promise<string>;
   /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
   perTicketTokens?: number;
+  /** `max_diff: off` of factory.yml (ORC-381): `verify` bounds the diff's size only where the repository's `max_diff` does. */
+  maxDiff?: 'off';
   /** `budgets.on_usage_limit` of factory.yml (ORC-340): `wait`, a run stopped by the usage limit resumes at its reset. Absent: it blocks, as any failure. */
   onUsageLimit?: 'wait';
+  /** `acknowledge` of factory.yml (ORC-380): `reaction` reacts on the message in place of the ack's comment. Absent: `comment`. */
+  acknowledge?: AckMode;
   /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
   configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */
@@ -1168,6 +1173,7 @@ export class Orchestrator {
         commands: job.verify,
         gitleaks: true,
         semgrep: true,
+        ...(this.d.maxDiff ? { maxDiff: this.d.maxDiff } : {}),
         knownFlaky: await this.d.store.knownFlakyTests(project.id),
         ...over,
         ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
@@ -2014,20 +2020,34 @@ export class Orchestrator {
 
   /**
    * The ack of a trigger (ORC-171), best effort: a courtesy must not hold back or kill the run behind it, so a write
-   * Linear refuses is logged, neither retried nor blocking. The one key on both writes: a replay finds what its first
+   * Linear refuses is logged, neither retried nor blocking. The one key on every write: a replay finds what its first
    * execution wrote of each. The time a measure reads (ORC-235) is the human's first sign of life, before the plan.
+   * `acknowledge: reaction` (ORC-380) reacts on the message in place of the comment; a message with no comment to react
+   * on, or a reaction Linear refuses, gets the comment, logged; a delegation, which has no message, keeps its comment
+   * unlogged. The session's thought stays: Linear asks for an activity.
    */
   private async ack(t: TicketState, c: Extract<Effect, { kind: 'ack' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const outcomes: (EffectOutcome | void)[] = [];
-    const attempt = async (what: string, write: () => Promise<EffectOutcome | void>) => {
+    const attempt = async (what: string, write: () => Promise<EffectOutcome | void>, failed = 'not written'): Promise<boolean> => {
       try {
         outcomes.push(await write());
+        return true;
       } catch (err) {
-        this.log('warn', `${what} of the ack of ${t.ticketId} not written: ${(err as Error).message}`);
+        this.log('warn', `${what} of the ack of ${t.ticketId} ${failed}: ${(err as Error).message}`);
+        return false;
       }
     };
-    if (c.comment) await attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    const comment = () => attempt('comment', () => this.commentOnce(t.ticketId, c.body, key));
+    // A delegation has no message of its own: it keeps its comment, first, in either mode.
+    if (c.comment) await comment();
     await attempt('activity', () => this.activityOnce(c.linearSessionId, { type: 'thought', body: c.body }, key));
+    // The reaction comes after the thought, which Linear waits for within 10 s.
+    if (this.d.acknowledge === 'reaction' && !c.comment) {
+      const { commentId } = c;
+      if (!commentId) this.log('info', `no message to put a reaction on for the ack of ${t.ticketId}: a comment instead`);
+      const reacted = !!commentId && (await attempt('the reaction', () => this.reactOnce(commentId, key), `refused on comment ${commentId}, a comment instead`));
+      if (!reacted) await comment();
+    }
     if (outcomes.length > 0) await this.d.store.markAcked(key.eventId, this.d.clock.now()).catch((err: Error) => this.log('warn', `ack of ${key.eventId} posted, its time not recorded: ${err.message}`));
     if (c.plan) await this.openPlan(t, c.linearSessionId);
     // Already made only if nothing was written here.
@@ -2049,6 +2069,13 @@ export class Orchestrator {
     } catch (err) {
       this.log('warn', `the requester of ${t.ticketId} not told of PR #${c.number}: ${(err as Error).message}`);
     }
+  }
+
+  /** The ack's reaction on a message (ORC-380): 👀, by its name, put unless its first execution already put it (ORC-162). */
+  private async reactOnce(commentId: string, key: EffectKey): Promise<EffectOutcome | void> {
+    const found = key.replay ? await this.d.tracker.findReaction(commentId, key.id) : undefined;
+    if (found !== undefined) return { deduplicated: true, ref: found };
+    await this.d.tracker.react(commentId, 'eyes', key.id);
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */

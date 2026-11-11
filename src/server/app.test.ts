@@ -16,7 +16,7 @@ import { TAKEN_OVER } from '../core/block-cause.js';
 /** The HTTP Basic header the UI password asks for; its user is free. */
 const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -59,6 +59,12 @@ describe('server', () => {
     expect((await (await (await setup()).app.request('/api/state')).json()).usageLimitedUntil).toBeNull();
     const held = await setup({ usageLimitedUntil: async () => 301_000 });
     expect((await (await held.app.request('/api/state')).json()).usageLimitedUntil).toBe(301_000);
+  });
+
+  it('serves the controls factory.yml disables, none by default (ORC-381)', async () => {
+    expect((await (await (await setup()).app.request('/api/state')).json()).disabledControls).toEqual([]);
+    const off = await setup({ disabledControls: ['max_diff', 'budgets.per_ticket_tokens'] });
+    expect((await (await off.app.request('/api/state')).json()).disabledControls).toEqual(['max_diff', 'budgets.per_ticket_tokens']);
   });
 
   it('serves state without run tokens', async () => {

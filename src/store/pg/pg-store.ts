@@ -1025,7 +1025,7 @@ export class PgStore implements AsyncStore {
   async putGhostReplay(r: GhostReplay): Promise<boolean> {
     const rows = await this.db
       .insert(schema.ghostReplays)
-      .values({ id: r.id, projectId: r.projectId, threshold: r.threshold, memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: new Date(r.startedAt), startedBy: r.startedBy })
+      .values({ id: r.id, projectId: r.projectId, threshold: r.threshold, asIsThreshold: r.asIsThreshold ?? null, memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: new Date(r.startedAt), startedBy: r.startedBy })
       .onConflictDoNothing()
       .returning({ id: schema.ghostReplays.id });
     return rows.length === 1;
@@ -1040,11 +1040,11 @@ export class PgStore implements AsyncStore {
   }
 
   private async readGhostReplays(rest: ReturnType<typeof sql>): Promise<GhostReplay[]> {
-    type Row = { id: string; project_id: string; threshold: number; memory: boolean; seed: string; tickets: string[]; started_at: string | number; started_by: string };
+    type Row = { id: string; project_id: string; threshold: number; as_is_threshold: number | null; memory: boolean; seed: string; tickets: string[]; started_at: string | number; started_by: string };
     const { rows } = await this.db.execute<Row>(sql`
-      select id, project_id, threshold, memory, seed, tickets, round(extract(epoch from started_at) * 1000) as started_at, started_by from ghost_replays ${rest}
+      select id, project_id, threshold, as_is_threshold, memory, seed, tickets, round(extract(epoch from started_at) * 1000) as started_at, started_by from ghost_replays ${rest}
     `);
-    return rows.map((r) => ({ id: r.id, projectId: r.project_id, threshold: Number(r.threshold), memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: Number(r.started_at), startedBy: r.started_by }));
+    return rows.map((r) => ({ id: r.id, projectId: r.project_id, threshold: Number(r.threshold), ...(r.as_is_threshold === null ? {} : { asIsThreshold: Number(r.as_is_threshold) }), memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: Number(r.started_at), startedBy: r.started_by }));
   }
 
   async putGhostTicket(t: GhostTicket): Promise<void> {
