@@ -121,6 +121,17 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('read_guard: 500')).toContain('read_guard: an object is expected');
   });
 
+  it('reads the definition of a serious defect the audit sheets count by, none by default (ORC-229)', () => {
+    expect(parseFactoryYml('audit: { serious_defect: "Breaks a user flow or loses data" }', ENV).audit).toEqual({ seriousDefect: 'Breaks a user flow or loses data' });
+    expect(parseFactoryYml('concurrency: 1', ENV).audit).toBeUndefined();
+    expect(parseFactoryYml('audit: {}', ENV).audit).toBeUndefined();
+  });
+
+  it('refuses an empty definition, and an unknown key of audit (ORC-229)', () => {
+    for (const bad of ['""', '"   "', '12']) expect(violations(`audit: { serious_defect: ${bad} }`).join()).toContain('audit.serious_defect');
+    expect(violations('audit: { definition: x }')).toContain('audit.definition: unknown key');
+  });
+
   it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {
     expect(stepSettings(undefined)).toEqual({});
     expect(stepSettings({ budgets: { maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });

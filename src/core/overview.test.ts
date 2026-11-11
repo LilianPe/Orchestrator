@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NO_DEFINITION } from './audit.js';
 import type { MessageMeasure, TicketMeasures } from './measures.js';
 import { overview } from './overview.js';
 
@@ -79,5 +80,17 @@ describe('overview (ORC-299)', () => {
   it('carries the baseline it is given, to face the measures (ORC-230)', () => {
     const baseline = { projectId: 'p', since: 0, until: 90 * DAY, computedAt: 1, measures: { delivered: { value: 4, over: 5, leftOut: 1, noSource: false } } };
     expect(overview(PERIOD, [], 0, baseline).baseline).toEqual(baseline);
+  });
+
+  it('counts no defect of the audit sheets while no definition of a serious defect is set, and says why (ORC-229)', () => {
+    const defect = { id: 'd1', projectId: 'p', ticketId: 'A', prNumber: 1, description: 'x', findingId: null, definition: null, enteredBy: 'dashboard:local', at: 11 * DAY };
+    expect(overview(PERIOD, []).aiReviewMisses).toEqual({ counted: false, why: NO_DEFINITION });
+    expect(overview(PERIOD, [], 0, null, { defects: [defect] }).aiReviewMisses).toEqual({ counted: false, why: NO_DEFINITION });
+  });
+
+  it("gives the AI reviewers' miss rate over the defects entered in the period under the definition in force (ORC-229)", () => {
+    const d = (id: string, at: number, findingId: string | null) => ({ id, projectId: 'p', ticketId: 'A', prNumber: 1, description: 'x', findingId, definition: 'loses data', enteredBy: 'dashboard:local', at });
+    const o = overview(PERIOD, [], 0, null, { defects: [d('d1', 11 * DAY, null), d('d2', 12 * DAY, 'r:correctness:0'), d('d3', 200 * DAY, null)], definition: 'loses data' });
+    expect(o.aiReviewMisses).toEqual({ counted: true, definition: 'loses data', defects: 2, missed: 1, rate: 0.5, leftOut: 0 });
   });
 });

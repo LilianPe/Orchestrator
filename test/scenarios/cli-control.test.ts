@@ -38,6 +38,7 @@ describe('factory status and factory stop (ORC-220)', () => {
     const c = control(h);
     expect(await runStatusCommand(c, h.clock.now())).toBe(0);
     expect(c.lines[0]).toContain('dev slots 1/3');
+    expect(c.lines[0]).not.toContain('cost today'); // No day counted in dollars (ORC-194).
     expect(c.lines).toContain('  REL-1  dev  Export CSV');
     expect(c.lines).toContain(`    run ${runId}: dev, for 5 min, 0.00 $`);
   });

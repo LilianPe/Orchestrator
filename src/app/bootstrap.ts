@@ -36,6 +36,7 @@ import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveL
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { loadWorkflow } from '../config/load-workflow.js';
+import { asFantome, fantome, projectEffects } from '../presets/fantome.js';
 import { EventBus } from '../core/bus.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
@@ -100,11 +101,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
   const projects: ProjectRuntime[] = instance.projects.map((p) => {
     const projectFile = join(p.repoPath, '.factory/workflow.yml');
+    const workflow = loadWorkflow({ packDir, projectFile: existsSync(projectFile) ? projectFile : undefined, settings: stepSettings(yml) });
     return {
       id: p.id,
       repoPath: p.repoPath,
       teamKey: p.linearTeamKey,
-      workflow: loadWorkflow({ packDir, projectFile: existsSync(projectFile) ? projectFile : undefined, settings: stepSettings(yml) }),
+      // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
+      workflow: p.preset === fantome.name ? asFantome(workflow) : workflow,
+      ...(projectEffects(p) ? { effects: 'none' as const } : {}),
     };
   });
   const limits = projects[0]?.workflow.limits;
@@ -230,6 +234,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
+      keptEffectsDir: paths.kept,
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
       ...(kb ? { knowledgeIndex: () => kb.refresh() } : {}),
       store,
@@ -374,6 +379,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       isPaused: () => orchestrator.isPaused(),
       usageLimitedUntil: () => orchestrator.usageLimitedUntil(),
       ...(yml?.budgets?.perTicketTokens ? { perTicketTokens: yml.budgets.perTicketTokens } : {}),
+      ...(yml?.audit ? { seriousDefect: yml.audit.seriousDefect } : {}),
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,

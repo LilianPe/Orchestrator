@@ -13,7 +13,10 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { agentOnly, createApp, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
+/** The HTTP Basic header the UI password asks for; its user is free. */
+const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
+
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -65,6 +68,11 @@ describe('server', () => {
     expect(body.activeRuns[0].id).toBe('r1');
     expect(body.activeRuns[0].token).toBeUndefined();
     expect(body.capacity.dev).toEqual({ used: 1, total: 3 });
+  });
+
+  it('serves no cost of the day in dollars: nothing counts a day in dollars (ORC-194)', async () => {
+    const body = await (await (await setup()).app.request('/api/state')).json();
+    expect(body).not.toHaveProperty('costTodayUsd');
   });
 
   describe('the Flow (ORC-297)', () => {
@@ -258,6 +266,91 @@ describe('server', () => {
     it('refuses a period that is not one, and asks for the password as the other routes of the interface', async () => {
       expect((await (await setup()).app.request('/api/overview?since=100&until=10')).status).toBe(400);
       expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/overview')).status).toBe(401);
+    });
+  });
+
+  describe('the audit sheets of the reviewed PRs and the miss rate of the AI reviewers (ORC-229)', () => {
+    const pr = { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' };
+    const event = (id: string, type: FactoryEvent['type'], at: number, payload: object): FactoryEvent => ({ ...TRUSTED, id, type, at, projectId: 'p', ticketId: 'REL-1', payload }) as FactoryEvent;
+    const reviewedPr = async (store: SqliteStore) => {
+      await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'human_review', 20), prNumber: 3, prUrl: pr.url });
+      await store.recordEvent(event('o', 'pr.opened', 2, pr));
+      await store.recordEvent(event('rh', 'pr.reviewed', 5, { ...pr, kind: 'review', author: 'lilian-gh', body: 'no header', state: 'CHANGES_REQUESTED' }));
+      await store.putFindings({ projectId: 'p', ticketId: 'REL-1', sha: 'abc', lens: 'correctness', runId: 'rv1', at: 4, findings: [{ file: 'a.ts', line: 2, severity: 'blocking', explanation: 'off by one', suggestion: '' }] });
+    };
+    const post = (app: Awaited<ReturnType<typeof setup>>['app'], body: unknown, headers: Record<string, string> = {}) =>
+      app.request('/api/audit/p/REL-1/defects', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', ...headers } });
+
+    it('lists the PRs a human reviewed, and serves the sheet of one: its task, the agent path, its result, read-only', async () => {
+      const { app, store } = await setup();
+      await reviewedPr(store);
+      await store.putTicket({ ...newTicketState('p', 'REL-2', 'Import', 'dev', 30), prNumber: 4 });
+      await store.recordEvent({ ...event('o2', 'pr.opened', 3, { ...pr, number: 4 }), ticketId: 'REL-2' });
+      const list = await (await app.request('/api/audit')).json();
+      expect(list).toEqual({ sheets: [{ projectId: 'p', ticketId: 'REL-1', title: 'Export', logical: 'human_review', prUrl: pr.url, mergedAt: null }] });
+      const sheet = await (await app.request('/api/audit/p/REL-1')).json();
+      expect(sheet).toMatchObject({
+        definition: null,
+        task: { title: 'Export', spec: null },
+        path: { findings: [{ id: 'rv1:correctness:0', file: 'a.ts', severity: 'blocking' }] },
+        result: { prs: [{ number: 3, state: 'open' }], reviews: [{ author: 'lilian-gh', state: 'changes_requested' }] },
+        defects: [],
+      });
+      expect(JSON.stringify(sheet)).not.toContain('"token"');
+      expect((await app.request('/api/audit/p/REL-9')).status).toBe(404);
+      // A ticket whose facts cannot be read leaves the list, the others are still served.
+      const facts = store.measureFacts.bind(store);
+      const read = vi.spyOn(store, 'measureFacts').mockImplementation((projectId, ticketId) => (ticketId === 'REL-1' ? Promise.reject(new Error('journal illisible')) : facts(projectId, ticketId)));
+      expect((await (await app.request('/api/audit')).json()).sheets).toEqual([]);
+      expect(read.mock.calls.map((c) => c[1]).sort()).toEqual(['REL-1', 'REL-2']);
+      read.mockRestore();
+      expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/audit/p/REL-1')).status).toBe(401);
+    });
+
+    it('takes a defect found in human review, linked to an AI finding of the ticket or not, with its operator and the definition in force', async () => {
+      const { app, store } = await setup({ seriousDefect: 'loses data' });
+      await reviewedPr(store);
+      const linked = await post(app, { prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0', file: 'a.ts', line: 2 });
+      expect(linked.status).toBe(200);
+      expect((await post(app, { prNumber: 3, description: 'no empty-list case' })).status).toBe(200);
+      // Both in the same millisecond: in no order between them.
+      const kept = await store.ticketDefects('p', 'REL-1');
+      expect(kept).toHaveLength(2);
+      expect(kept).toEqual(expect.arrayContaining([
+        { id: expect.any(String), projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0', file: 'a.ts', line: 2, definition: 'loses data', enteredBy: 'dashboard:local', at: 10 },
+        { id: expect.any(String), projectId: 'p', ticketId: 'REL-1', prNumber: 3, description: 'no empty-list case', findingId: null, definition: 'loses data', enteredBy: 'dashboard:local', at: 10 },
+      ]));
+      expect((await (await app.request('/api/audit/p/REL-1')).json()).defects).toHaveLength(2);
+    });
+
+    it('refuses a defect on an unknown ticket, a PR not of the ticket, a finding not of the ticket, or an empty description; and one from another origin', async () => {
+      const { app, store } = await setup();
+      await reviewedPr(store);
+      expect((await app.request('/api/audit/p/REL-9/defects', { method: 'POST', body: JSON.stringify({ prNumber: 3, description: 'x' }) })).status).toBe(404);
+      for (const bad of [{ prNumber: 4, description: 'x' }, { prNumber: 3, description: 'x', findingId: 'other:correctness:0' }, { prNumber: 3, description: '  ' }, { prNumber: 3 }, 'not json']) {
+        expect((await post(app, bad)).status, JSON.stringify(bad)).toBe(400);
+      }
+      // The refusal names the field at fault.
+      expect((await (await post(app, { prNumber: 3, description: 'x', line: 2.5 })).json()).error).toContain('line');
+      expect((await post(app, { prNumber: 3, description: 'x' }, { origin: 'https://evil.test' })).status).toBe(403);
+      expect(await store.ticketDefects('p', 'REL-1')).toEqual([]);
+    });
+
+    it('counts nothing on the overview while no definition of a serious defect is set, and says why (ORC-153)', async () => {
+      const { app, store } = await setup();
+      await reviewedPr(store);
+      expect((await post(app, { prNumber: 3, description: 'no empty-list case' })).status).toBe(200);
+      const o = await (await app.request('/api/overview?since=0&until=100')).json();
+      expect(o.aiReviewMisses).toEqual({ counted: false, why: expect.stringContaining('audit.serious_defect') });
+    });
+
+    it('gives the miss rate on the overview once the definition is set, over the defects entered under it', async () => {
+      const { app, store } = await setup({ seriousDefect: 'loses data' });
+      await reviewedPr(store);
+      await post(app, { prNumber: 3, description: 'header row missing', findingId: 'rv1:correctness:0' });
+      await post(app, { prNumber: 3, description: 'no empty-list case' });
+      const o = await (await app.request('/api/overview?since=0&until=100')).json();
+      expect(o.aiReviewMisses).toEqual({ counted: true, definition: 'loses data', defects: 2, missed: 1, rate: 0.5, leftOut: 0 });
     });
   });
 
@@ -759,7 +852,6 @@ describe('server', () => {
   });
 
   describe('UI password (non-loopback host)', () => {
-    const basic = (p: string) => ({ authorization: `Basic ${Buffer.from(`admin:${p}`).toString('base64')}` });
 
     it('requires Basic auth on the API, the UI and /oauth/start', async () => {
       const { app } = await setup({ uiPassword: 's3cret' });
@@ -801,6 +893,43 @@ describe('server', () => {
     });
   });
 
+  describe("behind the host's TLS reverse proxy (ORC-221)", () => {
+    // What a proxy that keeps the Host sends on: the public name, its own X-Forwarded-*, on plain HTTP.
+    const PUBLIC = 'factory.example.com';
+    const proxied = (headers: Record<string, string> = {}) => ({ host: PUBLIC, 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7', 'x-forwarded-host': PUBLIC, ...headers });
+    /** A write of the interface's through the proxy, behind the password: each test changes the headers it is about. */
+    const pause = async (url: string, headers: Record<string, string>) => {
+      const { app, submitted } = await setup({ uiPassword: 's3cret' });
+      return { status: (await app.request(`${url}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic('s3cret'), ...headers }) })).status, submitted };
+    };
+
+    it('takes the webhooks under the public name, on plain HTTP, the headers passed on as they came', async () => {
+      const { app, linearWebhook, githubWebhook } = await setup({ uiPassword: 's3cret' });
+      expect((await app.request(`http://${PUBLIC}/webhooks/linear`, { method: 'POST', body: '{}', headers: proxied() })).status).toBe(200);
+      await app.request(`http://${PUBLIC}/webhooks/github`, { method: 'POST', body: '{}', headers: proxied({ 'x-hub-signature-256': 'sha256=00' }) });
+      expect(githubWebhook).toHaveBeenCalledWith('{}', expect.objectContaining({ 'x-hub-signature-256': 'sha256=00', 'x-forwarded-proto': 'https' }));
+      expect(linearWebhook).toHaveBeenCalledTimes(1);
+    });
+
+    it("serves the interface's writes from the public HTTPS origin: the scheme never counts, only the name", async () => {
+      const { status, submitted } = await pause(`http://${PUBLIC}`, { origin: `https://${PUBLIC}` });
+      expect(status).toBe(200);
+      expect(submitted).toHaveLength(1);
+    });
+
+    it('trusts no X-Forwarded-Host: a forged one does not let another origin write', async () => {
+      const { status, submitted } = await pause(`http://${PUBLIC}`, { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' });
+      expect(status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+
+    it("refuses the interface's writes behind a proxy that rewrites the Host: it must pass the public name on", async () => {
+      const { status, submitted } = await pause('http://127.0.0.1:4100', { host: '127.0.0.1:4100', origin: `https://${PUBLIC}` });
+      expect(status).toBe(403);
+      expect(submitted).toEqual([]);
+    });
+  });
+
   describe('a foreign Host is refused: DNS rebinding (ORC-349)', () => {
     // A page of evil.example rebound to 127.0.0.1 sends Host and Origin of its own name: equal, so the Origin check passes.
     const as = (host: string, init: RequestInit = {}) => ({ ...init, headers: { ...(init.headers as Record<string, string>), host } });
@@ -825,8 +954,7 @@ describe('server', () => {
       expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
       expect((await app.request('/agent/issue/REL-1', as('host.containers.internal:4101', { headers: { authorization: 'Bearer tok' } }))).status).toBe(200);
       const guarded = await setup({ uiPassword: 's3cret' });
-      const basic = { authorization: `Basic ${Buffer.from('x:s3cret').toString('base64')}` };
-      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic }))).status).toBe(200);
+      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic('s3cret') }))).status).toBe(200);
     });
   });
 });

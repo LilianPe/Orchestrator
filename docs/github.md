@@ -29,7 +29,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 #### Creating the App
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
-2. Enter a name and a URL. **Webhook**: active, URL `<publicUrl>/webhooks/github`, secret = the value of `github.webhookSecret` (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). Without a public URL, leave it disabled: polling every 30 s tracks PRs on its own.
+2. Enter a name and a URL. **Webhook**: active, URL `<publicUrl>/webhooks/github`, secret = the value of `github.webhookSecret` (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). `<publicUrl>` is the server's HTTPS URL, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)); on a workstation, a tunnel (ngrok, `cloudflared tunnel`) in `publicUrl`, for development only (smee relays Linear's webhooks, not GitHub's). Without a public URL, leave it disabled: polling every 30 s tracks PRs on its own.
 3. Under **Repository permissions**, apply the manifest [`github-app-manifest.json`](github-app-manifest.json):
    - **Contents**: read/write;
    - **Pull requests**: read/write;
@@ -139,7 +139,7 @@ Without a GitHub webhook, it takes up to 30 s for a merge or CI to be taken into
 
 ## GitHub webhooks
 
-`POST /webhooks/github` receives the App's webhooks (ORC-134):
+`POST /webhooks/github` receives the App's webhooks (ORC-134), at `<publicUrl>/webhooks/github`. In production GitHub calls the server directly in HTTPS, through the host's reverse proxy or the optional `caddy` service (`--profile tls`), which pass the body unchanged to `factoryd` in plain HTTP: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221). On a workstation, a tunnel in `publicUrl` stands in for it.
 
 - **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhookSecret` in `config.yaml`, otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `relais up` reports it at startup;
 - **inbox written before the response** (ORC-147): a 200 means "written"; if the daemon goes down right after, even with `kill -9`, the event is processed at the next startup. If the write fails, the response is 500: GitHub does not resend a failed delivery on its own; redeliver it from the App's *Advanced* tab, or let polling catch it up;

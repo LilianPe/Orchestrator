@@ -29,9 +29,9 @@ export function ticketDuration(m: TicketMeasuresView, now: number, logical?: str
 
 export const reviewRoundsCell = (r: TicketMeasuresView['reviewRounds']): string => `${r.ai} AI · ${r.human} human`;
 
-/** The ticket's tokens, as the Flow shows them; `?` when its measures could not be read. */
+/** The ticket's tokens and share of its token budget, as the Flow shows them; `?` when its measures could not be read. */
 export const costCell = (m: TicketMeasuresView | null) =>
-  tokensCell({ measured: m !== null, tokens: m?.tokens ?? null, attemptsWithoutTokens: m?.attemptsWithoutTokens ?? 0, costUsd: m?.costUsd ?? 0 });
+  tokensCell({ measured: m !== null, tokens: m?.tokens ?? null, attemptsWithoutTokens: m?.attemptsWithoutTokens ?? 0, usageLimitShare: m?.usageLimitShare ?? null, costUsd: m?.costUsd ?? 0 });
 
 const key = (t: MeasuredTicketView) => `${t.projectId}/${t.ticketId}`;
 

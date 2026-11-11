@@ -10,7 +10,7 @@ Relais acts in Linear as an **agent**: an OAuth application installed with `acto
 |---|---|
 | Name | `relais`: this is the name that will be mentioned with `@`. |
 | Callback URL | `http://localhost:4100/oauth/callback`, or `<publicUrl>/oauth/callback` if `publicUrl` is set. The port follows `port` in `config.yaml`. |
-| Webhooks | Checked. URL: the smee channel created by `relais init` (`https://smee.io/…`), or `<publicUrl>/webhooks/linear`. |
+| Webhooks | Checked. URL: `<publicUrl>/webhooks/linear` on the server; on a workstation, the smee channel created by `relais init` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
 | Webhook categories | **Agent session events**, **Issues**, **Comments**. |
 
 Create the application, then copy into `relais init`:
@@ -38,12 +38,14 @@ On connection, Relais:
 
 The token is refreshed automatically. On later startups, Relais reconnects on its own with the tokens in `secrets.json`. `relais status` and the UI show whether Linear is connected.
 
-## 3. Webhooks: smee or public URL
+## 3. Webhooks: production and development
 
-Linear must be able to reach Relais. Two modes, set in `config.yaml`:
+Linear must be able to reach Relais. Set in `config.yaml`:
 
-- **smee relay (default on a workstation)**: `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `relais up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `relais init`.
-- **Public URL (server, tunnel)**: `publicUrl: https://relais.exemple.fr` and `relay: { kind: none }`. Linear calls `POST <publicUrl>/webhooks/linear` directly.
+- **Production, on the server**: `publicUrl: https://relais.exemple.fr` and `relay: { kind: none }`. Linear calls `POST <publicUrl>/webhooks/linear` directly, in HTTPS, through the server's reverse proxy: the host's own (nginx, Caddy…), or the optional `caddy` service of `compose.yaml` (`--profile tls`). `factoryd` listens in plain HTTP behind it. Setup and examples: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221).
+- **Development, on a workstation only** (never the server):
+  - **smee relay** (the default of `relais init`): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `relais up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `relais init`;
+  - **a tunnel** (ngrok, `cloudflared tunnel`): `publicUrl: <the tunnel's HTTPS URL>` and `relay: { kind: none }`, as on the server; the tunnel stands in for the reverse proxy, towards `http://localhost:4100`. Its URL changes with each tunnel unless it is reserved: update the application's webhook and callback URLs then.
 
 Every webhook is verified, whatever the mode:
 
@@ -56,7 +58,7 @@ Every webhook is verified, whatever the mode:
 - **acknowledgement** (ORC-171): the comment « Got it. », then the plan: see [Triggering](#triggering). A refusal by the matrix only receives the refusal.
 - **ticket not found** (ORC-302): a delegation, a mention, a command or a reply on a ticket the factory does not track yet rereads that ticket in Linear to keep its snapshot. If Linear can no longer find it (deleted in the meantime, in the trash or already purged; Linear responds the same way for a ticket the app can no longer see, access to its team removed), the event is journaled then ignored, with no retry: no run, and nothing is written in the session. If the ticket becomes visible again, it has to be delegated again or the mention repeated. A read error (network, Linear unavailable) makes it retry, like any processing error.
 
-A smee channel is public: anyone who knows the URL can read the events on it (ticket contents) and write to it. The signature prevents injecting fake events, not reading. For long-term use or sensitive data, prefer a public URL.
+A smee channel is public: anyone who knows the URL can read the events on it (ticket contents) and write to it. The signature prevents injecting fake events, not reading. It is a development option: in production, the server's public URL.
 
 **Limit of the smee relay: it does not forward the original bytes.** smee.io decodes the JSON received from Linear and only relays the decoded object; Relais re-encodes it (`JSON.stringify`) before verifying the signature. The result is identical to the signed bytes as long as Linear sends compact JSON produced by `JSON.stringify`, which is the case today (validated during the 11/10 acceptance run): accents, emojis, `\n`, quotes and ordinary numbers go through. It differs, and the webhook is refused with 401, if the body contains spaces or indentation, optional escapes (`\/`, `\u00e9`), numbers written differently from how `JSON.stringify` would write them (for example `1.0`, `1e3`, `-0`, `0.30000000000000001` instead of `0.3`, `9007199254740993`, `1000000000000000000000` instead of `1e+21`), duplicate keys or numeric keys out of `JSON.stringify` order. In that case, the log shows `relay: webhook rejected with 401 (…)` with the three possible causes (wrong secret, clock offset, non-reproducible body); if the secret and the clock are correct, switch to `publicUrl`.
 

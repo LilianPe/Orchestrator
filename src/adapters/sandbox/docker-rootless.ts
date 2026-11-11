@@ -81,6 +81,8 @@ export async function podmanCli(exec: Exec, cli: string): Promise<boolean> {
 
 const ATTEMPT = 'factory.attempt';
 const NETWORK = 'factory.network';
+/** A `custom` repository's hosts, comma-separated (a host name holds none): what `reattach` opens the egress with again (ORC-322). */
+const ALLOW = 'factory.allow';
 const INSTANCE = 'factory.instance';
 /** On a service's container (ORC-309): the key of the sandboxes it serves, `servicesOf` of their requests. */
 const SERVICES = 'factory.services';
@@ -171,6 +173,7 @@ interface Info {
   running: boolean;
   runId: string;
   network: NetworkLevel;
+  allow: string[];
   /** On the loopback of services (ORC-309): `--network container:<id>`. */
   joined: boolean;
 }
@@ -223,6 +226,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
     if (browser) throw new Error('container sandbox: no browser');
     const unknown = this.unprovided(services);
     if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
+    // Kept comma-separated on a label `inspect` prints in a tab-separated line: what would split it differently is refused.
+    const host = req.allow?.find((h) => !/^[^\s,]+$/.test(h));
+    if (host !== undefined) throw new Error(`container sandbox: unsupported host ${JSON.stringify(host)} in allow`);
     const mounts = [{ host: req.workspacePath, target: WORKSPACE_TARGET, readOnly: false }, ...req.mounts].map(mountArg);
     const key = req.servicesOf ?? req.runId;
 
@@ -341,6 +347,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return [
       'run', '-d',
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
+      ...(req.allow?.length ? ['--label', `${ALLOW}=${req.allow.join(',')}`] : []),
       ...(this.opts.instance ? ['--label', `${INSTANCE}=${this.opts.instance}`] : []),
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       ...limitArgs(this.opts.limits ?? defaultLimits()),
@@ -386,14 +393,11 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return c && this.seen(c);
   }
 
-  /**
-   * Its egress listens again at the same path, at the level on the container's label. `allow` is not kept:
-   * a `custom` repository's run taken back loses its hosts, which only narrows.
-   */
+  /** Its egress listens again at the same path, at the level and with the hosts on the container's labels. */
   async reattach(runId: string): Promise<Sandbox | undefined> {
     const c = (await this.byLabel(`${ATTEMPT}=${runId}`)).find((x) => x.running);
     if (!c) return undefined;
-    if (this.opts.egress && !this.opts.egress.isOpen(runId)) await this.opts.egress.open(runId, { level: c.network, allow: [] });
+    if (this.opts.egress && !this.opts.egress.isOpen(runId)) await this.opts.egress.open(runId, { level: c.network, allow: c.allow });
     return this.seen(c);
   }
 
@@ -461,14 +465,16 @@ export class ContainerSandboxProvider implements SandboxProvider {
 
   /** `inspect` rather than `ps --format`: its labels are a map under both engines. A missing id prints nothing and is skipped. */
   private async inspect(ids: string[]): Promise<Info[]> {
-    const format = `{{.Id}}\t{{.State.Running}}\t{{index .Config.Labels "${ATTEMPT}"}}\t{{index .Config.Labels "${NETWORK}"}}\t{{.HostConfig.NetworkMode}}`;
+    const format = `{{.Id}}\t{{.State.Running}}\t{{index .Config.Labels "${ATTEMPT}"}}\t{{index .Config.Labels "${NETWORK}"}}\t{{index .Config.Labels "${ALLOW}"}}\t{{.HostConfig.NetworkMode}}`;
     const r = await this.engine(['inspect', '--format', format, ...ids]);
     return r.stdout
       .split('\n')
       .filter(Boolean)
       .map((line) => {
-        const [id = '', running, runId = '', network, mode = ''] = line.split('\t');
-        return { id, running: running === 'true', runId, network: network as NetworkLevel, joined: mode.startsWith('container:') };
+        const [id = '', running, runId = '', network, allow = '', mode = ''] = line.split('\t');
+        // A label the container lacks prints as `<no value>` under some engines.
+        const hosts = allow === '<no value>' ? [] : allow.split(',').filter(Boolean);
+        return { id, running: running === 'true', runId, network: network as NetworkLevel, allow: hosts, joined: mode.startsWith('container:') };
       });
   }
 }

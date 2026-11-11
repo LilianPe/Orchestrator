@@ -18,6 +18,7 @@ import { runInit } from './init.js';
 import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
 import { runFlakyCommand } from './flaky.js';
+import { runGhostCommand } from './ghost.js';
 import { formatPlan, planRows } from './plan.js';
 import { runReplayCommand } from './replay.js';
 import { runRepairCommand } from './repair.js';
@@ -36,7 +37,8 @@ const USAGE = `Usage: factory <command>
   replay <journal>... replay exported journals (bit-for-bit regression, --what-if <workflow.yml>, --export <ID>)
   run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
   flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
-  baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub`;
+  baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub
+  ghost start|collect|judge|report|list  replay closed tickets without effects, and judge the PRs blind against the human ones`;
 
 /** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
 function uiAuth(): Record<string, string> {
@@ -51,6 +53,8 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'flaky') return runFlakyCommand(factoryHome(), process.argv.slice(3));
   // Its own options; Linear, GitHub and the store, no running instance needed.
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
+  // Its own options, on the store and the projects; GitHub through gh, no running instance needed (ORC-231).
+  if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
   // The repository's file and the budgets of factory.yml (ORC-216), its secrets left unresolved: no running instance needed.
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => ({ budgets: loadFactoryBudgets(factoryHome()) }) });
   const { positionals, values } = parseArgs({
