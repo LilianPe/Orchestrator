@@ -13,7 +13,7 @@ If the prompt carries a "Spec under review" block and a "Feedback to address" bl
 
 ## Do
 
-1. Read the whole ticket, then what it cites: the architecture docs and decisions of the repository (`docs/`, ADRs, `CLAUDE.md`), the linked tickets (`factory-agent issue <ID>`), and the code it touches (`grep -rn "<symbol>"`).
+1. Read the whole ticket, then what it cites: the architecture docs and decisions of the repository (`docs/`, ADRs, `CLAUDE.md`), and the code it touches (`Grep` for its symbols, `Glob` for its files). You have the read and search tools only. The linked tickets are out of your reach: judge from what the ticket says of them, and write in `assumed` what you take from them.
 2. Write the spec, in English, short and precise:
    - `goal`: what the ticket delivers, in two or three sentences.
    - `out_of_scope`: what it does not do, even if close (an empty list when nothing is worth saying).

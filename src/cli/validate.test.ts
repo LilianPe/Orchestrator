@@ -5,12 +5,15 @@ import { describe, expect, it } from 'vitest';
 import { FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { isAgentStep } from '../presets/preset.js';
+import { stepTools } from '../presets/tools.js';
 import { runValidateCommand } from './validate.js';
 
 const AGENTS = factoryDefault.steps.filter(isAgentStep).map((s) => s.id);
 /** factory.yml's budgets whose worst case on factory/default is its ticket cap exactly: 41 attempts of 1,000 tokens. */
 const budgeted = (perTicketTokens = 41_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
 const WITHIN = 'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, within budgets.per_ticket_tokens 41000.';
+/** What it shows of the default tools of each agent step (ORC-383). */
+const TOOLS = ['Tools of each agent step of factory/default:', ...factoryDefault.steps.filter(isAgentStep).map((s) => `- ${s.id}: ${stepTools(s)!.join(', ')}`)];
 
 function repo(config?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-validate-'));
@@ -40,6 +43,7 @@ describe('factory validate (ORC-209)', () => {
       '.factory/config.yml valid: it only adds checks or prohibitions to the baseline.',
       'Warning, ignored entries (a branch that took untrusted content is refused until they are fixed):',
       '- sensitive_paths[1]: "../x": a path from the repository root is expected (no drive, no `..`, no absolute path in a brace)',
+      ...TOOLS,
       WITHIN,
     ]);
   });
@@ -136,7 +140,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
   it('refuses a preset whose worst case exceeds the ticket cap', () => {
     expect(run(repo(), budgeted(40_999))).toEqual({
       code: 1,
-      out: ['no .factory/config.yml: the factory/default baseline applies as is.', 'Budgets of factory/default refused:', "- worst case 41000 tokens per ticket exceeds budgets.per_ticket_tokens 40999: lower a step's per_step_tokens or a counter of factory/default"],
+      out: ['no .factory/config.yml: the factory/default baseline applies as is.', ...TOOLS, 'Budgets of factory/default refused:', "- worst case 41000 tokens per ticket exceeds budgets.per_ticket_tokens 40999: lower a step's per_step_tokens or a counter of factory/default"],
     });
   });
 
@@ -152,7 +156,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
   it('refuses while the caps are still to set, rather than passing', () => {
     const { code, out } = run(repo(), {});
     expect(code).toBe(1);
-    expect(out.slice(1)).toEqual([
+    expect(out.slice(1 + TOOLS.length)).toEqual([
       'Budgets of factory/default refused:',
       ...AGENTS.map((s) => `- budgets.per_step_tokens.${s}: not set; the worst case of factory/default has no bound without it`),
       '- budgets.per_ticket_tokens: not set; the worst case of factory/default has no bound without it',
@@ -165,7 +169,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
     it('says so, and still validates the rest', () => {
       expect(run(repo(), { ...budgeted(), maxDiff: 'off' })).toEqual({
         code: 0,
-        out: ['no .factory/config.yml: the factory/default baseline applies as is.', 'Disabled in factory.yml: max_diff.', WITHIN],
+        out: ['no .factory/config.yml: the factory/default baseline applies as is.', 'Disabled in factory.yml: max_diff.', ...TOOLS, WITHIN],
       });
     });
 
@@ -175,6 +179,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
         out: [
           'no .factory/config.yml: the factory/default baseline applies as is.',
           'Disabled in factory.yml: budgets.per_ticket_tokens.',
+          ...TOOLS,
           'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, under no ticket cap.',
         ],
       });
@@ -189,6 +194,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
         out: [
           'no .factory/config.yml: the factory/default baseline applies as is.',
           'Disabled in factory.yml: max_diff, budgets.per_step_tokens, budgets.per_ticket_tokens.',
+          ...TOOLS,
           'No worst case of factory/default in tokens: budgets.per_step_tokens is disabled.',
         ],
       });
@@ -207,5 +213,36 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
     const code = runValidateCommand({ repoPath: repo(), out: (l) => out.push(l), factoryYml: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } });
     expect(code).toBe(1);
     expect(out.slice(1)).toEqual(['factory.yml refused:', '- unreadable: EACCES: permission denied']);
+  });
+});
+
+describe('factory validate: the tools of each step (ORC-383)', () => {
+  it("shows each agent step's tools: read for the steps that read, write for the steps that write", () => {
+    const { code, out } = run(repo());
+    expect(code).toBe(0);
+    expect(out).toContain('- review: Read, Grep, Glob');
+    expect(out).toContain('- spec_draft: Read, Grep, Glob');
+    expect(out).toContainEqual(expect.stringMatching(/^- build: Read, Grep, Glob, Edit, Write, .*Bash/));
+  });
+
+  it("shows factory.yml's tools narrowed by the repository's, and warns of a tool the repository names that factory.yml does not give", () => {
+    const yml = { ...budgeted(), tools: { perStep: { build: ['Read', 'Grep', 'Edit', 'Bash'] } } };
+    const { code, out } = run(repo('tools: { per_step: { build: [Read, Edit, Write] } }\n'), yml);
+    expect(code).toBe(0);
+    expect(out).toContain('- build: Read, Edit');
+    expect(out).toContain('Warning, tools the repository names that factory.yml does not give the step (ignored):');
+    expect(out).toContain('- tools.per_step.build: Write');
+  });
+
+  it('refuses a factory.yml that gives a step more than it may have, as the daemon does', () => {
+    const { code, out } = run(repo(), { ...budgeted(), tools: { perStep: { review: ['Read', 'Edit'] } } });
+    expect(code).toBe(1);
+    expect(out.slice(1)).toEqual(['factory.yml refused:', expect.stringMatching(/^- tools\.per_step\.review: Edit: .*read-only/)]);
+  });
+
+  it('refuses a repository file that adds a write tool to review', () => {
+    const { code, out } = run(repo('tools: { per_step: { review: [Read, Bash] } }\n'));
+    expect(code).toBe(1);
+    expect(out).toEqual(['.factory/config.yml refused:', expect.stringMatching(/^- tools\.per_step\.review: Bash: /)]);
   });
 });

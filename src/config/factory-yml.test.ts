@@ -132,6 +132,19 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('audit: { definition: x }')).toContain('audit.definition: unknown key');
   });
 
+  it("reads the tools of each step, and hands them to the agent steps (ORC-383)", () => {
+    const yml = parseFactoryYml('tools: { per_step: { build: [Read, Edit, Write], review: [Read] } }', ENV);
+    expect(yml.tools).toEqual({ perStep: { build: ['Read', 'Edit', 'Write'], review: ['Read'] } });
+    expect(stepSettings(yml)).toEqual({ tools: { perStep: { build: ['Read', 'Edit', 'Write'], review: ['Read'] } } });
+    expect(parseFactoryYml('concurrency: 1', ENV).tools).toBeUndefined();
+  });
+
+  it('refuses tools that are not a list of names per step, and an unknown key of tools (ORC-383)', () => {
+    expect(violations('tools: { per_step: { build: Read } }').join()).toContain('tools.per_step');
+    expect(violations('tools: { per_step: { build: [""] } }').join()).toContain('tools.per_step');
+    expect(violations('tools: { build: [Read] }')).toContain('tools.build: unknown key');
+  });
+
   it('reads how a human message is acknowledged, a comment by default (ORC-380)', () => {
     expect(parseFactoryYml('acknowledge: reaction', ENV).acknowledge).toBe('reaction');
     expect(parseFactoryYml('acknowledge: comment', ENV).acknowledge).toBe('comment');
@@ -192,11 +205,11 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(loadFactoryYml(home, ENV)).toEqual({ concurrency: 2 });
   });
 
-  it('gives factory validate its budgets and max_diff alone, the secrets of the file left unresolved (ORC-216, ORC-381)', () => {
+  it('gives factory validate its budgets, max_diff and tools alone, the secrets of the file left unresolved (ORC-216, ORC-381, ORC-383)', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
     expect(loadFactoryLimits(home)).toEqual({});
-    writeFileSync(join(home, 'factory.yml'), 'linear:\n  client_secret: env:NOT_IN_THIS_SHELL\nmax_diff: off\nbudgets:\n  per_ticket_tokens: 1000\n  per_step_tokens: { build: 10 }\n');
-    expect(loadFactoryLimits(home)).toEqual({ maxDiff: 'off', budgets: { perTicketTokens: 1000, perStepTokens: { build: 10 } } });
+    writeFileSync(join(home, 'factory.yml'), 'linear:\n  client_secret: env:NOT_IN_THIS_SHELL\nmax_diff: off\nbudgets:\n  per_ticket_tokens: 1000\n  per_step_tokens: { build: 10 }\ntools:\n  per_step: { build: [Read, Edit] }\n');
+    expect(loadFactoryLimits(home)).toEqual({ maxDiff: 'off', budgets: { perTicketTokens: 1000, perStepTokens: { build: 10 } }, tools: { perStep: { build: ['Read', 'Edit'] } } });
     writeFileSync(join(home, 'factory.yml'), 'budgets:\n  per_ticket_tokens: -1\nmax_diff: { files: 30 }\n');
     // Both faults at once, as the daemon says them.
     expect(() => loadFactoryLimits(home)).toThrow(expect.objectContaining({ violations: [expect.stringContaining('budgets.per_ticket_tokens'), expect.stringContaining('max_diff')] }));

@@ -109,9 +109,9 @@ import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type
 import { changelogEntry, deliveredBody, mergedWork, type MergedPr } from './changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
-import { agentPolicy, type EgressPolicy } from '../network/levels.js';
+import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { READ_TOOLS } from '../presets/preset.js';
+import { READ_TOOLS } from '../presets/tools.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -3089,8 +3089,8 @@ export class Orchestrator {
       // Its lease starts here: until now the launch is alive by itself. A failure leaves it to the next beat.
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
-      // A review job of a version frozen before ORC-367 has its lens, not yet its tools.
-      const tools = job.tools ?? (job.lens ? READ_TOOLS : undefined);
+      // A review job of a version frozen before ORC-367 has its lens, not yet its tools. The repository's list only restricts them (ORC-383).
+      const tools = runTools(job.tools ?? (job.lens ? READ_TOOLS : undefined), config, job.step, job.network);
       const handle = this.d.runner.start({
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,

@@ -2,7 +2,7 @@
 
 A repository can declare its commands, its sensitive paths and its limits to the factory in `.factory/config.yml`, at the root. The file is optional: without it, the `factory/default` baseline applies as is.
 
-**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). `budgets.per_ticket_tokens` at each launch (ORC-340) and by `factory validate`'s worst case (ORC-216). `visual_paths` on each `verify` of a job that writes the commit (ORC-176). `services` at launch and on each `verify` (ORC-309, see [Services](#services)). `max_diff` on each `verify` (ORC-333), not yet on the publication (ORC-125). `dependencies.allow` on each `verify` (ORC-371, see [Dependencies](#dependencies)). `branches` at the launch of a run that makes a worktree, and by `factory plan` and `factory doctor` (ORC-283, see [Branch names](#branch-names)). Read and validated, but not yet applied: `feature_flags`.
+**Status (ORC-209).** The schema, `factory validate` and reading by the daemon exist (see [When and where it is read](#when-and-where-it-is-read)). Applied to runs: `setup`, `env`, `setup_secrets` and `network` at launch, `commands`, `setup` and `env` on each `verify`, `sensitive_paths` on each `verify` and publication of a branch an untrusted run worked on, on what it changed since (ORC-338). `budgets.per_ticket_tokens` at each launch (ORC-340) and by `factory validate`'s worst case (ORC-216). `visual_paths` on each `verify` of a job that writes the commit (ORC-176). `services` at launch and on each `verify` (ORC-309, see [Services](#services)). `max_diff` on each `verify` (ORC-333), not yet on the publication (ORC-125). `dependencies.allow` on each `verify` (ORC-371, see [Dependencies](#dependencies)). `branches` at the launch of a run that makes a worktree, and by `factory plan` and `factory doctor` (ORC-283, see [Branch names](#branch-names)). `tools.per_step` at each launch and by `factory validate` (ORC-383). Read and validated, but not yet applied: `feature_flags`.
 
 ## When and where it is read
 
@@ -28,6 +28,7 @@ feature_flags: { provider: openfeature }    # optional
 visual_paths: ["src/components/**", "app/**"]
 network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (default) | custom; `allow` for custom only
 dependencies: { allow: { npm: [zod, "@types/node"], pypi: [requests] } }   # the packages a branch may add; none without a list
+tools: { per_step: { build: [Read, Grep, Glob, Edit, Write] } }          # can only restrict a step's tools
 branches: { pattern: "{type}/{id}-{slug}", types: { Bug: fix, default: feat } }   # the default
 ```
 
@@ -47,6 +48,7 @@ branches: { pattern: "{type}/{id}-{slug}", types: { Bug: fix, default: feat } } 
 | `feature_flags.provider` | text | none | Feature flag provider. |
 | `visual_paths` | list of patterns | `[]` | Paths that require visual proof (ORC-176): a diff that touches one makes `verify` take captures before and after ([workflow.md](workflow.md#jobs)). Matched as `sensitive_paths`, from the root. |
 | `network` | `{ level, allow }` | `limited`, `[]` | The agent's network level: `none`, `limited` or `custom`. See [The agent's network](#the-agents-network). |
+| `tools.per_step` | `step: [tool, …]` | none | The built-in tools of an agent step (ORC-383): the run gets only those that `factory.yml` or the preset also gives the step ([tools per step](preset.md#the-agents-tools-per-step-orc-383)), so a list only restricts. Refused: a step that has no agent, a write tool or a shell for a read-only step (`intake`, `clarify`, `spec_draft`, `review`), `WebFetch` below network `limited` (or with `network.level: none`), `WebSearch`, a tool the factory does not know. |
 | `dependencies.allow` | `{ npm, pypi }`, lists of names | none | The packages a branch may add, exact names (PyPI compared after normalisation, `Typing_Extensions` is `typing-extensions`). An ecosystem without a list allows nothing there. See [Dependencies](#dependencies). |
 | `branches` | `{ pattern, types }` | `{type}/{id}-{slug}`, `{ Bug: fix, default: feat }` | How the factory names a ticket's branch. See [Branch names](#branch-names). |
 

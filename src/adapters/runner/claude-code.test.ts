@@ -632,6 +632,16 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(envs[1]).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
   });
 
+  it("names the run's tools for the PreToolUse hook beside `--tools`, and none for a run with every tool (ORC-383)", async () => {
+    const { sandboxes, id, spawnCommand } = await sandbox();
+    const { r } = runner(sandboxes);
+    await r.start(req({ sandboxId: id, cwd: '/work', tools: ['Read', 'Grep'] }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    await r.start(req({ sandboxId: id, cwd: '/work', runId: 'r-2' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
+    const envs = spawnCommand.mock.calls.map((c) => (c as Parameters<SandboxProvider['spawnCommand']>)[2]!.env);
+    expect(envs[0]).toMatchObject({ FACTORY_TOOLS: 'Read,Grep' });
+    expect(envs[1]).not.toHaveProperty('FACTORY_TOOLS');
+  });
+
   it('names no credential at all when there is none, and the API key never', async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
+import { WRITE_TOOLS } from '../../src/presets/tools.js';
 import { createHarness } from '../helpers/harness.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206), as the pack's own comment says. */
@@ -48,8 +49,8 @@ describe('intake, the first step (ORC-206)', () => {
     expect(intake!.cwd).toBe(`/tmp/factory-fake/${h.project.id}/_trunk/${intake!.runId}`);
     expect(h.workspaces.prepared[0]).toMatchObject({ kind: 'trunk-readonly', runId: intake!.runId });
     expect(h.workspaces.released).toContain(intake!.cwd);
-    // dev, which writes, has every tool, in the ticket's worktree.
-    expect(dev).not.toHaveProperty('tools');
+    // dev, which writes, has the write tools, in the ticket's worktree (ORC-383).
+    expect(dev!.tools).toEqual(WRITE_TOOLS);
     expect(dev!.cwd).toBe(`/tmp/factory-fake/${h.project.id}/REL-1`);
   });
 

@@ -5,6 +5,8 @@ import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { isPackageName, type AllowList } from '../checks/deps.js';
 import { MaxDiffConfigError, repoMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { perStepToolViolations } from '../presets/tools.js';
 import { branchNamingErrors, DEFAULT_BRANCH_NAMING, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -37,6 +39,11 @@ export interface RepoConfig {
   visualPaths: string[];
   /** The packages a branch may add (`factory/dependances`, ORC-371): exact names per ecosystem, none allowed where there is no list. */
   dependencies: { allow: AllowList };
+  /**
+   * The built-in tools of each agent step (ORC-383): they only restrict what `factory.yml` or the preset gives the step (`narrowTools`
+   * at the launch); a tool the step may never have is refused here. Absent: the step keeps its tools.
+   */
+  tools?: { perStep: Record<string, readonly string[]> };
   /** How the factory names the ticket's branch (ORC-283): the team's convention, `{type}/{id}-{slug}`, unless the repository sets its own. */
   branches: BranchNaming;
 }
@@ -80,7 +87,7 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches'];
+const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
 const strings = z.array(z.string().min(1));
 
 const VARIABLE = /^[A-Z][A-Z0-9_]*$/;
@@ -175,6 +182,10 @@ export function parseRepoConfig(text: string | undefined, o: { defaultBranch?: s
       if (!isPackageName(ecosystem, name)) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is not an exact package name; patterns are refused`);
     });
   }
+  const tools = read('tools', z.strictObject({ per_step: z.record(z.string(), strings) }), '`{ per_step: { step: [tool, …] } }` expected', 'a list of tool names per step expected');
+  // A repository at none runs every step at none: no WebFetch. Its ceiling (`repoNetworkCeiling`) is otherwise its steps' own.
+  const repoNone = network.level === 'none';
+  violations.push(...perStepToolViolations(tools?.per_step ?? {}, factoryDefault.steps, factoryDefault.name, (s) => (repoNone ? 'none' : s.network ?? 'none')));
   const branches = branchesOf(r['branches'], violations, o.defaultBranch);
   let maxDiff: Partial<MaxDiff> = {};
   try {
@@ -201,6 +212,7 @@ export function parseRepoConfig(text: string | undefined, o: { defaultBranch?: s
     ...(featureFlags ? { featureFlags } : {}),
     visualPaths: visualPaths ?? [],
     dependencies: { allow: dependencies?.allow ?? {} },
+    ...(tools ? { tools: { perStep: tools.per_step } } : {}),
     branches,
   };
 }

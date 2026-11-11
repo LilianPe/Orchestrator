@@ -186,8 +186,9 @@ export interface JobSpec {
   /** The network level of the job's preset step (ORC-183), or the job's own out of the preset (ORC-182), narrowed by the repository's at the launch. Absent: the repository's. */
   network?: NetworkLevel;
   /**
-   * The built-in tools of the job's preset step when the step is read-only (`stepTools`, ORC-367): `Read`, `Grep` and `Glob`,
-   * refused anything else by the run itself, whatever its skill says; a job out of the preset by its `read_only` (ORC-182). Absent: every tool.
+   * The built-in tools of the job's preset step (ORC-383): `factory.yml`'s `tools.per_step`, else the step's default (`stepTools`): `Read`,
+   * `Grep` and `Glob` for a read-only step (ORC-367), the write tools otherwise; refused anything else by the run itself, whatever its
+   * skill says. A job out of the preset by its `read_only` (ORC-182). Absent: every tool (a job a project adds, a version frozen before).
    */
   tools?: readonly string[];
   input?: InputKind;

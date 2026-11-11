@@ -46,7 +46,7 @@ The two instance files are read **at startup** of `relais up`: restart after a c
 
 Variables reserved for tests (no effect on the daemon): `LINEAR_API_KEY` (live test of the Linear queries), `FACTORY_E2E=1` (pack test with the real `claude`). See [`acceptance.md`](acceptance.md#optional-live-checks).
 
-Variables **set by Relais** in each run's environment (do not set them yourself): `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_REFUSALS_LOG` when the daemon has it (in a sandbox, always, pointing to the run's directory), `FACTORY_READ_MAX_LINES` when `factory.yml` declares `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` when a file must be read in full and, for the `dev` queue, `PORT`. See ["What does not leave the daemon"](#what-does-not-leave-the-daemon). In a container, these paths are the container's: `RELAIS_ROOT=/factory/app` (Relais's `bin/` and what it needs, mounted read-only), `RELAIS_KNOWLEDGE=/factory/knowledge` (read-only), and a `PATH` specific to the container, never the host's.
+Variables **set by Relais** in each run's environment (do not set them yourself): `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT`, `PATH`, `FACTORY_REFUSALS_LOG` when the daemon has it (in a sandbox, always, pointing to the run's directory), `FACTORY_READ_MAX_LINES` when `factory.yml` declares `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` when a file must be read in full, `FACTORY_TOOLS` with the run's built-in tools (the hook refuses any other, ORC-383) and, for the `dev` queue, `PORT`. See ["What does not leave the daemon"](#what-does-not-leave-the-daemon). In a container, these paths are the container's: `RELAIS_ROOT=/factory/app` (Relais's `bin/` and what it needs, mounted read-only), `RELAIS_KNOWLEDGE=/factory/knowledge` (read-only), and a `PATH` specific to the container, never the host's.
 
 ## `config.yaml`
 
@@ -174,6 +174,7 @@ claude:
   effort: { default: medium, per_step: { spec_draft: high, review: high } }
 concurrency: 1
 budgets: { max_turns: { build: 150, fix: 60, review: 25 }, on_usage_limit: wait }
+tools: { per_step: { build: [Read, Grep, Glob, Edit, Write, Bash, Skill] } }   # a step's built-in tools, in place of the preset's
 repos:
   - linear_team: ORC
     github: LilianPe/Orchestrator
@@ -194,6 +195,7 @@ acknowledge: reaction              # how a human message is acknowledged (ORC-38
 | `max_diff` | **Applied** (ORC-381): only `off` exists. It disables the baseline of `factory/taille-du-diff` (15 files, 400 lines outside tests) in `verify`: a diff is then bounded only where the repository's own `max_diff` sets a bound. Without it, the baseline applies. A repository's `.factory/config.yml` cannot set `off`. |
 | `repos` | **`env` and `secrets` applied** (ORC-211), the entry being found through the project's `origin` remote: see [`repository-configuration.md`](repository-configuration.md#variables-and-secrets). For the rest, `projects[].repoPath` in `config.yaml` remains the working copy as long as the runner does not clone by itself (ORC-204). |
 | `audit` | **Applied** (ORC-229): `serious_defect` is the definition of a serious defect, as written (a non-empty text). Absent by default, and until ORC-153 decides it: the defects entered on the audit sheets are kept but none is counted, and the Overview shows the AI reviewers' miss rate as **not counted**, with why ([interface](interface-and-security.md)). Each defect is kept with the definition in force when it was entered; only those entered under the definition in force are counted. It counts from the next startup. |
+| `tools` | **Applied** (ORC-383): `per_step` gives an agent step its built-in tools in place of the preset's ([tools per step](preset.md#the-agents-tools-per-step-orc-383)). The daemon refuses to start on a list that gives a step more than it may have: a write tool or a shell to a read-only step (`intake`, `clarify`, `spec_draft`, `review`), `WebFetch` to a step below network `limited`, `WebSearch`, or a tool the factory does not know. A repository's `.factory/config.yml` can only restrict the list. It counts from the next startup, for the tickets that start then. |
 | `acknowledge` | **Applied** (ORC-380): `comment` (the default) or `reaction`. With `reaction`, a human message gets 👀 on its Linear comment in place of the ack's comment; a message with no comment to react on, or a reaction Linear refuses, gets the comment, logged. A delegation has no message: it keeps its comment « Got it. ». The session's `thought` stays in both modes. See [`linear.md`](linear.md#triggering). It counts from the next startup. |
 | `read_guard` | **Applied**: `max_lines` (positive integer, 350 without this key) is the number of lines beyond which the pack's hook refuses a full read ([ORC-279](pack-and-skills.md#full-read-of-a-large-file)). It counts from the next startup. |
 

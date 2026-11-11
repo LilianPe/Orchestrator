@@ -1,5 +1,6 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { repoNetworkCeiling, type RepoConfig } from '../config/repo-config.js';
+import { narrowTools } from '../presets/tools.js';
 
 /** Network levels of the MVP doc, narrowest first: a step can only narrow the repository's level. */
 export const NETWORK_RANK: Record<NetworkLevel, number> = { none: 0, 'claude-api': 1, limited: 2, full: 3 };
@@ -252,6 +253,14 @@ export const LIMITED = [
 const READ = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** The run's policy for one step: the step narrows the repository's level, `full` is refused (setup only). */
+/**
+ * The built-in tools a run of `step` gets (ORC-383): `tools`, its job's, kept to the repository's list for the step and without
+ * WebFetch where its network, narrowed by the repository's, does not reach. What the launch hands out and `factory validate` shows.
+ */
+export function runTools(tools: readonly string[] | undefined, config: RepoConfig, step: string | undefined, network?: NetworkLevel): readonly string[] | undefined {
+  return narrowTools(tools, step === undefined ? undefined : config.tools?.perStep[step], stepPolicy(config, network).level);
+}
+
 export function stepPolicy(config: RepoConfig, step: NetworkLevel = 'limited'): EgressPolicy {
   if (step === 'full') throw new Error('network full is reserved for setup, never for the agent');
   const ceiling = repoNetworkCeiling(config);

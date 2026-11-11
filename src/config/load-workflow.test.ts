@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { factoryDefault } from '../presets/factory-default.js';
+import { READ_TOOLS, WRITE_TOOLS } from '../presets/tools.js';
 import { loadWorkflow, presetBound, WorkflowError } from './load-workflow.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
@@ -173,14 +174,39 @@ on:
       expect(jobs['ask']!.network).toBe('claude-api');
     });
 
-    it('gives a read-only step (intake, clarify) and the AI review the read and search tools only; every other job all of them (ORC-367)', () => {
+    it('gives a read-only step (intake, spec_draft) and the AI review the read and search tools only; a step that writes the write tools (ORC-367, ORC-383)', () => {
       const { jobs } = loadWorkflow({ packDir });
-      expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: ['Read', 'Grep', 'Glob'] });
-      for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read', 'Grep', 'Glob']);
-      for (const name of ['dev', 'tests', 'dev-feedback']) expect(jobs[name], name).not.toHaveProperty('tools');
+      expect(jobs['intake']).toMatchObject({ step: 'intake', workspace: 'trunk-readonly', tools: READ_TOOLS });
+      // It writes the spec through submit_result, in the ticket's worktree: read-only all the same.
+      expect(jobs['spec']).toMatchObject({ step: 'spec_draft', workspace: 'worktree', tools: READ_TOOLS });
+      for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(READ_TOOLS);
+      for (const name of ['dev', 'tests', 'dev-feedback', 'fix-ci', 'rebase']) expect(jobs[name]!.tools, name).toEqual(WRITE_TOOLS);
       // A step that writes no code is not read-only for that: after_merge keeps its shell.
       const after = 'version: 1\njobs:\n  after: { step: after_merge, queue: dev, model: sonnet, workspace: worktree, skill: "factory:dev" }\n';
-      expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']).not.toHaveProperty('tools');
+      expect(loadWorkflow({ packDir, projectFile: projectFile(after) }).jobs['after']!.tools).toEqual(WRITE_TOOLS);
+      // Out of the preset: the answer agent reads, a job a project adds keeps every tool.
+      expect(jobs['ask']!.tools).toEqual(READ_TOOLS);
+      expect(loadWorkflow({ packDir, projectFile: projectFile(OWN_JOB) }).jobs['own']).not.toHaveProperty('tools');
+    });
+
+    it("takes a step's tools from factory.yml: build without Bash has no Bash (ORC-383)", () => {
+      const { jobs } = loadWorkflow({ packDir, settings: { tools: { perStep: { build: ['Read', 'Grep', 'Glob', 'Edit', 'Write'], review: ['Read'] } } } });
+      for (const name of ['dev', 'tests']) expect(jobs[name]!.tools, name).toEqual(name === 'dev' ? ['Read', 'Grep', 'Glob', 'Edit', 'Write'] : WRITE_TOOLS);
+      expect(jobs['dev']!.tools).not.toContain('Bash');
+      for (const name of ['review', 'review-security']) expect(jobs[name]!.tools, name).toEqual(['Read']);
+      expect(loadWorkflow({ packDir, settings: { tools: { perStep: { build: [...WRITE_TOOLS, 'WebFetch'] } } } }).jobs['dev']!.tools).toContain('WebFetch');
+    });
+
+    it('refuses in factory.yml a tool a step cannot have: a write tool on a read-only step, WebFetch below network limited, an unknown step (ORC-383)', () => {
+      const load = (perStep: Record<string, string[]>) => () => loadWorkflow({ packDir, settings: { tools: { perStep } } });
+      expect(load({ review: ['Read', 'Write'] })).toThrow(/factory\.yml: tools\.per_step\.review: Write: .*read-only/);
+      expect(load({ spec_draft: ['Read', 'Bash'] })).toThrow(/tools\.per_step\.spec_draft: Bash/);
+      expect(load({ review: ['Read', 'WebFetch'] })).toThrow(/tools\.per_step\.review: WebFetch/);
+      expect(load({ build: ['WebSearch'] })).toThrow(/tools\.per_step\.build: WebSearch/);
+      expect(load({ buid: ['Read'] })).toThrow(/tools\.per_step\.buid: not an agent step/);
+      expect(load({ spec_check: ['Read'] })).toThrow(/tools\.per_step\.spec_check: not an agent step/);
+      // Every step at once, as factory validate lists them.
+      expect(load({ intake: ['Bash'], review: ['Edit'] })).toThrow(/intake: Bash[\s\S]*review: Edit/);
     });
 
     it('takes the after_merge step on a merge only: no other event carries a merged PR (ORC-197)', () => {

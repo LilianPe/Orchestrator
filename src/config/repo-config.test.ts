@@ -262,6 +262,28 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
     });
   });
 
+  describe('the tools of a step, which a repository can only restrict (ORC-383)', () => {
+    it("reads a list per agent step", () => {
+      expect(parseRepoConfig('tools: { per_step: { build: [Read, Grep, Glob, Edit, Write], review: [Read, Grep] } }\n').tools).toEqual({
+        perStep: { build: ['Read', 'Grep', 'Glob', 'Edit', 'Write'], review: ['Read', 'Grep'] },
+      });
+      expect(parseRepoConfig(undefined)).not.toHaveProperty('tools');
+    });
+
+    it('refuses a write tool on a read-only step, and names it', () => {
+      expect(violations('tools: { per_step: { review: [Read, Edit] } }\n')).toEqual([expect.stringMatching(/^tools\.per_step\.review: Edit: .*read-only/)]);
+      expect(violations('tools: { per_step: { intake: [Bash] } }\n')).toEqual([expect.stringMatching(/^tools\.per_step\.intake: Bash: /)]);
+    });
+
+    it('refuses WebFetch on a repository at network none, a tool the factory never gives, and a step that has no agent', () => {
+      expect(violations('network: { level: none }\ntools: { per_step: { build: [Read, WebFetch] } }\n')).toEqual([expect.stringMatching(/^tools\.per_step\.build: WebFetch: .*none/)]);
+      expect(parseRepoConfig('tools: { per_step: { build: [Read, WebFetch] } }\n').tools).toEqual({ perStep: { build: ['Read', 'WebFetch'] } });
+      expect(violations('tools: { per_step: { build: [WebSearch, Task] } }\n')).toHaveLength(2);
+      expect(violations('tools: { per_step: { verify: [Read] } }\n')).toEqual([expect.stringMatching(/^tools\.per_step\.verify: not an agent step of factory\/default/)]);
+      expect(violations('tools: { per_step: { build: Read } }\n')).toEqual([expect.stringMatching(/^tools/)]);
+    });
+  });
+
   it('reads an empty value as absent, extends included', () => {
     expect(parseRepoConfig('extends:\nsetup:\n').extends).toBe('factory/default@1.0');
   });

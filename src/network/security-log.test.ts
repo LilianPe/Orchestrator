@@ -111,6 +111,22 @@ describe('the security log of a run (ORC-296)', () => {
     expect(refusalSummary(log)).not.toContain(big);
   });
 
+  it("takes a tool the real hook refused off the step's list, whatever the tool, and no other rule on such a tool (ORC-383)", () => {
+    const paths = files(undefined, undefined);
+    const call = JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: '/work/s3cret-name.ts', old_string: 'a', new_string: 'b' } });
+    const env = { PATH: process.env['PATH'], FACTORY_REFUSALS_LOG: paths.refusals, FACTORY_TICKET: RUN.ticketId, FACTORY_TOOLS: 'Read,Grep,Glob' };
+    const hook = spawnSync(process.execPath, [HOOK], { input: call, encoding: 'utf8', env });
+    expect(hook.stdout).toContain('"permissionDecision":"deny"');
+    const log = readSecurityLog(RUN, paths);
+    expect(log).toMatchObject({ refusals: [{ tool: 'Edit', rule: 'tool-not-allowed' }], skipped: { refusals: 0 } });
+    expect(refusalSummary(log)).not.toContain('s3cret-name');
+    // A name the agent's log chose is never kept: only a built-in tool's, any other as `mcp` or `other`.
+    const lines = [refusalLine({ tool: 'Edit', rule: 'push' }), refusalLine({ tool: 'ghp_s3cret', rule: 'tool-not-allowed' }), refusalLine({ tool: 'mcp__other__s3cret', rule: 'tool-not-allowed' })];
+    const forged = readSecurityLog(RUN, files(undefined, lines));
+    expect(forged).toMatchObject({ refusals: [{ tool: 'other' }, { tool: 'mcp' }], skipped: { refusals: 1 } });
+    expect(JSON.stringify(forged)).not.toContain('s3cret');
+  });
+
   it('still reads a forge-read refusal the hook wrote before ORC-193: a genuine line, not a forged one', () => {
     const log = readSecurityLog(RUN, files(undefined, [refusalLine({ rule: 'forge-read' })]));
     expect(log).toMatchObject({ refusals: [{ rule: 'forge-read' }], skipped: { refusals: 0 } });

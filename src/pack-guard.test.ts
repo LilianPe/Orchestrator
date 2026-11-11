@@ -37,10 +37,10 @@ const bash = (command: string, env?: Record<string, string>) => guard({ command 
 const sample = (rule: string) => rule.slice(5, -1).replace(/:\*$/, '').replaceAll('*', '').replace(/\s+/g, ' ').trim();
 
 describe('PreToolUse guard of the standard pack', () => {
-  it('is registered for Bash, WebSearch and Read', () => {
+  it("is registered for every tool: it also refuses a tool off the step's list (ORC-383)", () => {
     const hooks = JSON.parse(readFileSync(join(pack, 'hooks/hooks.json'), 'utf8')).hooks.PreToolUse;
     expect(hooks).toEqual([
-      { matcher: 'Bash|WebSearch|Read', hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use.mjs"' }] },
+      { matcher: '*', hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use.mjs"' }] },
     ]);
   });
 
@@ -174,6 +174,34 @@ describe('PreToolUse guard of the standard pack', () => {
     expect(readFileSync(join(dir, 'factory-refusals.jsonl'), 'utf8')).toContain('"rule":"rm-root"');
     const file = join(dir, 'factory-refusals.jsonl');
     expect(guard({ command: 'rm -rf /' }, { FACTORY_REFUSALS_LOG: join(file, 'not-a-dir', 'x.jsonl') }).denied).toBe(true);
+  });
+});
+
+describe("a tool off the step's list (ORC-383)", () => {
+  const tools = { FACTORY_TOOLS: 'Read,Grep,Glob' };
+
+  it('refuses a tool the step does not have, says so, and journals it', () => {
+    const r = guard({ file_path: '/work/a.ts', old_string: 'a', new_string: 'b' }, tools, 'Edit');
+    expect(r.denied).toBe(true);
+    expect(r.reason).toMatch(/Edit.*Read, Grep, Glob/);
+    expect(r.lines).toEqual([{ at: expect.any(String), tool: 'Edit', command: '/work/a.ts', rule: 'tool-not-allowed', ticket: null }]);
+    expect(guard({ command: 'ls' }, tools).denied).toBe(true);
+    // A web search is still journaled under its own rule.
+    expect(guard({ query: 'x' }, tools, 'WebSearch').lines).toEqual([expect.objectContaining({ rule: 'web-search' })]);
+  });
+
+  it("lets through the step's tools and the factory's MCP tools, and judges them as before", () => {
+    expect(guard({ pattern: 'x' }, tools, 'Grep').denied).toBe(false);
+    expect(guard({ status: 'done' }, tools, 'mcp__factory__submit_result')).toMatchObject({ denied: false, lines: [] });
+    // Another MCP server's tool is not the factory's.
+    expect(guard({}, tools, 'mcp__other__submit_result').denied).toBe(true);
+    // Its own rules still apply to a tool it has.
+    expect(bash('rm -rf /', { FACTORY_TOOLS: 'Bash' }).lines).toEqual([expect.objectContaining({ rule: 'rm-root' })]);
+  });
+
+  it('refuses every built-in tool for an empty list, and checks no list for a run without one', () => {
+    expect(guard({ pattern: 'x' }, { FACTORY_TOOLS: '' }, 'Grep').denied).toBe(true);
+    expect(guard({ file_path: '/work/a.ts', old_string: 'a', new_string: 'b' }, {}, 'Edit').denied).toBe(false);
   });
 });
 

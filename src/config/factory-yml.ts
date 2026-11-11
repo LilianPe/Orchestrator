@@ -31,6 +31,8 @@ export interface FactoryYml {
    * A token cap `off` is disabled (ORC-381), `budgets: off` both: unlike a cap left unset, `factory validate` accepts it. `on_usage_limit` is no cap of the factory's.
    */
   budgets?: { perStepTokens?: Record<string, number> | 'off'; perTicketTokens?: number | 'off'; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
+  /** The built-in tools of each agent step, in place of its preset default (ORC-383): checked against the step by `loadWorkflow`, applied by `stepSettings`. */
+  tools?: { perStep?: Record<string, string[]> };
   /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
   maxDiff?: 'off';
   /**
@@ -147,7 +149,7 @@ export function claudeToken(value: string | undefined, from: string): string | u
 /** What the workflow's agent steps read of the file (ORC-136): no per-step cap when it is `off` (ORC-381). */
 export function stepSettings(yml: FactoryYml | undefined): StepSettings {
   const { perStepTokens, ...budgets } = yml?.budgets ?? {};
-  return { effort: yml?.claude?.effort, budgets: yml?.budgets && { ...budgets, ...(perStepTokens === 'off' ? {} : { perStepTokens }) } };
+  return { effort: yml?.claude?.effort, budgets: yml?.budgets && { ...budgets, ...(perStepTokens === 'off' ? {} : { perStepTokens }) }, tools: yml?.tools };
 }
 
 /** The ticket's token cap the orchestrator applies (ORC-340): none when it is unset or `off` (ORC-381). */
@@ -177,6 +179,7 @@ const SECTIONS: Record<string, string[]> = {
   claude: ['runtime', 'accounts', 'active', 'default_model', 'per_step', 'effort'],
   concurrency: [],
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
+  tools: ['per_step'],
   max_diff: [],
   repos: [],
   read_guard: ['max_lines'],
@@ -194,13 +197,14 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
 }
 
 /**
- * The `budgets` and `max_diff` of `<home>/factory.yml` alone (ORC-216, ORC-381), validated as the daemon validates them: what
- * `factory validate` reads, without resolving the file's `env:` secrets, which the shell it runs in need not have. A read error is thrown as is.
+ * The `budgets`, `max_diff` and `tools` of `<home>/factory.yml` alone (ORC-216, ORC-381, ORC-383), validated as the daemon validates
+ * them: what `factory validate` reads, without resolving the file's `env:` secrets, which the shell it runs in need not have. A read
+ * error is thrown as is.
  */
-export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'maxDiff'> {
+export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'maxDiff' | 'tools'> {
   const text = factoryYmlText(home);
-  // Only these two keys are parsed: the result holds nothing else.
-  return (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff'])) ?? {};
+  // Only these keys are parsed: the result holds nothing else.
+  return (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff', 'tools'])) ?? {};
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
@@ -323,6 +327,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       ...(onUsageLimit ? { onUsageLimit } : {}),
     };
   }
+  const perStepTools = leaf('tools.per_step', section('tools')?.['per_step'], z.record(z.string(), z.array(z.string().min(1))), '`step: [tool, …]` expected');
+  if (perStepTools) out.tools = { perStep: perStepTools };
   const repos = leaf(
     'repos',
     r['repos'],

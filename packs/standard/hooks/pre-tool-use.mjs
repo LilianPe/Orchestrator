@@ -5,6 +5,7 @@
 // A guard against an agent's mistakes, not a barrier: a command written otherwise gets past it. A push fails for want
 // of means, a sandbox without token, or on the host a git config that sends every push nowhere (ORC-349).
 // It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead.
+// And any tool off the step's list (ORC-383), behind `claude --tools`: see offList.
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -208,6 +209,16 @@ function fullRead(input) {
   }
 }
 
+/**
+ * The run's built-in tools, comma-separated (`FACTORY_TOOLS`, ORC-383), the factory's MCP tools always beside them: any other
+ * tool is refused. Unset: a run with every tool, nothing to check.
+ */
+const TOOLS = process.env.FACTORY_TOOLS?.split(',').filter(Boolean);
+function offList(tool) {
+  if (TOOLS && !tool.startsWith('mcp__factory__') && !TOOLS.includes(tool)) return 'tool-not-allowed';
+  return null;
+}
+
 function journal(entry) {
   const env = process.env;
   const file =
@@ -230,11 +241,26 @@ try {
 const tool = call.tool_name ?? '';
 const input = call.tool_input ?? {};
 const command = String(input.command ?? input.query ?? input.file_path ?? '');
-const hit = tool === 'Read' ? fullRead(input) : rule(tool, command);
+/** The rule that refuses the call, in order: a web search, a tool off the step's list, a whole read of a large file, a forbidden command. */
+function judge() {
+  // Its own rule, which no step's list lifts.
+  if (tool === 'WebSearch') return rule(tool, command);
+  const off = offList(tool);
+  if (off) return off;
+  if (tool === 'Read') return fullRead(input);
+  // The command rules judge a shell command: an edit's path or another tool's input is no command.
+  if (tool === 'Bash') return rule(tool, command);
+  return null;
+}
+
+const REASONS = {
+  'full-read': () => `this file is longer than ${READ_MAX_LINES} lines. Find what you need with grep, then read the useful range with offset and limit.`,
+  'tool-not-allowed': () => `${tool} is not a tool of this step, which has ${TOOLS.join(', ') || 'none'} and the factory's MCP tools.`,
+};
+
+const hit = judge();
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
-  const permissionDecisionReason = hit === 'full-read'
-    ? `Refused by the factory (rule ${hit}): this file is longer than ${READ_MAX_LINES} lines. Find what you need with grep, then read the useful range with offset and limit.`
-    : `Refused by the factory (rule ${hit}): this command is forbidden in a run.`;
+  const permissionDecisionReason = `Refused by the factory (rule ${hit}): ${REASONS[hit]?.() ?? 'this command is forbidden in a run.'}`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }
