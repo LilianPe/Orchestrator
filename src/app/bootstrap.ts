@@ -189,7 +189,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     if (yml?.budgets?.perTicketTokens === undefined) log('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
     // Said at each start (ORC-381): a control off is a choice of this server's, never a repository's. The Claude usage limit is not one.
     const disabled = disabledControls(yml);
-    if (disabled.length) log(`Disabled in factory.yml: ${disabled.join(', ')}. A repository's .factory/config.yml can still set its own max_diff and per_ticket_tokens.`);
+    if (disabled.length) log(`Disabled in factory.yml: ${disabled.join(', ')}.`);
     if (sandboxes && !claudeTokenOf()) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })

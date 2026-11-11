@@ -41,6 +41,8 @@ describe('the worst case of a preset (ORC-216)', () => {
     // The review sends back to the build, whose check refills the counter the review spends: no end.
     const refilling: Preset = { ...loop, steps: loop.steps.map((s) => (s.id === 'review' ? { ...s, onFailure: { goto: 'build', counter: 'v' } } : s)) };
     expect(worstCase(refilling, { perStepTokens: { build: 1, review: 1, fix: 1 } })).toMatchObject({ unbounded: expect.any(String) });
+    // The per-step caps disabled in factory.yml (ORC-381) leave the loop as unbounded.
+    expect(checkBudgets(refilling, { perStepTokens: 'off', perTicketTokens: 'off' }).violations).toEqual([expect.stringMatching(/^worst case unbounded: a counter refills inside its own loop/)]);
   });
 
   it('counts the turns of a step as `max_turns` lowers them, never raises them', () => {

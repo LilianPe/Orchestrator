@@ -307,7 +307,7 @@ export function App() {
         </p>
       )}
       {!!snap?.disabledControls?.length && (
-        <p className="usage-limit" role="status">
+        <p className="disabled-controls" role="status">
           Disabled in factory.yml: {snap.disabledControls.join(', ')}.
         </p>
       )}

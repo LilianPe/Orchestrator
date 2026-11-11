@@ -97,11 +97,13 @@ export function worstCase(preset: Preset, caps: BudgetCaps & { perStepTokens?: R
 export function checkBudgets(preset: Preset, caps: BudgetCaps): { violations: string[]; worst?: WorstCase } {
   const unset = (key: string) => `${key}: not set; the worst case of ${preset.name} has no bound without it`;
   const violations = caps.perTicketTokens === undefined ? [unset('budgets.per_ticket_tokens')] : [];
-  if (caps.perStepTokens === 'off') return { violations };
-  const worst = worstCase(preset, { ...caps, perStepTokens: caps.perStepTokens });
+  const off = caps.perStepTokens === 'off';
+  // Without the per-step caps, every step weighs nothing: a way back no counter bounds is still found.
+  const perStepTokens = caps.perStepTokens === 'off' ? Object.fromEntries(preset.steps.filter(isAgentStep).map((s) => [s.id, 0])) : caps.perStepTokens;
+  const worst = worstCase(preset, { ...caps, perStepTokens });
   if ('missing' in worst) violations.unshift(...worst.missing.map(unset));
   if ('unbounded' in worst) violations.unshift(`worst case unbounded: a counter refills inside its own loop, through step ${worst.unbounded}`);
-  if (!('tokens' in worst)) return { violations };
+  if (!('tokens' in worst) || off) return { violations };
   if (typeof caps.perTicketTokens === 'number' && worst.tokens > caps.perTicketTokens) {
     violations.push(`worst case ${worst.tokens} tokens per ticket exceeds budgets.per_ticket_tokens ${caps.perTicketTokens}: lower a step's per_step_tokens or a counter of ${preset.name}`);
   }

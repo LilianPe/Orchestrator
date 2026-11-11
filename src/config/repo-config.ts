@@ -159,7 +159,8 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
   // `off` is factory.yml's alone (ORC-381): said as such, rather than as a malformed value.
   if (r['budgets'] === 'off' || (r['budgets'] as Record<string, unknown> | null | undefined)?.['per_ticket_tokens'] === 'off') {
     violations.push("budgets: `off` is refused here: only factory.yml, the server's configuration, disables a token cap; the repository configuration can only lower `per_ticket_tokens`.");
-    delete r['budgets'];
+    // The rest of the object still checked: each fault said at once.
+    r['budgets'] = r['budgets'] === 'off' ? undefined : { ...(r['budgets'] as Record<string, unknown>), per_ticket_tokens: undefined };
   }
   const budgets = read('budgets', z.strictObject({ per_ticket_tokens: z.number().int().positive().optional() }), '`{ per_ticket_tokens }` positive integer expected');
   const featureFlags = read('feature_flags', z.strictObject({ provider: z.string().min(1) }), '`{ provider }` expected');

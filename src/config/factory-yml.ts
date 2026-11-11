@@ -68,7 +68,7 @@ export interface ClaudeAccount {
  */
 export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = process.env, log: (m: string) => void = () => {}): () => ClaudeAccount {
   const resolve = (text: string | undefined): ClaudeAccount => {
-    const yml = text === undefined ? undefined : parseSection(text, 'claude', env);
+    const yml = text === undefined ? undefined : parseSection(text, ['claude'], env);
     const chosen = activeClaudeToken(yml);
     if (chosen) return { name: yml!.claude!.active, token: chosen };
     const own = claudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
@@ -110,16 +110,17 @@ function factoryYmlText(home: string): string | undefined {
   }
 }
 
-/** One top-level key of the file, validated as `parseFactoryYml` validates it, the rest of the file left out; undefined when absent or null. */
-function parseSection(text: string, key: string, env?: NodeJS.ProcessEnv): FactoryYml | undefined {
+/** Top-level keys of the file, validated together as `parseFactoryYml` validates them, the rest of the file left out; undefined when all are absent or null. */
+function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv): FactoryYml | undefined {
   let raw: unknown;
   try {
     raw = parse(text);
   } catch (err) {
     throw new FactoryYmlError([`unreadable YAML: ${(err as Error).message}`]);
   }
-  const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>)[key] : undefined;
-  return value === undefined || value === null ? undefined : parseFactoryYml(stringify({ [key]: value }), env);
+  const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const kept = Object.fromEntries(keys.map((k) => [k, record[k]]).filter(([, v]) => v !== undefined && v !== null));
+  return Object.keys(kept).length === 0 ? undefined : parseFactoryYml(stringify(kept), env);
 }
 
 /**
@@ -191,9 +192,7 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
  */
 export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'maxDiff'> {
   const text = factoryYmlText(home);
-  if (text === undefined) return {};
-  const budgets = parseSection(text, 'budgets')?.budgets;
-  const maxDiff = parseSection(text, 'max_diff')?.maxDiff;
+  const { budgets, maxDiff } = (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff'])) ?? {};
   return { ...(budgets ? { budgets } : {}), ...(maxDiff ? { maxDiff } : {}) };
 }
 

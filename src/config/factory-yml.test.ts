@@ -190,8 +190,9 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(loadFactoryLimits(home)).toEqual({});
     writeFileSync(join(home, 'factory.yml'), 'linear:\n  client_secret: env:NOT_IN_THIS_SHELL\nmax_diff: off\nbudgets:\n  per_ticket_tokens: 1000\n  per_step_tokens: { build: 10 }\n');
     expect(loadFactoryLimits(home)).toEqual({ maxDiff: 'off', budgets: { perTicketTokens: 1000, perStepTokens: { build: 10 } } });
-    writeFileSync(join(home, 'factory.yml'), 'budgets:\n  per_ticket_tokens: -1\n');
-    expect(() => loadFactoryLimits(home)).toThrow(FactoryYmlError);
+    writeFileSync(join(home, 'factory.yml'), 'budgets:\n  per_ticket_tokens: -1\nmax_diff: { files: 30 }\n');
+    // Both faults at once, as the daemon says them.
+    expect(() => loadFactoryLimits(home)).toThrow(expect.objectContaining({ violations: [expect.stringContaining('budgets.per_ticket_tokens'), expect.stringContaining('max_diff')] }));
     writeFileSync(join(home, 'factory.yml'), 'linear: {}\n');
     expect(loadFactoryLimits(home)).toEqual({});
   });

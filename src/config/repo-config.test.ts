@@ -159,6 +159,8 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       const refused = "budgets: `off` is refused here: only factory.yml, the server's configuration, disables a token cap; the repository configuration can only lower `per_ticket_tokens`.";
       expect(violations('budgets: off\n')).toEqual([refused]);
       expect(violations('budgets: { per_ticket_tokens: off }\n')).toEqual([refused]);
+      // The rest of the object is still checked.
+      expect(violations('budgets: { per_ticket_tokens: off, per_step_tokens: { build: 5 } }\n')).toEqual([refused, 'budgets: `{ per_ticket_tokens }` positive integer expected']);
     });
 
     it('refuses the full network level', () => {
