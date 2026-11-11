@@ -8,7 +8,7 @@ packs/standard/
 ├── workflow.yml                 # default behavior (events, jobs, limits)
 ├── settings.json                # run permissions
 ├── hooks/hooks.json             # SessionStart and PreToolUse hooks
-├── hooks/session-start.mjs      # always-on rules, method, knowledge base index
+├── hooks/session-start.mjs      # always-on rules, method
 ├── hooks/pre-tool-use.mjs       # refuses forbidden commands and full reads of large files, refusal log
 ├── NOTICE.md                    # origin of the method (superpowers, MIT)
 └── skills/<name>/SKILL.md       # job skills (one per run type) and method skills
@@ -60,13 +60,13 @@ Full text: `packs/standard/skills/<name>/SKILL.md`.
 - the current ticket (`RELAIS_TICKET`);
 - the rules: Linear messages in French, never merge or force-push, modify nothing outside the working directory, never declare done without tests run and read, go through `relais-agent` for Linear, ask **one** question with `relais-agent ask` rather than invent, nothing written as a message is published: Linear shows what the factory composes from `submit_result`, whose summary, for a reply, reads on its own (ORC-214);
 - the method: before each step, load the method skill that applies (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), the repository's `CLAUDE.md` taking precedence on style only, never on the factory's rules; if the Skill tool is unavailable, read the skill's file (the hook gives the absolute path of the `skills/` folder);
-- if `RELAIS_KNOWLEDGE` is set and contains `INDEX.md`: the knowledge base index (8,000 characters at most) and the path to the notes.
+- no longer the knowledge base index: the server hands it to the session in its system prompt (`--append-system-prompt`, 8,000 characters at most, a cut marked and logged), and the notes are searched with the MCP's `kb_search` (ORC-232).
 
 ## Permissions
 
 `packs/standard/settings.json` sets `defaultMode: acceptEdits` and:
 
-**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `uv` (in the runner image) and `pytest`, `ruff`, `mypy` (from the project environment `uv sync` installs, run with `uv run`); `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; `relais-agent`; the `submit_result` and `ask` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
+**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `uv` (in the runner image) and `pytest`, `ruff`, `mypy` (from the project environment `uv sync` installs, run with `uv run`); `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; `relais-agent`; the `submit_result`, `ask` and `kb_search` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
 
 **Refused**:
 

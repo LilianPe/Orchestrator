@@ -7,6 +7,7 @@ import { saveAgentOutput } from './agent-output.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
+import type { ReplaySource } from '../ghost/delegate.js';
 import type { Verifier } from './verify.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { stateEchoKey } from '../adapters/tracker/types.js';
@@ -39,6 +40,8 @@ function setup(
     perTicketTokens?: number;
     onUsageLimit?: 'wait';
     account?: () => string | undefined;
+    knowledgeIndex?: (repo?: string) => Promise<{ text: string; more: number; warning?: string }>;
+    replays?: ReplaySource;
   } = {},
 ) {
   // `dev` straight to Human Review, as the harness has it: the AI review's own scenarios are test/scenarios/review.test.ts (ORC-183).
@@ -64,6 +67,8 @@ function setup(
     ...(o.perTicketTokens ? { perTicketTokens: o.perTicketTokens } : {}),
     ...(o.onUsageLimit ? { onUsageLimit: o.onUsageLimit } : {}),
     ...(o.account ? { claudeAccount: o.account } : {}),
+    ...(o.knowledgeIndex ? { knowledgeIndex: o.knowledgeIndex } : {}),
+    ...(o.replays ? { replays: o.replays } : {}),
   });
   return { store, tracker, runner: fakeRunner, orch, scheduler, bus, clock };
 }
@@ -183,6 +188,90 @@ describe('Orchestrator', () => {
     expect(r.settingsPath.endsWith(join('packs', 'standard', 'settings.json'))).toBe(true);
     expect(r.env['FACTORY_RUN_TOKEN']).toBeDefined();
     expect(r.env['PORT']).toBe('4200');
+  });
+
+  describe('knowledge index (ORC-232)', () => {
+    const logsOf = (bus: ReturnType<typeof setup>['bus']) => {
+      const logs: string[] = [];
+      bus.subscribe((m) => void (m.kind === 'log' && logs.push(m.message)));
+      return logs;
+    };
+
+    it('starts every session with the index in its system prompt, as data, read at each launch and fingerprinted', async () => {
+      let reads = 0;
+      const { store, tracker, runner, orch, bus } = setup({ knowledgeIndex: async () => ({ text: `- [Scores](notes/scores.md) ${++reads}\n`, more: 0 }) });
+      const logs = logsOf(bus);
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await orch.accept(delegated());
+      await orch.drained();
+      const req = runner.requests[0]!;
+      expect(req.systemPrompt).toContain('<knowledge-index>\n- [Scores](notes/scores.md) 1\n</knowledge-index>');
+      expect(req.systemPrompt).toContain('mcp__factory__kb_search');
+      // Not the prompt: the runner gets the index once, as the factory's data.
+      expect(req.prompt).not.toContain('notes/scores.md');
+      expect((await store.getRun(req.runId))!.labels!.fingerprints.knowledgeIndex).toBe(hashText(req.systemPrompt!));
+      expect(logs.filter((l) => l.includes('INDEX.md'))).toEqual([]);
+    });
+
+    it('gives the answer agent the index too, beside its read-only tools', async () => {
+      const { tracker, runner, orch, scheduler } = setup({ knowledgeIndex: async () => ({ text: '- [CI](notes/ci.md)\n', more: 0 }) });
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await orch.accept(delegated());
+      await orch.drained();
+      await scheduler.enqueue({ projectId: 'p', ticketId: 'REL-1', job: 'ask', queue: 'questions', priority: 0, enqueuedAt: 1 });
+      await orch.tick();
+      await orch.drained();
+      const ask = runner.requests.find((r) => r.prompt.startsWith('/factory:ask\n'))!;
+      expect(ask.tools).toEqual(['Read', 'Grep', 'Glob']);
+      expect(ask.systemPrompt).toContain('- [CI](notes/ci.md)');
+    });
+
+    it('marks an index over its cap in the system prompt and logs the cut, never silently', async () => {
+      const { tracker, runner, orch, bus } = setup({ knowledgeIndex: async () => ({ text: '- [Scores](notes/scores.md)\n', more: 4321, warning: 'Knowledge base: no remote' }) });
+      const logs = logsOf(bus);
+      tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await orch.accept(delegated());
+      await orch.drained();
+      expect(runner.requests[0]!.systemPrompt).toContain('4321 more not shown');
+      expect(logs).toContainEqual(expect.stringMatching(/REL-1.*INDEX\.md.*4321 characters/));
+      // What kept the pull from happening, on the bus the dashboard reads.
+      expect(logs).toContainEqual(expect.stringMatching(/REL-1.*Knowledge base: no remote/));
+    });
+
+    it('launches without an index it could not read, and says so; nothing without a knowledge base', async () => {
+      const failing = setup({ knowledgeIndex: async () => Promise.reject(new Error('EACCES')) });
+      const logs = logsOf(failing.bus);
+      failing.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await failing.orch.accept(delegated());
+      await failing.orch.drained();
+      expect(failing.runner.requests[0]).not.toHaveProperty('systemPrompt');
+      expect(logs).toContainEqual(expect.stringContaining('EACCES'));
+      const none = setup();
+      none.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await none.orch.accept(delegated());
+      await none.orch.drained();
+      expect(none.runner.requests[0]).not.toHaveProperty('systemPrompt');
+      expect((await none.store.getRun(none.runner.requests[0]!.runId))!.labels!.fingerprints.knowledgeIndex).toBeNull();
+    });
+
+    it("gives a replayed ticket's session the index at its start, none with --memory off (ORC-376)", async () => {
+      const issue = { identifier: 'REL-1', title: 'Export CSV', description: 'Export the scores as CSV, one row per player.', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 };
+      const read: (string | undefined)[] = [];
+      const knowledgeIndex = async (repo?: string) => (read.push(repo), { text: repo ? '- [Then](notes/then.md)\n' : '- [Now](notes/now.md)\n', more: 0 });
+      const then = setup({ knowledgeIndex, replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) } });
+      then.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await then.orch.accept(delegated());
+      await then.orch.drained();
+      // Never the knowledge base of now, which may hold a note learned from the ticket's own PR.
+      expect(then.runner.requests[0]!.systemPrompt).toContain('- [Then](notes/then.md)');
+      expect(read).toEqual(['/ghost/g1/REL-1/knowledge']);
+      const off = setup({ knowledgeIndex, replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', issue }) } });
+      off.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+      await off.orch.accept(delegated());
+      await off.orch.drained();
+      expect(off.runner.requests[0]).not.toHaveProperty('systemPrompt');
+      expect(read).toEqual(['/ghost/g1/REL-1/knowledge']);
+    });
   });
 
   it('reads the conventions before it resets .claude/, which holds one of them (ORC-284)', async () => {

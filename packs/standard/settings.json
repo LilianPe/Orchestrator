@@ -13,7 +13,7 @@
       "Bash(uv:*)", "Bash(pytest:*)", "Bash(ruff:*)", "Bash(mypy:*)",
       "Bash(ls:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(sleep:*)",
       "Bash(factory-agent:*)",
-      "mcp__factory__submit_result", "mcp__factory__ask"
+      "mcp__factory__submit_result", "mcp__factory__ask", "mcp__factory__kb_search"
     ],
     "deny": [
       "Bash(gh pr merge:*)",

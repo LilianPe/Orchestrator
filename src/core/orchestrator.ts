@@ -63,6 +63,7 @@ import { formatReuse, ownWork } from './intake-checks.js';
 import { ownBranchPrefix } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
+import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -196,7 +197,7 @@ export interface ProjectRuntime {
    * Set by `runtimeFor` on a ticket of a replay of closed tickets (ORC-376): its run reads the ticket as it was at its start, its
    * thread and linked tickets with it, and works on the clone at that start, which `repoPath` then names.
    */
-  replayed?: Pick<ReplayedTicket, 'issue' | 'history'>;
+  replayed?: Pick<ReplayedTicket, 'issue' | 'history' | 'knowledge'>;
 }
 
 export interface OrchestratorDeps {
@@ -290,7 +291,12 @@ export interface OrchestratorDeps {
   claudeAccount?: () => string | undefined;
   newId?: () => string;
   activityIntervalMs?: number;
-  beforeRun?: (run: RunRecord) => Promise<void>;
+  /**
+   * The knowledge index, read at each launch (ORC-232): the server pulls the knowledge repository and reads its INDEX.md,
+   * capped. The session gets it in its system prompt, and the rest through the MCP's `kb_search`. Absent: no knowledge base.
+   * `repo`, another checkout of it: a replayed ticket's, at transaction time (ORC-376).
+   */
+  knowledgeIndex?: (repo?: string) => Promise<KbIndex>;
   /**
    * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
@@ -1441,6 +1447,18 @@ export class Orchestrator {
   /** An invalid configuration holds every launch, as the pause does (ORC-350). */
   private configHeld(): boolean {
     return !!this.d.configProblems?.length;
+  }
+
+  /** The knowledge index for a session's system prompt (ORC-232), its cut logged: a read that fails launches without it, and says so. */
+  private knowledgePromptOf(index: KbIndex | Error, ticketId: string, job: string): string | undefined {
+    if (index instanceof Error) {
+      this.log('warn', `${ticketId} ${job}: knowledge index not read, the session starts without it: ${index.message}`);
+      return undefined;
+    }
+    if (index.warning) this.log('warn', `${ticketId} ${job}: ${index.warning}`);
+    const prompt = knowledgePrompt(index);
+    if (prompt && index.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
+    return prompt;
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -2726,6 +2744,12 @@ export class Orchestrator {
 
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
+    // Likewise the knowledge index (ORC-232), its failure kept for the launch to say: a launch that stops early drops it.
+    // A replayed ticket's (ORC-376): the knowledge base at its start, never the one of now, which may hold a note learned from its
+    // own PR; none with `--memory off`.
+    const replayed = project.replayed;
+    const index = replayed ? replayed.knowledge !== undefined ? this.d.knowledgeIndex?.(replayed.knowledge) : undefined : this.d.knowledgeIndex?.();
+    const knowledge = index?.catch((err: Error) => err);
 
     // Up to the workspace: a launch that lost does nothing.
     const head = await (async () => {
@@ -2952,7 +2976,8 @@ export class Orchestrator {
         ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
-      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
+      const systemPrompt = knowledge && this.knowledgePromptOf(await knowledge, ticketId, job.name);
+      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null, ...(systemPrompt ? { knowledgeIndex: systemPrompt } : {}) });
       // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
       const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;
 
@@ -3022,9 +3047,7 @@ export class Orchestrator {
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
       // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
       await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
-      if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
-
-      // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` took. A failure leaves it to the next beat.
+      // Its lease starts here: until now the launch is alive by itself. A failure leaves it to the next beat.
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
       // A review job of a version frozen before ORC-367 has its lens, not yet its tools.
@@ -3033,6 +3056,7 @@ export class Orchestrator {
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
         prompt,
+        ...(systemPrompt ? { systemPrompt } : {}),
         claudeSessionId,
         resume,
         model: job.model,

@@ -91,8 +91,8 @@ relais-knowledge/
 
 How it is used:
 
-- **reading**: on each run, the pack's startup hook injects `INDEX.md` (first 8,000 characters) into the agent's context; the agent searches the notes with `relais-agent kb search "<words>"`;
-- **updating**: before each run, Relais runs `git fetch origin` then `git merge --ff-only` on the clone; the clone must therefore stay on its default branch, with no local commits;
+- **reading** (ORC-232): at each launch, the server reads `INDEX.md` and hands its first 8,000 characters to the session in its system prompt, as data; an index past that cap ends on a visible `[… INDEX.md truncated …]` marker and the daemon logs the cut. The agent, the answer agent included, searches the notes with the factory MCP's `kb_search` tool, which the server answers from its clone: the session gets the index and the matching lines, never the repository, which no sandbox mounts any more;
+- **updating**: before a launch, the server runs `git fetch origin` (60 s at most) then `git merge --ff-only` on the clone, once for the launches that come together or within 30 s of the last pull; the clone must therefore stay on its default branch, with no local commits. A clone without a remote, or on another branch, is not pulled: the daemon logs `Knowledge base: …` saying why, and the agents read it as it is;
 - **writing**: asleep at the MVP (ORC-193). No job writes to it any more: neither `learn` after a merge nor `remember` (the `retiens` command is gone, a `@relais retiens …` is a message as any other). Humans edit the repository; the `learn` PRs still open are closed or merged by hand. Writing comes back in another form, fed only by signed human signals (ORC-247).
 
 ### Setup
@@ -113,6 +113,6 @@ knowledge:
   repoPath: /chemin/absolu/vers/relais-knowledge
 ```
 
-Without `knowledge`, everything works: the startup hook injects no index and `kb search` returns nothing.
+Without `knowledge`, everything works: no index in the system prompt, and `kb_search` answers that the factory has no knowledge base.
 
 There is also **per-repository** knowledge, with no configuration: the skills read the repository's `CLAUDE.md` and `docs/agent/` if they exist.

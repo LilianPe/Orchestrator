@@ -13,7 +13,7 @@ The prompt carries the **what** (the ticket); this skill carries the **how**. Th
 
 ## 1. Understand
 
-1. Read the whole ticket, then the files it cites. A linked ticket is mentioned: `factory-agent issue <ID>`. Read the repository's `CLAUDE.md` and `docs/agent/` if they exist, and the knowledge base (`factory-agent kb search "<words>"`) on the subject.
+1. Read the whole ticket, then the files it cites. A linked ticket is mentioned: `factory-agent issue <ID>`. Read the repository's `CLAUDE.md` and `docs/agent/` if they exist, and the knowledge base on the subject: its index is in your system prompt, its notes answer `mcp__factory__kb_search`.
 2. Check against the code that the ticket still holds: what it says to change or reuse exists (`grep -rn "<symbol>"`), and what it must deliver is not already there. A contradiction between the ticket and the code is a question, not a choice to make alone.
 3. **A product decision is missing** (ambiguous expected behavior, two possible readings, contradictory criterion): ask ONE precise question with `factory-agent ask "<question>"` before coding, giving the options you see, then end your turn. A technical question that the code or the repository settles is not one: settle it and say so in your summary.
 4. Stay within the ticket's scope. An unrelated neighboring defect: note it for your points of attention, do not fix it.

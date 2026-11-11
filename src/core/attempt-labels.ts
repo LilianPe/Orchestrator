@@ -23,7 +23,7 @@ export interface AttemptFingerprints {
   workflow: string;
   /** The run settings without the instance's home, plus the pack's plugin files (see `configFingerprint`); null if unreadable. */
   config: string | null;
-  /** The knowledge index the attempt read; null until ORC-232. */
+  /** The system prompt that carried the knowledge index the attempt read (ORC-232); null when it read none. */
   knowledgeIndex: string | null;
 }
 
@@ -50,7 +50,6 @@ const PENDING_LABELS = {
   risk: ['ORC-206'],
   registryCommit: ['ORC-257'],
   deliveredFactIds: ['ORC-257'],
-  knowledgeIndex: ['ORC-232'],
 } as const satisfies Record<string, readonly string[]>;
 
 type PendingLabel = keyof typeof PENDING_LABELS;
@@ -218,6 +217,8 @@ export interface AttemptLabelInput {
   factoryCommit?: string | null;
   /** The ticket's risk when the attempt starts (ORC-206): null before `intake` assessed it. */
   risk?: string | null;
+  /** The knowledge index as the session's system prompt carries it (`knowledgePrompt`, ORC-232): absent when the attempt read none. */
+  knowledgeIndex?: string;
 }
 
 export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
@@ -240,7 +241,7 @@ export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
       skills,
       workflow: workflowFingerprint(i.workflow),
       config,
-      knowledgeIndex: null,
+      knowledgeIndex: i.knowledgeIndex ? hashText(i.knowledgeIndex) : null,
     },
   };
 }
@@ -250,10 +251,9 @@ export function attemptLabels(i: AttemptLabelInput): AttemptLabels {
  * not stored, so an old attempt names the tickets still to come.
  */
 export function pendingLabels(l: AttemptLabels): Partial<Record<PendingLabel, string[]>> {
-  const values: Record<PendingLabel, unknown> = { ...l, knowledgeIndex: l.fingerprints.knowledgeIndex };
   const pending: Partial<Record<PendingLabel, string[]>> = {};
   for (const [name, tickets] of Object.entries(PENDING_LABELS) as [PendingLabel, readonly string[]][]) {
-    if (values[name] === null) pending[name] = [...tickets];
+    if (l[name] === null) pending[name] = [...tickets];
   }
   return pending;
 }

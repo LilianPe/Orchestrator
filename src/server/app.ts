@@ -23,6 +23,7 @@ import { ticketDiagnoses, type HeldRow } from '../core/diagnosis.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
+import type { KbHit } from '../knowledge/kb.js';
 import { runSecurityView, shownHosts } from '../network/security-log.js';
 import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readStatic } from './static.js';
@@ -47,8 +48,11 @@ export interface ServerDeps {
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
   /** The replay of closed tickets (ORC-376): a replayed ticket's run reads the ticket as of its start, through no tracker. */
   replays?: ReplaySource;
-  /** The knowledge base's search; `repo`, another checkout of it (a replayed ticket's, at transaction time: ORC-376). */
-  knowledgeSearch?: (q: string, repo?: string) => Promise<{ file: string; line: number; text: string }[]>;
+  /**
+   * The MCP's `kb_search` (ORC-232), on the server's clone of the knowledge base; `repo`, another checkout of it (a replayed
+   * ticket's, at transaction time: ORC-376). Absent: no knowledge base.
+   */
+  knowledgeSearch?: (q: string, repo?: string) => Promise<KbHit[]>;
   capacity: () => { dev: { used: number; total: number }; questions: { used: number; total: number } };
   transcriptsDir: string;
   webDir?: string;
@@ -592,14 +596,6 @@ export function createApp(d: ServerDeps): Hono {
     if (await replayedOf(run)) return c.json({ error: 'a replayed ticket searches no tracker: it holds what was written after the ticket\'s start' }, 403);
     return c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(run.ticketId)));
   });
-  agent.get('/kb/search', async (c) => {
-    const q = c.req.query('q') ?? '';
-    // A replayed ticket's run (ORC-376): the knowledge base at its start, never the one of now, which may hold a note learned from
-    // its own PR; none with `--memory off`.
-    const replayed = await replayedOf(c.get('run'));
-    if (replayed) return c.json(replayed.knowledge && d.knowledgeSearch ? await d.knowledgeSearch(q, replayed.knowledge) : []);
-    return c.json(d.knowledgeSearch ? await d.knowledgeSearch(q) : []);
-  });
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
     const at = d.clock.now();
@@ -618,7 +614,16 @@ export function createApp(d: ServerDeps): Hono {
     } catch {
       return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);
     }
-    const res = await handleMcp(msg, c.get('run'), { store: d.store, ask });
+    const run = c.get('run');
+    const search = d.knowledgeSearch;
+    // A replayed ticket's run (ORC-376): the knowledge base at its start, never the one of now, which may hold a note learned from
+    // its own PR; none with `--memory off`.
+    const kbSearch = search && (async (q: string) => {
+      const replayed = await replayedOf(run);
+      if (!replayed) return search(q);
+      return replayed.knowledge ? search(q, replayed.knowledge) : [];
+    });
+    const res = await handleMcp(msg, run, { store: d.store, ask, ...(kbSearch ? { kbSearch } : {}) });
     return res ? c.json(res) : c.body(null, 202);
   });
   // No SSE stream to GET: the MCP transport's answer for a server that offers none.

@@ -698,20 +698,13 @@ describe('server', () => {
 
   it("a replayed ticket's run reads the ticket as of its start, and searches no tracker, which holds what came after (ORC-376)", async () => {
     const replayed = { repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue: { identifier: 'REL-1', title: 'Export, as it was', description: 'Before.', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 } };
-    const searched: (string | undefined)[] = [];
-    const { app, tracker } = await setup({
-      replays: { of: async (p, t) => (p === 'p' && t === 'REL-1' ? replayed : undefined) },
-      knowledgeSearch: async (_q, repo) => (searched.push(repo), [{ file: 'notes/csv.md', line: 1, text: 'CSV' }]),
-    });
+    const { app, tracker } = await setup({ replays: { of: async (p, t) => (p === 'p' && t === 'REL-1' ? replayed : undefined) } });
     tracker.addIssue({ identifier: 'REL-2', title: 'Export follow-up, after the PR' });
     const issue = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
     expect(await issue.json()).toMatchObject({ identifier: 'REL-1', title: 'Export, as it was', description: 'Before.' });
     const search = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
     expect(search.status).toBe(403);
     expect(((await search.json()) as { error: string }).error).toContain('replayed');
-    // The knowledge base at its start, never the one of now, which may hold a note learned from the ticket's own PR.
-    expect((await app.request('/agent/kb/search?q=export', { headers: { authorization: 'Bearer tok' } })).status).toBe(200);
-    expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
   });
 
   it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {
@@ -801,12 +794,52 @@ describe('server', () => {
       }
     });
 
-    it('lists exactly submit_result, with the output JSON Schema, and ask', async () => {
+    it('lists exactly submit_result, with the output JSON Schema, ask and kb_search', async () => {
       const { app } = await setup();
       const { tools } = (await (await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()).result;
-      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'ask']);
+      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'ask', 'kb_search']);
       expect(tools[0].inputSchema).toMatchObject({ type: 'object', required: expect.arrayContaining(['status', 'summary', 'review_hints']), additionalProperties: false });
       expect(tools[1].inputSchema).toMatchObject({ type: 'object', required: ['text'] });
+      expect(tools[2].inputSchema).toMatchObject({ type: 'object', required: ['query'] });
+    });
+
+    it('kb_search answers with the notes the server searched, the runner reading no repository (ORC-232)', async () => {
+      const queries: string[] = [];
+      const { app } = await setup({
+        knowledgeSearch: async (q) => {
+          queries.push(q);
+          return [{ file: 'notes/scores.md', line: 4, text: 'Les agrégats se calculent côté serveur.' }];
+        },
+      });
+      expect(await call(app, 'kb_search', { query: 'agrégats serveur' })).toEqual({ content: [{ type: 'text', text: 'notes/scores.md:4: Les agrégats se calculent côté serveur.' }] });
+      expect(queries).toEqual(['agrégats serveur']);
+      expect((await call(app, 'kb_search', {})).isError).toBe(true);
+      // The HTTP route of factory-agent's `kb search` is gone with it: the MCP tool is the only way.
+      const route = await agentOnly(app)(new Request('http://172.17.0.1:4101/agent/kb/search?q=agrégats', { headers: { authorization: 'Bearer tok' } }));
+      expect(route.headers.get('content-type')).not.toContain('application/json');
+      expect(queries).toEqual(['agrégats serveur']);
+    });
+
+    it('kb_search says when nothing matches, and when the factory has no knowledge base', async () => {
+      expect((await call((await setup({ knowledgeSearch: async () => [] })).app, 'kb_search', { query: 'xyzzy' })).content[0].text).toBe('No note matches.');
+      const none = await call((await setup()).app, 'kb_search', { query: 'scores' });
+      expect(none.content[0].text).toBe('This factory has no knowledge base.');
+      expect(none.isError).toBeUndefined();
+      const broken = await call((await setup({ knowledgeSearch: async () => Promise.reject(new Error('EISDIR: notes/old.md')) })).app, 'kb_search', { query: 'scores' });
+      expect(broken).toEqual({ content: [{ type: 'text', text: 'Knowledge base search failed: EISDIR: notes/old.md' }], isError: true });
+    });
+
+    it("kb_search of a replayed ticket's run searches the knowledge base at its start, none with --memory off (ORC-376)", async () => {
+      const issue = { identifier: 'REL-1', title: 'Export, as it was', description: '', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 };
+      const searched: (string | undefined)[] = [];
+      const knowledgeSearch = async (_q: string, repo?: string) => (searched.push(repo), [{ file: 'notes/csv.md', line: 1, text: repo ? 'CSV, then' : 'CSV, learned from its PR' }]);
+      const then = await setup({ replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue }) }, knowledgeSearch });
+      // Never the knowledge base of now, which may hold a note learned from the ticket's own PR.
+      expect((await call(then.app, 'kb_search', { query: 'export' })).content[0].text).toBe('notes/csv.md:1: CSV, then');
+      expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
+      const off = await setup({ replays: { of: async () => ({ repoPath: '/ghost/g1/REL-1/repo', issue }) }, knowledgeSearch });
+      expect((await call(off.app, 'kb_search', { query: 'export' })).content[0].text).toBe('No note matches.');
+      expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
     });
 
     it('submit_result stores a valid output for the run of the token, the last one winning', async () => {
