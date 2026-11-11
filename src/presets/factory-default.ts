@@ -30,7 +30,8 @@ export const factoryDefault: Preset = {
   steps: [
     { id: 'intake', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
     { id: 'clarify', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },
-    { id: 'spec_draft', type: 'agent_step', writes: 'spec', model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
+    // Read-only (ORC-383): it hands the spec back through `submit_result`, nothing in the worktree.
+    { id: 'spec_draft', type: 'agent_step', writes: 'spec', readOnly: true, model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
     { id: 'spec_check', type: 'spec_check', network: 'none', next: 'spec_review', onFailure: { goto: 'spec_draft', counter: 'spec_check' } },
     { id: 'spec_review', type: 'human_gate', gate: 'spec', next: 'tests', onFailure: { goto: 'spec_draft', counter: 'spec_review' } },
     { id: 'tests', type: 'agent_step', writes: 'tests', model: SONNET, effort: 'medium', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'red' },

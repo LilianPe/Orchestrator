@@ -27,6 +27,8 @@ export interface FactoryYml {
   concurrency?: number;
   /** `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340); `validate`'s worst case waits for ORC-216. */
   budgets?: { perStepTokens?: Record<string, number>; perTicketTokens?: number; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
+  /** The built-in tools of each agent step, in place of its preset default (ORC-383): checked against the step by `loadWorkflow`, applied by `stepSettings`. */
+  tools?: { perStep?: Record<string, string[]> };
   /**
    * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and
    * `secrets` are the values of what the repository's `.factory/config.yml` declares (ORC-211).
@@ -134,7 +136,7 @@ export function claudeToken(value: string | undefined, from: string): string | u
 
 /** What the workflow's agent steps read of the file (ORC-136). */
 export function stepSettings(yml: FactoryYml | undefined): StepSettings {
-  return { effort: yml?.claude?.effort, budgets: yml?.budgets };
+  return { effort: yml?.claude?.effort, budgets: yml?.budgets, tools: yml?.tools };
 }
 
 export class FactoryYmlError extends Error {
@@ -149,6 +151,7 @@ const SECTIONS: Record<string, string[]> = {
   claude: ['runtime', 'accounts', 'active', 'default_model', 'per_step', 'effort'],
   concurrency: [],
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
+  tools: ['per_step'],
   repos: [],
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
@@ -170,6 +173,12 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
 export function loadFactoryBudgets(home: string): FactoryYml['budgets'] {
   const text = factoryYmlText(home);
   return text === undefined ? undefined : parseSection(text, 'budgets')?.budgets;
+}
+
+/** The `tools` of `<home>/factory.yml` alone (ORC-383), as `loadFactoryBudgets` reads its budgets, for `factory validate`. */
+export function loadFactoryTools(home: string): FactoryYml['tools'] {
+  const text = factoryYmlText(home);
+  return text === undefined ? undefined : parseSection(text, 'tools')?.tools;
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
@@ -288,6 +297,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       ...(onUsageLimit ? { onUsageLimit } : {}),
     };
   }
+  const perStepTools = leaf('tools.per_step', section('tools')?.['per_step'], z.record(z.string(), z.array(z.string().min(1))), '`step: [tool, …]` expected');
+  if (perStepTools) out.tools = { perStep: perStepTools };
   const repos = leaf(
     'repos',
     r['repos'],

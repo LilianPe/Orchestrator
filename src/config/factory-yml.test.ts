@@ -132,6 +132,19 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('audit: { definition: x }')).toContain('audit.definition: unknown key');
   });
 
+  it("reads the tools of each step, and hands them to the agent steps (ORC-383)", () => {
+    const yml = parseFactoryYml('tools: { per_step: { build: [Read, Edit, Write], review: [Read] } }', ENV);
+    expect(yml.tools).toEqual({ perStep: { build: ['Read', 'Edit', 'Write'], review: ['Read'] } });
+    expect(stepSettings(yml)).toEqual({ tools: { perStep: { build: ['Read', 'Edit', 'Write'], review: ['Read'] } } });
+    expect(parseFactoryYml('concurrency: 1', ENV).tools).toBeUndefined();
+  });
+
+  it('refuses tools that are not a list of names per step, and an unknown key of tools (ORC-383)', () => {
+    expect(violations('tools: { per_step: { build: Read } }').join()).toContain('tools.per_step');
+    expect(violations('tools: { per_step: { build: [""] } }').join()).toContain('tools.per_step');
+    expect(violations('tools: { build: [Read] }')).toContain('tools.build: unknown key');
+  });
+
   it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {
     expect(stepSettings(undefined)).toEqual({});
     expect(stepSettings({ budgets: { maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });

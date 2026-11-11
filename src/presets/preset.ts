@@ -65,7 +65,7 @@ interface AgentFields {
 }
 
 export type Step =
-  /** `readOnly`: it reads and searches, no write tool and no shell (`READ_TOOLS`, ORC-367); only a step that writes nothing. */
+  /** `readOnly`: it reads and searches, no write tool and no shell (`READ_TOOLS`, ORC-367); only a step that writes nothing in its worktree, the spec aside. */
   | (BaseStep & AgentFields & { type: 'agent_step'; writes: Writes; skill?: string; optional?: boolean; readOnly?: boolean })
   | (BaseStep & AgentFields & { type: 'fix'; skills: Record<FixCause, string> })
   | (BaseStep & AgentFields & { type: 'review'; skill: string; readOnly: boolean })
@@ -131,7 +131,8 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
       if (NETWORK_RANK[s.network] > NETWORK_RANK['claude-api']) violations.push(`${where}: a review step runs with network claude-api at most`);
     }
     if (s.type === 'agent_step' && !s.writes) violations.push(`${where}: an agent step must declare what it writes`);
-    if (s.type === 'agent_step' && s.readOnly && s.writes !== 'nothing') violations.push(`${where}: a read-only step writes nothing`);
+    // The spec goes through `submit_result` (ORC-212): nothing in the worktree.
+    if (s.type === 'agent_step' && s.readOnly && s.writes !== 'nothing' && s.writes !== 'spec') violations.push(`${where}: a read-only step writes nothing in its worktree`);
     if (preset.level === 'rapide' && s.type === 'human_gate') violations.push(`${where}: a preset at level rapide has no human gate, nobody answers`);
     if (isAgentStep(s) && !isPositiveInt(s.maxTurns)) {
       violations.push(`${where}: maxTurns must be a positive integer`);
@@ -171,14 +172,6 @@ function isPositiveInt(n: number): boolean {
 /** A step an agent runs: it has a model, an effort and a cap of turns. */
 export function isAgentStep(s: Step): s is Extract<Step, { maxTurns: number }> {
   return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
-}
-
-/** The built-in tools of a read-only step (`claude --tools`): it reads and searches, it writes nothing and runs no command (ORC-183, ORC-367). */
-export const READ_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob'];
-
-/** Its tools, when the step is read-only: `intake`, `clarify` and the AI review. Every other step has all of them. */
-export function stepTools(s: Step): readonly string[] | undefined {
-  return (s.type === 'agent_step' || s.type === 'review') && s.readOnly ? READ_TOOLS : undefined;
 }
 
 /** The ways back a step can take: its own failure edge, the red CI's and the conflict's (ORC-146). */

@@ -17,7 +17,12 @@ export const REFUSAL_RULES = [
   'push-trunk',
   'push',
   'full-read',
+  'tool-not-allowed',
 ] as const;
+
+/** The tools the hook's command and read rules judge; `tool-not-allowed` (ORC-383) refuses any tool, named as Claude Code names it. */
+const JUDGED_TOOLS: readonly string[] = ['Bash', 'WebSearch', 'Read'];
+const TOOL_NAME = /^[A-Za-z][\w-]{0,99}$/;
 
 /** Rules the hook wrote once and no longer does: a log written before is still read. `forge-read`, a knowledge run's, until ORC-193. */
 const RETIRED_RULES = ['forge-read'] as const;
@@ -40,13 +45,15 @@ const egressLine = z.object({
 
 /** The command a line names, or the path of a refused read, is not read: it can hold a secret. */
 const refusalLine = (ticketId: string) =>
-  z.object({
-    at,
-    tool: z.enum(['Bash', 'WebSearch', 'Read']),
-    rule: z.enum([...REFUSAL_RULES, ...RETIRED_RULES]),
-    // The hook writes the run's FACTORY_TICKET: another ticket is a forged line.
-    ticket: z.literal(ticketId),
-  });
+  z
+    .object({
+      at,
+      tool: z.string().regex(TOOL_NAME),
+      rule: z.enum([...REFUSAL_RULES, ...RETIRED_RULES]),
+      // The hook writes the run's FACTORY_TICKET: another ticket is a forged line.
+      ticket: z.literal(ticketId),
+    })
+    .refine((l) => l.rule === 'tool-not-allowed' || JUDGED_TOOLS.includes(l.tool));
 
 /** The proxy's journal is the daemon's; the refusals log is the agent's, a few lines at most. */
 const EGRESS_MAX_BYTES = 16 * 1024 * 1024;

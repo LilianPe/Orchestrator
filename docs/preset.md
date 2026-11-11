@@ -55,6 +55,18 @@ A token cap counts `input + output + cache_creation` of the attempt's messages, 
 
 The network level is chosen per repository (Limited by default); a step can only tighten it. A step declared above the repository's level makes compilation fail.
 
+### The agent's tools per step (ORC-383)
+
+Each agent step has a list of built-in tools, passed to `claude --tools` and enforced a second time by the pack's `PreToolUse` hook, which refuses any other tool and journals it (rule `tool-not-allowed`, [pack](pack-and-skills.md#pretooluse-hook-and-refusal-log)). The factory's MCP tools (`submit_result`, `ask`, `kb_search`) are always beside them.
+
+| Steps | Default tools |
+| -- | -- |
+| `intake`, `clarify`, `spec_draft`, `review`, and the answer agent (`ask`, a job out of the preset) | `Read`, `Grep`, `Glob`: read-only, no write tool and no shell |
+| `tests`, `build`, `fix`, `rebase`, `after_merge` | `Read`, `Grep`, `Glob`, `Edit`, `Write`, `NotebookEdit`, `Bash`, `TodoWrite`, `Skill`: no subagent, no web tool |
+| `spec_check`, `verify*`, `red`, `freeze_tests` | none: the factory's own checks, no agent |
+
+`factory.yml` sets a step's list (`tools.per_step`, [configuration](configuration.md#factoryyml-orc-209)), and the repository's `.factory/config.yml` can only restrict it (`tools.per_step`, [repository configuration](repository-configuration.md#keys)): the run gets the tools of both lists. A list never gives a step more than its preset step and its network allow, and a value that would is refused when it is read: no write tool or shell for a read-only step, no `WebFetch` below network `limited` (a repository at `none` included), never `WebSearch`, and no tool the factory does not know (`Task` among them). At the launch, `WebFetch` is also dropped from a run whose network does not reach past the Claude API. Like the rest of the workflow, a step's tools are frozen with the ticket's version; a version frozen before ORC-383 keeps every tool for the steps that write, narrowed to the repository's list when it has one. `factory validate` shows each step's tools.
+
 ## What the engine already reads
 
 `loadWorkflow` compiles the preset then carries its bounds over into `limits`, which is frozen with each ticket's workflow version (ORC-149). A ticket therefore keeps the bounds it started with.
@@ -115,7 +127,7 @@ The ticket is then Blocked, kind `conflict`, with the standard comment (step `re
 
 ## `intake` step and the guard before In Progress (ORC-206)
 
-The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job) reads the ticket, the repository's architecture docs and decisions and the code it touches. It writes nothing and does not move the ticket: since ORC-367 the run itself holds it to that. It runs on a fresh clone of the default branch (workspace `trunk-readonly`, `_trunk/<runId>/`, gone with the run), never in the ticket's worktree, so a ticket found incomplete keeps no worktree made for nothing; and like the AI review's lenses it has the `Read`, `Grep` and `Glob` tools only (`claude --tools`), no write tool and no shell, whatever its skill says. A read-only step of the preset (`readOnly`: `intake`, `clarify`; not `after_merge`, which writes no code but keeps its shell) gives its job these tools, and such a job anywhere but a clone of its own (`trunk-readonly`) is refused when the workflow loads. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands back, in the `intake` field of `submit_result`:
+The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job) reads the ticket, the repository's architecture docs and decisions and the code it touches. It writes nothing and does not move the ticket: since ORC-367 the run itself holds it to that. It runs on a fresh clone of the default branch (workspace `trunk-readonly`, `_trunk/<runId>/`, gone with the run), never in the ticket's worktree, so a ticket found incomplete keeps no worktree made for nothing; and like the AI review's lenses it has the `Read`, `Grep` and `Glob` tools only (`claude --tools`), no write tool and no shell, whatever its skill says. A read-only step of the preset (`readOnly`: `intake`, `clarify`, `spec_draft`; not `after_merge`, which writes no code but keeps its shell) gives its job these tools ([tools per step](#the-agents-tools-per-step-orc-383)), and a job of a read-only step that writes nothing (`intake`, `clarify`) anywhere but a clone of its own (`trunk-readonly`) is refused when the workflow loads. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands back, in the `intake` field of `submit_result`:
 
 | Field | Values |
 | -- | -- |
@@ -189,7 +201,7 @@ A timer only acts on the round that armed it (`at`): a round answered, asked aga
 
 ## `spec_draft`, `spec_check` and the `spec_review` gate (ORC-212)
 
-The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
+The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
 
 | Section | What it holds |
 | -- | -- |

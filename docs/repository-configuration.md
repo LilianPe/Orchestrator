@@ -28,6 +28,7 @@ feature_flags: { provider: openfeature }    # optional
 visual_paths: ["src/components/**", "app/**"]
 network: { level: custom, allow: ["docs.exemple.com"] }    # none | limited (default) | custom; `allow` for custom only
 dependencies: { allow: { npm: [zod, "@types/node"], pypi: [requests] } }   # the packages a branch may add; none without a list
+tools: { per_step: { build: [Read, Grep, Glob, Edit, Write] } }          # can only restrict a step's tools
 ```
 
 ## Keys
@@ -46,6 +47,7 @@ dependencies: { allow: { npm: [zod, "@types/node"], pypi: [requests] } }   # the
 | `feature_flags.provider` | text | none | Feature flag provider. |
 | `visual_paths` | list of patterns | `[]` | Paths that require visual proof (ORC-176): a diff that touches one makes `verify` take captures before and after ([workflow.md](workflow.md#jobs)). Matched as `sensitive_paths`, from the root. |
 | `network` | `{ level, allow }` | `limited`, `[]` | The agent's network level: `none`, `limited` or `custom`. See [The agent's network](#the-agents-network). |
+| `tools.per_step` | `step: [tool, …]` | none | The built-in tools of an agent step (ORC-383): the run gets only those that `factory.yml` or the preset also gives the step ([tools per step](preset.md#the-agents-tools-per-step-orc-383)), so a list only restricts. Refused: a step that has no agent, a write tool or a shell for a read-only step (`intake`, `clarify`, `spec_draft`, `review`), `WebFetch` below network `limited` (or with `network.level: none`), `WebSearch`, a tool the factory does not know. |
 | `dependencies.allow` | `{ npm, pypi }`, lists of names | none | The packages a branch may add, exact names (PyPI compared after normalisation, `Typing_Extensions` is `typing-extensions`). An ecosystem without a list allows nothing there. See [Dependencies](#dependencies). |
 
 ## Variables and secrets

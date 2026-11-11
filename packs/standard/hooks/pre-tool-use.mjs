@@ -5,6 +5,7 @@
 // A guard against an agent's mistakes, not a barrier: a command written otherwise gets past it. A push fails for want
 // of means, a sandbox without token, or on the host a git config that sends every push nowhere (ORC-349).
 // It also refuses a whole read of a large file (ORC-279): a question of tokens, see fullRead.
+// And any tool off the step's list (ORC-383), behind `claude --tools`: see offList.
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -208,6 +209,16 @@ function fullRead(input) {
   }
 }
 
+/**
+ * The run's built-in tools, comma-separated (`FACTORY_TOOLS`, ORC-383), the factory's MCP tools always beside them: any other
+ * tool is refused. Unset: a run with every tool, nothing to check.
+ */
+const TOOLS = process.env.FACTORY_TOOLS?.split(',').filter(Boolean);
+function offList(tool) {
+  if (TOOLS && !tool.startsWith('mcp__factory__') && !TOOLS.includes(tool)) return 'tool-not-allowed';
+  return null;
+}
+
 function journal(entry) {
   const env = process.env;
   const file =
@@ -230,11 +241,14 @@ try {
 const tool = call.tool_name ?? '';
 const input = call.tool_input ?? {};
 const command = String(input.command ?? input.query ?? input.file_path ?? '');
-const hit = tool === 'Read' ? fullRead(input) : rule(tool, command);
+// The command rules judge a shell command or a search query: an edit's path or another tool's input is no command.
+const hit = offList(tool) ?? (tool === 'Read' ? fullRead(input) : tool === 'Bash' || tool === 'WebSearch' ? rule(tool, command) : null);
 if (hit) {
   journal({ at: new Date().toISOString(), tool, command, rule: hit, ticket: process.env.FACTORY_TICKET ?? null });
   const permissionDecisionReason = hit === 'full-read'
     ? `Refused by the factory (rule ${hit}): this file is longer than ${READ_MAX_LINES} lines. Find what you need with grep, then read the useful range with offset and limit.`
-    : `Refused by the factory (rule ${hit}): this command is forbidden in a run.`;
+    : hit === 'tool-not-allowed'
+      ? `Refused by the factory (rule ${hit}): ${tool} is not a tool of this step, which has ${TOOLS.join(', ') || 'none'} and the factory's MCP tools.`
+      : `Refused by the factory (rule ${hit}): this command is forbidden in a run.`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason } }));
 }

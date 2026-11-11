@@ -5,6 +5,8 @@ import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { isPackageName, type AllowList } from '../checks/deps.js';
 import { MaxDiffConfigError, resolveMaxDiff, type MaxDiff } from '../checks/diff-size.js';
 import { FORBIDDEN_PATHS, repoPatternError } from '../checks/forbidden-paths.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { stepTools, toolRefusal } from '../presets/tools.js';
 
 /**
  * `.factory/config.yml` (ORC-209): what a repository declares to the factory, optional. It can add controls or
@@ -35,6 +37,11 @@ export interface RepoConfig {
   visualPaths: string[];
   /** The packages a branch may add (`factory/dependances`, ORC-371): exact names per ecosystem, none allowed where there is no list. */
   dependencies: { allow: AllowList };
+  /**
+   * The built-in tools of each agent step (ORC-383): they only restrict what `factory.yml` or the preset gives the step (`narrowTools`
+   * at the launch); a tool the step may never have is refused here. Absent: the step keeps its tools.
+   */
+  tools?: { perStep: Record<string, readonly string[]> };
 }
 
 /** The repository picks its level; `full` is reserved to `setup`, never for the agent. */
@@ -76,7 +83,7 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies'];
+const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'tools'];
 const strings = z.array(z.string().min(1));
 
 const VARIABLE = /^[A-Z][A-Z0-9_]*$/;
@@ -162,6 +169,20 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
       if (!isPackageName(ecosystem, name)) violations.push(`dependencies.allow.${ecosystem}[${i}]: "${name}" is not an exact package name; patterns are refused`);
     });
   }
+  const tools = read('tools', z.strictObject({ per_step: z.record(z.string(), strings) }), '`{ per_step: { step: [tool, …] } }` expected', 'a list of tool names per step expected');
+  for (const [name, list] of Object.entries(tools?.per_step ?? {})) {
+    const step = factoryDefault.steps.find((s) => s.id === name);
+    if (!step || !stepTools(step)) {
+      violations.push(`tools.per_step.${name}: not an agent step of ${factoryDefault.name}`);
+      continue;
+    }
+    // At network none, its step runs at none too: no WebFetch (`stepPolicy`).
+    const level = network.level === 'none' ? 'none' : step.network;
+    for (const tool of list) {
+      const refused = toolRefusal(step, tool, level);
+      if (refused) violations.push(`tools.per_step.${name}: ${refused}`);
+    }
+  }
   let maxDiff = resolveMaxDiff();
   try {
     maxDiff = resolveMaxDiff(r['max_diff'] as Partial<MaxDiff> | null | undefined);
@@ -187,6 +208,7 @@ export function parseRepoConfig(text: string | undefined): RepoConfig {
     ...(featureFlags ? { featureFlags } : {}),
     visualPaths: visualPaths ?? [],
     dependencies: { allow: dependencies?.allow ?? {} },
+    ...(tools ? { tools: { perStep: tools.per_step } } : {}),
   };
 }
 

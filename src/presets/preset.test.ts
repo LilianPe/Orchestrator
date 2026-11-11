@@ -148,10 +148,15 @@ describe('compilePreset', () => {
     expect(violations(p)).toContain('step review: a review step must be read-only');
   });
 
-  it('refuses a read-only step that writes (ORC-367)', () => {
+  it('refuses a read-only step that writes in its worktree, and accepts one that hands back a spec (ORC-367, ORC-383)', () => {
+    for (const writes of ['tests', 'code']) {
+      const p = clone();
+      (step(p, 'intake') as { writes: string }).writes = writes;
+      expect(violations(p), writes).toContain('step intake: a read-only step writes nothing in its worktree');
+    }
     const p = clone();
     (step(p, 'intake') as { writes: string }).writes = 'spec';
-    expect(violations(p)).toContain('step intake: a read-only step writes nothing');
+    expect(violations(p)).toEqual([]);
   });
 
   it('refuses a build reachable without freezing the tests', () => {

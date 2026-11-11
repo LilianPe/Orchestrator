@@ -8,6 +8,7 @@ import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.j
 import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { causeOf } from '../../src/core/block-cause.js';
 import { TRUSTED } from '../../src/core/types.js';
+import { WRITE_TOOLS } from '../../src/presets/tools.js';
 import { createHarness } from '../helpers/harness.js';
 
 const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
@@ -43,6 +44,22 @@ describe("the repository's config at the launch", () => {
     await delegate(h);
     expect(agents(h)).toMatchObject([{ network: 'claude-api' }]);
     expect(agents(h)[0]).not.toHaveProperty('allow');
+  });
+
+  it("hands the build the step's tools, narrowed by the repository's list, to claude and to the hook (ORC-383)", async () => {
+    const h = createHarness({ sandboxed: true, ...onDefaultBranch('tools: { per_step: { build: [Read, Grep, Glob, Edit, Write] } }\n') });
+    await delegate(h);
+    const [req] = h.runner.requests;
+    expect(req!.tools).toEqual(['Read', 'Grep', 'Glob', 'Edit', 'Write']);
+    expect(req!.env['FACTORY_TOOLS']).toBe('Read,Grep,Glob,Edit,Write');
+  });
+
+  it("hands the build the preset's write tools when the repository restricts nothing (ORC-383)", async () => {
+    const h = createHarness({ sandboxed: true, ...onDefaultBranch(BASE) });
+    await delegate(h);
+    const [req] = h.runner.requests;
+    expect(req!.tools).toEqual(WRITE_TOOLS);
+    expect(req!.env['FACTORY_TOOLS']).toBe(WRITE_TOOLS.join(','));
   });
 
   it("runs the file's setup, not the workflow's", async () => {
