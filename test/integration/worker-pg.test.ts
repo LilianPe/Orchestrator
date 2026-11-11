@@ -9,7 +9,6 @@ import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js
 import { createHarness, trackHarnesses } from '../helpers/harness.js';
 import { createTestSchema, EMPTY_ALL, type TestSchema, PG_URL } from '../helpers/pg-database.js';
 
-
 /** Each event of a ticket decides one comment; a prompt appends its body to the ticket's feedback. */
 const COMMENTS = `
 version: 1

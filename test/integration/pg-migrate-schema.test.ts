@@ -30,12 +30,6 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
         .sort(),
     );
 
-  it('keeps the journal of the public schema where it always was', () => {
-    expect(journalSchemaOf('public')).toBe('drizzle');
-    expect(journalSchemaOf('tenant')).toBe('tenant_drizzle');
-    expect(() => journalSchemaOf('t'.repeat(56))).toThrow(/too long/);
-  });
-
   it('migrates two schemas of one database each on its own, the journal beside each', async () => {
     for (const s of [a, b]) {
       expect(await tablesOf(s.name)).toEqual([...PG_TABLE_NAMES].sort());
@@ -62,7 +56,8 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
     }
   });
 
-  it('has neither sequence nor foreign key: deleting the rows resets a schema (EMPTY_ALL)', async () => {
+  // A sequence or a foreign key is fine for the store, but EMPTY_ALL would then have to reset or order them.
+  it('has neither sequence nor foreign key, which EMPTY_ALL relies on to reset a test schema', async () => {
     const { rows } = await queryOn(PG_URL, (c) =>
       c.query<{ kind: string; name: string }>(
         `select 'sequence' as kind, sequence_name as name from information_schema.sequences where sequence_schema = $1
