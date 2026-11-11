@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { disabledControls, FactoryYmlError, type FactoryYml } from '../config/factory-yml.js';
+import { disabledControls, FactoryYmlError, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, ticketTokenCap, type RepoConfig } from '../config/repo-config.js';
 import { checkBudgets } from '../presets/budget.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -85,7 +85,8 @@ function validateBudgets(config: RepoConfig, opts: { out: (line: string) => void
   const disabled = disabledControls(yml);
   if (disabled.length) opts.out(`Disabled in factory.yml: ${disabled.join(', ')}.`);
   const budgets = yml?.budgets;
-  const perTicketTokens = ticketTokenCap(budgets?.perTicketTokens, config);
+  // factory.yml's `off` (ORC-381) leaves the repository's own cap.
+  const perTicketTokens = ticketTokenCap(ticketCapOf(yml), config);
   const caps = { ...budgets, ...(perTicketTokens !== undefined ? { perTicketTokens } : {}) };
   // The preset's structure is compiled at load (`loadWorkflow`): only its budgets are left to check.
   const { violations, worst } = checkBudgets(factoryDefault, caps);

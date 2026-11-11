@@ -153,8 +153,7 @@ function leftOut(m: DiffMeasure): string {
 
 /** The bounds set, `15 files, 400 lines`: one `max_diff: off` left unbounded is not named. */
 function bounds(limits: MaxDiff): string {
-  const set = [...(Number.isFinite(limits.files) ? [`${limits.files} files`] : []), ...(Number.isFinite(limits.lines) ? [`${limits.lines} lines`] : [])];
-  return set.join(', ');
+  return (['files', 'lines'] as const).filter((k) => Number.isFinite(limits[k])).map((k) => `${limits[k]} ${k}`).join(', ');
 }
 
 function blockedSummary(m: DiffMeasure, limits: MaxDiff): string {
@@ -185,10 +184,11 @@ export function diffSizeCheck(diff: string | DiffFile[], options: DiffSizeOption
   }
   const ok = measure.size.files <= limits.files && measure.size.lines <= limits.lines;
   const measured = `${measure.size.files} file(s), ${measure.size.lines} line(s) outside tests${leftOut(measure)}`;
+  const set = bounds(limits);
   const summary = !ok
     ? blockedSummary(measure, limits)
-    : limits.files === Infinity && limits.lines === Infinity
-      ? `${measured}, not bounded: \`max_diff\` is disabled in factory.yml.`
-      : `${measured}, within \`max_diff\` (${bounds(limits)}).`;
+    : set
+      ? `${measured}, within \`max_diff\` (${set}).`
+      : `${measured}, not bounded: \`max_diff\` is disabled in factory.yml.`;
   return { check: DIFF_SIZE_CHECK, ok, summary, size: measure.size, limits };
 }

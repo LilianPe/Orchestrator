@@ -49,12 +49,9 @@ export function repoNetworkCeiling(config: RepoConfig): NetworkLevel {
   return config.network.level === 'none' ? 'none' : 'limited';
 }
 
-/**
- * The ticket's token cap (ORC-340, ORC-216): factory.yml's, lowered by the repository's, never raised. Undefined without
- * either. factory.yml's `off` (ORC-381) leaves the repository's own.
- */
-export function ticketTokenCap(factoryCap: number | 'off' | undefined, config: RepoConfig): number | undefined {
-  const caps = [factoryCap === 'off' ? undefined : factoryCap, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
+/** The ticket's token cap (ORC-340, ORC-216): factory.yml's, lowered by the repository's, never raised. Undefined without either. */
+export function ticketTokenCap(factoryCap: number | undefined, config: RepoConfig): number | undefined {
+  const caps = [factoryCap, config.budgets?.perTicketTokens].filter((c) => c !== undefined);
   return caps.length ? Math.min(...caps) : undefined;
 }
 

@@ -3,6 +3,7 @@ import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
+import { MAX_DIFF } from '../checks/diff-size.js';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from './load-workflow.js';
 
@@ -192,8 +193,8 @@ export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.en
  */
 export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'maxDiff'> {
   const text = factoryYmlText(home);
-  const { budgets, maxDiff } = (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff'])) ?? {};
-  return { ...(budgets ? { budgets } : {}), ...(maxDiff ? { maxDiff } : {}) };
+  // Only these two keys are parsed: the result holds nothing else.
+  return (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff'])) ?? {};
 }
 
 /** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
@@ -300,8 +301,10 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   const concurrency = leaf('concurrency', r['concurrency'], z.number().int().positive(), 'a positive integer is expected');
   if (concurrency !== undefined) out.concurrency = concurrency;
   // `off` disables a token cap (ORC-381): `budgets: off` both.
-  const budgets = r['budgets'] === 'off' ? { per_step_tokens: 'off', per_ticket_tokens: 'off' } : typeof r['budgets'] === 'string' ? undefined : section('budgets');
-  if (typeof r['budgets'] === 'string' && r['budgets'] !== 'off') violations.push('budgets: an object is expected, or `off`');
+  let budgets: Record<string, unknown> | undefined;
+  if (r['budgets'] === 'off') budgets = { per_step_tokens: 'off', per_ticket_tokens: 'off' };
+  else if (typeof r['budgets'] === 'string') violations.push('budgets: an object is expected, or `off`');
+  else budgets = section('budgets');
   if (budgets) {
     const perStepTokens = leaf('budgets.per_step_tokens', budgets['per_step_tokens'], counts.or(z.literal('off')), '`step: positive integer` expected, or `off`');
     const perTicketTokens = leaf('budgets.per_ticket_tokens', budgets['per_ticket_tokens'], z.number().int().positive().or(z.literal('off')), 'a positive integer is expected, or `off`');
@@ -337,7 +340,7 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
     });
   }
-  const maxDiff = leaf('max_diff', r['max_diff'], z.literal('off'), 'only `off` exists here; without it, the baseline (15 files, 400 lines) applies, tightened by each repository');
+  const maxDiff = leaf('max_diff', r['max_diff'], z.literal('off'), `only \`off\` exists here; without it, the baseline (${MAX_DIFF.files} files, ${MAX_DIFF.lines} lines) applies, tightened by each repository`);
   if (maxDiff) out.maxDiff = maxDiff;
   const maxLines = leaf('read_guard.max_lines', section('read_guard')?.['max_lines'], z.number().int().positive(), 'a positive integer is expected');
   if (maxLines !== undefined) out.readGuard = { maxLines };
