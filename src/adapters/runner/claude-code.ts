@@ -56,6 +56,7 @@ export function buildClaudeArgs(req: RunRequest): string[] {
     req.resume ? '--resume' : '--session-id', req.claudeSessionId,
     '--model', req.model,
     ...(req.effort ? ['--effort', req.effort] : []),
+    ...(req.systemPrompt ? ['--append-system-prompt', req.systemPrompt] : []),
     '--plugin-dir', req.pluginDir,
     '--settings', req.settingsPath,
     // Nothing of the repository's: no settings, hooks, skills, CLAUDE.md, nor .mcp.json, nor the account's
@@ -156,8 +157,9 @@ function usageLimitOf(raw: { type?: string; is_error?: boolean; result?: unknown
 }
 
 /**
- * The result subtypes of a limit the CLI enforces itself (`--max-turns`, `--max-budget-usd`): by name, never a word in it
- * (ORC-348). Any other error, a new one included, is a failure.
+ * The result subtypes of a limit the CLI enforces itself (`--max-turns`; the dollar cap only of a run launched before
+ * ORC-216, which the factory no longer passes): by name, never a word in it (ORC-348). Any other error, a new one
+ * included, is a failure.
  */
 const LIMIT_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd']);
 

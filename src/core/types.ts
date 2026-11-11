@@ -231,9 +231,10 @@ export interface EventPayloads {
   /**
    * `ack`: brought by the webhook, to acknowledge (ORC-171). `noRepo`: the Linear team no project takes: the ticket waits blocked under the first project.
    * `repos`: the team has several and the ticket names none (ORC-291); the delegation then waits for a human's choice.
-   * `waitedIn`: the project where the ticket waited for that choice.
+   * `waitedIn`: the project where the ticket waited for that choice. `replay`: the replay of closed tickets whose daemon delegated it
+   * (ORC-376), no human: no actor to check.
    */
-  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string; repos?: string[]; waitedIn?: string };
+  'ticket.delegated': { linearSessionId?: string; promptContext?: string; issue?: IssueSnapshot; ack?: true; noRepo?: string; repos?: string[]; waitedIn?: string; replay?: string };
   /** `keepLabel`: another project's ticket for the same issue is blocked, the label stays (ORC-291). */
   'ticket.undelegated': { keepLabel?: true };
   /**
@@ -447,7 +448,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'assumed'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** A question the answer agent relays to the agent that implements, into the run inbox (ORC-182). */
@@ -704,6 +705,11 @@ export interface TicketState {
   visualProof?: 'required' | null;
   /** The existing code `intake` found close to the request (ORC-207), its last assessment: leads `build` is given to reuse. */
   reuse?: ReuseLead[];
+  /**
+   * What the Rapide level (ORC-231) assumed instead of asking: the questions `clarify` would have asked, each as `Unasked: …`,
+   * written in the spec's `assumed` at its approval and counted by the replay's report.
+   */
+  assumed?: string[];
   /**
    * The ticket's spec (ORC-212), its last version: waiting for review while it has no approval and no run of the ticket
    * is being drafted, the contract of the later steps once approved. Absent until `spec_draft` wrote one; `null` once a

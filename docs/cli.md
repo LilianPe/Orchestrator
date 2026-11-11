@@ -20,6 +20,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory stop <ID>` | Stop a ticket's run. | yes |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
+| `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against a threshold written before. | no (the database, `gh`) |
 
 The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. If `RELAIS_UI_PASSWORD` is set in your shell, they send it as HTTP Basic (necessary when the daemon listens beyond loopback). In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
@@ -87,7 +88,7 @@ Requires Linear to be connected (`Linear not connected: run `factory up`, then c
 ### `factory status`
 
 ```text
-Linear: connected · queue: active (0 waiting) · dev slots 1/3 · cost today 2.40 $
+Linear: connected · queue: active (0 waiting) · dev slots 1/3
   REL-12  dev  Add the CSV export
     run 7f3a…: dev, for 12 min, 0.80 $
   REL-15  todo (blocked)  Fix the login
@@ -173,6 +174,14 @@ Stored.
 
 The same period again is refused, the stored rows kept and no figure printed, unless `--replace`: a baseline is what the factory is measured against, never recomputed by accident. A start still to come is refused before anything is read. Linear's archived issues are read too: a team archives closed issues after its own delay, which the period may be past. The Overview shows the baseline computed last. A list Linear or GitHub cannot give to its end (GitHub's search stops at 1000 PRs) stops the command, never a baseline read in part. Like `flaky`, the command writes to the instance's database, without the daemon.
 
+### `factory ghost` (ORC-231)
+
+The replay of closed tickets: `start <project> --threshold <share> --tickets <ID>=<PR>,...` writes the replay and its threshold
+(required, never changed after) and rebuilds each ticket at the parent of its PR's merge commit, for a project on the
+`factory/fantome` preset; the daemon then delegates each ticket to that project itself (ORC-376). It is refused when the daemon
+runs its agents on the host (no sandboxes), or has never started: the agent could push by itself. `collect`, `judge` (the blind screen, PR A and PR B on the grid mergeable as is / after edits / to reject) and `report` follow. See
+[the replay of closed tickets](ghost-replay.md). Like `flaky`, the command writes to the instance's database, without the daemon.
+
 ## `relais-agent` (agent side)
 
 During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` and `RELAIS_RUN_TOKEN`. The agent then uses:
@@ -181,8 +190,9 @@ During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` an
 |---|---|
 | `relais-agent issue <ID>` | Prints the ticket: identifier, title, status, URL, description. **Limited to the run's ticket** (403 otherwise). |
 | `relais-agent search <text>` | Searches the Linear tickets of the current ticket's team (ORC-349). |
-| `relais-agent kb search <words>` | Searches `notes/*.md` in the knowledge base (words of 3 letters or more, ignoring accents and case). Prints `file:line: text`. |
 | `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
+
+The knowledge base is no longer searched here: the factory MCP's `kb_search` tool searches `notes/*.md` (words of 3 letters or more, ignoring accents and case) and answers `file:line: text` (ORC-232).
 
 Launched outside a run, it answers `relais-agent must be started by Relais (RELAIS_API and RELAIS_RUN_TOKEN missing).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-and-skills.md`](pack-and-skills.md)).
 

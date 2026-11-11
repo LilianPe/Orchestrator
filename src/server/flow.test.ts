@@ -109,10 +109,10 @@ describe('buildFlow (ORC-297)', () => {
       const f = flow({
         tickets: [ticket('A', { activeRunId: 'r1', costUsd: 0.5 })],
         running: [run('r1', 'A', { job: 'dev-feedback' })],
-        measures: new Map([['p/A', { tokens, attemptsWithoutTokens: 0 }]]),
+        measures: new Map([['p/A', { tokens, attemptsWithoutTokens: 0, usageLimitShare: 0.4 }]]),
       });
       expect(f.working).toEqual([
-        { projectId: 'p', ticketId: 'A', title: 'Titre A', runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 5000, measured: true, tokens, attemptsWithoutTokens: 0, costUsd: 0.5 },
+        { projectId: 'p', ticketId: 'A', title: 'Titre A', runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 5000, measured: true, tokens, attemptsWithoutTokens: 0, usageLimitShare: 0.4, costUsd: 0.5 },
       ]);
     });
 
@@ -120,14 +120,14 @@ describe('buildFlow (ORC-297)', () => {
       const f = flow({
         tickets: [ticket('A', { activeRunId: 'r1' })],
         running: [run('r1', 'A')],
-        measures: new Map([['p/A', { tokens: null, attemptsWithoutTokens: 3 }]]),
+        measures: new Map([['p/A', { tokens: null, attemptsWithoutTokens: 3, usageLimitShare: null }]]),
       });
       expect(f.working[0]).toMatchObject({ tokens: null, attemptsWithoutTokens: 3 });
     });
 
     it('serves no tokens when the measures of the ticket could not be read', () => {
       const f = flow({ tickets: [ticket('A', { activeRunId: 'r1', costUsd: 0.5 })], running: [run('r1', 'A')] });
-      expect(f.working[0]).toMatchObject({ measured: false, tokens: null, attemptsWithoutTokens: 0, costUsd: 0.5 });
+      expect(f.working[0]).toMatchObject({ measured: false, tokens: null, attemptsWithoutTokens: 0, usageLimitShare: null, costUsd: 0.5 });
     });
 
     it('offers Stop on the ticket\'s active run only, as the Tickets table did: not on a question run', () => {

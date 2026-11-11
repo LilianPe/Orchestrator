@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -21,6 +21,7 @@ import {
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
+import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
@@ -30,6 +31,7 @@ import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolic
 import { Worker } from '../runtime/worker.js';
 import { workflowVersion } from '../runtime/workflow-version.js';
 import {
+  KEPT_PR,
   LEASE_MS,
   PAUSE_ACCEPTED,
   RUN_LEASE_MS,
@@ -61,6 +63,7 @@ import { formatReuse, ownWork, ticketBranches } from './intake-checks.js';
 import { branchName } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
+import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -185,6 +188,16 @@ export interface ProjectRuntime {
   repoPath: string;
   teamKey: string;
   workflow: Workflow;
+  /**
+   * `none` (ORC-231): nothing of the project's leaves the factory, no push, no PR, no comment; the outbox keeps each such effect
+   * as an artifact of its run instead (`keptEffectsDir`). The replay of closed tickets runs so, and a prompt tried out.
+   */
+  effects?: 'none';
+  /**
+   * Set by `runtimeFor` on a ticket of a replay of closed tickets (ORC-376): its run reads the ticket as it was at its start, its
+   * thread and linked tickets with it, and works on the clone at that start, which `repoPath` then names.
+   */
+  replayed?: Pick<ReplayedTicket, 'issue' | 'history' | 'knowledge'>;
 }
 
 export interface OrchestratorDeps {
@@ -240,6 +253,13 @@ export interface OrchestratorDeps {
    * `<artifactsDir>/<ticket>/<sha256>.png`, on the daemon's disk, out of every mount of a run. Absent, a required proof is unavailable, indicative.
    */
   visualProof?: { shooter: VisualShooter; artifactsDir: string };
+  /**
+   * Where the effects of a project without effects are kept (ORC-231), `<keptEffectsDir>/<ticket>/<row>.json`, each with its row in
+   * `artifacts`. Absent, such an effect fails: its ticket is blocked, nothing goes out.
+   */
+  keptEffectsDir?: string;
+  /** The replay of closed tickets (ORC-376): where a replayed ticket of a project without effects runs, and what it reads. */
+  replays?: ReplaySource;
   /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
   egressJournal?: (runId: string) => string;
   /** Where the runner keeps the runs' transcripts (ORC-132): the answer agent reads the session at work there (ORC-182). Absent: it reads none. */
@@ -271,7 +291,12 @@ export interface OrchestratorDeps {
   claudeAccount?: () => string | undefined;
   newId?: () => string;
   activityIntervalMs?: number;
-  beforeRun?: (run: RunRecord) => Promise<void>;
+  /**
+   * The knowledge index, read at each launch (ORC-232): the server pulls the knowledge repository and reads its INDEX.md,
+   * capped. The session gets it in its system prompt, and the rest through the MCP's `kb_search`. Absent: no knowledge base.
+   * `repo`, another checkout of it: a replayed ticket's, at transaction time (ORC-376).
+   */
+  knowledgeIndex?: (repo?: string) => Promise<KbIndex>;
   /**
    * Retries of the inbox write of a run or check result (ORC-147): `attempts` writes in all, the
    * n-th retry after `baseMs * 2^(n-1)`. Default 5 writes from 200 ms (about 3 s in all).
@@ -358,6 +383,11 @@ type StartOutcome = 'queued' | 'deferred' | 'done';
 const ECHO_MS = 60_000;
 /** The `meta` key of the installation's id (`instanceId`). */
 const INSTANCE_KEY = 'instance-id';
+
+/** What the PR's description is composed from (`describePr`), published or kept (ORC-231). */
+const publishFacts = (t: TicketState, c: Extract<Effect, { kind: 'publish' }>) => ({
+  ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}),
+});
 
 /** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
 /** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */
@@ -503,6 +533,8 @@ export class Orchestrator {
       request: (event) => this.request(event),
       committed: (event, outcome) => this.committed(event, outcome),
       execute: (row) => this.execute(row),
+      noEffect: (projectId) => this.noEffect(projectId),
+      ...(d.keptEffectsDir ? { keep: (row: OutboxRow) => this.keep(row, d.keptEffectsDir!) } : {}),
       leaseMs: d.effectLeaseMs,
       retry: d.processRetry,
       left: (row) => void this.freeSlot(row),
@@ -934,7 +966,7 @@ export class Orchestrator {
       const { egress, refusals } = log.skipped;
       if (egress + refusals) this.log('warn', `security log of ${runId}: ${egress} egress and ${refusals} refusal lines skipped (malformed or forged)`);
       const summary = refusalSummary(log);
-      if (summary && owner.linearSessionId) await this.d.tracker.activity(owner.linearSessionId, { type: 'thought', body: summary });
+      if (summary && owner.linearSessionId && !this.silenced(owner.projectId, `the security summary of ${runId}`)) await this.d.tracker.activity(owner.linearSessionId, { type: 'thought', body: summary });
     } catch (err) {
       this.log('error', `security log of ${runId} not recorded: ${(err as Error).message}`);
     }
@@ -1323,6 +1355,7 @@ export class Orchestrator {
    * any other, without an effect's key. A version frozen before ORC-196 says it the way it did (`frozen`).
    */
   private async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, frozen: (t: TicketState) => Promise<void>): Promise<void> {
+    if (this.silenced(project.id, `the block notice of ${t.ticketId}`)) return;
     if (!project.workflow.blockComment) return frozen(t);
     // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
     await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), `block:${this.newId()}`);
@@ -1416,6 +1449,18 @@ export class Orchestrator {
     return !!this.d.configProblems?.length;
   }
 
+  /** The knowledge index for a session's system prompt (ORC-232), its cut logged: a read that fails launches without it, and says so. */
+  private knowledgePromptOf(index: KbIndex | Error, ticketId: string, job: string): string | undefined {
+    if (index instanceof Error) {
+      this.log('warn', `${ticketId} ${job}: knowledge index not read, the session starts without it: ${index.message}`);
+      return undefined;
+    }
+    if (index.warning) this.log('warn', `${ticketId} ${job}: ${index.warning}`);
+    const prompt = knowledgePrompt(index);
+    if (prompt && index.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
+    return prompt;
+  }
+
   private log(level: 'info' | 'warn' | 'error', message: string): void {
     this.d.bus.publish({ kind: 'log', level, message, at: this.d.clock.now() });
   }
@@ -1475,8 +1520,11 @@ export class Orchestrator {
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
   /** `known`: the ticket, when the caller has just read it (`null`: read, and not tracked). */
   private async runtimeFor(projectId: string, ticketId: string | undefined, known?: TicketState | null): Promise<ProjectRuntime | undefined> {
-    const project = projectId === '*' ? this.d.projects[0] : this.project(projectId);
-    if (!project || !ticketId) return project;
+    const found = projectId === '*' ? this.d.projects[0] : this.project(projectId);
+    if (!found || !ticketId) return found;
+    // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was.
+    const replayed = await this.d.replays?.of(found.id, ticketId);
+    const project = replayed ? { ...found, repoPath: replayed.repoPath, replayed } : found;
     const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);
@@ -1634,6 +1682,78 @@ export class Orchestrator {
     const outcome = await this.exec(project, row.ticketId, effect, key);
     if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
     return outcome;
+  }
+
+  /** A project without effects (ORC-231): the outbox keeps its effects, and the orchestrator makes none of its writes outside it. */
+  private noEffect(projectId: string): boolean {
+    return this.d.projects.find((p) => p.id === projectId)?.effects === 'none';
+  }
+
+  /** Whether `what`, a write to Linear made outside the outbox, is left out because its project has no effects: said in the log. */
+  private silenced(projectId: string, what: string): boolean {
+    if (!this.noEffect(projectId)) return false;
+    this.log('info', `${what} not made: the project has no effects`);
+    return true;
+  }
+
+  /**
+   * An effect of a project without effects (ORC-231), kept instead of made: what it would have written, as a JSON file and its row in
+   * `artifacts`, once by the row's id. A `publish` keeps the PR it would have opened, its title, its body and the ticket's diff, then
+   * goes on as a publication does (`publish.done`), so the run ends as it would have; a `reconcile` reads nothing and keeps nothing.
+   */
+  private async keep(row: OutboxRow, dir: string): Promise<void> {
+    const effect = row.effect;
+    if (effect.kind === 'reconcile' || !row.ticketId) return;
+    const project = await this.runtimeFor(row.projectId, row.ticketId);
+    if (!project) return;
+    const t = await this.ticket(project.id, row.ticketId);
+    if (effect.kind === 'publish') return this.keepPublication(project, t, effect, row.id, dir);
+    await this.keepFile(dir, t.ticketId, row.id, `kept:${effect.kind}`, { kind: effect.kind, row: row.id, effect }, 'runId' in effect ? effect.runId : undefined);
+  }
+
+  /**
+   * A kept `publish` (ORC-231): the same gate as a publication (`publishRefusal`, the output policy on the PR's text), then the PR it
+   * would have opened, with the ticket's diff, and the run goes on as after a publication; a run that committed nothing keeps none.
+   */
+  private async keepPublication(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'publish' }>, rowId: string, dir: string): Promise<void> {
+    if (t.verifyingRunId !== c.runId) return this.log('info', `kept publish of ${t.ticketId} dropped: the ticket let go of run ${c.runId}`);
+    const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId, at: this.d.clock.now() };
+    const payload = { runId: c.runId, job: c.job, sha: c.sha };
+    const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:kept:${rowId}`, type: 'publish.refused', payload: { ...payload, reason } }));
+    const done = async () => void (await this.accept({ ...base, id: `publish-done:kept:${rowId}`, type: 'publish.done', payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }));
+    const refusal = this.publishRefusal(project, t, c.sha);
+    if (refusal) return refuse(refusal);
+    if (!t.branch || !t.worktreePath) return refuse(`no branch or no worktree for ${t.ticketId}.`);
+    const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath);
+    // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
+    if (!diff?.trim()) return done();
+    let text;
+    try {
+      text = await this.policy.pr(describePr(c.output, publishFacts(t, c)));
+    } catch (err) {
+      if (!(err instanceof OutputRefused)) throw err;
+      return refuse(`the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`);
+    }
+    await this.keepFile(dir, t.ticketId, rowId, KEPT_PR, { kind: 'publish', row: rowId, pr: { ...text, branch: t.branch, sha: c.sha, diff } }, c.runId);
+    await done();
+  }
+
+  /** One kept effect: its JSON under `<dir>/<ticket>/`, and its row in `artifacts`, once by the outbox row's id. */
+  private async keepFile(dir: string, ticketId: string, rowId: string, kind: string, content: Record<string, unknown>, runId: string | undefined): Promise<void> {
+    const body = `${JSON.stringify(content, null, 2)}\n`;
+    const folder = join(dir, ticketId);
+    await mkdir(folder, { recursive: true });
+    const path = join(folder, `${rowId.replaceAll(/[^\w.-]/g, '_')}.json`);
+    await writeFile(path, body);
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    await this.d.store.putArtifact({ id: `kept:${rowId}`, ticketId, ...(runId ? { attemptId: runId } : {}), kind, path, sha256, createdAt: this.d.clock.now() });
+    this.log('info', `effect ${rowId} of ${ticketId} kept as ${kind}, not made: the project has no effects`);
+  }
+
+  /** Why a commit may not be published (ORC-125), whatever would publish it: it has no green verification. */
+  private publishRefusal(project: ProjectRuntime, t: TicketState, sha: string): string | undefined {
+    if (mayPublish(t, sha, project.workflow)) return undefined;
+    return `the commit ${sha.slice(0, 12)} has no green verification, the last one is on ${t.verifiedSha?.slice(0, 12) ?? 'no commit'}.`;
   }
 
   /**
@@ -1959,6 +2079,7 @@ export class Orchestrator {
    */
   private async writePlan(t: TicketState, next: (key: string) => Promise<KeptPlan | undefined>): Promise<void> {
     const key = `plan:${t.projectId}:${t.ticketId}`;
+    if (this.silenced(t.projectId, `the plan of ${t.ticketId}`)) return;
     try {
       const kept = await next(key);
       if (!kept) return;
@@ -1979,7 +2100,8 @@ export class Orchestrator {
   /** `state`: what the caller makes of a failed read or write of the factory's state (a launch's: a start to try again, ORC-359). */
   private async sessionFor(t: TicketState, state: StateIo = asIs): Promise<string> {
     if (t.linearSessionId) return t.linearSessionId;
-    const s = await this.d.tracker.ensureSession(t.ticketId);
+    // A project without effects opens no Linear session (ORC-231): a local one, which only kept effects name.
+    const s = this.noEffect(t.projectId) ? `kept:${t.ticketId}` : await this.d.tracker.ensureSession(t.ticketId);
     await state(this.apply(await state(this.ticket(t.projectId, t.ticketId)), { type: 'session.linked', linearSessionId: s }));
     return s;
   }
@@ -2012,6 +2134,7 @@ export class Orchestrator {
     const stateName = project.workflow.states[to];
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
+    if (this.silenced(project.id, `the move of ${t.ticketId} to ${to}`)) return;
     await state(this.d.store.putEcho(stateEchoKey(t.ticketId, stateName), this.d.clock.now() + ECHO_MS));
     await this.d.tracker.moveTo(t.ticketId, stateName);
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
@@ -2086,7 +2209,8 @@ export class Orchestrator {
     if (known) return refuse(known);
     let reason: string;
     const { publisher } = this.d;
-    if (!mayPublish(t, c.sha, project.workflow)) reason = `the commit ${c.sha.slice(0, 12)} has no green verification, the last one is on ${t.verifiedSha?.slice(0, 12) ?? 'no commit'}.`;
+    const unverified = this.publishRefusal(project, t, c.sha);
+    if (unverified) reason = unverified;
     else if (!publisher) reason = "the factory publishes through a GitHub App from its sandboxes, and this instance has none (docs/github.md).";
     else if (!t.branch || !t.worktreePath) reason = `no branch or no worktree for ${t.ticketId}.`;
     else {
@@ -2094,8 +2218,7 @@ export class Orchestrator {
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
         const [untrustedMark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
         const untrusted = untrustedMark ? { untrusted: untrustedMark } : {};
-        const facts = { ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}) };
-        const described = describePr(c.output, facts);
+        const described = describePr(c.output, publishFacts(t, c));
         // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
         const open = t.prNumber !== undefined && t.prState === 'OPEN';
         const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
@@ -2621,6 +2744,12 @@ export class Orchestrator {
 
     // Read while the workspace is prepared; a pack it cannot read gives null fingerprints (ORC-226).
     const pack = packFingerprints(this.d.packDir, (err) => this.log('warn', `attempt labels: pack not fingerprinted: ${err.message}`));
+    // Likewise the knowledge index (ORC-232), its failure kept for the launch to say: a launch that stops early drops it.
+    // A replayed ticket's (ORC-376): the knowledge base at its start, never the one of now, which may hold a note learned from its
+    // own PR; none with `--memory off`.
+    const replayed = project.replayed;
+    const index = replayed ? replayed.knowledge !== undefined ? this.d.knowledgeIndex?.(replayed.knowledge) : undefined : this.d.knowledgeIndex?.();
+    const knowledge = index?.catch((err: Error) => err);
 
     // Up to the workspace: a launch that lost does nothing.
     const head = await (async () => {
@@ -2639,7 +2768,7 @@ export class Orchestrator {
         }, Math.max(1, Math.floor(leaseMs / 3)));
         at.renew.unref();
       }
-      const issue = await tracker.getIssue(ticketId);
+      const issue = project.replayed?.issue ?? (await tracker.getIssue(ticketId));
       // The deterministic checks, before the ticket's first run: at intake, inputs of its guard, journaled with its end
       // (ORC-206); else they block a job that picks up the ticket. The « blocked by » tickets not done likewise (ORC-363),
       // except that they make the job wait instead of blocking it.
@@ -2654,8 +2783,9 @@ export class Orchestrator {
       // Fetched by that read only when a reader of the repository is wired: without one, `prepare` fetches as before.
       const fetched = worktree && !!this.d.repoConfig;
       const naming = early?.branches;
-      // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together.
-      const [search, ownBranches] = guarded
+      // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together. Neither for a
+      // replayed ticket (ORC-376): the forge and the tracker hold now the human's PR and branch, the very work it is compared with.
+      const [search, ownBranches] = guarded && !project.replayed
         ? await Promise.all([
             intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }, naming) : undefined,
             checks.includes('not_started') ? ticketBranches(forge, project.repoPath, issue.identifier, naming) : undefined,
@@ -2682,7 +2812,7 @@ export class Orchestrator {
         const waiting = await state(this.apply(t, waitingOn(blockers, start)));
         this.log('info', `${job.name} on ${ticketId} waits for ${blockers.map((b) => b.identifier).join(', ')} to be done`);
         try {
-          await tracker.activity(await this.sessionFor(waiting), { type: 'thought', body: waitingBody(blockers) });
+          if (!this.silenced(project.id, `the wait of ${ticketId}`)) await tracker.activity(await this.sessionFor(waiting), { type: 'thought', body: waitingBody(blockers) });
         } catch (err) {
           this.log('warn', `could not tell ${ticketId}'s session that it waits: ${(err as Error).message}`);
         }
@@ -2838,6 +2968,7 @@ export class Orchestrator {
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
+        ...(project.replayed?.history ? { history: project.replayed.history } : {}),
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
         spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,
@@ -2855,7 +2986,8 @@ export class Orchestrator {
         ...(relayed.length ? { relayed } : {}),
       };
       const prompt = buildPrompt(promptInput);
-      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null });
+      const systemPrompt = knowledge && this.knowledgePromptOf(await knowledge, ticketId, job.name);
+      const labels = attemptLabels({ job, prompt, promptInput, workflow: wf, pack: await pack, factoryCommit: this.d.factoryCommit, risk: t.risk ?? null, ...(systemPrompt ? { knowledgeIndex: systemPrompt } : {}) });
       // What the relay job's end compares its head with, to tell an answer from a commit (ORC-375).
       const startHead = job.name === wf.relayJob ? await workspaces.head(ws.path).catch(() => undefined) : undefined;
 
@@ -2925,9 +3057,7 @@ export class Orchestrator {
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused
       // when handed out again (its ticket has a run, or is blocked, or its mark names this run).
       await recorded?.().catch((err: Error) => this.log('warn', `queued ${job.name} on ${ticketId} not taken out of the queue: ${err.message}`));
-      if (this.d.beforeRun) await this.d.beforeRun(run).catch((err: Error) => this.log('warn', `beforeRun: ${err.message}`));
-
-      // Its lease starts here: until now the launch is alive by itself, however long `beforeRun` took. A failure leaves it to the next beat.
+      // Its lease starts here: until now the launch is alive by itself. A failure leaves it to the next beat.
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
       // A review job of a version frozen before ORC-367 has its lens, not yet its tools.
@@ -2936,6 +3066,7 @@ export class Orchestrator {
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
         prompt,
+        ...(systemPrompt ? { systemPrompt } : {}),
         claudeSessionId,
         resume,
         model: job.model,
@@ -3051,8 +3182,9 @@ export class Orchestrator {
     };
     try {
       // The relay composes from the factory's words alone, a closed table and the step (ORC-214): nothing of the agent to check, and no sandbox per activity.
+      const session = run.linearSessionId && !this.silenced(run.projectId, `the activities of run ${run.id}`) ? run.linearSessionId : undefined;
       const relay = new ActivityRelay(
-        (a) => (run.linearSessionId ? this.relayTracker.activity(run.linearSessionId, a) : Promise.resolve()),
+        (a) => (session ? this.relayTracker.activity(session, a) : Promise.resolve()),
         step,
         this.d.activityIntervalMs ?? 2000,
         () => clock.now(),

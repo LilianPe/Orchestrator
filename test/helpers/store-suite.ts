@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
+import type { GhostJudgment, GhostReplay, GhostTicket } from '../../src/ghost/replay.js';
 import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
@@ -163,7 +164,6 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putRun(run({ id: 'r2', token: 't2', status: 'success', costUsd: 1.5, startedAt: 200 }));
     expect((await s.findRunByToken('t2'))!.id).toBe('r2');
     expect((await s.runsByStatus('running')).map((r) => r.id)).toEqual(['r1']);
-    expect(await s.costSince(150)).toBe(1.5);
   });
 
   it('reads the runs of one ticket of one project, oldest first (ORC-196)', async () => {
@@ -353,6 +353,31 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.deleteKnownFlakyTest('p', t.test)).toBe(false);
     expect((await s.knownFlakyTests('p')).map((k) => k.test)).toEqual(['tests/t.py::test_it']);
     expect(await s.knownFlakyTests('other')).toEqual([{ ...t, projectId: 'other' }]);
+  });
+
+  it('keeps a replay of closed tickets with its threshold, written once and never changed; its tickets and judgments (ORC-231)', async () => {
+    const s = await store();
+    const replay: GhostReplay = { id: 'g1', projectId: 'p', threshold: 0.6, memory: false, seed: 'abc', tickets: ['REL-1', 'REL-2'], startedAt: 1_710_000_000_000, startedBy: 'armand' };
+    expect(await s.ghostReplay('g1')).toBeUndefined();
+    expect(await s.putGhostReplay(replay)).toBe(true);
+    // Criterion 4: the threshold cannot change once the replay started, not even by writing the replay again.
+    expect(await s.putGhostReplay({ ...replay, threshold: 0.1 })).toBe(false);
+    expect(await s.ghostReplay('g1')).toEqual(replay);
+    expect(await s.ghostReplays()).toEqual([replay]);
+
+    const t: GhostTicket = { replayId: 'g1', ticketId: 'REL-1', humanPr: { number: 7, url: 'https://github.test/pr/7', author: 'lilian' }, mergeSha: 'm', start: 's', env: 'unchecked', outcome: 'pr', factoryPr: 'kept:x', costUsd: 1.5, assumptions: 2, at: 1_710_000_000_500 };
+    await s.putGhostTicket(t);
+    await s.putGhostTicket({ ...t, costUsd: 2 });
+    await s.putGhostTicket({ ...t, ticketId: 'REL-2', env: 'failed', envReason: 'npm ci', outcome: 'no_pr', factoryPr: undefined, start: undefined });
+    expect(await s.ghostTickets('g1')).toEqual([{ ...t, costUsd: 2 }, { ...t, ticketId: 'REL-2', env: 'failed', envReason: 'npm ci', outcome: 'no_pr', factoryPr: undefined, start: undefined }].map((x) => JSON.parse(JSON.stringify(x))));
+    expect(await s.ghostTickets('other')).toEqual([]);
+
+    const j: GhostJudgment = { replayId: 'g1', ticketId: 'REL-1', side: 'factory', grade: 'after_edits', judge: 'armand', at: 1_710_000_001_000 };
+    expect(await s.putGhostJudgment(j)).toBe(true);
+    // A grade given stands: the grid is fixed, a second answer for the same PR is refused.
+    expect(await s.putGhostJudgment({ ...j, grade: 'as_is' })).toBe(false);
+    expect(await s.putGhostJudgment({ ...j, side: 'human', grade: 'as_is' })).toBe(true);
+    expect(await s.ghostJudgments('g1')).toEqual([j, { ...j, side: 'human', grade: 'as_is' }]);
   });
 
   it('keeps a baseline frozen, its rows all or none: the same period again only on replace, the last computed read back (ORC-230)', async () => {

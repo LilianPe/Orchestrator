@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import { PRODUCT_NAME } from '../product.js';
 
-const USAGE = 'Usage: factory-agent issue <ID> | search <text> | kb search <words> | ask <question>';
+const USAGE = 'Usage: factory-agent issue <ID> | search <text> | ask <question>';
 
 export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchImpl: typeof fetch, out: (s: string) => void): Promise<number> {
   const api = env['FACTORY_API'];
@@ -27,11 +27,6 @@ export async function runAgentCli(argv: string[], env: NodeJS.ProcessEnv, fetchI
     if (cmd === 'search' && rest.length) {
       const hits = (await get(`/search?q=${encodeURIComponent(rest.join(' '))}`)) as any[];
       out(hits.map((h) => `${h.identifier} — ${h.title} (${h.stateName}) ${h.url}`).join('\n') + '\n');
-      return 0;
-    }
-    if (cmd === 'kb' && rest[0] === 'search' && rest.length > 1) {
-      const hits = (await get(`/kb/search?q=${encodeURIComponent(rest.slice(1).join(' '))}`)) as any[];
-      out((hits.length ? hits.map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n') : 'No result.') + '\n');
       return 0;
     }
     if (cmd === 'ask' && rest.length) {

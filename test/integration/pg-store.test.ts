@@ -249,7 +249,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect(rows.rows[0]).toEqual({ inbox: SCHEMA_VERSION, journal: SCHEMA_VERSION });
   });
 
-  it('stores runs as attempts and computes cost since a timestamp', async () => {
+  it('stores runs as attempts', async () => {
     await store.putRun(runRecord());
     await store.putRun(runRecord({ id: 'r2', token: 't2', status: 'success', costUsd: 1.5, startedAt: 200 }));
 
@@ -257,8 +257,6 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect((await store.findRunByToken('t2'))?.id).toBe('r2');
     expect((await store.runsByStatus('running')).map((run) => run.id)).toEqual(['r1']);
     expect((await store.runsByStatus('success')).map((run) => run.id)).toEqual(['r2']);
-    expect(await store.costSince(150)).toBe(1.5);
-    expect(await store.costSince(0)).toBe(2);
   });
 
   it('writes the attempt labels to their columns at creation and never rewrites them (ORC-226)', async () => {

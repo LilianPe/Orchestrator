@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { saveAgentOutput, agentOutputSchema, parseSubmittedResult } from '../core/agent-output.js';
+import type { KbHit } from '../knowledge/kb.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -11,6 +12,8 @@ export interface McpDeps {
   store: Pick<Store, 'setMeta'>;
   /** The `/agent/ask` effect: an elicitation in Linear, the ticket blocked. */
   ask: (run: RunRecord, text: string) => Promise<void>;
+  /** The knowledge base's search, on the server's clone (ORC-232): the runner reads no repository. Absent: no knowledge base. */
+  kbSearch?: (query: string) => Promise<KbHit[]>;
 }
 
 type Rpc = { jsonrpc: '2.0'; id: string | number | null } & ({ result: unknown } | { error: { code: number; message: string } });
@@ -29,6 +32,11 @@ const TOOLS = [
     description: 'Asks a human a question in Linear and blocks the ticket until they answer.',
     inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1 } }, required: ['text'], additionalProperties: false },
   },
+  {
+    name: 'kb_search',
+    description: "Searches the notes of the team's knowledge base (its index is in your system prompt) for words: the matching lines, as `notes/<file>.md:<line>: <text>`, best first.",
+    inputSchema: { type: 'object', properties: { query: { type: 'string', minLength: 1 } }, required: ['query'], additionalProperties: false },
+  },
 ];
 
 const text = (t: string, isError?: true) => ({ content: [{ type: 'text', text: t }], ...(isError && { isError }) });
@@ -44,6 +52,16 @@ async function callTool(name: unknown, args: Record<string, unknown>, run: RunRe
     if (typeof args['text'] !== 'string' || !args['text']) return text('text: required', true);
     await d.ask(run, args['text']);
     return text('Question asked: the ticket waits for the answer.');
+  }
+  if (name === 'kb_search') {
+    if (typeof args['query'] !== 'string' || !args['query']) return text('query: required', true);
+    if (!d.kbSearch) return text('This factory has no knowledge base.');
+    try {
+      const hits = await d.kbSearch(args['query']);
+      return text(hits.length ? hits.map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n') : 'No note matches.');
+    } catch (err) {
+      return text(`Knowledge base search failed: ${(err as Error).message}`, true);
+    }
   }
   return undefined;
 }

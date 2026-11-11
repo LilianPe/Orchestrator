@@ -31,7 +31,6 @@ const RUN_ENV = {
   FACTORY_RUN_TOKEN: 'run-token-of-this-run',
   FACTORY_TICKET: 'ISO-7',
   FACTORY_API: 'http://host.docker.internal:7778/agent',
-  FACTORY_KNOWLEDGE: '',
   FACTORY_ROOT: '/factory/app',
   ...CLAUDE_RUN_ENV,
   CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude`,
