@@ -91,7 +91,8 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
 ## Threshold, judging, report
 
 **Thresholds** (criterion 4, ORC-385): two shares of the compared tickets, decided by ORC-143: at least 60% of the factory's PRs
-mergeable, as is or after edits (`--threshold`), of which at least 30% mergeable as is (`--as-is`). Both are required inputs of
+mergeable, as is or after edits (`--threshold`), and at least 30% mergeable as is (`--as-is`), both counted over the compared
+tickets: 60% mergeable but 20% as is is `below`. Both are required inputs of
 `factory ghost start`, refused when missing or not a share, and an as-is share above the mergeable one is refused too; they are
 written with the replay before any ticket runs. The store writes a replay once: starting it again with another threshold is
 refused, the first ones stay. A replay recorded before ORC-385 kept one threshold: it stays readable, its as-is threshold shown

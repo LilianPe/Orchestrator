@@ -140,8 +140,6 @@ export interface GhostReport {
   share: number;
   asIsShare: number;
   threshold: number;
-  /** Absent for a replay recorded with one threshold: not set, and not checked. */
-  asIsThreshold?: number;
   /**
    * `met` when both shares reach their thresholds, `below` otherwise; `incomplete` while a ticket has not run or a compared PR waits
    * for its judgment: no verdict on part of the replay.
@@ -177,9 +175,11 @@ export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[]
   const asIs = rows.filter((r) => r.factory === 'as_is').length;
   const unjudged = rows.filter((r) => r.factory === 'unjudged' || r.human === 'unjudged').length;
   const pending = rows.filter((r) => r.factory === 'pending').length;
-  const share = rows.length ? mergeable / rows.length : 0;
-  const asIsShare = rows.length ? asIs / rows.length : 0;
+  const of = (n: number) => (rows.length ? n / rows.length : 0);
+  const share = of(mergeable);
+  const asIsShare = of(asIs);
   // A replay recorded with one threshold is judged on that one: a threshold added after the replay would be one changed after.
+  // Both shares are of the compared tickets: 60% mergeable but 20% as is is below 30% as is (ORC-385, criterion 2).
   const reached = share >= replay.threshold && asIsShare >= (replay.asIsThreshold ?? 0);
   return {
     replay,
@@ -194,7 +194,6 @@ export function ghostReport(replay: GhostReplay, tickets: readonly GhostTicket[]
     share,
     asIsShare,
     threshold: replay.threshold,
-    ...(replay.asIsThreshold !== undefined ? { asIsThreshold: replay.asIsThreshold } : {}),
     verdict: unjudged || pending || !rows.length ? 'incomplete' : reached ? 'met' : 'below',
     assumptions: rows.reduce((s, r) => s + r.assumptions, 0),
     totalCostUsd: tickets.reduce((s, t) => s + t.costUsd, 0),

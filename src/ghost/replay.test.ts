@@ -43,7 +43,7 @@ describe('the report of a replay (ORC-231)', () => {
     ]);
     expect(r.envFailures).toEqual([expect.objectContaining({ ticketId: 'REL-4', envReason: 'npm ci failed' })]);
     // The factory's PR counts mergeable as is or after edits; no PR is not mergeable. 1 of 3 compared.
-    expect(r).toMatchObject({ compared: 3, mergeable: 1, asIs: 1, unjudged: 0, threshold: 0.5, asIsThreshold: 0.25, verdict: 'below', totalCostUsd: 3.75, assumptions: 6 });
+    expect(r).toMatchObject({ compared: 3, mergeable: 1, asIs: 1, unjudged: 0, threshold: 0.5, verdict: 'below', totalCostUsd: 3.75, assumptions: 6 });
     expect(r.share).toBeCloseTo(1 / 3);
     expect(r.asIsShare).toBeCloseTo(1 / 3);
   });
@@ -59,7 +59,7 @@ describe('the report of a replay (ORC-231)', () => {
   it('ORC-385 criterion 2: 60% mergeable but 20% as is is below: met only when both shares reach their thresholds', () => {
     const below = graded(6, 2);
     const r = ghostReport(decided, below.tickets, below.judgments);
-    expect(r).toMatchObject({ compared: 10, mergeable: 6, asIs: 2, threshold: 0.6, asIsThreshold: 0.3, verdict: 'below' });
+    expect(r).toMatchObject({ compared: 10, mergeable: 6, asIs: 2, threshold: 0.6, verdict: 'below' });
     expect(r.share).toBeCloseTo(0.6);
     expect(r.asIsShare).toBeCloseTo(0.2);
     const met = graded(6, 3);
@@ -73,7 +73,6 @@ describe('the report of a replay (ORC-231)', () => {
     const { asIsThreshold: _, ...legacy } = decided;
     const g = graded(6, 0);
     const r = ghostReport(legacy, g.tickets, g.judgments);
-    expect(r).not.toHaveProperty('asIsThreshold');
     expect(r).toMatchObject({ asIs: 0, threshold: 0.6, verdict: 'met' });
   });
 

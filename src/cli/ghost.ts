@@ -17,8 +17,8 @@ import { KEPT_PR, type Store } from '../store/types.js';
 
 export const GHOST_USAGE = `Usage: factory ghost <command>
   start <project> --threshold <share> --as-is <share> --tickets <ID>=<PR>,... [--memory off] [--id <replay>]
-              write the replay and its two thresholds (0.6, or 60%: the share of the factory's PRs to be mergeable, as is or
-              after edits; --as-is, of those, the share to be mergeable as is), before any ticket runs; then rebuild each
+              write the replay and its two thresholds, shares of the compared tickets (0.6, or 60%: the factory's PRs to be
+              mergeable, as is or after edits; --as-is, those to be mergeable as is), before any ticket runs; then rebuild each
               ticket at the parent of its PR's merge commit, which the daemon delegates to the project on factory/fantome,
               with sandboxes only. The thresholds never change after.
   collect <replay>  read what each ticket ran to on the project without effects: its kept PR, its cost, its assumptions
@@ -74,8 +74,17 @@ function refuse(o: GhostOptions, why: string): number {
 
 const percent = (v: number) => `${Math.round(v * 1000) / 10}%`;
 const dollars = (v: number) => `$${v.toFixed(2)}`;
-/** A replay's thresholds; the as-is one not set on a replay recorded with one threshold (before ORC-385). */
-const thresholds = (r: GhostReplay) => `threshold ${percent(r.threshold)} mergeable, ${r.asIsThreshold === undefined ? 'as is not set' : `of which ${percent(r.asIsThreshold)} as is`}`;
+/** The as-is threshold, not set on a replay recorded with one threshold (before ORC-385). */
+const asIsLabel = (r: GhostReplay) => (r.asIsThreshold === undefined ? 'not set' : percent(r.asIsThreshold));
+const thresholds = (r: GhostReplay) => `thresholds ${percent(r.threshold)} mergeable, as is ${asIsLabel(r)}`;
+
+/** A threshold `start` requires (ORC-143), parsed; or why it is refused. */
+function requiredShare(flag: string, name: string, raw: string | undefined, example: string, what: string): number | string {
+  const v = parseThreshold(raw);
+  if (v !== undefined) return v;
+  const given = raw === undefined ? `No ${name}` : `No ${name} in « ${raw} »`;
+  return `${given}: ${flag} is required, a share (${example}) or a percentage (${percent(Number(example))}) of the factory's PRs to be ${what}, written before the replay and never changed after (ORC-143).`;
+}
 
 /** `REL-1=12,REL-2=34`: each ticket and its human PR's number; undefined when one is malformed. */
 function parseTickets(raw: string | undefined): { ticketId: string; pr: number }[] | undefined {
@@ -122,16 +131,10 @@ async function list(o: GhostOptions): Promise<number> {
 }
 
 async function start(o: GhostOptions, projectId: string, values: { threshold?: string | undefined; 'as-is'?: string | undefined; tickets?: string | undefined; memory?: string | undefined; id?: string | undefined }): Promise<number> {
-  const threshold = parseThreshold(values.threshold);
-  if (threshold === undefined) {
-    const given = values.threshold === undefined ? 'No threshold' : `No threshold in « ${values.threshold} »`;
-    return refuse(o, `${given}: --threshold is required, a share (0.6) or a percentage (60%) of the factory's PRs to be mergeable, as is or after edits, written before the replay and never changed after (ORC-143).`);
-  }
-  const asIsThreshold = parseThreshold(values['as-is']);
-  if (asIsThreshold === undefined) {
-    const given = values['as-is'] === undefined ? 'No as-is threshold' : `No as-is threshold in « ${values['as-is']} »`;
-    return refuse(o, `${given}: --as-is is required, a share (0.3) or a percentage (30%) of the factory's PRs to be mergeable as is, written before the replay and never changed after (ORC-143).`);
-  }
+  const threshold = requiredShare('--threshold', 'threshold', values.threshold, '0.6', 'mergeable, as is or after edits');
+  if (typeof threshold === 'string') return refuse(o, threshold);
+  const asIsThreshold = requiredShare('--as-is', 'as-is threshold', values['as-is'], '0.3', 'mergeable as is');
+  if (typeof asIsThreshold === 'string') return refuse(o, asIsThreshold);
   if (asIsThreshold > threshold) return refuse(o, `--as-is ${percent(asIsThreshold)} is above --threshold ${percent(threshold)}: the PRs mergeable as is are some of the mergeable ones.`);
   const tickets = parseTickets(values.tickets);
   if (!tickets) return refuse(o, '--tickets: each ticket and its human PR, as REL-1=12,REL-2=34.');
@@ -286,10 +289,10 @@ async function report(o: GhostOptions, id: string): Promise<number> {
   if (r.pending) o.print(`Tickets not ended, or not collected, yet: ${r.pending}.`);
   if (r.envUnchecked) o.print(`Environments not checked by a dry run: ${r.envUnchecked} (ORC-208).`);
   o.print(`Mergeable factory PRs: ${r.mergeable} of ${r.compared} compared (${percent(r.share)}), threshold ${percent(r.threshold)}.${r.unjudged ? ` ${r.unjudged} pair(s) still to judge.` : ''}`);
-  o.print(`Mergeable as is: ${r.asIs} of ${r.compared} compared (${percent(r.asIsShare)}), threshold ${r.asIsThreshold === undefined ? 'not set' : percent(r.asIsThreshold)}.`);
+  o.print(`Mergeable as is: ${r.asIs} of ${r.compared} compared (${percent(r.asIsShare)}), threshold ${asIsLabel(replay)}.`);
   o.print(`Assumptions written in the specs: ${r.assumptions}.`);
   o.print(`Total cost: ${dollars(r.totalCostUsd)}.`);
-  o.print(`Verdict: ${r.verdict}.`);
+  o.print(`Verdict: ${r.verdict}${replay.asIsThreshold === undefined ? ', on the mergeable share only: no as-is threshold was set when this replay started' : ''}.`);
   return 0;
 }
 
