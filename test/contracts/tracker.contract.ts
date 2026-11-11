@@ -54,6 +54,16 @@ export function describeTrackerContract(name: string, make: () => TrackerSubject
       await expect(s.tracker.getIssue(s.missing)).rejects.toBeInstanceOf(IssueNotFoundError);
     });
 
+    it('history returns the issue with its dated comments and its linked tickets, and rejects an unknown issue (ORC-376)', async () => {
+      const s = await make();
+      const h = await s.tracker.history(s.issue);
+      expect(h.issue.identifier).toBe(s.issue);
+      expect(Number.isFinite(h.issue.createdAt)).toBe(true);
+      for (const c of [...h.issue.comments, ...h.linked.flatMap((l) => l.comments)]) expect(Number.isFinite(c.createdAt)).toBe(true);
+      expect(h.linked.map((l) => l.identifier)).not.toContain(s.issue);
+      await expect(s.tracker.history(s.missing)).rejects.toBeInstanceOf(IssueNotFoundError);
+    });
+
     it('every write rejects an unknown issue', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'states');
       const state = (await s.tracker.getIssue(s.issue)).stateName;

@@ -19,6 +19,8 @@ import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../src/core/orchestrator.js';
 import { devCapacity, Scheduler } from '../../src/core/scheduler.js';
 import { TimerService } from '../../src/runtime/timers.js';
+import { asFantome } from '../../src/presets/fantome.js';
+import { Replays } from '../../src/ghost/delegate.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { VisualShooter } from '../../src/adapters/browser/types.js';
 import type { CleanVerifier, CleanVerifyRequest } from '../../src/core/clean-verify.js';
@@ -266,11 +268,20 @@ export function createHarness(
     transcriptsDir?: string;
     /** The project without effects (ORC-231), its effects kept in a temporary dir (`keptEffectsDir`): or `{ keptEffectsDir: false }`, nowhere. */
     noEffect?: boolean | { keptEffectsDir: false };
+    /** The `factory/fantome` preset's workflow (ORC-231): `asFantome`, and no effects, as the preset always has none. */
+    fantome?: boolean;
+    /**
+     * The replay of closed tickets (ORC-376): each life delegates the replays of the store's `ghost_*` tables kept under `dir` to the
+     * project, as the daemon does (`delegateReplays`), the start of each ticket made at `startTime`. Its runs have sandboxes when
+     * `sandboxed` (above) says so.
+     */
+    replays?: { dir: string; startTime: number };
   } = {},
 ) {
   if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
   const pack = opts.packDir ?? packDir;
-  const workflow = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview, pack });
+  const loaded = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview, pack });
+  const workflow = opts.fantome ? asFantome(loaded) : loaded;
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();
@@ -286,6 +297,7 @@ export function createHarness(
   const visualProof = opts.visualShooter && { shooter: opts.visualShooter, artifactsDir: mkdtempSync(join(tmpdir(), 'factory-artifacts-')) };
   /** The orchestrator's log lines, every life of it. */
   const logs: { level: string; message: string }[] = [];
+  if (opts.fantome) opts.noEffect ??= true;
   const keptEffectsDir = opts.noEffect === true ? mkdtempSync(join(tmpdir(), 'factory-kept-')) : undefined;
   const project = { id: 'p', repoPath: '/repo', teamKey: 'REL', workflow, ...(opts.noEffect ? { effects: 'none' as const } : {}) };
   const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
@@ -316,7 +328,12 @@ export function createHarness(
       ...(keptEffectsDir ? { keptEffectsDir } : {}),
       ...(opts.transcriptsDir ? { transcriptsDir: opts.transcriptsDir } : {}),
     };
-    return { ...life, outside };
+    // As the daemon's (ORC-376): the replays of the store this life reads, delegated through the orchestrator it builds.
+    const replays = opts.replays && new Replays({
+      store: life.store, tracker: outside.tracker, projects: [project.id], dir: opts.replays.dir, sandboxes: !!opts.sandboxed,
+      accept: (e): Promise<boolean> => orch.accept(e), now: () => clock.now(), log: (level, message) => void logs.push({ level, message }), startTime: async () => opts.replays!.startTime,
+    });
+    return { ...life, outside: { ...outside, ...(replays ? { replays } : {}) } };
   };
   let life = connect();
   // The fake build does what its skill says: it ends on a `submit_result` (ORC-136), on the store of the living process.
@@ -418,6 +435,11 @@ export function createHarness(
   return {
     clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, runsDir, logs,
     send, advance, restart, another, project,
+    /** One pass of the daemon's delegation of the replayed tickets (ORC-376), and what it started. */
+    async delegateReplays(): Promise<void> {
+      await life.outside.replays?.delegate();
+      await orch.drained();
+    },
     get orch() {
       return orch;
     },

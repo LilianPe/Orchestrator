@@ -16,7 +16,7 @@ import { TAKEN_OVER } from '../core/block-cause.js';
 /** The HTTP Basic header the UI password asks for; its user is free. */
 const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const tracker = new FakeTracker();
@@ -694,6 +694,24 @@ describe('server', () => {
     const ok = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
     expect((await ok.json()).identifier).toBe('REL-1');
     expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
+  });
+
+  it("a replayed ticket's run reads the ticket as of its start, and searches no tracker, which holds what came after (ORC-376)", async () => {
+    const replayed = { repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue: { identifier: 'REL-1', title: 'Export, as it was', description: 'Before.', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 } };
+    const searched: (string | undefined)[] = [];
+    const { app, tracker } = await setup({
+      replays: { of: async (p, t) => (p === 'p' && t === 'REL-1' ? replayed : undefined) },
+      knowledgeSearch: async (_q, repo) => (searched.push(repo), [{ file: 'notes/csv.md', line: 1, text: 'CSV' }]),
+    });
+    tracker.addIssue({ identifier: 'REL-2', title: 'Export follow-up, after the PR' });
+    const issue = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
+    expect(await issue.json()).toMatchObject({ identifier: 'REL-1', title: 'Export, as it was', description: 'Before.' });
+    const search = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
+    expect(search.status).toBe(403);
+    expect(((await search.json()) as { error: string }).error).toContain('replayed');
+    // The knowledge base at its start, never the one of now, which may hold a note learned from the ticket's own PR.
+    expect((await app.request('/agent/kb/search?q=export', { headers: { authorization: 'Bearer tok' } })).status).toBe(200);
+    expect(searched).toEqual(['/ghost/g1/REL-1/knowledge']);
   });
 
   it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {

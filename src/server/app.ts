@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
 import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
 import { teamOf, type Tracker } from '../adapters/tracker/types.js';
+import type { ReplaySource } from '../ghost/delegate.js';
 import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
 import type { BusMessage, EventBus } from '../core/bus.js';
 import type { Clock } from '../core/clock.js';
@@ -44,7 +45,10 @@ export interface ServerDeps {
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
   tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
-  knowledgeSearch?: (q: string) => Promise<{ file: string; line: number; text: string }[]>;
+  /** The replay of closed tickets (ORC-376): a replayed ticket's run reads the ticket as of its start, through no tracker. */
+  replays?: ReplaySource;
+  /** The knowledge base's search; `repo`, another checkout of it (a replayed ticket's, at transaction time: ORC-376). */
+  knowledgeSearch?: (q: string, repo?: string) => Promise<{ file: string; line: number; text: string }[]>;
   capacity: () => { dev: { used: number; total: number }; questions: { used: number; total: number } };
   transcriptsDir: string;
   webDir?: string;
@@ -574,14 +578,28 @@ export function createApp(d: ServerDeps): Hono {
     c.set('run', run);
     await next();
   });
+  /** The run's ticket as a replay keeps it (ORC-376); undefined for any other run. */
+  const replayedOf = (run: RunRecord) => d.replays?.of(run.projectId, run.ticketId);
   agent.get('/issue/:id', async (c) => {
     const run = c.get('run');
     if (c.req.param('id') !== run.ticketId) return c.json({ error: 'forbidden' }, 403);
-    return c.json(await d.tracker.getIssue(run.ticketId));
+    return c.json((await replayedOf(run))?.issue ?? (await d.tracker.getIssue(run.ticketId)));
   });
   // The run's team alone (ORC-349): the factory's token reads the whole workspace, the agent reads its ticket's team.
-  agent.get('/search', async (c) => c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(c.get('run').ticketId))));
-  agent.get('/kb/search', async (c) => c.json(d.knowledgeSearch ? await d.knowledgeSearch(c.req.query('q') ?? '') : []));
+  agent.get('/search', async (c) => {
+    const run = c.get('run');
+    // A replayed ticket (ORC-376): Linear holds now what was written after its start, the human's work among it.
+    if (await replayedOf(run)) return c.json({ error: 'a replayed ticket searches no tracker: it holds what was written after the ticket\'s start' }, 403);
+    return c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(run.ticketId)));
+  });
+  agent.get('/kb/search', async (c) => {
+    const q = c.req.query('q') ?? '';
+    // A replayed ticket's run (ORC-376): the knowledge base at its start, never the one of now, which may hold a note learned from
+    // its own PR; none with `--memory off`.
+    const replayed = await replayedOf(c.get('run'));
+    if (replayed) return c.json(replayed.knowledge && d.knowledgeSearch ? await d.knowledgeSearch(q, replayed.knowledge) : []);
+    return c.json(d.knowledgeSearch ? await d.knowledgeSearch(q) : []);
+  });
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
     const at = d.clock.now();

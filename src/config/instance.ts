@@ -91,6 +91,8 @@ export function homePaths(home: string) {
     egressCa: join(home, 'egress-ca'),
     /** The effects of the projects without effects, kept instead of made (ORC-231). */
     kept: join(home, 'kept'),
+    /** The replays of closed tickets (ORC-231, ORC-376): each ticket's clone and its text as of its start, `<replay>/<ticket>/`. */
+    ghost: join(home, 'ghost'),
   };
 }
 

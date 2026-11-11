@@ -21,6 +21,7 @@ import {
 } from '../adapters/sandbox/types.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
+import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
@@ -191,6 +192,11 @@ export interface ProjectRuntime {
    * as an artifact of its run instead (`keptEffectsDir`). The replay of closed tickets runs so, and a prompt tried out.
    */
   effects?: 'none';
+  /**
+   * Set by `runtimeFor` on a ticket of a replay of closed tickets (ORC-376): its run reads the ticket as it was at its start, its
+   * thread and linked tickets with it, and works on the clone at that start, which `repoPath` then names.
+   */
+  replayed?: Pick<ReplayedTicket, 'issue' | 'history'>;
 }
 
 export interface OrchestratorDeps {
@@ -251,6 +257,8 @@ export interface OrchestratorDeps {
    * `artifacts`. Absent, such an effect fails: its ticket is blocked, nothing goes out.
    */
   keptEffectsDir?: string;
+  /** The replay of closed tickets (ORC-376): where a replayed ticket of a project without effects runs, and what it reads. */
+  replays?: ReplaySource;
   /** The egress proxy's journal of a run (`EgressProxy.journalPath`), read into its security log (ORC-296). */
   egressJournal?: (runId: string) => string;
   /** Where the runner keeps the runs' transcripts (ORC-132): the answer agent reads the session at work there (ORC-182). Absent: it reads none. */
@@ -1494,8 +1502,11 @@ export class Orchestrator {
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
   /** `known`: the ticket, when the caller has just read it (`null`: read, and not tracked). */
   private async runtimeFor(projectId: string, ticketId: string | undefined, known?: TicketState | null): Promise<ProjectRuntime | undefined> {
-    const project = projectId === '*' ? this.d.projects[0] : this.project(projectId);
-    if (!project || !ticketId) return project;
+    const found = projectId === '*' ? this.d.projects[0] : this.project(projectId);
+    if (!found || !ticketId) return found;
+    // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was.
+    const replayed = await this.d.replays?.of(found.id, ticketId);
+    const project = replayed ? { ...found, repoPath: replayed.repoPath, replayed } : found;
     const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);
@@ -2733,15 +2744,16 @@ export class Orchestrator {
         }, Math.max(1, Math.floor(leaseMs / 3)));
         at.renew.unref();
       }
-      const issue = await tracker.getIssue(ticketId);
+      const issue = project.replayed?.issue ?? (await tracker.getIssue(ticketId));
       // The deterministic checks, before the ticket's first run: at intake, inputs of its guard, journaled with its end
       // (ORC-206); else they block a job that picks up the ticket. The « blocked by » tickets not done likewise (ORC-363),
       // except that they make the job wait instead of blocking it.
       const intake = job.step === 'intake';
       const guarded = (intake || job.pickup) && !t.claudeSessionId;
       const checks = wf.tracker.pickup.checks;
-      // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together.
-      const [search, ownBranches] = guarded
+      // The duplicate search of intake (ORC-207), and the ticket's own branches for `not_started`, read together. Neither for a
+      // replayed ticket (ORC-376): the forge and the tracker hold now the human's PR and branch, the very work it is compared with.
+      const [search, ownBranches] = guarded && !project.replayed
         ? await Promise.all([
             intake ? searchDuplicates(issue, project.repoPath, { forge, tracker }) : undefined,
             checks.includes('not_started') ? forge.branches(project.repoPath, ownBranchPrefix(issue.identifier)) : undefined,
@@ -2922,6 +2934,7 @@ export class Orchestrator {
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
+        ...(project.replayed?.history ? { history: project.replayed.history } : {}),
         branch: job.queue === 'dev' ? t.branch : undefined,
         prUrl: t.prUrl,
         spec: specShown && t.spec ? { version: t.spec.version, approved: !!t.spec.approval, text: formatSpec(t.spec.spec) } : undefined,

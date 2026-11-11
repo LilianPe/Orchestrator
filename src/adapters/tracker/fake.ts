@@ -1,6 +1,6 @@
 import type { PlanStep } from '../../core/session-plan.js';
 import type { TeamDirectory } from '../roles/types.js';
-import { IssueNotFoundError, type ActivityInput, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
+import { IssueNotFoundError, type ActivityInput, type DatedIssue, type IssueHistory, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
 /** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
 export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done'] as const;
@@ -15,6 +15,10 @@ export class FakeTracker implements Tracker, TeamDirectory {
   private members = new Map<string, readonly string[]>();
   /** The blockers of each issue, by identifier: « blocked by » relations (ORC-363). */
   private blockers = new Map<string, string[]>();
+  /** The comments of each issue, dated, as a test writes them on Linear (ORC-376): `history` reads them. */
+  private threads = new Map<string, { body: string; createdAt: number }[]>();
+  /** The issues related to each one, both ways (ORC-376). */
+  private related = new Map<string, Set<string>>();
 
   constructor(private readonly defaultStates: readonly string[] = STANDARD_STATES) {}
 
@@ -30,6 +34,17 @@ export class FakeTracker implements Tracker, TeamDirectory {
   /** `blocker` blocks `blocked`, as a Linear relation (ORC-363): `blocked` reads it in `blockedBy`, with the blocker as it is then. */
   blocks(blocker: string, blocked: string): void {
     this.blockers.set(blocked, [...(this.blockers.get(blocked) ?? []), blocker]);
+  }
+
+  /** A comment written on `identifier` at `createdAt`, by a human on Linear (ORC-376): `history` reads it, dated. */
+  addComment(identifier: string, body: string, createdAt: number): void {
+    this.must(identifier);
+    this.threads.set(identifier, [...(this.threads.get(identifier) ?? []), { body, createdAt }]);
+  }
+
+  /** `a` and `b` related, as a Linear relation (ORC-376): `history` reads each from the other. */
+  relate(a: string, b: string): void {
+    for (const [x, y] of [[a, b], [b, a]] as const) this.related.set(x, new Set([...(this.related.get(x) ?? []), y]));
   }
 
   /** The relation taken off. */
@@ -124,6 +139,16 @@ export class FakeTracker implements Tracker, TeamDirectory {
 
   async getIssue(identifier: string): Promise<TrackerIssue> {
     return this.snapshot(this.must(identifier));
+  }
+
+  /** As Linear's: every relation, both ways, « blocked by » included. */
+  async history(identifier: string): Promise<IssueHistory> {
+    const dated = (i: TrackerIssue): DatedIssue => ({
+      identifier: i.identifier, title: i.title, description: i.description, createdAt: i.createdAt, comments: (this.threads.get(i.identifier) ?? []).map((c) => ({ ...c })),
+    });
+    const blocked = [...this.blockers].filter(([, by]) => by.includes(identifier)).map(([id]) => id);
+    const linked = new Set([...(this.related.get(identifier) ?? []), ...(this.blockers.get(identifier) ?? []), ...blocked]);
+    return { issue: dated(this.must(identifier)), linked: [...linked].map((id) => dated(this.must(id))) };
   }
 
   async listDelegated(teamKey: string): Promise<TrackerIssue[]> {
