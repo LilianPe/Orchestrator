@@ -89,6 +89,9 @@ async function release(db: Database): Promise<void> {
   try {
     // First: the connections still held by the test's background work, whose writes would reach the next test.
     if (name) await endConnections(name);
+  } catch (err) {
+    if (name) await dropTestSchema(name).catch(() => {});
+    throw err;
   } finally {
     await db.pool.then((p) => p.end()).catch(() => {});
   }
