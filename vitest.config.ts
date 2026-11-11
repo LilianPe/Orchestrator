@@ -3,8 +3,8 @@ import { defineConfig } from 'vitest/config';
 
 /** What the projects on one Postgres share; the measures behind these numbers are in docs/tests.md (ORC-290). */
 const onPostgres = {
-  // A hook creates, migrates or drops databases, and a drop waits for a checkpoint of the whole server.
-  // On a stalled CI runner a checkpoint of 45 buffers took 14.5 s, past Vitest's default of 10 s for a hook.
+  // A hook creates and migrates schemas (ORC-334): about 0.8 s of DDL at rest. On a stalled CI runner a
+  // checkpoint of 45 buffers took 14.5 s, past Vitest's default of 10 s for a hook.
   hookTimeout: 60_000,
   // Vitest's default for a run (a worker per CPU but one), bounded: a drop's p90 is 4.2 s at 11 workers.
   // A bare 4 would raise a small CI runner's single worker.
@@ -43,7 +43,7 @@ export default defineConfig({
         },
       },
       {
-        // The scenarios again, each harness on a Postgres database of its own (ORC-228): run with
+        // The scenarios again, each harness on a Postgres schema of its own (ORC-228, ORC-334): run with
         // the integration project, skipped without DATABASE_URL.
         test: {
           name: 'scenarios-pg',

@@ -1,11 +1,11 @@
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
-import { migratePgStore } from '../../src/store/pg/migrate.js';
+import { journalSchemaOf, migratePgStore } from '../../src/store/pg/migrate.js';
 import { OUTBOX_LEASE_MS, PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import { timerRowId, type QueueItem, type RunRecord } from '../../src/store/types.js';
-import { createTestDatabase, PG_URL, TRUNCATE_ALL as TRUNCATE } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, PG_URL, EMPTY_ALL } from '../helpers/pg-database.js';
 import { LABELS, storeContract } from '../helpers/store-suite.js';
 
 const url = PG_URL;
@@ -42,19 +42,19 @@ function runRecord(patch: Partial<RunRecord> = {}): RunRecord {
 }
 
 describe.skipIf(!url)('PgStore integration', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
   let store: PgStore;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_pgstore');
+    db = await createTestSchema('factory_pgstore');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
     store = new PgStore({ pool, now: () => 1_000_000 });
   });
 
   beforeEach(async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(EMPTY_ALL);
   });
 
   afterAll(async () => {
@@ -64,13 +64,13 @@ describe.skipIf(!url)('PgStore integration', () => {
 
   it('applies the migration to an empty database and creates exactly its tables', async () => {
     const migrations = await pool.query<{ n: number }>(
-      `select count(*)::int as n from drizzle.__drizzle_migrations`,
+      `select count(*)::int as n from "${journalSchemaOf(db.name)}".__drizzle_migrations`,
     );
     expect(migrations.rows[0]?.n).toBeGreaterThanOrEqual(1);
 
     const tables = await pool.query<{ table_name: string }>(
       `select table_name from information_schema.tables
-       where table_schema = 'public' and table_type = 'BASE TABLE'
+       where table_schema = current_schema() and table_type = 'BASE TABLE'
        order by table_name`,
     );
     expect(tables.rows.map((row) => row.table_name)).toEqual([...PG_TABLE_NAMES].sort());
@@ -78,7 +78,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     for (const table of PG_TABLE_NAMES) {
       const key = await pool.query<{ n: number }>(
         `select count(*)::int as n from information_schema.table_constraints
-         where table_schema = 'public' and table_name = $1 and constraint_type = 'PRIMARY KEY'`,
+         where table_schema = current_schema() and table_name = $1 and constraint_type = 'PRIMARY KEY'`,
         [table],
       );
       expect(key.rows[0]?.n, `primary key on ${table}`).toBe(1);
@@ -100,7 +100,7 @@ describe.skipIf(!url)('PgStore integration', () => {
 
   it('creates the ticket, status, due and availability indexes', async () => {
     const indexes = await pool.query<{ indexname: string }>(
-      `select indexname from pg_indexes where schemaname = 'public'`,
+      `select indexname from pg_indexes where schemaname = current_schema()`,
     );
     const names = new Set(indexes.rows.map((row) => row.indexname));
     for (const expected of [
@@ -123,7 +123,7 @@ describe.skipIf(!url)('PgStore integration', () => {
   it('stores payloads as jsonb and all timestamps with a time zone', async () => {
     const jsonColumns = await pool.query<{ table_name: string; column_name: string; data_type: string }>(
       `select table_name, column_name, data_type from information_schema.columns
-       where table_schema = 'public'
+       where table_schema = current_schema()
          and column_name in ('payload', 'data', 'decision', 'definition', 'human_inbox', 'fingerprints')`,
     );
     expect(jsonColumns.rows.length).toBeGreaterThanOrEqual(11);
@@ -131,7 +131,7 @@ describe.skipIf(!url)('PgStore integration', () => {
 
     const badTimestamps = await pool.query<{ table_name: string; column_name: string }>(
       `select table_name, column_name from information_schema.columns
-       where table_schema = 'public'
+       where table_schema = current_schema()
          and column_name in ('created_at', 'updated_at', 'received_at', 'processed_at', 'due_at', 'available_at', 'started_at', 'ended_at')
          and data_type <> 'timestamp with time zone'`,
     );
@@ -457,11 +457,11 @@ describe.skipIf(!url)('PgStore integration', () => {
 });
 
 describe.skipIf(!url)('PgStore, Store contract', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_contract');
+    db = await createTestSchema('factory_contract');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });
@@ -472,12 +472,12 @@ describe.skipIf(!url)('PgStore, Store contract', () => {
   });
 
   storeContract(async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(EMPTY_ALL);
     return new PgStore({ pool });
   });
 
   it('hands a queued item out under a lease until its start is recorded, and back in line when released or lost (ORC-150)', async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(EMPTY_ALL);
     let now = 1_000;
     const store = new PgStore({ pool, now: () => now });
     const id = await store.enqueue(queueItem({ ticketId: 'ONCE', enqueuedAt: 500 }));
@@ -503,7 +503,7 @@ describe.skipIf(!url)('PgStore, Store contract', () => {
   });
 
   it('settles a claimed effect with completeEffect', async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(EMPTY_ALL);
     const store = new PgStore({ pool, now: () => 1_000 });
     const id = await store.enqueue(queueItem({ ticketId: 'DONE', enqueuedAt: 500 }));
     expect((await store.claim('dev', 1_000))?.id).toBe(id);

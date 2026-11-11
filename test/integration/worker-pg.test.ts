@@ -4,13 +4,11 @@ import { newTicketState, TRUSTED, type FactoryEvent } from '../../src/core/types
 import { OutboxExecutor } from '../../src/runtime/outbox.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { DecisionOutcome, DecisionRequest, Store } from '../../src/store/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
 import { createHarness, trackHarnesses } from '../helpers/harness.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
+import { createTestSchema, EMPTY_ALL, type TestSchema, PG_URL } from '../helpers/pg-database.js';
 
-const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
 
 /** Each event of a ticket decides one comment; a prompt appends its body to the ticket's feedback. */
 const COMMENTS = `
@@ -25,17 +23,17 @@ on:
 // ORC-149 on Postgres: the decision transaction under the ticket's advisory lock, a crash after the
 // commit, and two workers (two daemons) on the same database.
 describe.skipIf(!PG_URL)('worker on PgStore', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_worker');
+    db = await createTestSchema('factory_worker');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });
 
   beforeEach(async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(EMPTY_ALL);
   });
 
   // The harnesses of the test, shut down before the next one empties the database (ORC-290).
