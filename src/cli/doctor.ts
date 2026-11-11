@@ -429,7 +429,6 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   } else {
     verdict = 'refused';
     reasons.push(`${what} exposed on the factory's branches (${exposure.join('; ')}) without human approval`);
-    reasons.push('attach each of these jobs to an environment with required reviewers');
     const withoutEnvironment = unprotectedJobs.filter((jobId) => !workflow.jobEnvironments.has(jobId));
     const withUnprotectedEnvironment = unprotectedJobs.filter((jobId) => workflow.jobEnvironments.has(jobId));
     if (withoutEnvironment.length > 0) reasons.push(`job(s) without an environment: ${withoutEnvironment.join(', ')}`);

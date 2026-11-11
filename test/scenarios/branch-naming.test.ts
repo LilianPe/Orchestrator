@@ -53,6 +53,15 @@ describe("the ticket's branch name", () => {
     expect(worktrees.map((p) => p.branch)).toEqual(worktrees.map(() => 'feat/rel-1-export-csv'));
   });
 
+  it('keeps a branch recorded under an earlier naming: the next run asks for the same one', async () => {
+    const h = createHarness();
+    await delegated(h, ['Feature']);
+    await h.store.putTicket({ ...(await h.ticket()), branch: 'agent/rel-1' });
+    h.runner.enqueue({ output: DONE });
+    await h.send('pr.checks_failed', { number: 7, url: 'https://forge/pr/7', branch: 'agent/rel-1', failures: ['test'] });
+    expect(h.workspaces.prepared.filter((p) => p.kind === 'worktree').at(-1)!.branch).toBe('agent/rel-1');
+  });
+
   it("never asks for a recorded branch that is not one of the ticket's: a detached HEAD or a branch the agent checked out", async () => {
     for (const recorded of ['HEAD', 'release/1.0']) {
       const h = createHarness();

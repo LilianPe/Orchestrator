@@ -502,9 +502,9 @@ ${environment ? `    environment: ${environment}\n` : ''}    steps:
       }
     });
 
-    it('says the environment is the way, and does not offer the actor exclusion', async () => {
+    it('names the job without an environment, and does not offer the actor exclusion', async () => {
       const result = await doctor([workflow(guarded('pull_request'))]);
-      expect(result.text).toContain('attach each of these jobs to an environment with required reviewers');
+      expect(result.text).toContain('job(s) without an environment: test');
       expect(result.text).not.toContain('github.actor');
       expect(result.text).not.toContain("App excluded");
     });

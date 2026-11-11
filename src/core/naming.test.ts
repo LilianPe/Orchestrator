@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchName, branchNamingErrors, branchType, isBranchRefName, legacyBranchName, ownBranchMatcher, ownBranchPrefixes, slugify, type BranchNaming } from './naming.js';
+import { branchName, branchNamingErrors, branchType, isBranchRefName, legacyBranchName, namesTicket, ownBranchMatcher, ownBranchPrefixes, slugify, type BranchNaming } from './naming.js';
 
 describe('slugify', () => {
   it('lowercases, strips accents and collapses separators', () => {
@@ -39,6 +39,11 @@ describe("a ticket's own branches (ORC-283)", () => {
     for (const name of ['feat/rel-31-export-csv', 'feat/rel-3', 'chore/rel-3-x', 'factory/rel-31-x', 'feat/rel-3-Export']) expect(ownBranchMatcher('REL-3')(name), name).toBe(false);
     expect(ownBranchMatcher('REL-3', custom)('agent/sec-rel-3')).toBe(true);
     expect(ownBranchMatcher('REL-3', custom)('agent/sec-rel-31')).toBe(false);
+  });
+
+  it('are named by their id between separators, under any naming: never a detached HEAD, another ticket or a branch of its own', () => {
+    for (const ok of ['feat/rel-1-export', 'agent/rel-1', 'factory/rel-1-x', 'x/REL-1'.toLowerCase(), 'w/rel-1/y']) expect(namesTicket('REL-1', ok), ok).toBe(true);
+    for (const bad of ['HEAD', 'release/1.0', 'feat/rel-12-x', 'feat/xrel-1', 'main']) expect(namesTicket('REL-1', bad), bad).toBe(false);
   });
 
   it('are looked for on the forge by the prefix of each type, and the legacy one', () => {

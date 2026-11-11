@@ -90,6 +90,14 @@ export function ownBranchMatcher(identifier: string, naming: BranchNaming = DEFA
   return (name) => name.startsWith(legacy) || own.test(name);
 }
 
+/**
+ * Whether a branch names this ticket, by any naming the repository could have had: its id between separators, as every
+ * naming puts it (`branchNamingErrors`). A branch recorded under an earlier naming does; a detached `HEAD` or a branch
+ * the agent checked out of its own does not.
+ */
+export const namesTicket = (identifier: string, branch: string): boolean =>
+  new RegExp(`(?:^|[^a-z0-9])${escape(identifier.toLowerCase())}(?:[^a-z0-9]|$)`).test(branch);
+
 
 /**
  * Git's own rules on a branch's name (`git check-ref-format`), what `refs/heads/<name>` must be: the agent's HEAD is read
