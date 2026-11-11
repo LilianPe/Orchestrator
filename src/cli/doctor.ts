@@ -42,8 +42,6 @@ function factoryBranches(naming: BranchNaming): FactoryBranches {
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
   listEnvironments(repoPath: string): Promise<EnvironmentProtection[]>;
-  /** The login GitHub gives the factory's App as an actor, `<slug>[bot]` (ORC-283): what a workflow's `if:` keeps out. */
-  appLogin(): Promise<string>;
 }
 
 export interface DoctorOptions {
@@ -64,9 +62,7 @@ export interface WorkflowReport {
   /** Whether a trigger can run the workflow on a branch the factory names (ORC-353). */
   factoryBranches: boolean;
   environments: { name: string; requiredReviewers: boolean }[];
-  /** The jobs whose `if:` keeps the factory's App out (ORC-283): `github.actor != '<app>[bot]'`, joined to the rest by `&&` only. */
-  actorExcluded: string[];
-  /** True when every job that can see a secret or a writable GITHUB_TOKEN is attached to a protected environment or keeps the App out. */
+  /** True when every job that can see a secret or a writable GITHUB_TOKEN is attached to a protected environment. */
   protected: boolean;
   verdict: 'accepted' | 'refused';
   reasons: string[];
@@ -82,8 +78,6 @@ interface TriggerFilters {
 interface ParsedWorkflow {
   triggers: Map<string, TriggerFilters>;
   jobEnvironments: Map<string, string>;
-  /** Each job's `if:`, as the YAML gives it. */
-  jobConditions: Map<string, unknown>;
   environmentNames: string[];
   hasSecrets: boolean;
   /** Jobs that can see a secret; every job when a workflow-level value references one. */
@@ -248,13 +242,11 @@ function parseWorkflow(content: string): ParseResult {
 
   const jobs = new Map<string, Record<string, unknown>>();
   const jobEnvironments = new Map<string, string>();
-  const jobConditions = new Map<string, unknown>();
   const environmentNames: string[] = [];
   const tokenWrites = new Map<string, string>();
   for (const [jobId, rawJob] of Object.entries(rawJobs)) {
     if (!isRecord(rawJob)) return { ok: false, reason: `job \`${jobId}\` invalide` };
     jobs.set(jobId, rawJob);
-    if (rawJob['if'] !== undefined) jobConditions.set(jobId, rawJob['if']);
     const rights = rawJob['permissions'] === undefined ? workflowRights : writeRights(rawJob['permissions']);
     if (rights === undefined) return { ok: false, reason: `ambiguous \`permissions\` for the job \`${jobId}\`` };
     if (rights) tokenWrites.set(jobId, rights);
@@ -278,7 +270,6 @@ function parseWorkflow(content: string): ParseResult {
     workflow: {
       triggers: parsedOn,
       jobEnvironments,
-      jobConditions,
       environmentNames,
       hasSecrets: rootSecrets || secretJobs.length > 0,
       secretJobs,
@@ -399,63 +390,7 @@ function protectedByEnvironment(jobId: string, workflow: ParsedWorkflow, environ
   return name !== undefined && environments.get(name)?.requiredReviewers === true;
 }
 
-/** `expression` cut at `separator` where it stands outside quotes and parentheses. */
-function splitTopLevel(expression: string, separator: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let quoted = false;
-  let start = 0;
-  for (let i = 0; i < expression.length; i++) {
-    const char = expression[i]!;
-    if (char === "'") quoted = !quoted;
-    else if (quoted) continue;
-    else if (char === '(') depth++;
-    else if (char === ')') depth--;
-    else if (depth === 0 && expression.startsWith(separator, i)) {
-      parts.push(expression.slice(start, i));
-      start = i + separator.length;
-      i += separator.length - 1;
-    }
-  }
-  parts.push(expression.slice(start));
-  return parts.map((part) => part.trim());
-}
-
-/** A term without the parentheses that wrap it whole: `((a))` is `a`; `(a) == (b)`, whose first one closes early, stays. */
-function unwrap(term: string): string {
-  while (term.startsWith('(') && term.endsWith(')')) {
-    const inner = term.slice(1, -1);
-    let depth = 0;
-    for (const char of inner) {
-      if (char === '(') depth++;
-      else if (char === ')' && --depth < 0) return term;
-    }
-    term = inner.trim();
-  }
-  return term;
-}
-
-const ACTOR_EXCLUDED = [/^github\.actor\s*!=\s*'([^']*)'$/, /^'([^']*)'\s*!=\s*github\.actor$/];
-
-/**
- * Whether a job's `if:` keeps the factory's App out (ORC-283): one of its terms joined by `&&` alone, at the top, is
- * `github.actor != '<login>'` (GitHub compares strings without case). Anything it cannot read so, a `||` at the top, a
- * negation, another context, an expression beside text, is no exclusion: fail closed.
- */
-function excludesActor(condition: unknown, login: string): boolean {
-  if (typeof condition !== 'string') return false;
-  let expression = condition.trim();
-  const inline = [...expression.matchAll(EXPRESSION)];
-  if (inline.length > 1 || (inline.length === 1 && inline[0]![0] !== expression)) return false;
-  if (inline.length === 1) expression = (inline[0]![1] ?? '').trim();
-  if (splitTopLevel(expression, '||').length > 1) return false;
-  return splitTopLevel(expression, '&&').some((term) => {
-    const read = unwrap(term);
-    return ACTOR_EXCLUDED.some((form) => form.exec(read)?.[1]?.toLowerCase() === login.toLowerCase());
-  });
-}
-
-function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>, factory: FactoryBranches, login: string): WorkflowReport {
+function analyzeWorkflow(source: WorkflowSource, environments: Map<string, EnvironmentProtection>, factory: FactoryBranches): WorkflowReport {
   const parsed = parseWorkflow(source.content);
   if (!parsed.ok) {
     return {
@@ -465,7 +400,6 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
       githubToken: [],
       factoryBranches: false,
       environments: [],
-      actorExcluded: [],
       protected: false,
       verdict: 'refused',
       reasons: [parsed.reason],
@@ -479,11 +413,7 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   }));
   const exposure = exposureReasons(workflow.triggers, factory);
   const { sensitiveJobs } = workflow;
-  const actorExcluded = [...workflow.jobConditions].filter(([, condition]) => excludesActor(condition, login)).map(([jobId]) => jobId);
-  const byEnvironment = sensitiveJobs.filter((jobId) => protectedByEnvironment(jobId, workflow, environments));
-  const byActor = sensitiveJobs.filter((jobId) => !byEnvironment.includes(jobId) && actorExcluded.includes(jobId));
-  const unprotectedJobs = sensitiveJobs.filter((jobId) => !byEnvironment.includes(jobId) && !byActor.includes(jobId));
-  const exclusion = `\`if: github.actor != '${login}'\``;
+  const unprotectedJobs = sensitiveJobs.filter((jobId) => !protectedByEnvironment(jobId, workflow, environments));
   const what = [...(workflow.hasSecrets ? ['secrets'] : []), ...(workflow.tokenWrites.size > 0 ? ['a writable GITHUB_TOKEN'] : [])].join(' and ');
 
   const reasons: string[] = [];
@@ -495,14 +425,11 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
   } else if (sensitiveJobs.length === 0) {
     reasons.push('workflow without jobs: no secret can be exposed');
   } else if (unprotectedJobs.length === 0) {
-    const how: string[] = [];
-    if (byEnvironment.length) how.push(`under a protected environment (${[...new Set(byEnvironment.map((jobId) => workflow.jobEnvironments.get(jobId)!))].join(', ')})`);
-    if (byActor.length) how.push(`that exclude the factory's App (${exclusion})`);
-    reasons.push(`${what} limited to jobs ${how.join(' or ')}`);
+    reasons.push(`${what} limited to jobs under a protected environment (${[...new Set(workflow.environmentNames)].join(', ')})`);
   } else {
     verdict = 'refused';
     reasons.push(`${what} exposed on the factory's branches (${exposure.join('; ')}) without human approval`);
-    reasons.push(`attach each of these jobs to an environment with required reviewers, or keep the factory's App out of it with ${exclusion} on the job`);
+    reasons.push('attach each of these jobs to an environment with required reviewers');
     const withoutEnvironment = unprotectedJobs.filter((jobId) => !workflow.jobEnvironments.has(jobId));
     const withUnprotectedEnvironment = unprotectedJobs.filter((jobId) => workflow.jobEnvironments.has(jobId));
     if (withoutEnvironment.length > 0) reasons.push(`job(s) without an environment: ${withoutEnvironment.join(', ')}`);
@@ -522,7 +449,6 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
     githubToken: [...workflow.tokenWrites].map(([job, rights]) => ({ job, rights })),
     factoryBranches: exposure.length > 0,
     environments: environmentReport,
-    actorExcluded,
     protected: sensitiveJobs.length > 0 && unprotectedJobs.length === 0,
     verdict,
     reasons,
@@ -542,17 +468,16 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     return doctorFailure(options, `Cannot read the workflows: ${errorMessage(error)}`);
   }
   let environments: EnvironmentProtection[] = [];
-  let login = '';
   if (workflows.length > 0) {
-    const [read, app] = await Promise.allSettled([api.listEnvironments(repoPath), api.appLogin()]);
-    if (read.status === 'rejected') return doctorFailure(options, `Cannot read the environments: ${errorMessage(read.reason)}`);
-    if (app.status === 'rejected') return doctorFailure(options, `Cannot read the GitHub App's login: ${errorMessage(app.reason)}`);
-    environments = read.value;
-    login = app.value;
+    try {
+      environments = await api.listEnvironments(repoPath);
+    } catch (error) {
+      return doctorFailure(options, `Cannot read the environments: ${errorMessage(error)}`);
+    }
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
-  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory, login));
+  const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory));
   const accepted = reports.every((report) => report.verdict === 'accepted');
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
@@ -578,8 +503,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
               : 'none'
           }`,
         );
-        out(`  factory's App excluded: ${report.actorExcluded.length > 0 ? report.actorExcluded.join(', ') : 'no job'}`);
-        out(`  protected: ${report.protected ? 'yes' : 'no'}`);
+        out(`  protected environment: ${report.protected ? 'yes' : 'no'}`);
         out(`  verdict: ${report.verdict} — ${report.reasons.join(' ')}`);
         out('');
       }

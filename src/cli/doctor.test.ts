@@ -127,7 +127,7 @@ jobs:
 `;
     const result = await doctor([workflow(ci)], [protectedEnvironment]);
     expect(result.code).toBe(0);
-    expect(result.text).toContain('protected: yes');
+    expect(result.text).toContain('protected environment: yes');
     expect(result.text).toContain('limited to jobs under a protected environment');
   });
 

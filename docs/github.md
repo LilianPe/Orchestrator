@@ -189,13 +189,12 @@ The knowledge repository (`relais-knowledge`) deserves the same protection: a hu
 
 `factory doctor [repo] [--json]` (current repository by default) checks, before entrusting a repository, that no CI can expose secrets to the factory's branches. The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
 
-Since ORC-283 the factory's branches follow the team's convention, `feat/<id>-<slug>` or `fix/<id>-<slug>` by default, or the repository's own `branches.pattern` ([repository configuration](repository-configuration.md#branch-names)). They no longer live in a space of their own: a branch filter can no longer tell them from a human's. So `doctor` accepts a job that sees a secret on these branches only if a human approves it (a protected environment) or if the job keeps the factory's App out by its actor (`if: github.actor != '<app-slug>[bot]'`). A ticket whose PR was already open on `factory/<id>-<slug>` keeps that branch, so `doctor` still counts `factory/*` among the factory's branches.
+Since ORC-283 the factory's branches follow the team's convention, `feat/<id>-<slug>` or `fix/<id>-<slug>` by default, or the repository's own `branches.pattern` ([repository configuration](repository-configuration.md#branch-names)). They no longer live in a space of their own: a branch filter can no longer tell them from a human's. So `doctor` accepts a job that sees a secret or a writable `GITHUB_TOKEN` on these branches only if a human approves each of its runs: the job runs under an environment with required reviewers. A condition on the actor (`if: github.actor != '<app-slug>[bot]'`) is not credited: a human can start a run on the agent's code (a push on top of its commits, re-opening or labelling its PR), and that run's actor is the human. A ticket whose PR was already open on `factory/<id>-<slug>` keeps that branch, so `doctor` still counts `factory/*` among the factory's branches.
 
 The command resolves `owner/name` with `git remote get-url origin`, then reads with the GitHub App:
 
 - `.github/workflows/*.yml` and `*.yaml` (Contents API, default branch);
-- `GET /repos/{owner}/{repo}/environments` and their `protection_rules`;
-- `GET /app`, as the App (its JWT): its slug, which makes its actor's login, `<slug>[bot]`.
+- `GET /repos/{owner}/{repo}/environments` and their `protection_rules`.
 
 It reads the repository's branch naming in `.factory/config.yml` on the default branch, as the local clone last fetched it (`origin/HEAD`, no `fetch`); an invalid file makes `doctor` refuse.
 
@@ -215,12 +214,10 @@ Conversely, a `push` limited to branches the factory never names (`main`, `relea
 Accepted:
 
 1. a dedicated CI **without secrets**, its `GITHUB_TOKEN` read only, on these branches;
-2. a workflow with secrets or a writable token where **every job that sees one** is either attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer (human approval blocks the job before it reads the secret), or keeps the factory's App out by its job-level `if:` (ORC-283, below);
-3. a workflow with secrets that only runs on branches the factory never names, or only on tags.
+2. a workflow with secrets or a writable token where **every job that sees one** is attached to a GitHub environment whose `protection_rules` contain `required_reviewers` with at least one reviewer: human approval blocks the job before it reads the secret, whoever started the run;
+3. a workflow with secrets that only runs on branches the factory never names (the default branch, `release/*`), or only on tags.
 
-**Keeping the App out (ORC-283).** `doctor` credits a job whose own `if:` (the job's, not a step's) has `github.actor != '<app-slug>[bot]'` as one of its terms joined by `&&` alone at the top: `if: github.actor != 'my-factory[bot]'`, `if: ${{ github.event_name == 'push' && github.actor != 'my-factory[bot]' }}`, the operands either way round, parentheses around the term. The login is compared without case, as GitHub compares strings. It credits nothing it cannot read so: a `||` at the top, a negation (`!(github.actor == …)`), `github.triggering_actor`, another bot's login, an expression beside text. `doctor` prints the exact condition in a refusal. A job that `needs:` an excluded job is not credited by it: each job that sees a secret carries its own condition.
-
-What this exclusion guarantees, and what it does not: it keeps the secret from the runs the factory's App starts, its pushes and the PRs it opens and updates. A run a human starts on a factory branch (pushing on top of the agent's commits, re-opening or labelling its PR) has the human as its actor and sees the secret, on code the agent wrote. That human is then the approval. Where that is not enough, use a protected environment, which asks for approval on every run. The exclusion also assumes the factory publishes through its GitHub App: a daemon without one (`gh` CLI) pushes as a user, whom no such condition keeps out.
+Nothing else protects a job (ORC-283). A job-level or step-level `if:` on `github.actor`, `github.triggering_actor` or the PR's author is not credited, nor is a `needs:` on a protected job: each job that sees a secret runs under its own protected environment. The job keeps its condition if the team wants it; `doctor` reads past it.
 
 When in doubt, `doctor` refuses: invalid or ambiguous YAML (multi-document, dynamic `on`, mistyped filters), environment not found or without required reviewers, `secrets: inherit` without a protected environment, `permissions:` it cannot read, a `GITHUB_TOKEN` without `permissions:`, GitHub API error, unreadable API response (never read as "no workflow", "no environment", "no reviewer" or "protected"), more than 1000 environments. A 404 on `.github/workflows` means "no CI"; a 404 on the App's installation or on its token is a configuration error: `doctor` refuses.
 
@@ -238,9 +235,8 @@ GitHub Actions workflows: 1
   secrets: yes
   GITHUB_TOKEN: test (repository default)
   environments: none
-  factory's App excluded: no job
-  protected: no
-  verdict: refused — secrets and a writable GITHUB_TOKEN exposed on the factory's branches (pull_request can run the CI on the factory's branches) without human approval attach each of these jobs to an environment with required reviewers, or keep the factory's App out of it with `if: github.actor != 'my-factory[bot]'` on the job
+  protected environment: no
+  verdict: refused — secrets and a writable GITHUB_TOKEN exposed on the factory's branches (pull_request can run the CI on the factory's branches) without human approval attach each of these jobs to an environment with required reviewers job(s) without an environment: test …
   ...
 Result: refused — 1 workflow(s) of 1 can expose secrets or a writable GITHUB_TOKEN to the factory's branches.
 ```
@@ -259,26 +255,9 @@ jobs:
           TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-`factory doctor` then displays `secrets: yes`, `protected: yes` and `verdict: accepted`.
+`factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`. The CI without secrets can still run on the factory's branches beside it, in another job or workflow, without approval.
 
-Acceptance by keeping the App out (the App's slug is `my-factory`):
-
-```yaml
-on: [push, pull_request]
-permissions: read-all
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    if: github.actor != 'my-factory[bot]'
-    steps:
-      - run: npm test
-        env:
-          TOKEN: ${{ secrets.NPM_TOKEN }}
-```
-
-`factory doctor` then displays `factory's App excluded: test`, `protected: yes` and `verdict: accepted`. The CI without secrets can still run on the factory's branches beside it, in another job or workflow.
-
-`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, actorExcluded, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights; `actorExcluded`: the jobs whose `if:` keeps the App out).
+`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
 
 ### Limitations
 

@@ -66,9 +66,6 @@ const isEnvironment = (v: unknown): v is EnvironmentDto =>
   v.name !== '' &&
   (v.protection_rules === undefined || (Array.isArray(v.protection_rules) && v.protection_rules.every(isProtectionRule)));
 
-/** `GET /app`: a slug that names it, the only one GitHub gives (lowercase letters, digits and dashes). */
-const isApp = (v: unknown): v is { slug: string } => isRecord(v) && typeof v.slug === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(v.slug);
-
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
   return (rules ?? []).some((rule) => rule.type === 'required_reviewers' && (rule.reviewers ?? []).length > 0);
 }
@@ -111,11 +108,5 @@ export class GitHubAppApi extends GitHubAppAuth {
     const path = `/repos/${segment(repo.owner)}/${segment(repo.name)}/environments`;
     const environments = await this.allPages(path, 'environments', 'a list of environments', isEnvironment, token);
     return environments.map((environment) => ({ name: environment.name, requiredReviewers: hasRequiredReviewers(environment.protection_rules) }));
-  }
-
-  /** The App's login as an actor, `<slug>[bot]` (ORC-283): `github.actor` on its pushes and the PRs it opens. */
-  async appLogin(): Promise<string> {
-    const app = await this.read('GET', '/app', this.appJwt(), isApp, 'the App');
-    return `${app.slug}[bot]`;
   }
 }
