@@ -1,5 +1,4 @@
-import { formatDuration, formatTokens, plural } from './Flow.js';
-import { percent } from './Security.js';
+import { formatDuration, formatTokens, percent, plural } from './Flow.js';
 import type { BaselineValueView, BaselineView, MissRateView, OverviewView, ReworkCause } from './types.js';
 
 /** The measures of the MVP doc that nothing in the factory feeds yet, and the ticket that brings each (ORC-223). */

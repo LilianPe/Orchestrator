@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { NO_SECURITY_SOURCE, percent, Security } from './Security.js';
+import { NO_SECURITY_SOURCE, Security } from './Security.js';
 import type { BlockParetoView, RunSecurityView, SecurityPeriodView } from './types.js';
 
 const PERIOD: SecurityPeriodView = {
@@ -35,11 +35,6 @@ const rows = (html: string, title: string) => html.split(`>${title}<`)[1]!.split
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 describe('the security page (ORC-300)', () => {
-  it('percent: a whole percentage', () => {
-    expect(percent(0.75)).toBe('75%');
-    expect(percent(1 / 3)).toBe('33%');
-  });
-
   it('shows the causes of the blocks of the period, most frequent first, with their share and running share', () => {
     const html = page();
     expect(rows(html, 'Block causes').map(text)).toEqual(['Red not verified 3 75% 75%', 'Limit reached 1 25% 100%']);

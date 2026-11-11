@@ -2,13 +2,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { AGENT_QUESTION, STOPPED } from '../../src/core/block-cause.js';
-import { Flow, formatDuration, formatTokens, plural, tokensCell } from './Flow.js';
+import { Flow, formatDuration, formatTokens, percent, plural, tokensCell } from './Flow.js';
 import type { FlowView, WorkingRunView } from './types.js';
 
 const EMPTY: FlowView = { needsYou: { blocked: [], humanReview: [], gates: [] }, working: [], queued: [], done: [], others: [] };
 const base = { projectId: 'p', ticketId: 'REL-1', title: 'Export' };
 const running: WorkingRunView = {
-  ...base, runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 65_000, measured: true, tokens: { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 }, attemptsWithoutTokens: 0, costUsd: 0.5,
+  ...base, runId: 'r1', step: 'dev-feedback', verifying: false, stoppable: true, durationMs: 65_000, measured: true, tokens: { input: 1_000, output: 2_000, cacheRead: 30_000, cacheCreation: 4_000 }, attemptsWithoutTokens: 0, usageLimitShare: null, costUsd: 0.5,
 };
 const page = (flow: Partial<FlowView>, elapsedMs = 0) =>
   renderToStaticMarkup(createElement(Flow, { flow: { ...EMPTY, ...flow }, elapsedMs, onSelect: () => undefined, onStop: () => undefined }));
@@ -37,11 +37,23 @@ describe('formats', () => {
     expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).title).toMatch(/^2 finished attempts without a measurement\. /);
   });
 
+  it('percent: a whole percentage', () => {
+    expect(percent(0.75)).toBe('75%');
+    expect(percent(1 / 3)).toBe('33%');
+  });
+
   it('tokensCell: the measure, marked when attempts are missing from it, and the cost in dollars when none reported (ORC-216)', () => {
     expect(tokensCell(running).text).toBe('37.0 k');
     expect(tokensCell({ ...running, attemptsWithoutTokens: 2 }).text).toBe('≥ 37.0 k');
     expect(tokensCell({ ...running, tokens: null }).text).toBe('— ($0.50)');
     expect(tokensCell({ ...running, tokens: null, costUsd: 0 }).text).toBe('—');
+  });
+
+  it("tokensCell: the share of the ticket's token budget, beside its tokens, when there is a cap (ORC-194)", () => {
+    const cell = tokensCell({ ...running, usageLimitShare: 0.42 });
+    expect(cell.text).toBe('37.0 k · 42%');
+    expect(cell.title).toContain(' 42% of the ticket’s token budget: its code runs, cache reads left out, against factory.yml’s per_ticket_tokens.');
+    expect(tokensCell({ ...running, tokens: null, costUsd: 0, usageLimitShare: null }).text).toBe('—');
   });
 
   it('tokensCell: a read error is not a fact about the ticket', () => {

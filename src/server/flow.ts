@@ -34,6 +34,8 @@ export interface WorkingRun extends FlowTicket {
   tokens: TokenUsage | null;
   /** Finished attempts `tokens` leaves out: they reported no usage. */
   attemptsWithoutTokens: number;
+  /** Share of the ticket's token budget its code runs spent, what the dashboard shows in place of a cost of the day (ORC-194); null without a cap or while no code run reported its tokens. */
+  usageLimitShare: number | null;
   /** Of the ticket, in dollars: what exists when no attempt reported tokens (ORC-216). */
   costUsd: number;
 }
@@ -64,7 +66,7 @@ export interface FlowInput {
   verifying: RunRecord[];
   queue: QueueItem[];
   /** By `flowKey`: what the measures say of the tickets at work; a ticket without an entry has no tokens to show. */
-  measures: ReadonlyMap<string, Pick<TicketMeasures, 'tokens' | 'attemptsWithoutTokens'>>;
+  measures: ReadonlyMap<string, Pick<TicketMeasures, 'tokens' | 'attemptsWithoutTokens' | 'usageLimitShare'>>;
 }
 
 export const flowKey = (r: { projectId: string; ticketId: string }): string => `${r.projectId}/${r.ticketId}`;
@@ -123,6 +125,7 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
       measured: measure !== undefined,
       tokens: measure?.tokens ?? null,
       attemptsWithoutTokens: measure?.attemptsWithoutTokens ?? 0,
+      usageLimitShare: measure?.usageLimitShare ?? null,
       costUsd: ticket?.costUsd ?? 0,
     };
   };

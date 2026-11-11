@@ -704,7 +704,6 @@ export interface Store {
   removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void>;
   putEcho(key: string, until: number): Promise<void>;
   isEcho(key: string, now: number): Promise<boolean>;
-  costSince(ts: number): Promise<number>;
   /**
    * Records the first sign of life the factory gave for an inbox event (ORC-235): the ack of its
    * webhook, at `at`. A later call leaves the first time.
