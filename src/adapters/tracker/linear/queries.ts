@@ -54,6 +54,9 @@ export const Q = {
   /** The session's activity of an effect (ORC-162): an activity has no body filter, only its id. */
   effectActivity: `query EffectActivity($sessionId: String!, $id: ID!) {
     agentSession(id: $sessionId) { activities(first: 1, filter: { id: { eq: $id } }) { nodes { id } } } }`,
+  reactionCreate: `mutation ReactionCreate($input: ReactionCreateInput!) { reactionCreate(input: $input) { success } }`,
+  /** The comment's reactions (ORC-380): the effect's is found by the id it was created with. */
+  effectReaction: `query EffectReaction($commentId: String!) { comment(id: $commentId) { reactions { id } } }`,
   sessionLinks: `query SessionLinks($id: String!) { agentSession(id: $id) { externalLinks { url } } }`,
   activityCreate: `mutation ActivityCreate($input: AgentActivityCreateInput!) { agentActivityCreate(input: $input) { success } }`,
   sessionUpdate: `mutation SessionUpdate($id: String!, $input: AgentSessionUpdateInput!) { agentSessionUpdate(id: $id, input: $input) { success } }`,

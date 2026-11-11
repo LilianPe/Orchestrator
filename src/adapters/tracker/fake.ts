@@ -19,6 +19,8 @@ export class FakeTracker implements Tracker, TeamDirectory {
   private threads = new Map<string, { body: string; createdAt: number }[]>();
   /** The issues related to each one, both ways (ORC-376). */
   private related = new Map<string, Set<string>>();
+  /** Set, every reaction is refused, as Linear refuses one on a message it does not take (ORC-380). */
+  refuseReactions = false;
 
   constructor(private readonly defaultStates: readonly string[] = STANDARD_STATES) {}
 
@@ -102,6 +104,11 @@ export class FakeTracker implements Tracker, TeamDirectory {
 
   comments(identifier: string): string[] {
     return this.argsOf('comment', identifier).map(([body]) => body as string);
+  }
+
+  /** The emojis put on the comment, in order (ORC-380). */
+  reactions(commentId: string): string[] {
+    return this.argsOf('react', commentId).map(([emoji]) => emoji as string);
   }
 
   agentSessions(identifier: string): string[] {
@@ -210,6 +217,16 @@ export class FakeTracker implements Tracker, TeamDirectory {
     this.must(identifier);
     const n = this.argsOf('comment', identifier).findIndex(([, e]) => e === effectId);
     return n < 0 ? undefined : `comment-${identifier}-${n + 1}`;
+  }
+
+  async react(commentId: string, emoji: string, effectId?: string): Promise<void> {
+    if (this.refuseReactions) throw new Error(`reaction refused on comment ${commentId}`);
+    this.record('react', commentId, emoji, ...(effectId === undefined ? [] : [effectId]));
+  }
+
+  async findReaction(commentId: string, effectId: string): Promise<string | undefined> {
+    const n = this.argsOf('react', commentId).findIndex(([, e]) => e === effectId);
+    return n < 0 ? undefined : `reaction-${commentId}-${n + 1}`;
   }
 
   async activity(sessionId: string, a: ActivityInput, effectId?: string): Promise<void> {

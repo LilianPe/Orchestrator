@@ -3,7 +3,7 @@ import { reconcileOnce, type ReconcileDeps } from '../../src/adapters/tracker/li
 import { measureTicket } from '../../src/core/measures.js';
 import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
-import { linearIngest, signedDelegation, signedMention } from '../helpers/linear-webhook.js';
+import { linearIngest, signedDelegation, signedMention, signedReply } from '../helpers/linear-webhook.js';
 import { testPreset } from '../helpers/test-preset.js';
 
 /** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
@@ -400,5 +400,83 @@ describe('the trigger (ORC-171)', () => {
     expect(session.at(-1)).toEqual({ type: 'response', body: "C'est pour garder l'ordre." });
     expect(h.tracker.comments('REL-1')).toEqual([]);
     expect(await h.ticket()).toMatchObject({ delegated: false });
+  });
+});
+
+describe('the acknowledgement by reaction (ORC-380, decision ORC-140)', () => {
+  const reacting = (refuse = false) => {
+    const h = createHarness({ acknowledge: 'reaction', authz: { githubLogins: { 'user-lilian': 'lilian' } } });
+    h.tracker.setTeamMembers('REL', ['user-lilian']);
+    h.forge.setRepoPermission('lilian', 'write');
+    h.tracker.addIssue(CLEAR);
+    if (refuse) h.tracker.refuseReactions = true;
+    return h;
+  };
+  const warned = (h: ReturnType<typeof createHarness>) => h.logs.filter((l) => /reaction/.test(l.message));
+
+  it('criterion 1: a mention gets a reaction on its comment and no « Got it. » comment; the sign of life is measured on it', async () => {
+    const h = reacting();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Pour garder l’ordre.' }], hold: true });
+    const { raw, headers } = signedMention('as-q', '@factory pourquoi ce tri ?', h.clock.now());
+    expect(await ingestOf(h)(raw, headers)).toEqual({ status: 200 });
+    await h.orch.drained();
+    expect(h.tracker.reactions('c-as-q')).toEqual(['eyes']);
+    expect(h.tracker.comments('REL-1')).toEqual([]);
+    // Linear marks a session unresponsive without an activity in 10 s: the session keeps its thought.
+    expect(h.tracker.activities('as-q')[0]).toEqual({ type: 'thought', body: 'Got it.' });
+    const [message] = (await measureTicket(h.store, 'p', 'REL-1')).messages;
+    expect(message!.signOfLifeMs).toEqual(expect.any(Number));
+  });
+
+  it('criterion 2: without the key, a mention gets no reaction, and a delegation its comment as before', async () => {
+    const h = authorized();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Pour garder l’ordre.' }], hold: true });
+    const mention = signedMention('as-q', '@factory pourquoi ?', h.clock.now());
+    await ingestOf(h)(mention.raw, mention.headers);
+    await h.orch.drained();
+    expect(h.tracker.comments('REL-1')).toEqual([]);
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }], hold: true });
+    const delegation = signedDelegation(h.clock.now());
+    await ingestOf(h)(delegation.raw, delegation.headers);
+    await h.orch.drained();
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
+    expect(h.tracker.calls.filter((c) => c.method === 'react')).toEqual([]);
+  });
+
+  it('criterion 3: a reaction Linear refuses falls back on the comment, and the fallback is logged; the sign of life still counts', async () => {
+    const h = reacting(true);
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Pour garder l’ordre.' }], hold: true });
+    const { raw, headers } = signedMention('as-q', '@factory pourquoi ce tri ?', h.clock.now());
+    await ingestOf(h)(raw, headers);
+    await h.orch.drained();
+    expect(h.tracker.reactions('c-as-q')).toEqual([]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
+    expect(warned(h)).toEqual([{ level: 'warn', message: expect.stringMatching(/reaction .*refused.*comment instead/) }]);
+    expect((await measureTicket(h.store, 'p', 'REL-1')).messages[0]!.signOfLifeMs).toEqual(expect.any(Number));
+  });
+
+  it('a delegation has no message to react on: it keeps its comment, as in either mode, with nothing logged', async () => {
+    const h = reacting();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }], hold: true });
+    const { raw, headers } = signedDelegation(h.clock.now());
+    await ingestOf(h)(raw, headers);
+    await h.orch.drained();
+    expect(h.tracker.calls.filter((c) => c.method === 'react')).toEqual([]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.']);
+    expect(warned(h)).toEqual([]);
+  });
+
+  it('a reply Linear names no comment of gets the comment in place of a reaction, logged', async () => {
+    const h = reacting();
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'PR ouverte.' }], hold: true });
+    const delegation = signedDelegation(h.clock.now());
+    await ingestOf(h)(delegation.raw, delegation.headers);
+    await h.orch.drained();
+    const reply = signedReply('as-1', 'Trie par date décroissante.', h.clock.now() + 1);
+    await ingestOf(h)(reply.raw, reply.headers);
+    await h.orch.drained();
+    expect(h.tracker.calls.filter((c) => c.method === 'react')).toEqual([]);
+    expect(h.tracker.comments('REL-1')).toEqual(['Got it.', expect.stringMatching(/^Noted/)]);
+    expect(warned(h)).toEqual([{ level: 'info', message: expect.stringMatching(/no message to put a reaction on.*comment instead/) }]);
   });
 });

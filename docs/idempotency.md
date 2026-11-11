@@ -31,7 +31,7 @@ The other effects of `decide`, attached as ORC-138 proposes (point 6):
 
 | Effect | Duplicate behavior |
 |---|---|
-| `ack` (acknowledgment, ORC-171) | the Comment and Activity rows, on the same key: a replay looks for each and only writes what is missing; the plan (`setSessionPlan`) is a final state; the time kept on the inbox row is the first one. A refused write is logged, neither retried nor blocking: the acknowledgment does not hold back the run |
+| `ack` (acknowledgment, ORC-171) | the Comment and Activity rows, on the same key: a replay looks for each and only writes what is missing; with `acknowledge: reaction` (ORC-380), the reaction too, under a client id derived from the key, looked for among the comment's reactions (`Tracker.findReaction`) before it is put (« Accusé par réaction (ORC-380)… »); the plan (`setSessionPlan`) is a final state; the time kept on the inbox row is the first one. A refused write is logged, neither retried nor blocking: the acknowledgment does not hold back the run |
 | `move` (status) | final state, naturally idempotent; echo filtered. The move to Human Review also labels the PR `revue:` (ORC-198), a final state too: `setExclusiveLabel` reads the PR's labels and writes only what differs, so a replay writes nothing and one label of the group stays (`FakeForge`, `GitHubAppForge`: `test/scenarios/diff-class.test.ts`, `github-app.test.ts`) |
 | `link_pr` (`addExternalUrl`) | final state: the Linear adapter reads the session's links again and does not add a URL already there (the fake too) |
 | `stop_run`, `cleanup` | naturally idempotent: stopping what is stopped, deleting what no longer exists does nothing |

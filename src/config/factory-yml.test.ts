@@ -132,6 +132,13 @@ describe('factory.yml (ORC-209, part B)', () => {
     expect(violations('audit: { definition: x }')).toContain('audit.definition: unknown key');
   });
 
+  it('reads how a human message is acknowledged, a comment by default (ORC-380)', () => {
+    expect(parseFactoryYml('acknowledge: reaction', ENV).acknowledge).toBe('reaction');
+    expect(parseFactoryYml('acknowledge: comment', ENV).acknowledge).toBe('comment');
+    expect(parseFactoryYml('concurrency: 1', ENV).acknowledge).toBeUndefined();
+    expect(violations('acknowledge: emoji')).toEqual(['acknowledge: `comment` or `reaction` expected']);
+  });
+
   it('hands the effort and the budgets to the agent steps, nothing without them (ORC-136)', () => {
     expect(stepSettings(undefined)).toEqual({});
     expect(stepSettings({ budgets: { maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });
