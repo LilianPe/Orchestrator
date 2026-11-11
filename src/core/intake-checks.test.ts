@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { ForgeBranch, OpenPr } from '../adapters/forge/types.js';
-import { ACTIVE_WORK_MAX, formatActiveWork, formatReuse, guardFindings, ownWork } from './intake-checks.js';
-import { branchName, ownBranchPrefix } from './naming.js';
+import { FakeForge } from '../adapters/forge/fake.js';
+import { ACTIVE_WORK_MAX, formatActiveWork, formatReuse, guardFindings, ownWork, ticketBranches } from './intake-checks.js';
+import type { BranchNaming } from './naming.js';
 
 const branch = (name: string): ForgeBranch => ({ name, url: `https://github.com/acme/app/tree/${name}` });
 const pr = (number: number, branchName: string, files: string[] | null = ['src/a.ts'], extra: Partial<OpenPr> = {}): OpenPr => ({ number, url: `https://github.com/acme/app/pull/${number}`, title: `PR ${number}`, branch: branchName, fork: false, files, filesTotal: files?.length ?? 0, ...extra });
 
 describe('ownWork: the not_started check, absorbed by the duplicate search (ORC-207)', () => {
   it("names the ticket's own branch, by its PR's link when it has an open one", () => {
-    expect(ownBranchPrefix('REL-3')).toBe('factory/rel-3-');
-    expect(branchName('REL-3', 'Export CSV').startsWith(ownBranchPrefix('REL-3'))).toBe(true);
+    expect(ownWork('REL-3', [branch('feat/rel-3-export-csv')], [pr(5, 'feat/rel-3-export-csv')])).toBe(
+      'This ticket already has work on the forge: https://github.com/acme/app/pull/5 (branch feat/rel-3-export-csv).',
+    );
     expect(ownWork('REL-3', [branch('factory/rel-3-old')], [])).toBe(
       'This ticket already has work on the forge: https://github.com/acme/app/tree/factory/rel-3-old (branch factory/rel-3-old).',
     );
@@ -19,7 +21,21 @@ describe('ownWork: the not_started check, absorbed by the duplicate search (ORC-
   });
 
   it("finds none on another ticket's branch, even one whose id starts the same", () => {
-    expect(ownWork('REL-3', [branch('factory/rel-31-x'), branch('main')], [pr(1, 'feat/rel-3')])).toBeUndefined();
+    expect(ownWork('REL-3', [branch('factory/rel-31-x'), branch('fix/rel-31-x'), branch('main')], [pr(1, 'feat/rel-3')])).toBeUndefined();
+  });
+
+  it("follows the repository's own naming (ORC-283)", () => {
+    const naming: BranchNaming = { pattern: 'agent/{id}', types: [], fallback: 'feat' };
+    expect(ownWork('REL-3', [branch('agent/rel-3')], [], naming)).toContain('branch agent/rel-3');
+    expect(ownWork('REL-3', [branch('feat/rel-3-x')], [], naming)).toBeUndefined();
+  });
+});
+
+describe("ticketBranches: the ticket's own branches on the forge (ORC-283)", () => {
+  it('asks the forge for each type and the legacy factory/ name, and keeps only the ticket’s', async () => {
+    const forge = new FakeForge();
+    forge.branchNames = ['main', 'feat/rel-3-export', 'fix/rel-3-crash', 'factory/rel-3-old', 'feat/rel-31-other', 'chore/rel-3-x'];
+    expect((await ticketBranches(forge, '/repo', 'REL-3')).map((b) => b.name)).toEqual(['fix/rel-3-crash', 'feat/rel-3-export', 'factory/rel-3-old']);
   });
 });
 
