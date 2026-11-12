@@ -129,7 +129,7 @@ describe('the publish effect (ORC-125)', () => {
       expect(reviewing(decide(shown, ev('publish.done', { runId: 'r1', job: 'dev-feedback', sha: 'def' }), workflow))).toEqual([{ kind: 'move', to: 'ai_review' }, expect.objectContaining({ job: 'review' })]);
     });
 
-    it('in the review loop, a fix that contests without committing is judged again: AI Review has no reviewed commit', () => {
+    it('in the review loop, a fix that contests without committing is judged again', () => {
       const loop = verifying({ logical: 'ai_review', reviewSha: undefined, reviewBlocking: { sha: 'abc', counts: { correctness: 1 } } });
       expect(reviewing(decide(loop, ev('publish.done', { runId: 'r1', job: 'fix-review', sha: 'abc' }), workflow))).toEqual([expect.objectContaining({ job: 'review' })]);
     });
