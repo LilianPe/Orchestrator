@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { execFailure } from '../../src/adapters/exec.js';
@@ -10,11 +10,15 @@ import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { TRUSTED, type EventPayloads } from '../../src/core/types.js';
 import { causeOf } from '../../src/core/block-cause.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
+import { FakeSecretSource } from '../../src/adapters/secrets/fake.js';
 import { createHarness, packDir } from '../helpers/harness.js';
 
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 const SETUP = 'version: 1\nworkspace:\n  setup: ["npm ci"]\n  ports: { base: 4200 }\n';
 const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
+/** The repository's registry token, in the secret manager the tests register (ORC-308). */
+const REGISTRY = { source: 'coffre', path: 'kv/app#registry' };
+const vault = () => ({ coffre: new FakeSecretSource({ 'kv/app#registry': 'registry-secret' }) });
 
 /** The repository's own setup commands, without the rc file of Yarn 1 that comes before them. */
 const setups = (h: ReturnType<typeof createHarness>) => h.sandboxes.execs.filter((e) => e.argv[0] === 'timeout');
@@ -441,17 +445,64 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   describe('the repository variables and secrets (ORC-211)', () => {
-    const VARS = { env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] };
+    const VARS = { env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: REGISTRY }, missing: [] };
     const repoVariables = async () => VARS;
 
     it('gives the setup the secrets, and the agent only the declared variables', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
       await delegate(h);
       expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test', REGISTRY_TOKEN: 'registry-secret', npm_config_ignore_scripts: 'true' });
       const env = h.runner.requests[0]!.env;
       expect(env).toMatchObject({ NODE_ENV: 'test' });
       expect(env).not.toHaveProperty('REGISTRY_TOKEN');
       expect(Object.values(env)).not.toContain('registry-secret');
+    });
+
+    it('reads the secret from its source at the setup, then masks and seals it as any other (ORC-308)', async () => {
+      const sources = vault();
+      const worktree = '/tmp/factory-fake/p/REL-1';
+      const h = createHarness({ sandboxed: true, secretSources: sources, projectYaml: SETUP, repoVariables });
+      expect(sources.coffre.reads).toEqual([]);
+      // The setup leaves the token in the worktree, as an `.npmrc` would.
+      h.sandboxes.execResult = (argv) => {
+        if (argv[0] === 'timeout') writeFileSync(join(worktree, '.npmrc'), '//registry/:_authToken=registry-secret\n');
+        return { stdout: '', stderr: '', code: 0 };
+      };
+      mkdirSync(worktree, { recursive: true });
+      try {
+        await delegate(h);
+        expect(sources.coffre.reads).toEqual(['kv/app#registry']);
+        expect(setups(h)[0]!.opts!.env).toMatchObject({ REGISTRY_TOKEN: 'registry-secret' });
+        expect(h.secrets.values()).toEqual(['registry-secret']);
+        expect(existsSync(join(worktree, '.npmrc'))).toBe(false);
+        expect(h.logs.map((l) => l.message).join('\n')).toContain(`secret found and purged in ${join(worktree, '.npmrc')}`);
+        expect(h.runner.requests).toHaveLength(1);
+      } finally {
+        rmSync(worktree, { recursive: true, force: true });
+      }
+    });
+
+    it('a source that fails creates no setup container and blocks the ticket with the reference, never the value (ORC-308)', async () => {
+      const down = { coffre: new FakeSecretSource({ 'kv/app#registry': 'registry-secret' }, { down: true }) };
+      const h = createHarness({ sandboxed: true, secretSources: down, projectYaml: SETUP, repoVariables });
+      await delegate(h);
+      expect(h.sandboxes.created).toEqual([]);
+      expect(h.runner.requests).toEqual([]);
+      expect(h.workspaces.cleaned).toEqual(['REL-1']);
+      const t = await h.ticket();
+      expect(t).toMatchObject({ blocked: true });
+      const told = [t.blockReason, h.tracker.comments('REL-1').at(-1)].join('\n');
+      expect(told).toContain('the secret REGISTRY_TOKEN (coffre:kv/app#registry) could not be read: the secret manager does not answer');
+      expect(told).not.toContain('registry-secret');
+    });
+
+    it('reads no secret for a setup on work nobody reviewed (ORC-308)', async () => {
+      const sources = vault();
+      const h = createHarness({ sandboxed: true, secretSources: sources, projectYaml: SETUP, repoVariables });
+      h.workspaces.ahead.add('REL-1');
+      await delegate(h);
+      expect(setups(h)).toHaveLength(1);
+      expect(sources.coffre.reads).toEqual([]);
     });
 
     it('a run variable of the factory wins over a variable of the repository', async () => {
@@ -461,13 +512,13 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('no secret mounted for the setup: its sandbox has the git dir alone, read-only', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
       await delegate(h);
       expect(h.sandboxes.created[0]!.mounts).toEqual([{ host: join('/tmp/factory-fake/p/REL-1', '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true }]);
     });
 
     it('a setup that fails with secrets removes the worktree and starts no run', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
       h.sandboxes.execResult = () => ({ stdout: '', stderr: 'boom', code: 1 });
       await delegate(h);
       expect(h.runner.requests).toEqual([]);
@@ -476,7 +527,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a setup whose container cannot be destroyed starts no run: a process could still write the secret', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
       h.sandboxes.destroy = async () => Promise.reject(new Error('engine down'));
       await delegate(h);
       expect(h.runner.requests).toEqual([]);
@@ -489,7 +540,7 @@ describe('a disposable sandbox per attempt', () => {
       ['the secrets are gone from the configuration', { env: {}, setupSecrets: {}, missing: [] }],
     ])('a worktree whose setup a crash cut is removed and made anew, when %s', async (_, after) => {
       let declared = VARS as typeof after;
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables: async () => declared });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables: async () => declared });
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
       expect(h.workspaces.cleaned).toEqual([]);
@@ -508,7 +559,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('withholds the secrets from a setup on commits a previous agent wrote, and says so', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
       h.workspaces.ahead.add('REL-1');
       await delegate(h);
       expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test' });
@@ -530,7 +581,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a reading of the variables that fails leaves the run without them', async () => {
-      const h = createHarness({ sandboxed: true, repoVariables: async () => Promise.reject(new Error('git down')) });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), repoVariables: async () => Promise.reject(new Error('git down')) });
       await delegate(h);
       expect(h.runner.requests).toHaveLength(1);
       expect(h.runner.requests[0]!.env).not.toHaveProperty('NODE_ENV');
@@ -554,7 +605,7 @@ describe('a disposable sandbox per attempt', () => {
   describe("the repository's services (ORC-309)", () => {
     const PG = { ...DEFAULT_REQUIREMENTS, services: ['postgres'] };
     const repoConfig = async () => parseRepoConfig('services: [postgres]\n');
-    const VARS = { env: {}, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] };
+    const VARS = { env: {}, setupSecrets: { REGISTRY_TOKEN: REGISTRY }, missing: [] };
 
     it("the attempt's setup and agent share its services, gone with the agent's sandbox", async () => {
       const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig });
@@ -570,7 +621,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a new attempt on the same worktree runs the setup again, for its new database, without the secrets; a failure there keeps the worktree', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
       expect(setups(h)[0]!.opts!.env).toHaveProperty('REGISTRY_TOKEN');
@@ -586,7 +637,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a setup that writes a secret in its database blocks the ticket, without the value, and no agent starts', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
       h.sandboxes.execResult = (argv) => ({ stdout: argv[0] === 'pg_dumpall' ? 'INSERT INTO t VALUES (\'registry-secret\');\n' : '', stderr: '', code: 0 });
       await delegate(h);
       expect(h.runner.requests).toEqual([]);

@@ -4,14 +4,14 @@ import { NO_REPO_VARIABLES, repoVariables } from './repo-variables.js';
 
 const SERVER = {
   env: { NODE_ENV: 'test', UNDECLARED: 'not for the runner' },
-  secrets: { REGISTRY_TOKEN: 'registry-secret', OTHER_TOKEN: 'other-secret' },
+  secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' }, OTHER_TOKEN: { source: 'coffre', path: 'kv/app#other' } },
 };
 
 describe('repoVariables (ORC-211)', () => {
   const config = parseRepoConfig('env: [NODE_ENV, NOT_ON_THE_SERVER]\nsetup_secrets: [REGISTRY_TOKEN, ALSO_MISSING_TOKEN]\n');
 
-  it('passes a variable only when the repository declares it and the server gives its value', () => {
-    expect(repoVariables(config, SERVER)).toMatchObject({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' } });
+  it('passes a variable only when the repository declares it and the server gives its value, a secret by its reference (ORC-308)', () => {
+    expect(repoVariables(config, SERVER)).toMatchObject({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } });
   });
 
   it('names what the repository declares and the server does not give, for the daemon log', () => {
@@ -24,7 +24,7 @@ describe('repoVariables (ORC-211)', () => {
 
   it('never takes a secret for a variable, nor the reverse: the two lists stay apart', () => {
     const crossed = parseRepoConfig('env: [REGISTRY_URL]\nsetup_secrets: [DEPLOY_HOST]\n');
-    expect(repoVariables(crossed, { env: { DEPLOY_HOST: 'h' }, secrets: { REGISTRY_URL: 'u' } })).toEqual({ env: {}, setupSecrets: {}, missing: ['REGISTRY_URL', 'DEPLOY_HOST'] });
+    expect(repoVariables(crossed, { env: { DEPLOY_HOST: 'h' }, secrets: { REGISTRY_URL: { source: 'env', path: 'U' } } })).toEqual({ env: {}, setupSecrets: {}, missing: ['REGISTRY_URL', 'DEPLOY_HOST'] });
   });
 
   it('declares everything as missing on a server that has no entry for the repository', () => {

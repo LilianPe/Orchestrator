@@ -159,14 +159,12 @@ export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets
   saveSecrets(home, { ...s, linear: { clientId: '', clientSecret: '', webhookSecret: '', ...s.linear, ...patch } });
 }
 
-/** Every secret the daemon holds, from `secrets.json` and `factory.yml`: masked in run transcripts. */
-export function daemonSecretValues(home: string, yml: FactoryYml | undefined): string[] {
-  const fromYml = [
-    yml?.github?.privateKey,
-    yml?.github?.webhookSecret,
-    ...(yml?.claude?.accounts.map((a) => a.token) ?? []),
-    ...(yml?.repos?.flatMap((r) => Object.values(r.secrets ?? {})) ?? []),
-  ];
+/**
+ * Every secret the daemon holds, from `secrets.json` and `factory.yml`, and the repositories' secrets its setups `read` from
+ * their sources (ORC-308): masked in run transcripts.
+ */
+export function daemonSecretValues(home: string, yml: FactoryYml | undefined, read: readonly string[] = []): string[] {
+  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, ...(yml?.claude?.accounts.map((a) => a.token) ?? []), ...read];
   return [...new Set([...secretValues({ linear: linearSettings(home, yml) }), ...fromYml.filter((v): v is string => !!v)])];
 }
 

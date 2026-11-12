@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { fakeSecretKind } from '../adapters/secrets/fake.js';
+import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, stepSettings, ticketCapOf } from './factory-yml.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
@@ -162,23 +164,76 @@ describe('factory.yml (ORC-209, part B)', () => {
   describe('the values of a repository (ORC-211)', () => {
     const env = { ...ENV, ORG_REGISTRY_TOKEN: 'registry-secret-1', API: 'https://api.exemple.com' };
 
-    it('reads its variables, in clear or env:NAME, and its secrets, env:NAME only', () => {
+    it('reads its variables, in clear or env:NAME, and its secrets as references, unread (ORC-308)', () => {
       const c = parseFactoryYml('repos:\n  - linear_team: ORC\n    github: org/app\n    env: { NODE_ENV: test, API_URL: env:API }\n    secrets: { REGISTRY_TOKEN: env:ORG_REGISTRY_TOKEN }\n', env);
-      expect(c.repos).toEqual([{ linearTeam: 'ORC', github: 'org/app', env: { NODE_ENV: 'test', API_URL: 'https://api.exemple.com' }, secrets: { REGISTRY_TOKEN: 'registry-secret-1' } }]);
+      expect(c.repos).toEqual([{ linearTeam: 'ORC', github: 'org/app', env: { NODE_ENV: 'test', API_URL: 'https://api.exemple.com' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }]);
     });
 
     it('refuses a secret written in the file', () => {
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: en-clair-123 } }]\n', env).join()).toContain('repos[0].secrets.REGISTRY_TOKEN');
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: en-clair-123 } }]\n', env)).toEqual([
+        'repos[0].secrets.REGISTRY_TOKEN: a reference `<source>:<path>` is expected (`env:NAME`), never a secret in clear in factory.yml',
+      ]);
     });
 
-    it('names the variable that is missing', () => {
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:NOPE } }]\n', env).join()).toContain('NOPE');
+    it('checks the syntax of a reference only: a variable not set is read, and refused, at the setup (ORC-308)', () => {
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:NOPE, SHORT: env:SHORT } }]\n', { ...env, SHORT: 'abc' })).toEqual([]);
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: "env:not a name" } }]\n', env)).toEqual([
+        'repos[0].secrets.REGISTRY_TOKEN: "not a name" does not name a variable (`env:NAME`)',
+      ]);
     });
 
-    it('refuses a secret of fewer than 8 characters: sealing it would purge any file that holds those letters', () => {
-      expect(violations('repos: [{ linear_team: ORC, github: org/app, secrets: { REGISTRY_TOKEN: env:SHORT } }]\n', { ...env, SHORT: 'abc' }).join()).toContain('repos[0].secrets.REGISTRY_TOKEN');
+    it('still resolves env:NAME of its variables at load', () => {
+      expect(violations('repos: [{ linear_team: ORC, github: org/app, env: { API_URL: env:NOPE } }]\n', env).join()).toContain('NOPE');
+    });
+  });
+
+  describe('secret_sources (ORC-308)', () => {
+    const kinds = { ...SECRET_SOURCE_KINDS, fake: fakeSecretKind({}) };
+    const parse = (yaml: string) => parseFactoryYml(yaml, ENV, kinds);
+    const faults = (yaml: string): string[] => {
+      try {
+        parse(yaml);
+        return [];
+      } catch (err) {
+        if (err instanceof FactoryYmlError) return err.violations;
+        throw err;
+      }
+    };
+
+    it('reads a declared source and the references to it', () => {
+      const c = parse('secret_sources:\n  coffre: { kind: fake, name: coffre }\nrepos:\n  - linear_team: ENG\n    github: org/app\n    secrets:\n      NPM_TOKEN: env:NPM_TOKEN\n      DB_SEED_KEY: coffre:kv/app#seed_key\n');
+      expect(c.secretSources).toEqual({ coffre: { kind: 'fake', options: { name: 'coffre' } } });
+      expect(c.repos?.[0]?.secrets).toEqual({ NPM_TOKEN: { source: 'env', path: 'NPM_TOKEN' }, DB_SEED_KEY: { source: 'coffre', path: 'kv/app#seed_key' } });
     });
 
+    it('refuses a reference to a source that is not declared, naming the path of its key', () => {
+      expect(faults('repos:\n  - { linear_team: ENG, github: org/app, secrets: { DB_SEED_KEY: "coffre:kv/app#seed_key" } }\n')).toEqual([
+        'repos[0].secrets.DB_SEED_KEY: its source is neither `env` nor declared under secret_sources',
+      ]);
+    });
+
+    it('refuses a path its source does not accept, through its adapter', () => {
+      expect(faults('secret_sources: { coffre: { kind: fake, name: coffre } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "coffre:no-hash" } }\n')).toEqual([
+        'repos[0].secrets.K: "no-hash" is not `<path>#<key>`',
+      ]);
+    });
+
+    it('refuses an unknown adapter, a missing kind, options its adapter refuses, and a source named env', () => {
+      expect(faults('secret_sources:\n  a: { kind: vault }\n  b: { name: x }\n  c: { kind: fake }\n  env: { kind: fake, name: x }\n  d: fake\n')).toEqual([
+        'secret_sources.a.kind: no adapter vault (env, fake)',
+        'secret_sources.b.kind: required (env, fake)',
+        'secret_sources.c.name: required',
+        'secret_sources.env: built in, it is not declared',
+        'secret_sources.d: an object `{ kind, … }` is expected',
+      ]);
+    });
+
+    it('only knows env by default: no real secret manager is shipped', () => {
+      expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual(['secret_sources.coffre.kind: no adapter vault (env)']);
+    });
+  });
+
+  describe('the Claude token (ORC-337)', () => {
     it('trims the Claude token, and refuses one a header cannot carry, naming where it came from (ORC-337)', () => {
       expect(claudeToken('  sk-ant-oat01-abc\n', 'X')).toBe('sk-ant-oat01-abc');
       expect(claudeToken('   ', 'X')).toBeUndefined();
