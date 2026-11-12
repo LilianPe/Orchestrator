@@ -10,7 +10,8 @@ import type { RedCause } from '../checks/red.js';
 import type { VisualProof } from '../checks/visual-proof.js';
 import type { ReviewLens } from '../config/workflow-schema.js';
 
-export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done'] as const;
+/** `cancelled`: a ticket a human moved to a status of type canceled (ORC-170), read on that type, never mapped by name. */
+export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done', 'cancelled'] as const;
 export type LogicalState = (typeof LOGICAL_STATES)[number];
 export function isLogicalState(v: string): v is LogicalState {
   return (LOGICAL_STATES as readonly string[]).includes(v);
@@ -617,7 +618,7 @@ export interface TicketState {
   repeatedFailure?: { signature: string; count: number } | null;
   /**
    * The move of a job's `on_success` that waits for its publication (ORC-125). Kept through a refusal: what relaunches the ticket
-   * is `dev-feedback`, which has no move of its own, and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
+   * is `dev-feedback`, which had no move of its own before ORC-170 (a frozen version still has none), and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
    */
   owedMove?: LogicalState | null;
   /**

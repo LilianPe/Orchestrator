@@ -19,7 +19,7 @@ import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
 import { CHANGES, formatSpec, publishedSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
-import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
+import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type LogicalState, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
@@ -70,14 +70,31 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
  * ORC-212), there is nothing to post.
  */
 function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId?: string, output?: AgentOutput): Decision {
+  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+  // An end that would start the AI review with nothing new for it moves nothing and starts nothing (ORC-170).
+  const idle = !job.lens && next?.lens ? nothingToReview(at) : undefined;
+  if (idle) out.trace.push(`review: nothing new at the end of ${job.name} (${idle}), the ticket stays where it is`);
+  const stays = !!idle;
   // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
-  if (job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
+  if (!stays && job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
-  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
-  if (next) startRun(out, at.event, at.ticket, next, { input: next.input });
-  else handOver(out, at, job);
+  if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
+  // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
+  else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove ?? undefined));
   return out;
+}
+
+/**
+ * Nothing new for the AI review at the end of `job` (ORC-170): no PR to post its findings on, or the ticket is in Human Review
+ * and this end leaves the commit shown there, already reviewed. An answer that commits nothing is no work to review again.
+ * Out of Human Review (the review loop, or a human's move, which keeps `reviewSha`), the end is judged again: a fix that
+ * contests without committing included.
+ */
+function nothingToReview({ event, ticket }: { event: FactoryEvent; ticket: TicketState | undefined }): string | undefined {
+  const sha = event.type === 'publish.done' || event.type === 'verify.passed' ? event.payload.sha : undefined;
+  if (!ticket?.prNumber) return 'no PR';
+  return sha && ticket.logical === 'human_review' && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
 }
 
 /**
@@ -88,13 +105,12 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  * A question relayed while a step that does not resume the session ran (the AI review) resumes it too, as no round of
  * human review: it answers a question (ORC-374).
  */
-function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec): void {
+function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, leaves: LogicalState | undefined): void {
   const { event, ticket, workflow } = at;
   if (job.queue !== 'dev' || !ticket?.delegated || heldWork(ticket)) return;
   const feedback = awaitsAgent(ticket.humanInbox);
   if (!feedback && !relayWaits(out, ticket)) return;
-  // A move owed by an earlier job is made by this end too (`publish.done`).
-  const after = { ...ticket, logical: job.onSuccess.move ?? ticket.owedMove ?? ticket.logical };
+  const after = { ...ticket, logical: leaves ?? ticket.logical };
   const next = replyJob(event, after, workflow);
   if (!next) return;
   out.trace.push(`human inbox: handed over to ${next.name} at the end of ${job.name}`);
@@ -1296,7 +1312,8 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
   if (!refused && !keepsBlock && ticket?.blocked && !unblocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
-  if (rule.move) out.effects.push({ kind: 'move', to: rule.move });
+  // A move to the status the ticket is in writes nothing: after a Done set by a human, the merge leaves Done to the human (ORC-170).
+  if (rule.move && rule.move !== ticket?.logical) out.effects.push({ kind: 'move', to: rule.move });
   if (rule.labels) out.effects.push({ kind: 'labels', add: rule.labels.add, remove: rule.labels.remove });
   if (rule.comment) out.effects.push({ kind: 'comment', body: rule.comment });
   if (rule.do === 'stop') stop(out, workflow);
@@ -1644,9 +1661,10 @@ function afterMerge(state: TicketState | undefined, event: FactoryEvent, workflo
   return workflow.jobs[event.payload.job]?.queue === 'dev' ? `merged: ignored run.finished for run ${event.payload.runId}` : undefined;
 }
 
-/** Delivered (`done`, PR merged) or stopped by a human (its reason stays): a failure blocks it no more. */
+/** Delivered (`done`, PR merged), cancelled or stopped by a human (its reason stays): a failure blocks it no more. */
 export function settledTicket(ticket: TicketState): string | undefined {
   if (ticket.logical === 'done' || ticket.prState === 'MERGED') return 'delivered';
+  if (ticket.logical === 'cancelled') return 'cancelled';
   return ticket.blocked && causeOf(ticket.blockKind) === 'stopped' ? 'stopped' : undefined;
 }
 

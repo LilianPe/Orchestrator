@@ -47,7 +47,7 @@ describe('decide — the freeze of the tests (ORC-131)', () => {
     expect(decide(ticket({ activeRunId: 'r2', frozenTests: FROZEN }), finished, workflow).effects).toEqual([{ kind: 'run_verify', runId: 'r2', job: 'dev' }]);
     // Not frozen: as before.
     const unchecked = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, repoChecks: undefined } } } as typeof workflow;
-    expect(decide(ticket({ activeRunId: 'r2' }), finished, unchecked).effects).toContainEqual({ kind: 'move', to: 'ai_review' });
+    expect(decide(ticket({ activeRunId: 'r2', prNumber: 7 }), finished, unchecked).effects).toContainEqual({ kind: 'move', to: 'ai_review' });
   });
 
   it('/refreeze by a designated maintainer freezes the branch head, journaled', () => {

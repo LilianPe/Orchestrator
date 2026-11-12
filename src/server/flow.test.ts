@@ -183,6 +183,7 @@ describe('buildFlow (ORC-297)', () => {
         ticket('QUEUED'),
         ticket('RUNNING', { activeRunId: 'r1' }),
         ticket('OLD', { logical: 'done', updatedAt: 0 }),
+        ticket('CANCELLED', { logical: 'cancelled' }),
       ],
       queue: [queued('QUEUED')],
       running: [run('r1', 'RUNNING')],

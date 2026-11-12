@@ -96,7 +96,7 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
   });
 
   it('no commit recorded at the passage in Human Review: nothing merged, back to Human Review, the way to record one said', () => {
-    // A reply in the thread runs dev-feedback, which moves nothing: only the AI review's move to Human Review records one.
+    // A ticket put in Human Review by hand: only the AI review's move to Human Review records one.
     expect(decide(inReview({ reviewSha: undefined }), done(), workflow).effects).toEqual(backToReview(/no reviewed commit.*only at the end of its own work.*Move the ticket to AI Review/));
   });
 

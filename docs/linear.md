@@ -86,7 +86,7 @@ Its cadence is a **timer in the database** (ORC-185): each project's pseudo-tick
 | `/status`, `/stop` as a reply in a session | The ticket's state read from the projection, without a model; the stop, like the stop button. |
 | `/approve`, `/changes <comment>`, `/reject` as a reply in the ticket's session | The spec gate, when the repository runs `spec_draft` (ORC-212, [preset](preset.md#spec_draft-spec_check-and-the-spec_review-gate-orc-212)): approves the published version, asks for a new one, or rejects it. Validators only, never the run's initiator. |
 | Reply in the session, or review on the PR, while in *Human Review* | After 3 minutes without a new message, `fix-human`: the agent fixes on the same PR, then `verify`, the AI review and *Human Review* again; 3 rounds, then the ticket is blocked (ORC-190). Moving the ticket back to *In Progress* starts nothing. |
-| Move to *AI Review* | The AI review of the published commit again (two read-only lenses, findings on the PR, ORC-183), then back to *Human Review*. `dev`'s end starts it by itself. |
+| Move to *AI Review* | The AI review of the published commit again (two read-only lenses, findings on the PR, ORC-183), then back to *Human Review*. The end of `dev`, `dev-feedback`, `fix-ci`, `fix-review` and `fix-human` starts it by itself (ORC-170): this move is never needed to review the factory's work. |
 | `@relais <question>` in a comment | Read-only answer (`ask`, the answer agent), including on a non-delegated ticket. |
 | `@relais fais-le` | Reminds that the ticket must be delegated. |
 | `agent:stop` label, the session's stop button, or removing the delegation | Run stopped, ticket blocked. |
@@ -217,7 +217,9 @@ Missing statuses are created on connection. If your columns have other names, de
 
 Moves made by Relais itself are recognized (for 60 s) and do not re-trigger a rule.
 
-A delegated ticket moved by a human to a status of type *Canceled* cancels its run (stop, queue and pending replies dropped); it is not blocked, and a block in progress is lifted along with its label (ORC-170).
+A delegated ticket moved by a human to a status of type *Canceled* cancels its run (stop, queue and pending replies dropped); it is not blocked, and a block in progress is lifted along with its label (ORC-170). The ticket then goes to the logical state `cancelled`, read on the status's Linear type, never mapped by name: it is not declared in `states`, and no `move` nor a rule's `from`/`to` can name it (they are refused at load); a `when` condition can (`state == cancelled`). A cancelled ticket is settled, as a delivered one: a failure that comes after (an effect replayed late) blocks it no more, a delegation starts nothing, and the dashboard no longer lists it among the unfinished tickets. A human move to a declared status takes it out of `cancelled`.
+
+**Who sets which status.** In a ticket taken to the merge, a human sets two statuses only: *Todo* (the ticket written, then delegated) and *Done* (the merge decision, ORC-148). The factory sets *In Progress*, *AI Review* and *Human Review* from its steps (`on_start` and `on_success` of the jobs). After a *Done* set by a human, the merge moves nothing: the ticket is already in *Done*. After a PR merged directly on GitHub, the factory moves the ticket to *Done* (`pr.merged` rule). No work of the factory waits for a human move either: a commit published on a reply, a block lifted included, goes to *AI Review* and its review by itself (`dev-feedback`, as `fix-human`).
 
 As long as a ticket is **blocked** (the factory is waiting for a reply), the `Bloqué` label is set next to its status; it is removed when the ticket restarts. Relais creates it on connection, along with `agent:stop`.
 

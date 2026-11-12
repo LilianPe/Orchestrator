@@ -20,8 +20,8 @@ on:
   ticket.delegated:
     - { when: "state in [todo, dev] && !blocked", run: dev }
   status.changed:
-    # The review starts once `dev`, `fix-ci`, `fix-review` or `fix-human` is published (their `on_success`). A human's move to
-    # AI Review reviews the published commit again: how a commit `dev-feedback` publishes gets one.
+    # The review starts once a job that writes is published (its `on_success`). This rule reviews the published commit again:
+    # a merge refused for a push since the review starts its job (ORC-148), and so does a human's move to AI Review.
     - { to: ai_review, run: review }
   # A reply in the ticket's session; a review written on the PR (`pr.reviewed`) goes through these rules too (ORC-190).
   # In Human Review, it is a round of human feedback: `fix-human`, on its own counter (`limits.human_review_rounds`).
@@ -119,7 +119,8 @@ jobs:
     input: feedback
     pickup: false
     on_start: {}
-    on_success: { post: reply }
+    # Its commit goes back through the AI review, as every fix's: no work of the factory waits for a human move (ORC-170).
+    on_success: { move: ai_review, post: reply, run: review }
   # The fix of a red CI goes back through `verify`, `publish` and the AI review, as any fix of the loop (ORC-184).
   fix-ci:
     extends: dev-feedback
