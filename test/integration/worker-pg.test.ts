@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { newTicketState, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { OutboxExecutor } from '../../src/runtime/outbox.js';
@@ -193,6 +193,11 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     // Another session (another daemon in its decision) holds REL-1's lock.
     const holder = await pool.connect();
     await holder.query(`select pg_advisory_lock(hashtext('REL-1'))`);
+    // A suite running beside this one in the same database (ORC-334), blocked on the same key.
+    const otherSuite = new Client({ connectionString: PG_URL });
+    await otherSuite.connect();
+    const otherPid = (await otherSuite.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]!.pid;
+    const otherWait = otherSuite.query(`select pg_advisory_lock(hashtext('REL-1'))`).catch(() => undefined);
     const inner = new PgStore({ connectionString: db.url, max: 4 });
     const h = createHarness({ store: inner, projectYaml: COMMENTS });
     for (const t of ['REL-1', 'REL-2']) h.tracker.addIssue({ identifier: t, title: t });
@@ -202,11 +207,20 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
       for (let i = 0; i < 500 && !(await journaled('REL-2')); i++) await new Promise((r) => setTimeout(r, 10));
       expect(await journaled('REL-2')).toBe(1);
       // REL-1's transaction waits on the lock: nothing of it read or written.
-      const waiting = await pool.query(`select 1 from pg_locks where locktype = 'advisory' and not granted`);
+      // pg_locks is server-wide, and every suite of the run now shares one database (ORC-334): only
+      // the blocked locks of this suite's connections count, named by its schema as application_name.
+      const waiting = await pool.query<{ one: number }>(
+        `select 1 as one from pg_locks l join pg_stat_activity a on a.pid = l.pid
+          where l.locktype = 'advisory' and not l.granted and a.application_name = $1`,
+        [db.name],
+      );
+      expect((await pool.query(`select 1 from pg_locks where pid = $1 and not granted`, [otherPid])).rowCount).toBe(1);
       expect(waiting.rowCount).toBe(1);
       expect(await journaled('REL-1')).toBe(0);
       expect(await seed.getTicket('p', 'REL-1')).toBeUndefined();
     } finally {
+      await otherSuite.end();
+      await otherWait;
       await holder.query(`select pg_advisory_unlock(hashtext('REL-1'))`);
       holder.release();
     }
