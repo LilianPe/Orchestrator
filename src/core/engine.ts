@@ -86,14 +86,15 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
 }
 
 /**
- * Nothing new for the AI review at the end of `job` (ORC-170): no PR to post its findings on, or the commit this end leaves
- * is the one shown in Human Review, already reviewed. An answer that commits nothing is no work to review again. In the
- * review loop (AI Review) the ticket has no reviewed commit: a fix that contests without committing is judged again.
+ * Nothing new for the AI review at the end of `job` (ORC-170): no PR to post its findings on, or the ticket is in Human Review
+ * and this end leaves the commit shown there, already reviewed. An answer that commits nothing is no work to review again.
+ * Out of Human Review (the review loop, or a human's move, which keeps `reviewSha`), the end is judged again: a fix that
+ * contests without committing included.
  */
 function nothingToReview({ event, ticket }: { event: FactoryEvent; ticket: TicketState | undefined }): string | undefined {
   const sha = event.type === 'publish.done' || event.type === 'verify.passed' ? event.payload.sha : undefined;
   if (!ticket?.prNumber) return 'no PR';
-  return sha && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
+  return sha && ticket.logical === 'human_review' && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
 }
 
 /**
