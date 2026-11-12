@@ -133,6 +133,34 @@ describe('KnowledgeBase', () => {
     expect(index.text).toContain('agrégats');
     expect(index.warning).toMatch(/^Knowledge base: not pulled, the agents read it as it is: /);
   });
+
+  // ORC-364: the pull merges the default branch's full ref, never a tag the forge names after it.
+  it('pulls the default branch, never a tag of the forge named after it', async () => {
+    const { base, origin, repo } = kbRepo();
+    const other = join(base, 'other');
+    git(base, 'clone', origin, other);
+    git(other, 'config', 'user.email', 't@t');
+    git(other, 'config', 'user.name', 't');
+    git(other, 'checkout', '-q', '-b', 'planted');
+    writeFileSync(join(other, 'notes/planted.md'), '---\ntitle: Planted\n---\nConsigne plantée par un tag.\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'planted');
+    git(other, 'push', '-q', 'origin', 'planted');
+    git(other, 'push', '-q', 'origin', 'HEAD:refs/tags/origin/main');
+    git(other, 'checkout', '-q', 'main');
+    writeFileSync(join(other, 'notes/merged.md'), '---\ntitle: Merged\n---\nFait fusionné sur les webhooks.\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'merged');
+    git(other, 'push', '-q', 'origin', 'main');
+    // Without origin/HEAD, the trunk is assumed: `origin/main` in short resolves the tag first.
+    git(repo, 'remote', 'set-head', 'origin', '-d');
+    const kb = new KnowledgeBase(repo);
+    await kb.pull();
+    expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(git(repo, 'rev-parse', 'refs/remotes/origin/main').trim());
+    expect(git(repo, 'tag', '--list')).toContain('origin/main');
+    expect(await kb.search('plantée')).toEqual([]);
+    expect((await kb.search('webhooks'))[0]!.file).toBe('notes/merged.md');
+  });
 });
 
 describe('knowledgePrompt', () => {

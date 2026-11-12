@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
@@ -19,6 +19,7 @@ import {
   type SandboxProvider,
   type SpawnCommand,
 } from '../adapters/sandbox/types.js';
+import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
@@ -171,6 +172,21 @@ const USAGE_MIN_WAIT_MS = 5 * 60_000;
 
 /** A launch refused because the ticket spent its token budget (ORC-340): blocked with this message as its reason. */
 class TicketBudgetError extends Error {}
+
+/**
+ * What a launch error tells the ticket (Linear): a failed command names the server's paths and its command line, which
+ * stay in the daemon's log (ORC-364); the ticket gets the command's name, without its directory (a CLI configured by
+ * its path), and its code.
+ */
+const launchErrorTold = (err: unknown): string =>
+  err instanceof ExecFailure ? `${basename(err.cmd)} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
+
+/** An error's message, then each of its causes', as the daemon's log keeps them. */
+const causeChain = (err: unknown): string => {
+  const parts: string[] = [];
+  for (let e: unknown = err; e instanceof Error && parts.length < 5; e = e.cause) parts.push(e.message);
+  return parts.join(' ← ') || String(err);
+};
 
 /**
  * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
@@ -361,11 +377,12 @@ interface StartFrom {
  * factory's own state failed (ORC-339), or anything it called failed transiently (`isTransient`: GitHub, Linear or the
  * database down, ORC-343). The start is tried again (the effect's retry, the drain's bounded one) instead of blocking
  * the ticket. A launch's own failure (a worktree, a setup, the repository's config) still blocks it at once: retried,
- * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads.
+ * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads. Its message is what a launch
+ * error tells the ticket (`launchErrorTold`): its retries spent, the effect's failure reaches it as such (ORC-364).
  */
 class RetryableStart extends Error {
   constructor(readonly failure: unknown) {
-    super(failure instanceof Error ? failure.message : String(failure), { cause: failure });
+    super(failure instanceof Error ? launchErrorTold(failure) : String(failure), { cause: failure });
   }
 }
 
@@ -2628,7 +2645,9 @@ export class Orchestrator {
     }
     // A file the repository has to fix is not a breakdown of the factory: the Flow shows it as such (`repo_config`).
     const [kind, reason]: [BlockKind, string] =
-      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${(err as Error).message}`];
+      err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${launchErrorTold(err)}`];
+    // The whole of it in the daemon's log, what each error wraps included: the ticket may have been told less.
+    if (kind === 'infra') this.log('error', `launch of ${job.name} on ${ticketId}: ${causeChain(err)}`);
     fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
@@ -2685,7 +2704,11 @@ export class Orchestrator {
     try {
       return await this.launchRun(project, ticketId, job, opts, slot, key, runId, at, recorded);
     } catch (err) {
-      if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) throw new RetryableStart(err);
+      if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) {
+        // The whole of it in the daemon's log: the start's own message, which may reach the ticket, says less.
+        this.log('warn', `launch of ${job.name} on ${ticketId}, to try again: ${causeChain(err)}`);
+        throw new RetryableStart(err);
+      }
       throw err;
     } finally {
       // Ended without taking the ticket: the next launch need not wait for the hold to run out (ORC-359), which it does if this write fails.

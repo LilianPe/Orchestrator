@@ -113,8 +113,19 @@ export function systemEnv(base: NodeJS.ProcessEnv): Record<string, string> {
   return env;
 }
 
-export function execFailure(cmd: string, args: string[], r: ExecResult): Error {
-  return new Error(`${cmd} ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim() || `exit ${r.code}`}`);
+/** A command that failed: its message names the command line and its output, for the daemon's log; `cmd` and `code` alone may be told further. */
+export class ExecFailure extends Error {
+  constructor(
+    readonly cmd: string,
+    readonly code: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function execFailure(cmd: string, args: string[], r: ExecResult): ExecFailure {
+  return new ExecFailure(cmd, r.code, `${cmd} ${args.join(' ')}: ${r.stderr.trim() || r.stdout.trim() || `exit ${r.code}`}`);
 }
 
 export async function mustExec(exec: Exec, cmd: string, args: string[], opts?: ExecOpts): Promise<string> {

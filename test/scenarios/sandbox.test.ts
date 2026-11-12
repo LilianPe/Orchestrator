@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { execFailure } from '../../src/adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, PACK_TARGET, REFUSALS_TARGET, SANDBOX_HOME, WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
 import { LOG_EXCERPT_MAX } from '../../src/checks/log-excerpt.js';
 import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
@@ -334,6 +335,47 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     expect(h.tracker.comments('REL-1').at(-1)).toContain('Reason: Launch error: The worktree setup failed: npm ci\n');
+  });
+
+  it("a git failure of the launch's preparation tells the ticket neither the server's path nor the command, which the daemon's log keeps", async () => {
+    const h = createHarness();
+    const args = ['-C', '/srv/factory/repos/p', 'rev-list', '--count', 'refs/remotes/origin/main..refs/heads/factory/rel-1'];
+    h.workspaces.prepare = async () => {
+      throw execFailure('git', args, { stdout: '', stderr: 'fatal: bad revision', code: 128 });
+    };
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: git failed (code 128); the command and its output are in the daemon log.' });
+    const told = [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? a.body : ''))].join('\n');
+    expect(told).toContain('Launch error: git failed (code 128)');
+    expect(told).not.toMatch(/\/srv\/factory|rev-list|bad revision/);
+    expect(h.logs.map((l) => l.message).join('\n')).toContain('git -C /srv/factory/repos/p rev-list --count refs/remotes/origin/main..refs/heads/factory/rel-1: fatal: bad revision');
+  });
+
+  it('a failed command configured by its path is told to the ticket by its name alone', async () => {
+    const h = createHarness();
+    h.workspaces.prepare = async () => {
+      throw execFailure('/opt/factory/bin/docker', ['create', '--name', 'box'], { stdout: '', stderr: 'Error response from daemon', code: 125 });
+    };
+    await delegate(h);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: docker failed (code 125); the command and its output are in the daemon log.' });
+    const told = [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? a.body : ''))].join('\n');
+    expect(told).not.toContain('/opt/factory');
+  });
+
+  it("a transient git failure of the launch's preparation, its retries spent, tells the ticket neither the server's path nor the command", async () => {
+    const h = createHarness();
+    const args = ['-C', '/srv/factory/worktrees/p/REL-1.new', 'checkout', '--quiet', 'factory/rel-1'];
+    h.workspaces.prepare = async () => {
+      throw execFailure('git', args, { stdout: '', stderr: 'fatal: unable to access the forge: Could not resolve host: forge', code: 128 });
+    };
+    await delegate(h);
+    expect(h.runner.requests).toEqual([]);
+    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Error: git failed (code 128); the command and its output are in the daemon log.' });
+    const told = [...h.tracker.comments('REL-1'), ...h.tracker.activities().map((a) => ('body' in a ? a.body : ''))].join('\n');
+    expect(told).toContain('git failed (code 128)');
+    expect(told).not.toMatch(/\/srv\/factory|checkout|resolve host/);
+    expect(h.logs.map((l) => l.message).join('\n')).toContain('git -C /srv/factory/worktrees/p/REL-1.new checkout --quiet factory/rel-1: fatal: unable to access the forge: Could not resolve host: forge');
   });
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
