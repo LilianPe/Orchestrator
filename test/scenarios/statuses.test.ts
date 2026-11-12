@@ -3,7 +3,7 @@ import type { AgentOutput } from '../../src/core/agent-output.js';
 import { createHarness } from '../helpers/harness.js';
 
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
-const BRANCH = 'factory/rel-1-export-csv';
+const BRANCH = 'feat/rel-1-export-csv';
 const SHA = 'c0ffee'.padEnd(40, '0');
 const PR = { number: 3, url: 'https://github.com/acme/app/pull/3' };
 
