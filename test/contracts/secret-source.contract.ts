@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import type { SecretSource, SecretSourceKind } from '../../src/adapters/secrets/types.js';
-import { describeContract, resolved, subjectWith, type ContractOptions } from './cases.js';
+import { describeContract, rejection, resolved, subjectWith, type ContractOptions } from './cases.js';
 
 /** What the implementation under test arranged for the suite. Docs: docs/ports/secret-source.md. */
 export interface SecretSourceSubject {
@@ -30,20 +30,14 @@ export function describeSecretSourceContract(name: string, make: () => SecretSou
 
     it('a path it does not hold rejects, without any value', async () => {
       const s = await make();
-      const err = await s.source.read(s.missing).then(
-        () => expect.fail('expected a rejection'),
-        (e: unknown) => e,
-      );
+      const err = await rejection(s.source.read(s.missing));
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message).not.toContain(s.present.value);
     });
 
     it('a source out of service rejects, without any value', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'down');
-      const err = await s.down.read(s.present.path).then(
-        () => expect.fail('expected a rejection'),
-        (e: unknown) => e,
-      );
+      const err = await rejection(s.down.read(s.present.path));
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message).not.toContain(s.present.value);
     });
