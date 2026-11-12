@@ -193,16 +193,23 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     // Another session (another daemon in its decision) holds REL-1's lock.
     const holder = await pool.connect();
     await holder.query(`select pg_advisory_lock(hashtext('REL-1'))`);
-    // A suite running beside this one in the same database (ORC-334), blocked on the same key.
-    const otherSuite = new Client({ connectionString: PG_URL });
-    await otherSuite.connect();
-    const otherPid = (await otherSuite.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]!.pid;
-    const otherWait = otherSuite.query(`select pg_advisory_lock(hashtext('REL-1'))`).catch(() => undefined);
     const inner = new PgStore({ connectionString: db.url, max: 4 });
     const h = createHarness({ store: inner, projectYaml: COMMENTS });
     for (const t of ['REL-1', 'REL-2']) h.tracker.addIssue({ identifier: t, title: t });
     const journaled = async (t: string) => (await pool.query(`select 1 from journal where ticket_id = $1`, [t])).rowCount;
+    // A suite running beside this one in the same database (ORC-334), blocked on the same key.
+    const otherSuite = new Client({ connectionString: PG_URL });
+    otherSuite.on('error', () => undefined);
+    let otherPid: number | undefined;
+    let otherWait: Promise<unknown> | undefined;
+    const otherBlocked = async () =>
+      (await pool.query(`select 1 from pg_locks where pid = $1 and locktype = 'advisory' and not granted`, [otherPid])).rowCount;
     try {
+      await otherSuite.connect();
+      otherPid = (await otherSuite.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]!.pid;
+      otherWait = otherSuite.query(`select pg_advisory_lock(hashtext('REL-1'))`).catch(() => undefined);
+      for (let i = 0; i < 500 && !(await otherBlocked()); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(await otherBlocked()).toBe(1);
       await h.orch.replayInbox();
       for (let i = 0; i < 500 && !(await journaled('REL-2')); i++) await new Promise((r) => setTimeout(r, 10));
       expect(await journaled('REL-2')).toBe(1);
@@ -214,13 +221,14 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
           where l.locktype = 'advisory' and not l.granted and a.application_name = $1`,
         [db.name],
       );
-      expect((await pool.query(`select 1 from pg_locks where pid = $1 and not granted`, [otherPid])).rowCount).toBe(1);
       expect(waiting.rowCount).toBe(1);
       expect(await journaled('REL-1')).toBe(0);
       expect(await seed.getTicket('p', 'REL-1')).toBeUndefined();
     } finally {
-      await otherSuite.end();
+      // Its backend would stay queued for the lock after a client-side end: terminated, it leaves the queue.
+      if (otherPid !== undefined) await pool.query('select pg_terminate_backend($1)', [otherPid]);
       await otherWait;
+      await otherSuite.end().catch(() => undefined);
       await holder.query(`select pg_advisory_unlock(hashtext('REL-1'))`);
       holder.release();
     }
