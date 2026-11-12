@@ -134,6 +134,16 @@ describe('the publish effect (ORC-125)', () => {
       expect(reviewing(decide(loop, ev('publish.done', { runId: 'r1', job: 'fix-review', sha: 'abc' }), workflow))).toEqual([expect.objectContaining({ job: 'review' })]);
     });
 
+    it('out of Human Review by a human move, the commit reviewed there is no longer the one shown: the end is judged again', () => {
+      // A human move keeps `reviewSha` (only the factory's own move records it): the end reads the status the ticket is in.
+      const shown = verifying({ logical: 'human_review', reviewSha: 'abc' });
+      for (const [to, job] of [['ai_review', 'fix-review'], ['dev', 'dev-feedback']] as const) {
+        const moved = reduce(shown, ev('status.changed', { from: 'human_review', to }))!;
+        expect(moved.reviewSha, to).toBe('abc');
+        expect(reviewing(decide(moved, ev('publish.done', { runId: 'r1', job, sha: 'abc' }), workflow)), to).toContainEqual(expect.objectContaining({ job: 'review' }));
+      }
+    });
+
     it('the lenses chain as before, a PR or not', () => {
       const end = ev('run.finished', { runId: 'r1', job: 'review', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { status: 'done', summary: '', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings: [] } });
       const lens = verifying({ logical: 'ai_review', prNumber: undefined, verifyingRunId: undefined, activeRunId: 'r1', activeJob: 'review', verifiedSha: 'abc' });
