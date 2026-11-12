@@ -228,6 +228,12 @@ describe('factory.yml (ORC-209, part B)', () => {
       ]);
     });
 
+    it('refuses a declared source of an unknown adapter once, not again at each reference to it', () => {
+      expect(faults('secret_sources: { coffre: { kind: vault } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
+        'secret_sources.coffre.kind: no adapter vault (env, fake)',
+      ]);
+    });
+
     it('only knows env by default: no real secret manager is shipped', () => {
       expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual(['secret_sources.coffre.kind: no adapter vault (env)']);
     });

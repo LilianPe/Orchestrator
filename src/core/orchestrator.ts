@@ -1,9 +1,9 @@
-import type { SecretRef } from '../adapters/secrets/types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
+import type { SecretRef } from '../adapters/secrets/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';

@@ -337,12 +337,15 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (perStepTools) out.tools = { perStep: perStepTools };
   const sourcesRaw = r['secret_sources'];
   const secretSources: Record<string, SecretSourceDecl> = {};
+  /** Every name declared, its adapter known or not: a reference to a faulty declaration is not refused a second time. */
+  const declared = new Set<string>();
   if (sourcesRaw !== undefined && sourcesRaw !== null) {
     if (typeof sourcesRaw !== 'object' || Array.isArray(sourcesRaw)) violations.push('secret_sources: an object is expected');
     else {
       const known = Object.keys(kinds).join(', ');
       for (const [name, decl] of Object.entries(sourcesRaw as Record<string, unknown>)) {
         const path = `secret_sources.${name}`;
+        declared.add(name);
         if (name === 'env') violations.push(`${path}: built in, it is not declared`);
         else if (!decl || typeof decl !== 'object' || Array.isArray(decl)) violations.push(`${path}: an object \`{ kind, … }\` is expected`);
         else {
@@ -374,7 +377,7 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     const ref = { source: v.slice(0, colon), path: v.slice(colon + 1) };
     const kind = ref.source === 'env' ? kinds['env'] : secretSources[ref.source] && kinds[secretSources[ref.source]!.kind];
     if (!kind) {
-      violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
+      if (!declared.has(ref.source)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
       return undefined;
     }
     const fault = kind.checkPath(ref.path);
