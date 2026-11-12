@@ -16,10 +16,10 @@ A reference is written `<source>:<path>`: `env:NPM_TOKEN`, or `coffre:kv/app#see
 
 | Method | What it guarantees | Replayed | Error |
 |---|---|---|---|
-| `read(path)` | the value at `path`, as the source holds it now | reads again, the same value while nobody rotated it | rejects when the source does not hold `path` or is out of service; the message never carries a value of the source |
+| `read(path)` | the value at `path`, as the source holds it now | reads again, the same value while nobody rotated it | rejects when the source does not hold `path` or is out of service; neither the message nor its `cause` carries a value of the source (the daemon's log keeps the cause chain) |
 | `SecretSourceKind.checkPath(path)` | why `path` is not one of its paths, without reading anything; undefined when it is | pure | none |
 | `SecretSourceKind.checkOptions(options)` | the faults of a declaration's options (every key but `kind`), each prefixed by its key | pure | none |
-| `SecretSourceKind.create(options, env)` | the source of a declaration whose options passed `checkOptions` | a new source | may throw on options it refused |
+| `SecretSourceKind.create(options, env)` | the source of a declaration whose options passed `checkOptions`, called at startup: it does not contact the source, whose faults (network, credential) appear at `read` only | a new source | may throw on options it refused |
 
 ## What the daemon does with it
 
