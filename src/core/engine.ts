@@ -81,7 +81,7 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
   if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
   // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
-  else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove));
+  else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove ?? undefined));
   return out;
 }
 
