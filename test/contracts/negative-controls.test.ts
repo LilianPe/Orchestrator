@@ -14,6 +14,8 @@ import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
 import type { Publication, Publisher } from '../../src/adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
+import { FakeSecretSource, fakeSecretKind } from '../../src/adapters/secrets/fake.js';
+import type { SecretSource } from '../../src/adapters/secrets/types.js';
 import type { Sandbox, SandboxRequest, SandboxRequirements } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
@@ -26,6 +28,7 @@ import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-ru
 import { describeForgeContract, type ForgeSubject } from './forge.contract.js';
 import { describePublisherContract, type PublisherSubject } from './publisher.contract.js';
 import { describeSandboxContract, EXEC_PROBE, type SandboxSubject } from './sandbox.contract.js';
+import { describeSecretSourceContract, type SecretSourceSubject } from './secret-source.contract.js';
 import { describeTrackerContract, type TrackerSubject } from './tracker.contract.js';
 
 // Each subject breaks one guarantee on purpose: the case that checks it must fail against it.
@@ -1034,3 +1037,44 @@ describe('contractCases', () => {
     expect(skipped).toBe(false);
   });
 });
+
+const SECRET_MISSING = 'a path it does not hold rejects, without any value';
+const SECRET_DOWN = 'a source out of service rejects, without any value';
+const SECRET_PATH = 'its kind checks a path without reading it';
+const SECRET_VALUE = 'seed-secret-value';
+
+function secretsThat(patch: Partial<SecretSourceSubject>): () => SecretSourceSubject {
+  return () => ({
+    source: new FakeSecretSource({ 'kv/app#seed': SECRET_VALUE }),
+    present: { path: 'kv/app#seed', value: SECRET_VALUE },
+    missing: 'kv/app#absent',
+    down: new FakeSecretSource({ 'kv/app#seed': SECRET_VALUE }, { down: true }),
+    syntax: { kind: fakeSecretKind({}), valid: 'kv/app#seed', invalid: 'no-hash' },
+    ...patch,
+  });
+}
+
+const emptyForMissing: SecretSource = { read: async (path) => (path === 'kv/app#seed' ? SECRET_VALUE : '') };
+describeSecretSourceContract('a secret source that answers an empty value for a path it does not hold', secretsThat({ source: emptyForMissing }), { violates: [SECRET_MISSING] });
+
+const tellsTheValue: SecretSource = {
+  read: async (path) => {
+    if (path === 'kv/app#seed') return SECRET_VALUE;
+    throw new Error(`no secret at ${path}; the keys of kv/app are seed (${SECRET_VALUE})`);
+  },
+};
+describeSecretSourceContract('a secret source whose error tells a value it holds', secretsThat({ source: tellsTheValue }), { violates: [SECRET_MISSING] });
+
+describeSecretSourceContract('a secret source that answers from a stale copy when it is out of service', secretsThat({ down: { read: async () => SECRET_VALUE } }), { violates: [SECRET_DOWN] });
+
+describeSecretSourceContract(
+  'a secret source whose error, out of service, tells the value it last read',
+  secretsThat({ down: { read: async () => Promise.reject(new Error(`unreachable; last value ${SECRET_VALUE}`)) } }),
+  { violates: [SECRET_DOWN] },
+);
+
+describeSecretSourceContract(
+  'a secret source kind that accepts any path',
+  secretsThat({ syntax: { kind: { ...fakeSecretKind({}), checkPath: () => undefined }, valid: 'kv/app#seed', invalid: 'no-hash' } }),
+  { violates: [SECRET_PATH] },
+);
