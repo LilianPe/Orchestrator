@@ -214,10 +214,9 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
       for (let i = 0; i < 500 && !(await journaled('REL-2')); i++) await new Promise((r) => setTimeout(r, 10));
       expect(await journaled('REL-2')).toBe(1);
       // REL-1's transaction waits on the lock: nothing of it read or written.
-      // pg_locks is server-wide, and every suite of the run now shares one database (ORC-334): only
-      // the blocked locks of this suite's connections count, named by its schema as application_name.
-      const waiting = await pool.query<{ one: number }>(
-        `select 1 as one from pg_locks l join pg_stat_activity a on a.pid = l.pid
+      // Only this suite's connections: the run's suites share one database (ORC-334).
+      const waiting = await pool.query(
+        `select 1 from pg_locks l join pg_stat_activity a on a.pid = l.pid
           where l.locktype = 'advisory' and not l.granted and a.application_name = $1`,
         [db.name],
       );
