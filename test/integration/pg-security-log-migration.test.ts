@@ -2,14 +2,14 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { createTestDatabase, migrationsUpTo, PG_URL } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, migrationsUpTo, PG_URL } from '../helpers/pg-database.js';
 
 describe.skipIf(!PG_URL)('the security log of a database migrated before the rule and host only (ORC-296)', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_seclog');
+    db = await createTestSchema('factory_seclog');
     pool = new Pool({ connectionString: db.url, max: 2 });
   });
 
@@ -27,7 +27,7 @@ describe.skipIf(!PG_URL)('the security log of a database migrated before the rul
     await migratePgStore(pool);
 
     const columns = await pool.query<{ table_name: string; column_name: string }>(
-      `select table_name, column_name from information_schema.columns where table_schema = 'public' and table_name in ('egress_requests', 'refusals')`,
+      `select table_name, column_name from information_schema.columns where table_schema = current_schema() and table_name in ('egress_requests', 'refusals')`,
     );
     const names = columns.rows.map((c) => `${c.table_name}.${c.column_name}`);
     expect(names).not.toContain('refusals.command');

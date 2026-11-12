@@ -1,16 +1,13 @@
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { newTicketState, TRUSTED, type FactoryEvent } from '../../src/core/types.js';
 import { OutboxExecutor } from '../../src/runtime/outbox.js';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
-import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import type { DecisionOutcome, DecisionRequest, Store } from '../../src/store/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
 import { createHarness, trackHarnesses } from '../helpers/harness.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
-
-const TRUNCATE = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
+import { createTestSchema, EMPTY_ALL, type TestSchema, PG_URL } from '../helpers/pg-database.js';
 
 /** Each event of a ticket decides one comment; a prompt appends its body to the ticket's feedback. */
 const COMMENTS = `
@@ -25,20 +22,20 @@ on:
 // ORC-149 on Postgres: the decision transaction under the ticket's advisory lock, a crash after the
 // commit, and two workers (two daemons) on the same database.
 describe.skipIf(!PG_URL)('worker on PgStore', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_worker');
+    db = await createTestSchema('factory_worker');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });
 
   beforeEach(async () => {
-    await pool.query(TRUNCATE);
+    await pool.query(EMPTY_ALL);
   });
 
-  // The harnesses of the test, shut down before the next one empties the database (ORC-290).
+  // The harnesses of the test, shut down before the next one empties the schema (ORC-290).
   afterEach(trackHarnesses());
 
   afterAll(async () => {
@@ -200,16 +197,37 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     const h = createHarness({ store: inner, projectYaml: COMMENTS });
     for (const t of ['REL-1', 'REL-2']) h.tracker.addIssue({ identifier: t, title: t });
     const journaled = async (t: string) => (await pool.query(`select 1 from journal where ticket_id = $1`, [t])).rowCount;
+    // A suite running beside this one in the same database (ORC-334), blocked on the same key.
+    const otherSuite = new Client({ connectionString: PG_URL });
+    otherSuite.on('error', () => undefined);
+    let otherPid: number | undefined;
+    let otherWait: Promise<unknown> | undefined;
+    const otherBlocked = async () =>
+      (await pool.query(`select 1 from pg_locks where pid = $1 and locktype = 'advisory' and not granted`, [otherPid])).rowCount;
     try {
+      await otherSuite.connect();
+      otherPid = (await otherSuite.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]!.pid;
+      otherWait = otherSuite.query(`select pg_advisory_lock(hashtext('REL-1'))`).catch(() => undefined);
+      for (let i = 0; i < 500 && !(await otherBlocked()); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(await otherBlocked()).toBe(1);
       await h.orch.replayInbox();
       for (let i = 0; i < 500 && !(await journaled('REL-2')); i++) await new Promise((r) => setTimeout(r, 10));
       expect(await journaled('REL-2')).toBe(1);
       // REL-1's transaction waits on the lock: nothing of it read or written.
-      const waiting = await pool.query(`select 1 from pg_locks where locktype = 'advisory' and not granted`);
+      // Only this suite's connections: the run's suites share one database (ORC-334).
+      const waiting = await pool.query(
+        `select 1 from pg_locks l join pg_stat_activity a on a.pid = l.pid
+          where l.locktype = 'advisory' and not l.granted and a.application_name = $1`,
+        [db.name],
+      );
       expect(waiting.rowCount).toBe(1);
       expect(await journaled('REL-1')).toBe(0);
       expect(await seed.getTicket('p', 'REL-1')).toBeUndefined();
     } finally {
+      // Its backend would stay queued for the lock after a client-side end: terminated, it leaves the queue.
+      if (otherPid !== undefined) await pool.query('select pg_terminate_backend($1)', [otherPid]);
+      await otherWait;
+      await otherSuite.end().catch(() => undefined);
       await holder.query(`select pg_advisory_unlock(hashtext('REL-1'))`);
       holder.release();
     }

@@ -2,6 +2,7 @@ import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import { journalSchemaOf } from '../../src/store/pg/migrate.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 
 /** The Postgres server of the integration project; empty skips its suites. */
@@ -17,24 +18,67 @@ async function onServer<T>(connectionString: string, f: (c: Client) => Promise<T
   }
 }
 
-/**
- * An empty database of its own on the PG_URL server, so a suite neither sees nor truncates the
- * rows of a suite running in parallel. `drop()` removes it.
- */
-export async function createTestDatabase(prefix: string): Promise<{ name: string; url: string; drop(): Promise<void> }> {
-  const name = `${prefix}_${process.pid}_${Date.now()}`;
-  await onServer(PG_URL, (c) => c.query(`create database "${name}"`));
-  const u = new URL(PG_URL);
-  u.pathname = `/${name}`;
-  return {
-    name,
-    url: u.toString(),
-    drop: () => onServer(PG_URL, (c) => c.query(`drop database if exists "${name}" with (force)`)).then(() => undefined),
-  };
+/** A test's schema in the PG_URL database; `drop()` removes it with its migration journal. */
+export interface TestSchema {
+  name: string;
+  /**
+   * PG_URL with the schema as search_path, and as application_name: the only way its connections are
+   * found to be ended, so every connection to the schema goes through this URL.
+   */
+  url: string;
+  drop(): Promise<void>;
 }
 
-/** Empties every table of the engine schema, between the tests of a suite sharing one database. */
-export const TRUNCATE_ALL = `truncate table ${PG_TABLE_NAMES.map((name) => `"${name}"`).join(', ')} restart identity cascade`;
+let made = 0;
+
+function testSchemaName(prefix: string): string {
+  const name = `${prefix}_${process.pid}_${Date.now()}_${++made}`;
+  // Unquoted in the search_path option, where Postgres would fold upper case that `create schema "…"` keeps.
+  if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`test schema name not in [a-z0-9_]: ${name}`);
+  // Throws past Postgres's bound for its journal, which also keeps the application_name whole.
+  journalSchemaOf(name);
+  return name;
+}
+
+function testSchemaUrl(name: string): string {
+  const u = new URL(PG_URL);
+  u.searchParams.set('options', `-c search_path=${name}`);
+  u.searchParams.set('application_name', name);
+  return u.toString();
+}
+
+/**
+ * An empty schema of its own in the PG_URL database, so a suite neither sees nor truncates the rows
+ * of a suite running in parallel. A schema rather than a database (ORC-334): a `drop database` waits
+ * for a checkpoint of the whole server, a `drop schema` does not.
+ */
+export async function createTestSchema(prefix: string): Promise<TestSchema> {
+  const name = testSchemaName(prefix);
+  await onServer(PG_URL, (c) => c.query(`create schema "${name}"`));
+  return { name, url: testSchemaUrl(name), drop: () => dropTestSchema(name) };
+}
+
+const END_CONNECTIONS = `select pg_terminate_backend(pid) from pg_stat_activity where application_name = $1 and pid <> pg_backend_pid()`;
+
+/** Ends the connections to the schema still open, as `drop database … with (force)` did. */
+export function endConnections(name: string): Promise<void> {
+  return onServer(PG_URL, (c) => c.query(END_CONNECTIONS, [name])).then(() => undefined);
+}
+
+/** Drops the schema and its migration journal, its connections ended first. */
+function dropTestSchema(name: string): Promise<void> {
+  return onServer(PG_URL, async (c) => {
+    await c.query(END_CONNECTIONS, [name]);
+    await c.query(`drop schema if exists "${name}", "${journalSchemaOf(name)}" cascade`);
+  });
+}
+
+/**
+ * Empties every table of the engine schema, between the tests sharing one schema. A `delete` rather than a
+ * `truncate`, which makes new files for each table: 3 ms against 650 on a Docker Desktop Postgres (ORC-334).
+ * The schema has neither sequence nor foreign key (held by pg-migrate-schema.test.ts), so this is all a reset needs.
+ */
+export const EMPTY_ALL = PG_TABLE_NAMES.map((name) => `delete from "${name}"`).join('; ');
 
 export function queryOn<T>(connectionString: string, f: (c: Client) => Promise<T>): Promise<T> {
   return onServer(connectionString, f);

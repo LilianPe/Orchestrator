@@ -6,7 +6,7 @@ import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import { exportJournal, replayJournal } from '../../src/runtime/replay.js';
 import { createHarness, loadTestWorkflow, trackHarnesses } from '../helpers/harness.js';
-import { createTestDatabase, PG_URL, TRUNCATE_ALL } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, PG_URL, EMPTY_ALL } from '../helpers/pg-database.js';
 import { expectFirstRunMeasures, firstRun } from '../helpers/measures-scenario.js';
 import { testPreset } from '../helpers/test-preset.js';
 
@@ -14,20 +14,20 @@ import { testPreset } from '../helpers/test-preset.js';
 // FACTORY_DATABASE_URL is set. Every scenario of test/scenarios also runs on Postgres (the
 // `scenarios-pg` project, ORC-228); these check the tables themselves.
 describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_orch');
+    db = await createTestSchema('factory_orch');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });
 
   beforeEach(async () => {
-    await pool.query(TRUNCATE_ALL);
+    await pool.query(EMPTY_ALL);
   });
 
-  // The harnesses of the test, shut down before the next one empties the database (ORC-290).
+  // The harnesses of the test, shut down before the next one empties the schema (ORC-290).
   afterEach(trackHarnesses());
 
   afterAll(async () => {
