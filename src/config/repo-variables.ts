@@ -1,9 +1,13 @@
+import type { SecretRef } from '../adapters/secrets/types.js';
 import type { RepoConfig } from './repo-config.js';
 
-/** What the runner gets of a repository (ORC-211): `env` for the setup and the agent, `setupSecrets` for the setup alone. */
+/**
+ * What the runner gets of a repository (ORC-211): `env` for the setup and the agent, `setupSecrets` for the setup alone,
+ * by their references: read at the setup only (ORC-308).
+ */
 export interface RepoVariables {
   env: Record<string, string>;
-  setupSecrets: Record<string, string>;
+  setupSecrets: Record<string, SecretRef>;
   /** Declared by the repository, with no value on the server: absent from the runner, for the daemon's log. */
   missing: string[];
 }
@@ -15,9 +19,9 @@ export const NO_REPO_VARIABLES: RepoVariables = { env: {}, setupSecrets: {}, mis
  * alone cannot name a variable of the daemon and be handed it; the server alone does not put one in a
  * runner. Each list is read in its own map: a declared `env` is never filled from a secret.
  */
-export function repoVariables(config: RepoConfig, server: { env?: Record<string, string> | undefined; secrets?: Record<string, string> | undefined } | undefined): RepoVariables {
+export function repoVariables(config: RepoConfig, server: { env?: Record<string, string> | undefined; secrets?: Record<string, SecretRef> | undefined } | undefined): RepoVariables {
   const out: RepoVariables = { env: {}, setupSecrets: {}, missing: [] };
-  const pick = (names: readonly string[], from: Record<string, string> | undefined, into: Record<string, string>) => {
+  const pick = <T>(names: readonly string[], from: Record<string, T> | undefined, into: Record<string, T>) => {
     for (const name of names) {
       const value = from?.[name];
       if (value === undefined) out.missing.push(name);

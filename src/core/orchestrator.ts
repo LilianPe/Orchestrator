@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
+import type { SecretRef } from '../adapters/secrets/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -291,6 +292,11 @@ export interface OrchestratorDeps {
   fullReadPaths?: (ticket: TicketState) => readonly string[];
   /** What the runner gets of the repository, from its config (ORC-211). Absent: nothing. */
   repoVariables?: (project: ProjectRuntime, config: RepoConfig) => Promise<RepoVariables>;
+  /**
+   * The values of a setup's secrets, from their sources (ORC-308): read at each setup that gets them, never before. It rejects,
+   * naming the secret and its reference, never a value. Absent: a setup that needs a secret fails.
+   */
+  readSecrets?: (refs: Readonly<Record<string, SecretRef>>) => Promise<Record<string, string>>;
   /**
    * `.factory/config.yml` on the repository's default branch, read once at each launch (ORC-209 C); it rejects on an
    * invalid file. Absent: the socle, as for a repository without the file.
@@ -1048,10 +1054,12 @@ export class Orchestrator {
     // On commits a previous agent wrote, or in a worktree an earlier attempt worked in (its services new, ORC-309), `setup`
     // runs code nobody reviewed: no secret for it. A setup that needs one fails.
     const unreviewed = ws.ahead || !ws.fresh;
-    const secrets = unreviewed ? {} : vars.setupSecrets;
-    if (unreviewed && Object.keys(vars.setupSecrets).length) {
+    const declared = Object.keys(vars.setupSecrets).length > 0;
+    if (unreviewed && declared) {
       this.log('warn', `setup of ${ticketId}: ${ws.ahead ? 'its branch has commits beyond the default branch' : "its worktree holds an earlier attempt's work"}, the repository's secrets are withheld`);
     }
+    // Read before its container exists: a source that fails leaves nothing to destroy, and no silent fallback.
+    const secrets = unreviewed || !declared ? {} : await this.readSetupSecrets(vars.setupSecrets);
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
       ticketId,
@@ -1064,6 +1072,13 @@ export class Orchestrator {
       now: new Date(this.d.clock.now()),
     });
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
+  }
+
+  private async readSetupSecrets(refs: Readonly<Record<string, SecretRef>>): Promise<Record<string, string>> {
+    if (!this.d.readSecrets) throw new Error('The worktree setup failed: no secret source is configured');
+    return this.d.readSecrets(refs).catch((err: Error) => {
+      throw new Error(`The worktree setup failed: ${err.message}`, { cause: err });
+    });
   }
 
   /** `.factory/config.yml` on the default branch (ORC-209 C): it rejects on an invalid file. */

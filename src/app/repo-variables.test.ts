@@ -8,7 +8,7 @@ import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 
-const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: 'registry-secret' } }] };
+const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
 
 /** A repository: its origin, its default branch, the config committed on it. */
@@ -225,13 +225,13 @@ describe('makeRepoVariables (ORC-211)', () => {
   it('takes the declaration it is given, and reads nothing of the repository but its origin', async () => {
     const { exec, calls } = git({ head: 'origin/trunk' });
     const vars = await makeRepoVariables({ yml: YML, exec, log: () => {} })(PROJECT, DECLARED);
-    expect(vars).toEqual({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] });
+    expect(vars).toEqual({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } }, missing: [] });
     expect(calls.every((c) => c.includes('get-url'))).toBe(true);
   });
 
   it.each(['git@github.com:Org/App.git', 'https://x-access-token:t@github.com/org/app', 'ssh://git@github.com/ORG/app.git/'])('finds the entry of the repository from its origin %s', async (origin) => {
     const vars = await makeRepoVariables({ yml: YML, exec: git({ origin }).exec, log: () => {} })(PROJECT, DECLARED);
-    expect(vars.setupSecrets).toEqual({ REGISTRY_TOKEN: 'registry-secret' });
+    expect(vars.setupSecrets).toEqual({ REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } });
   });
 
   it('gives nothing to a remote of the same path on another host', async () => {

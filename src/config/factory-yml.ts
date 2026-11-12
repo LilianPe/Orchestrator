@@ -3,13 +3,17 @@ import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
+import { ENV_NAME } from '../adapters/secrets/env.js';
+import { SECRET_SOURCE_KINDS, type SecretSourceDecl } from '../adapters/secrets/registry.js';
+import type { SecretRef, SecretSourceKind } from '../adapters/secrets/types.js';
 import { MAX_DIFF } from '../checks/diff-size.js';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from './load-workflow.js';
 
 /**
  * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, optional, next to `config.yaml`
- * until ORC-199. Every secret is written `env:NAME` and resolved from the environment, never kept in the file.
+ * until ORC-199. Every secret is written `env:NAME` and resolved from the environment, never kept in the file; a repository's
+ * secrets are references `<source>:<path>`, read at each `setup` (ORC-308).
  * Read only: the daemon overlays it on what it reads (`effectiveInstance`, `linearSettings`), nothing saves it.
  */
 export interface FactoryYml {
@@ -36,10 +40,12 @@ export interface FactoryYml {
   /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
   maxDiff?: 'off';
   /**
-   * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` and
-   * `secrets` are the values of what the repository's `.factory/config.yml` declares (ORC-211).
+   * `projects[].repoPath` of config.yaml stays the working copy until the runner clones (ORC-204). `env` holds the values of
+   * what the repository's `.factory/config.yml` declares (ORC-211); `secrets` their references, read at the setup (ORC-308).
    */
-  repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, string> }[];
+  repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, SecretRef> }[];
+  /** The secret managers `repos[].secrets` may name besides `env` (ORC-308), each validated against its adapter. */
+  secretSources?: Record<string, SecretSourceDecl>;
   /** Lines past which the pack's hook refuses a whole read (ORC-279); without it, the hook's own 350. */
   readGuard?: { maxLines: number };
   /**
@@ -53,9 +59,6 @@ export interface FactoryYml {
 
 /** The ack of a human message (ORC-380): the comment « Got it. », or a reaction on the comment the message was written in. */
 export type AckMode = 'comment' | 'reaction';
-
-/** Sealing purges the files that hold a secret: a value this short would be found in many that do not. */
-const MIN_REPO_SECRET_LENGTH = 8;
 
 /** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). */
 export function activeClaudeToken(yml: FactoryYml | undefined): string | undefined {
@@ -182,6 +185,7 @@ const SECTIONS: Record<string, string[]> = {
   tools: ['per_step'],
   max_diff: [],
   repos: [],
+  secret_sources: [],
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
   acknowledge: [],
@@ -189,7 +193,6 @@ const SECTIONS: Record<string, string[]> = {
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
 const REPO = /^[\w.-]+\/[\w.-]+$/;
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const text = factoryYmlText(home);
@@ -207,8 +210,11 @@ export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'm
   return (text === undefined ? undefined : parseSection(text, ['budgets', 'max_diff', 'tools'])) ?? {};
 }
 
-/** Validates the file and resolves its `env:` values; throws a FactoryYmlError naming the path of every faulty key. */
-export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.env): FactoryYml {
+/**
+ * Validates the file and resolves its `env:` values, but for `repos[].secrets`, references whose syntax alone is checked
+ * against `kinds` (ORC-308); throws a FactoryYmlError naming the path of every faulty key.
+ */
+export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.env, kinds: Readonly<Record<string, SecretSourceKind>> = SECRET_SOURCE_KINDS): FactoryYml {
   let raw: unknown;
   try {
     raw = parse(text) ?? {};
@@ -329,6 +335,58 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   }
   const perStepTools = leaf('tools.per_step', section('tools')?.['per_step'], z.record(z.string(), z.array(z.string().min(1))), '`step: [tool, …]` expected');
   if (perStepTools) out.tools = { perStep: perStepTools };
+  const sourcesRaw = r['secret_sources'];
+  const secretSources: Record<string, SecretSourceDecl> = {};
+  /** The adapter of each source a reference may name, `env` built in; undefined for a faulty declaration, already refused. */
+  const adapters: Record<string, SecretSourceKind | undefined> = { env: kinds['env'] };
+  if (sourcesRaw !== undefined && sourcesRaw !== null) {
+    if (typeof sourcesRaw !== 'object' || Array.isArray(sourcesRaw)) violations.push('secret_sources: an object is expected');
+    else {
+      const known = Object.keys(kinds).join(', ');
+      for (const [name, decl] of Object.entries(sourcesRaw as Record<string, unknown>)) {
+        const path = `secret_sources.${name}`;
+        if (name === 'env') {
+          violations.push(`${path}: built in, it is not declared`);
+          continue;
+        }
+        adapters[name] = undefined;
+        if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
+          violations.push(`${path}: an object \`{ kind, … }\` is expected`);
+          continue;
+        }
+        const { kind, ...options } = decl as Record<string, unknown>;
+        const adapter = typeof kind === 'string' ? kinds[kind] : undefined;
+        if (!adapter) {
+          violations.push(kind == null ? `${path}.kind: required (${known})` : `${path}.kind: no adapter ${String(kind)} (${known})`);
+          continue;
+        }
+        // Kept despite faulty options: its references are still checked against its adapter.
+        violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
+        adapters[name] = adapter;
+        secretSources[name] = { kind: kind as string, options };
+      }
+    }
+  }
+  if (Object.keys(secretSources).length) out.secretSources = secretSources;
+  /** A repository secret's reference (ORC-308): its source declared, its path one its adapter accepts; nothing read. */
+  const reference = (path: string, v: unknown): SecretRef | undefined => {
+    if (typeof v !== 'string' || v === '') {
+      violations.push(`${path}: a non-empty text is expected`);
+      return undefined;
+    }
+    const colon = v.indexOf(':');
+    if (colon <= 0) {
+      violations.push(`${path}: a reference \`<source>:<path>\` is expected (\`env:NAME\`), never a secret in clear in factory.yml`);
+      return undefined;
+    }
+    const ref = { source: v.slice(0, colon), path: v.slice(colon + 1) };
+    if (!(ref.source in adapters)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
+    const kind = adapters[ref.source];
+    if (!kind) return undefined;
+    const fault = kind.checkPath(ref.path);
+    if (fault) violations.push(`${path}: ${fault}`);
+    return fault ? undefined : ref;
+  };
   const repos = leaf(
     'repos',
     r['repos'],
@@ -338,18 +396,20 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (repos) {
     out.repos = repos.map((repo, i) => {
       if (!REPO.test(repo.github)) violations.push(`repos[${i}].github: \`<org>/<repo>\` expected`);
-      const resolved = (key: 'env' | 'secrets') => {
-        const out: Record<string, string> = {};
+      const read = <T>(key: 'env' | 'secrets', one: (path: string, v: unknown) => T | undefined): Record<string, T> => {
+        const out: Record<string, T> = {};
         for (const [name, v] of Object.entries(repo[key] ?? {})) {
-          const path = `repos[${i}].${key}.${name}`;
-          const text = value(path, v, key === 'secrets');
-          if (text === undefined) continue;
-          if (key === 'secrets' && text.length < MIN_REPO_SECRET_LENGTH) violations.push(`${path}: at least ${MIN_REPO_SECRET_LENGTH} characters expected`);
-          out[name] = text;
+          const got = one(`repos[${i}].${key}.${name}`, v);
+          if (got !== undefined) out[name] = got;
         }
         return out;
       };
-      return { linearTeam: repo.linear_team, github: repo.github, ...(repo.env ? { env: resolved('env') } : {}), ...(repo.secrets ? { secrets: resolved('secrets') } : {}) };
+      return {
+        linearTeam: repo.linear_team,
+        github: repo.github,
+        ...(repo.env ? { env: read('env', (path, v) => value(path, v)) } : {}),
+        ...(repo.secrets ? { secrets: read('secrets', reference) } : {}),
+      };
     });
   }
   const maxDiff = leaf('max_diff', r['max_diff'], z.literal('off'), `only \`off\` exists here; without it, the baseline (${MAX_DIFF.files} files, ${MAX_DIFF.lines} lines) applies, tightened by each repository`);

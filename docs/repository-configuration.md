@@ -54,7 +54,7 @@ branches: { pattern: "{type}/{id}-{slug}", types: { Bug: fix, default: feat } } 
 
 ## Variables and secrets
 
-A variable only enters the runner if **the repository declares its name** here and **the server gives its value** in `factory.yml` (`repos[].env`, `repos[].secrets`, see [`configuration.md`](configuration.md)). The repository therefore cannot request a daemon variable, and the server puts nothing into a runner that the repository has not declared. A name declared without a value stays absent, and the daemon logs it.
+A variable only enters the runner if **the repository declares its name** here and **the server gives its value** in `factory.yml` (`repos[].env`, `repos[].secrets`, see [`configuration.md`](configuration.md)). A secret's value is read from its source at each `setup`, for the names under `setup_secrets` only; a source that fails blocks the ticket before the setup starts ([Repository secrets](configuration.md#repository-secrets-orc-308)). The repository therefore cannot request a daemon variable, and the server puts nothing into a runner that the repository has not declared. A name declared without a value stays absent, and the daemon logs it.
 
 Refused: a name that is not made of uppercase letters, digits and `_`; names reserved for the factory (proxy and authority, `PATH`, `LD_*`, `NODE_OPTIONS`, `ANTHROPIC_*`, `CLAUDE*`, `FACTORY_*`, `LINEAR_*`, `GH_*`, `GITHUB_*`, `GIT_*`, `PIP_*`, `UV_*`, `YARN_*`, `NPM_CONFIG_*`…); under `env`, a secret name (`*_TOKEN`, `*_KEY`, `*_SECRET`, `DATABASE_URL`…), which the agent would see, and a name also present under `setup_secrets`.
 

@@ -44,7 +44,7 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 - [Deployment](docs/deployment.md): Docker, long-running service, clean shutdown and updates.
 
 ### Configure
-- [Daemon configuration](docs/configuration.md): environment variables, `config.yaml`, `secrets.json`, `factory.yml` (secrets as `env:`), token and turn budgets, ports, secrets.
+- [Daemon configuration](docs/configuration.md): environment variables, `config.yaml`, `secrets.json`, `factory.yml` (secrets as `env:`, a repository's secrets read from their source at each `setup`), token and turn budgets, ports, secrets.
 - [Customizing `workflow.yml`](docs/workflow.md): events, jobs, models, limits, checks, acceptance runs.
 - [Repository configuration (`.factory/config.yml`)](docs/repository-configuration.md): keys, what a configuration cannot remove from the baseline, `factory validate`.
 - [The `factory/default` preset](docs/preset.md): typed steps, loop bounds, single counter for review + red CI, models and network per step, invariants checked at compile time, hash.

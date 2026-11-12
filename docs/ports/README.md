@@ -1,6 +1,6 @@
 # Port contracts
 
-The engine only talks to the world through six ports. Each has a **sheet** (what every implementation guarantees: methods, idempotence, errors, fencing) and a **conformance suite**, parameterized by the implementation: the harness's fake passes it, and a new adapter must pass it before being plugged in.
+The engine only talks to the world through seven ports. Each has a **sheet** (what every implementation guarantees: methods, idempotence, errors, fencing) and a **conformance suite**, parameterized by the implementation: the harness's fake passes it, and a new adapter must pass it before being plugged in.
 
 | Port (MVP doc) | Interface | Sheet | Suite | Run on |
 |---|---|---|---|---|
@@ -10,6 +10,7 @@ The engine only talks to the world through six ports. Each has a **sheet** (what
 | SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider`, `SandboxRouter`, `ContainerSandboxProvider` (isolation tests) |
 | CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner`, `runVerify` |
 | AgentRuntime | `Runner` | [agent-runtime.md](agent-runtime.md) | `test/contracts/agent-runtime.contract.ts` | `FakeRunner`, `ClaudeCodeRunner` (fake `claude` CLI) |
+| SecretSource (ORC-308) | `SecretSource` | [secret-source.md](secret-source.md) | `test/contracts/secret-source.contract.ts` | `env`, `FakeSecretSource` |
 
 The interfaces keep their current name (`Runner` for AgentRuntime): they will take the target name when the port changes shape, not before.
 
@@ -43,6 +44,7 @@ A case that passes against every subject proves nothing if it would also pass ag
 | Tracker | unknown ticket on read and on write, status missing from the team, replayed `moveTo`, final state of `setLabels`, effects of writes, `ensureSession`, `listDelegated` |
 | SandboxProvider | `destroy` of an unknown or already destroyed id, replayed `create`, one sandbox per run, a new one after `destroy`, `exec` (result, unknown id), `spawnCommand` on an unknown id, `findByAttempt`, `list`, refusal of an unmet requirement |
 | Publisher | republishing a branch, one PR per branch, a new PR after merge or close |
+| SecretSource | a path it does not hold, a source out of service (each: no answer, no value in the error), a path its kind checks |
 
 The faulty subjects for each case are named by the titles in `negative-controls.test.ts`. Happy-path cases have no control: a run that succeeds, a command that passes, a first `publish`, a first `create` and its network level, the nominal reads of the Tracker and the Forge (`getIssue`, `search`, `findPr` that finds the PR, snapshots).
 
