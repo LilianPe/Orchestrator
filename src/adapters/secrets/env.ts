@@ -1,6 +1,7 @@
 import type { SecretSourceKind } from './types.js';
 
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A variable's name, as `env:NAME` writes it. */
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** `env:NAME` (ORC-211, ORC-308): the daemon's environment, read at each `setup`. Built in, never declared. */
 export const envSecretKind: SecretSourceKind = {

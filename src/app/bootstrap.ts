@@ -171,7 +171,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       return a.name ? a.token : undefined;
     };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
-    const daemonSecrets = () => [...daemonSecretValues(o.home, yml, repoSecrets.values()), ...(githubSecret ? [githubSecret] : [])];
+    // A repository's secrets by the values its setups read (ORC-308), a rotated one included.
+    const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.

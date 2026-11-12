@@ -3,6 +3,7 @@ import { validateHeaderValue } from 'node:http';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
+import { ENV_NAME } from '../adapters/secrets/env.js';
 import { SECRET_SOURCE_KINDS, type SecretSourceDecl } from '../adapters/secrets/registry.js';
 import type { SecretRef, SecretSourceKind } from '../adapters/secrets/types.js';
 import { MAX_DIFF } from '../checks/diff-size.js';
@@ -192,11 +193,10 @@ const SECTIONS: Record<string, string[]> = {
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
 const REPO = /^[\w.-]+\/[\w.-]+$/;
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env, kinds?: Readonly<Record<string, SecretSourceKind>>): FactoryYml | undefined {
+export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const text = factoryYmlText(home);
-  return text === undefined ? undefined : parseFactoryYml(text, env, kinds);
+  return text === undefined ? undefined : parseFactoryYml(text, env);
 }
 
 /**
@@ -337,28 +337,33 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (perStepTools) out.tools = { perStep: perStepTools };
   const sourcesRaw = r['secret_sources'];
   const secretSources: Record<string, SecretSourceDecl> = {};
-  /** Every name declared, its adapter known or not: a reference to a faulty declaration is not refused a second time. */
-  const declared = new Set<string>();
+  /** The adapter of each source a reference may name, `env` built in; undefined for a faulty declaration, already refused. */
+  const adapters: Record<string, SecretSourceKind | undefined> = { env: kinds['env'] };
   if (sourcesRaw !== undefined && sourcesRaw !== null) {
     if (typeof sourcesRaw !== 'object' || Array.isArray(sourcesRaw)) violations.push('secret_sources: an object is expected');
     else {
       const known = Object.keys(kinds).join(', ');
       for (const [name, decl] of Object.entries(sourcesRaw as Record<string, unknown>)) {
         const path = `secret_sources.${name}`;
-        declared.add(name);
-        if (name === 'env') violations.push(`${path}: built in, it is not declared`);
-        else if (!decl || typeof decl !== 'object' || Array.isArray(decl)) violations.push(`${path}: an object \`{ kind, … }\` is expected`);
-        else {
-          const { kind, ...options } = decl as Record<string, unknown>;
-          const adapter = typeof kind === 'string' ? kinds[kind] : undefined;
-          if (kind == null) violations.push(`${path}.kind: required (${known})`);
-          else if (!adapter) violations.push(`${path}.kind: no adapter ${String(kind)} (${known})`);
-          else {
-            // Kept despite faulty options: its references are still checked against its adapter, not refused as undeclared.
-            violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
-            secretSources[name] = { kind: kind as string, options };
-          }
+        if (name === 'env') {
+          violations.push(`${path}: built in, it is not declared`);
+          continue;
         }
+        adapters[name] = undefined;
+        if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
+          violations.push(`${path}: an object \`{ kind, … }\` is expected`);
+          continue;
+        }
+        const { kind, ...options } = decl as Record<string, unknown>;
+        const adapter = typeof kind === 'string' ? kinds[kind] : undefined;
+        if (!adapter) {
+          violations.push(kind == null ? `${path}.kind: required (${known})` : `${path}.kind: no adapter ${String(kind)} (${known})`);
+          continue;
+        }
+        // Kept despite faulty options: its references are still checked against its adapter.
+        violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
+        adapters[name] = adapter;
+        secretSources[name] = { kind: kind as string, options };
       }
     }
   }
@@ -375,11 +380,9 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return undefined;
     }
     const ref = { source: v.slice(0, colon), path: v.slice(colon + 1) };
-    const kind = ref.source === 'env' ? kinds['env'] : secretSources[ref.source] && kinds[secretSources[ref.source]!.kind];
-    if (!kind) {
-      if (!declared.has(ref.source)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
-      return undefined;
-    }
+    if (!(ref.source in adapters)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
+    const kind = adapters[ref.source];
+    if (!kind) return undefined;
     const fault = kind.checkPath(ref.path);
     if (fault) violations.push(`${path}: ${fault}`);
     return fault ? undefined : ref;

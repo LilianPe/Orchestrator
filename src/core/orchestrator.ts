@@ -1075,12 +1075,10 @@ export class Orchestrator {
   }
 
   private async readSetupSecrets(refs: Readonly<Record<string, SecretRef>>): Promise<Record<string, string>> {
-    try {
-      if (!this.d.readSecrets) throw new Error('no secret source is configured');
-      return await this.d.readSecrets(refs);
-    } catch (err) {
-      throw new Error(`The worktree setup failed: ${(err as Error).message}`, { cause: err });
-    }
+    if (!this.d.readSecrets) throw new Error('The worktree setup failed: no secret source is configured');
+    return this.d.readSecrets(refs).catch((err: Error) => {
+      throw new Error(`The worktree setup failed: ${err.message}`, { cause: err });
+    });
   }
 
   /** `.factory/config.yml` on the default branch (ORC-209 C): it rejects on an invalid file. */

@@ -25,13 +25,10 @@ export class SecretReader {
   private async one(name: string, ref: SecretRef): Promise<string> {
     const at = `the secret ${name} (${refText(ref)})`;
     const source = this.sources[ref.source];
-    let value: string;
-    try {
-      if (!source) throw new Error(`no source ${ref.source}`);
-      value = await source.read(ref.path);
-    } catch (err) {
-      throw new Error(`${at} could not be read: ${(err as Error).message}`, { cause: err });
-    }
+    if (!source) throw new Error(`${at} could not be read: no source ${ref.source}`);
+    const value = await source.read(ref.path).catch((err: Error) => {
+      throw new Error(`${at} could not be read: ${err.message}`, { cause: err });
+    });
     if (value.length < MIN_REPO_SECRET_LENGTH) throw new Error(`${at}: at least ${MIN_REPO_SECRET_LENGTH} characters expected`);
     this.seen.add(value);
     return value;

@@ -22,8 +22,8 @@ export function openSecretSources(
   kinds: Readonly<Record<string, SecretSourceKind>> = SECRET_SOURCE_KINDS,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, SecretSource> {
-  const sources: Record<string, SecretSource> = { env: envSecretKind.create({}, env) };
-  for (const [name, decl] of Object.entries(declared ?? {})) {
+  const sources: Record<string, SecretSource> = {};
+  for (const [name, decl] of Object.entries({ env: { kind: 'env', options: {} }, ...declared })) {
     const kind = kinds[decl.kind];
     if (!kind) throw new Error(`secret_sources.${name}: no adapter ${decl.kind}`);
     sources[name] = kind.create(decl.options, env);

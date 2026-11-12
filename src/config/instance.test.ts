@@ -116,11 +116,10 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
     expect(daemonSecretValues(h, loadFactoryYml(h, env))).toEqual(expect.arrayContaining(['yml-secret', 'yml-webhook-secret-1']));
   });
 
-  it("masks a repository's secrets by the values its setups read, not by their references, and never its plain variables (ORC-211, ORC-308)", () => {
+  it("holds neither a repository's plain variables nor its secrets, which its setups read (ORC-211, ORC-308)", () => {
     const h = home('repos: [{ linear_team: REL, github: org/app, env: { NODE_ENV: test-value }, secrets: { NPM_TOKEN: env:ORG_NPM_TOKEN } }]\n');
-    const yml = loadFactoryYml(h, { ...env, ORG_NPM_TOKEN: 'npm-secret-value' });
-    expect(daemonSecretValues(h, yml)).not.toContain('npm-secret-value');
-    expect(daemonSecretValues(h, yml, ['npm-secret-value'])).toContain('npm-secret-value');
-    expect(daemonSecretValues(h, yml, ['npm-secret-value'])).not.toContain('test-value');
+    const values = daemonSecretValues(h, loadFactoryYml(h, { ...env, ORG_NPM_TOKEN: 'npm-secret-value' }));
+    expect(values).not.toContain('npm-secret-value');
+    expect(values).not.toContain('test-value');
   });
 });
