@@ -40,11 +40,16 @@ function testSchemaName(prefix: string): string {
   return name;
 }
 
-function testSchemaUrl(name: string): string {
-  const u = new URL(PG_URL);
-  // Beside the options PG_URL may already carry (a statement_timeout, a provider's endpoint), not in their place.
+/** `url` with `path` as search_path, beside the options it may already carry (a statement_timeout, a provider's endpoint). */
+export function withSearchPath(url: string, path: string): string {
+  const u = new URL(url);
   const options = u.searchParams.get('options');
-  u.searchParams.set('options', [options, `-c search_path=${name}`].filter(Boolean).join(' '));
+  u.searchParams.set('options', [options, `-c search_path=${path}`].filter(Boolean).join(' '));
+  return u.toString();
+}
+
+function testSchemaUrl(name: string): string {
+  const u = new URL(withSearchPath(PG_URL, name));
   u.searchParams.set('application_name', name);
   return u.toString();
 }

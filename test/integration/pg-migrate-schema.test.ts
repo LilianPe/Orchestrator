@@ -4,13 +4,7 @@ import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { journalSchemaOf, migratePgStore } from '../../src/store/pg/migrate.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
-import { createTestSchema, PG_URL, queryOn, type TestSchema } from '../helpers/pg-database.js';
-
-function withSearchPath(url: string, path: string): string {
-  const u = new URL(url);
-  u.searchParams.set('options', `-c search_path=${path}`);
-  return u.toString();
-}
+import { createTestSchema, PG_URL, queryOn, type TestSchema, withSearchPath } from '../helpers/pg-database.js';
 
 describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)', () => {
   let a: TestSchema;
@@ -71,7 +65,7 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
       // An empty schema placed before the migrated one (a schema named after the role, `"$user", public`):
       // the engine's tables still resolve to the migrated one, so nothing is applied to it, as before ORC-334.
       const before = await createTestSchema('factory_mig_user');
-      const behind = new Pool({ connectionString: withSearchPath(before.url, `${before.name},${legacy.name}`), max: 1 });
+      const behind = new Pool({ connectionString: withSearchPath(PG_URL, `${before.name},${legacy.name}`), max: 1 });
       try {
         await migratePgStore(behind);
         expect(await tablesOf(before.name)).toEqual([]);
