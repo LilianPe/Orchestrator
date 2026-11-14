@@ -32,10 +32,10 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 2. Adds (or replaces) the project in `config.yaml`: `id` = name of the repository directory (slug, 30 characters max), `repoPath` = git root, `linearTeamKey`.
 3. Without `publicUrl` or a configured relay, creates a **smee.io channel** and records it in `relay`.
 4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty), recorded in `secrets.json`. Details: [`linear.md`](linear.md).
-5. If `.relais/workflow.yml` does not exist, creates it: asks for the verification commands, separated by `;`, suggested from what it detects (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: uv's commands when there are a `pyproject.toml` and a `uv.lock`, ORC-172), and sets `workspace.setup` and the red check's test command to match. Exact contents: [`workflow.md`](workflow.md#1-role-of-the-file-and-merging-with-the-pack).
+5. Prints a proposed [`.factory/config.yml`](repository-configuration.md) from what it detects, and writes nothing in the repository (ORC-388): `setup` (npm's `npm ci`, pnpm's `pnpm install --frozen-lockfile`, uv's `uv sync --frozen`) and `commands` (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: `ruff`, `mypy` and `pytest` through uv when there are a `pyproject.toml` and a `uv.lock`, ORC-172). Nothing detected, nothing proposed. Commit the file on the default branch: the factory reads it there.
 6. Writes `config.yaml` and prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
 
-`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It never rewrites an existing `.relais/workflow.yml`. Remember to commit `.relais/workflow.yml` to the repository.
+`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It no longer writes `.factory/workflow.yml`: the workflow is the `factory/default` preset, and a repository's `.factory/workflow.yml` is ignored (`factory doctor` says so).
 
 ### `relais up`
 
@@ -70,6 +70,7 @@ Check before entrusting a repository: refuses (exit code `1`) a CI that can expo
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
 - `--json`: machine report (workflows, triggers, secrets yes/no, environments, verdict).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
+- Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
 
 Full rule, examples and limits: [`github.md`](github.md).
 

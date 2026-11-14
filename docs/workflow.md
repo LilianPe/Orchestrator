@@ -1,5 +1,7 @@
 # Customizing `workflow.yml`
 
+> **Since ORC-388, a repository's workflow file is ignored.** The daemon no longer reads `.factory/workflow.yml` (formerly `.relais/workflow.yml`): every project runs the workflow of `factory/default`, built in TypeScript by `defaultWorkflow()` (`src/presets/workflow.ts`), the same as the pack's `packs/standard/workflow.yml` below. `factory doctor` warns about the file, and `factory init` proposes a [`.factory/config.yml`](repository-configuration.md) instead. This guide still describes the pack's format, which the tests load, until ORC-389 removes it.
+
 This guide explains how to adapt Relais's behavior on a repository without reading the code: which Linear or GitHub events trigger what, with which model, which limits and which checks.
 
 ## 1. Role of the file and merging with the pack

@@ -6,7 +6,7 @@ Relais is configured at three levels:
 |---|---|---|---|
 | Instance | `<RELAIS_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, knowledge base. | this page |
 | Secrets | `<RELAIS_HOME>/secrets.json` | Linear credentials. | this page |
-| Project | `.relais/workflow.yml` in each repository | Behavior: events, jobs, models, per-run limits, checks. | [`workflow.md`](workflow.md) |
+| Project | `.factory/config.yml` in each repository, read on its default branch | Its setup, its checks, its sensitive paths and limits; it can only tighten the preset. A `.factory/workflow.yml` is ignored since ORC-388: the workflow is the `factory/default` preset ([`preset.md`](preset.md)). | [`repository-configuration.md`](repository-configuration.md) |
 
 The two instance files are read **at startup** of `relais up`: restart after a change.
 

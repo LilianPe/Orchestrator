@@ -37,8 +37,8 @@ branches: { pattern: "{type}/{id}-{slug}", types: { Bug: fix, default: feat } } 
 | Key | Type | Default | Role |
 | -- | -- | -- | -- |
 | `extends` | text | `factory/default@1.0` | The preset; only `factory/default@1.0` exists in the MVP. |
-| `setup` | command | none | Repository preparation (install, migrations), run on each new worktree before the agent; `verify` reruns it on its fresh clone, at `limited` and without secrets, before its commands. Absent: the workflow's `workspace.setup`. |
-| `commands` | `name: command` | `{}` | The repository's checks (`lint`, `typecheck`, `test`…), run by `verify` in file order, at network level `none`. Empty: the workflow's `jobs.<job>.verify`, until ORC-177. |
+| `setup` | command | none | Repository preparation (install, migrations), run on each new worktree before the agent; `verify` reruns it on its fresh clone, at `limited` and without secrets, before its commands. Absent: none, as the workflow's `workspace.setup` is empty since a repository no longer overrides it (ORC-388). |
+| `commands` | `name: command` | `{}` | The repository's checks (`lint`, `typecheck`, `test`…), run by `verify` in file order, at network level `none`. Empty: none, as the workflow's `jobs.<job>.verify` is empty since a repository no longer overrides it (ORC-388). `factory init` proposes them. |
 | `env` | list of names | `[]` | Variables the runner receives: `setup`, agent, red check, and `verify`. See [Variables and secrets](#variables-and-secrets). |
 | `setup_secrets` | list of names | `[]` | Secrets that only `setup` receives, sealed before the agent starts. |
 | `services` | list | `[]` | Services the factory starts next to each attempt: `postgres` only, with sandboxes (see [Services](#services)). Another name, or any on a daemon without sandboxes, refuses the launch. |
