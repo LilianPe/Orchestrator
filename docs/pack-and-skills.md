@@ -27,7 +27,7 @@ Two families:
 
 ### Job skills
 
-All of them end on `submit_result`, whose summary, in English, is what the factory posts in the Linear session, composed and checked by its `OutputPolicy` (ORC-214): nothing the agent writes as a message is posted. When the agent asks a question (`factory-agent ask`), the ticket is blocked and that summary is **not** posted: the question must stand on its own.
+All of them end on `submit_result`, whose summary, in English, is what the factory posts in the Linear session, composed and checked by its `OutputPolicy` (ORC-214): nothing the agent writes as a message is posted. When the agent asks a question (a blocked `submit_result`, ORC-192), the ticket is blocked and that summary is **not** posted: the question must stand on its own.
 
 | Skill | Job(s) | Workspace | Role | Method loaded |
 |---|---|---|---|---|
@@ -58,7 +58,7 @@ Full text: `packs/standard/skills/<name>/SKILL.md`.
 `hooks/session-start.mjs` injects at the start of each run:
 
 - the current ticket (`RELAIS_TICKET`);
-- the rules: Linear messages in French, never merge or force-push, modify nothing outside the working directory, never declare done without tests run and read, go through `relais-agent` for Linear, ask **one** question with `relais-agent ask` rather than invent, nothing written as a message is published: Linear shows what the factory composes from `submit_result`, whose summary, for a reply, reads on its own (ORC-214);
+- the rules: Linear messages in French, never merge or force-push, modify nothing outside the working directory, never declare done without tests run and read, read no Linear (the prompt carries the ticket), ask **one** question rather than invent by ending the run with `submit_result`, `status: "blocked"` and the `question` (ORC-192), nothing written as a message is published: Linear shows what the factory composes from `submit_result`, whose summary, for a reply, reads on its own (ORC-214);
 - the method: before each step, load the method skill that applies (`relais:tdd`, `relais:debugging`, `relais:verification`, `relais:code-review`, `relais:receiving-review`), the repository's `CLAUDE.md` taking precedence on style only, never on the factory's rules; if the Skill tool is unavailable, read the skill's file (the hook gives the absolute path of the `skills/` folder);
 - no longer the knowledge base index: the server hands it to the session in its system prompt (`--append-system-prompt`, 8,000 characters at most, a cut marked and logged), and the notes are searched with the MCP's `kb_search` (ORC-232).
 
@@ -66,7 +66,7 @@ Full text: `packs/standard/skills/<name>/SKILL.md`.
 
 `packs/standard/settings.json` sets `defaultMode: acceptEdits` and:
 
-**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `uv` (in the runner image) and `pytest`, `ruff`, `mypy` (from the project environment `uv sync` installs, run with `uv run`); `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; `relais-agent`; the `submit_result`, `ask` and `kb_search` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
+**Allowed** without confirmation: reading, editing and searching files; `git status|diff|log|show|add|commit|fetch|rebase|checkout|switch|branch|rev-parse|merge-base|merge-tree|merge|revert|rev-list|ls-remote`; `gh pr view|list|checks|diff`; `gh run view|list`; `npm`, `npx`, `node`, `pnpm`, `yarn`; `uv` (in the runner image) and `pytest`, `ruff`, `mypy` (from the project environment `uv sync` installs, run with `uv run`); `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `sleep`; the `submit_result`, `ask` and `kb_search` tools of the factory MCP (`mcp__factory__…`), which `claude -p` would otherwise refuse.
 
 **Refused**:
 
@@ -128,5 +128,5 @@ Relais always loads `packs/standard`: `extends` in `workflow.yml` has no effect 
 - Rely on the method skills rather than repeating their rules: "apply `relais:receiving-review`" stays correct when the method evolves.
 - The run's prompt starts with `/<skill>` followed by the « Ticket » block (identifier, title, URL, branch, PR, description), the « Linear context » block when the webhook provides one and, depending on `input`, « Feedback to address », « CI failures », « Message » or « Failed checks ».
 - State explicitly what to do **at the end**: commit/push, and the format of the last message (posted in Linear).
-- Use `relais-agent ask` for any missing decision, then end the turn.
+- For any missing decision, end the turn with `submit_result`, `status: "blocked"` and the `question`.
 - Test it by hand in a repository: `claude -p "/<skill> …" --plugin-dir packs/standard --settings ~/.relais/run-settings.json`.

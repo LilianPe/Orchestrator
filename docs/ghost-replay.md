@@ -73,10 +73,10 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
 - **On its clone.** The project's repository, for that ticket, is its clone (`Orchestrator.runtimeFor`): the worktree, the diffs and
   the verification read it, not the project's checkout.
 - **Its text as of its start.** The run reads the title, the description, the thread and the linked tickets kept at the delegation
-  (`## The ticket's thread and its linked tickets, as of its start (data)` in its prompt), and `factory-agent issue` answers the same.
+  (`## The ticket's thread and its linked tickets, as of its start (data)` in its prompt): the agent reads no ticket otherwise (ORC-192).
   No link to the live ticket is given.
 - **Nothing of what came after.** The forge and Linear hold now the human's PR, its branch and what was written after the start:
-  `intake`'s duplicate search and the read of the ticket's own branches are skipped, and `factory-agent search` is refused.
+  `intake`'s duplicate search and the read of the ticket's own branches are skipped.
 - **Only the daemon's delegations.** Linear's webhooks and the reconciliation never route a ticket to a project on `factory/fantome`:
   its tickets of the same team stay the other projects'.
 - **Sandboxes required.** An agent run on the host gets the host's git login and could push by itself, which no effect mode holds

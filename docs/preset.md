@@ -89,7 +89,7 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 | Blocked at | A reply relaunches |
 | -- | -- |
-| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including via `relais-agent ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply. `fix-review` resumes itself on the reply, then goes back through the review (ORC-184) |
+| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including the MCP's `ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply. `fix-review` resumes itself on the reply, then goes back through the review (ORC-184) |
 | pickup, launch | the job being launched, its checks included |
 | `verify`, `verify_fix`, `verify_rebase`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
 | `verify` of a job that does not fix (`verify_failure: block`, the review of a version frozen before ORC-183) | `dev-feedback`, which writes |
@@ -127,7 +127,7 @@ The ticket is then Blocked, kind `conflict`, with the standard comment (step `re
 
 ## `intake` step and the guard before In Progress (ORC-206)
 
-The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job) reads the ticket, the repository's architecture docs and decisions and the code it touches. It writes nothing and does not move the ticket: since ORC-367 the run itself holds it to that. It runs on a fresh clone of the default branch (workspace `trunk-readonly`, `_trunk/<runId>/`, gone with the run), never in the ticket's worktree, so a ticket found incomplete keeps no worktree made for nothing; and like the AI review's lenses it has the `Read`, `Grep` and `Glob` tools only (`claude --tools`), no write tool and no shell, whatever its skill says. A read-only step of the preset (`readOnly`: `intake`, `clarify`, `spec_draft`; not `after_merge`, which writes no code but keeps its shell) gives its job these tools ([tools per step](#the-agents-tools-per-step-orc-383)), and a job of a read-only step that writes nothing (`intake`, `clarify`) anywhere but a clone of its own (`trunk-readonly`) is refused when the workflow loads. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands back, in the `intake` field of `submit_result`:
+The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job) reads the ticket, the repository's architecture docs and decisions and the code it touches. It writes nothing and does not move the ticket: since ORC-367 the run itself holds it to that. It runs on a fresh clone of the default branch (workspace `trunk-readonly`, `_trunk/<runId>/`, gone with the run), never in the ticket's worktree, so a ticket found incomplete keeps no worktree made for nothing; and like the AI review's lenses it has the `Read`, `Grep` and `Glob` tools only (`claude --tools`), no write tool and no shell, whatever its skill says. A read-only step of the preset (`readOnly`: `intake`, `clarify`, `spec_draft`; not `after_merge`, which writes no code but keeps its shell) gives its job these tools ([tools per step](#the-agents-tools-per-step-orc-383)), and a job of a read-only step that writes nothing (`intake`, `clarify`) anywhere but a clone of its own (`trunk-readonly`) is refused when the workflow loads. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands back, in the `intake` field of `submit_result`:
 
 | Field | Values |
 | -- | -- |
@@ -201,7 +201,7 @@ A timer only acts on the round that armed it (`at`): a round answered, asked aga
 
 ## `spec_draft`, `spec_check` and the `spec_review` gate (ORC-212)
 
-The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
+The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
 
 | Section | What it holds |
 | -- | -- |

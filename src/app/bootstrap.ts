@@ -67,9 +67,6 @@ export interface BootOptions {
 
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
-/** Where a sandbox sees the factory's install (ORC-204); its image puts `/factory/app/bin` on its PATH. No knowledge base: the server reads it (ORC-232). */
-const SANDBOX_ROOT = '/factory/app';
-
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
   const root = repoRoot();
@@ -299,34 +296,17 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             runsDir: paths.runs,
             egressJournal: (runId: string) => egress.journalPath(runId),
             registries: registriesViaEgress(egress),
-            // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
-            // which can hold a `.env` or a dev FACTORY_HOME.
-            sandboxMounts: [
-              ...['bin', 'package.json', 'node_modules', existsSync(join(root, 'dist')) ? 'dist' : 'src'].map((p) => ({
-                host: join(root, p),
-                target: `${SANDBOX_ROOT}/${p}`,
-                readOnly: true,
-              })),
-            ],
           }
         : {}),
-      // In a sandbox, paths of the sandbox and the PATH of its image: no host path reaches it.
+      // In a sandbox, no host path: the agent reaches the factory through its MCP alone (ORC-192).
       agentEnv: (run) => ({
         FACTORY_RUN_TOKEN: run.token,
         FACTORY_TICKET: run.ticketId,
         // Read by the pack's PreToolUse hook (ORC-285); the runner keeps every other FACTORY_* in the daemon.
         ...(env['FACTORY_REFUSALS_LOG'] ? { FACTORY_REFUSALS_LOG: env['FACTORY_REFUSALS_LOG'] } : {}),
         ...(yml?.readGuard ? { FACTORY_READ_MAX_LINES: String(yml.readGuard.maxLines) } : {}),
-        ...(sandboxes
-          ? {
-              FACTORY_API: `http://${agentHostInSandbox}:${agentPort}/agent`,
-              FACTORY_ROOT: SANDBOX_ROOT,
-            }
-          : {
-              FACTORY_API: `http://127.0.0.1:${port}/agent`,
-              FACTORY_ROOT: root,
-              PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
-            }),
+        // The factory MCP's address (ORC-288), the only thing of the factory a run reaches (ORC-192).
+        FACTORY_API: sandboxes ? `http://${agentHostInSandbox}:${agentPort}/agent` : `http://127.0.0.1:${port}/agent`,
       }),
     });
     await orchestrator.recover();
@@ -409,7 +389,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,
-      tracker: trackerSwitch,
       capacity: () => ({
         dev: { used: scheduler.inUse('dev'), total: capacity.dev },
         questions: { used: scheduler.inUse('questions'), total: capacity.questions },

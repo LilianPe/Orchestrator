@@ -11,7 +11,7 @@ A piece of feedback is a claim about the code, and the fix it proposes is anothe
 
 - Read **all** the feedback before fixing any of it: several items can describe the same mechanism, or contradict each other.
 - Restate each one as a technical requirement ("the date must be validated server-side"). Anchored feedback (`path:line — text`): open that file at that line.
-- **Ambiguous feedback, or feedback contrary to the ticket or to another human's feedback**: fix nothing that depends on it. Ask ONE precise question with `factory-agent ask "<question>"` (what you understood, the two possible readings), handle the independent feedback, then end your turn.
+- **Ambiguous feedback, or feedback contrary to the ticket or to another human's feedback**: fix nothing that depends on it. Handle the independent feedback, then ask ONE precise question (what you understood, the two possible readings): end your turn with `submit_result` with `status: "blocked"` and the `question`.
 
 ## 2. Verify in the code
 
