@@ -18,6 +18,9 @@ export type ReviewFinding = Finding & { lens: ReviewLens; runId: string };
 /** The id of a kept finding, the `n`th of its lens's run (ORC-229): both stores give it, a defect of review links to it. */
 export const findingRowId = (runId: string, lens: ReviewLens, n: number): string => `${runId}:${lens}:${n}`;
 
+/** What `capDiff` gives for a diff with no change: what a worktree's diff reads when its run committed nothing. */
+export const NO_CHANGE = '(no change against the trunk)';
+
 /** The diff a lens is given in its prompt, at most; past it, the changed files, read in its clone, as many as fit. */
 export const DIFF_MAX = 60_000;
 
@@ -26,7 +29,7 @@ export const DIFF_MAX = 60_000;
  * `past`: what its reader does past the cap; a clone that holds none of the changes (the answer agent's trunk) says so (ORC-182).
  */
 export async function capDiff(diff: string | undefined, stat: () => Promise<string>, { max = DIFF_MAX, past = 'read the changed files in the clone' } = {}): Promise<string> {
-  if (diff !== undefined && !diff.trim()) return '(no change against the trunk)';
+  if (diff !== undefined && !diff.trim()) return NO_CHANGE;
   if (diff !== undefined && diff.length <= max) return diff;
   const files = await stat();
   const cut = files.length > max ? `${files.slice(0, max)}\n[… more changed files: list them with Glob]` : files;
