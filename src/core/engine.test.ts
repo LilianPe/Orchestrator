@@ -148,6 +148,13 @@ describe('decide — YAML rules of the standard pack', () => {
       expect(out.effects.map((e) => e.kind)).not.toContain('start_run');
     });
 
+    it('the PR of a cancelled ticket closed afterwards: recorded closed, the ticket neither blocked nor told to relaunch', () => {
+      const after = reduce(ticket({ logical: 'dev', delegated: true, prNumber: 3, prState: 'OPEN' }), cancelled)!;
+      const out = decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), workflow);
+      expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
+      expect(out.effects).toEqual([]);
+    });
+
     it('cancelling a ticket the factory does not work on decides nothing', () => {
       expect(decide(ticket({ logical: 'dev', delegated: false }), cancelled, workflow).effects).toEqual([]);
     });

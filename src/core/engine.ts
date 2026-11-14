@@ -2311,8 +2311,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.trace.push(`pr.closed: PR #${n} is not the open PR of a ticket at work, nothing cancelled`);
         break;
       }
-      out.trace.push('built-in pr.closed: work cancelled');
       out.events.push({ type: 'ticket.patched', patch: { prState: 'CLOSED' } });
+      // A ticket cancelled by a human is settled (ORC-170): its work already stopped, nothing to block nor to relaunch.
+      if (ticket.logical === 'cancelled') {
+        out.trace.push('pr.closed: the ticket is cancelled, only the PR is recorded closed');
+        break;
+      }
+      out.trace.push('built-in pr.closed: work cancelled');
       stop(out, workflow, `PR #${n} closed without merge`, `PR #${n} was closed without merge: I am stopping work on this ticket. ${relaunch(workflow)}`, 'pr_closed');
       break;
     }
