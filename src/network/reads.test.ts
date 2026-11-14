@@ -14,6 +14,18 @@ describe('countedRead (ORC-370)', () => {
     expect(countedRead('registry.npmjs.org', '/lodash/-/other-1.0.0.tgz')).toEqual({ kind: 'npm', name: 'lodash', item: 'other-1.0.0.tgz' });
   });
 
+  it('names a read by its path as the host resolves it: dot-segments and doubled slashes do not hide it', () => {
+    for (const path of ['/x/../lodash/-/lodash-3.0.0.tgz', '/lodash/./-/lodash-3.0.0.tgz', '//lodash/-/lodash-3.0.0.tgz', '/lodash/-/%2e/lodash-3.0.0.tgz']) {
+      expect(countedRead('registry.npmjs.org', path), path).toEqual({ kind: 'npm', name: 'lodash', item: '3.0.0' });
+    }
+    expect(countedRead('github.com', '/owner/repo/./releases/download/v1/a.zip')).toEqual({ kind: 'release', name: 'owner/repo', item: 'v1/a.zip' });
+    expect(countedRead('files.pythonhosted.org', '//packages/aa/requests-1.0.tar.gz')).toEqual({ kind: 'pypi', name: 'requests', item: '1.0' });
+  });
+
+  it('names an asset read through the API by the id of its repository too', () => {
+    expect(countedRead('api.github.com', '/repositories/123/releases/assets/789')).toEqual({ kind: 'release', name: 'repository 123', item: 'asset 789' });
+  });
+
   it('leaves out what moves no public counter: a packument, a version manifest, a search', () => {
     for (const path of ['/lodash', '/lodash/4.17.21', '/@types%2fnode', '/-/v1/search?text=x']) expect(countedRead('registry.npmjs.org', path), path).toBeUndefined();
     expect(countedRead('docs.npmjs.com', '/lodash/-/lodash-4.17.21.tgz')).toBeUndefined();
@@ -122,6 +134,24 @@ describe('declaredReads and unusualReads (ORC-370)', () => {
   it('judges nothing of an ecosystem the repository has no lockfile for, and survives a lockfile it cannot read', () => {
     writeFileSync(join(ws, 'package-lock.json'), '{ not json');
     const unusualRead = unusualReads(declaredReads(ws));
+    expect(unusualRead({ kind: 'npm', name: 'lodash', item: '1' })).toBe(false);
+  });
+
+  it('reads the resolutions of a Yarn 2+ lockfile, and keeps what a package-lock declares around a malformed entry', () => {
+    writeFileSync(join(ws, 'yarn.lock'), '"lodash@npm:^4":\n  version: 4.17.21\n  resolution: "lodash@npm:4.17.21"\n\n"@types/node@npm:^24":\n  resolution: "@types/node@npm:24.0.1"\n');
+    writeFileSync(join(ws, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/x': null, 'node_modules/debug': { version: '4.0.0' } }, dependencies: { y: 'not an object' } }));
+    const unusualRead = unusualReads(declaredReads(ws));
+    expect(unusualRead({ kind: 'npm', name: 'lodash', item: '4.17.21' })).toBe(false);
+    expect(unusualRead({ kind: 'npm', name: '@types/node', item: '24.0.1' })).toBe(false);
+    expect(unusualRead({ kind: 'npm', name: 'debug', item: '4.0.0' })).toBe(false);
+    expect(unusualRead({ kind: 'npm', name: 'debug', item: '4.0.1' })).toBe(true);
+  });
+
+  it('judges an ecosystem only by a lockfile that declares its whole tree: requirements.txt pins only the direct dependencies, an empty lockfile nothing', () => {
+    writeFileSync(join(ws, 'requirements.txt'), 'requests==2.32.3\n');
+    writeFileSync(join(ws, 'yarn.lock'), '# empty\n');
+    const unusualRead = unusualReads(declaredReads(ws));
+    expect(unusualRead({ kind: 'pypi', name: 'urllib3', item: '2.0.0' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '1' })).toBe(false);
   });
 });

@@ -39,8 +39,12 @@ const NPM_HOSTS = ['registry.npmjs.org', 'registry.yarnpkg.com'];
 /** A downloaded distribution: its `.metadata` alone (PEP 658), which pip reads of many versions while it resolves, is no download. */
 const PYPI_FILE = /^(.+?)(\.whl|\.tar\.gz|\.tar\.bz2|\.tgz|\.zip|\.egg)$/;
 
-const decoded = (path: string): string => {
-  const p = path.split('?')[0]!;
+/**
+ * A request's path as its host resolves it, the query aside: dot-segments resolved (`%2e` too), backslashes as slashes
+ * (WHATWG's URL parser), doubled slashes collapsed, then decoded. A spelling the host serves must not escape the count.
+ */
+const resolved = (path: string): string => {
+  const p = (URL.parse(`https://h${path.startsWith('/') ? '' : '/'}${path}`)?.pathname ?? path.split('?')[0]!).replace(/\/{2,}/g, '/');
   try {
     return decodeURIComponent(p);
   } catch {
@@ -53,7 +57,7 @@ const pypiName = (name: string) => name.toLowerCase().replace(/[-_.]+/g, '-');
 
 /** The counted read a request of a listed host is, if it is one; its query never counts (the counters do not see it). */
 export function countedRead(host: string, path: string): CountedRead | undefined {
-  const p = decoded(path);
+  const p = resolved(path);
   if (NPM_HOSTS.includes(host)) {
     const m = /^\/((?:@[^/]+\/)?[^/@][^/]*)\/-\/([^/]+\.tgz)$/.exec(p);
     if (!m) return undefined;
@@ -74,8 +78,11 @@ export function countedRead(host: string, path: string): CountedRead | undefined
     return m ? { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `${m[3] ?? m[4]}/${m[5]}` } : undefined;
   }
   if (host === 'api.github.com') {
+    // By its repository's name, or its id: the same asset under two names, each capped (ponytail: the id is not resolved).
     const m = /^\/repos\/([^/]+)\/([^/]+)\/releases\/assets\/(\d+)$/.exec(p);
-    return m ? { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `asset ${m[3]}` } : undefined;
+    if (m) return { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `asset ${m[3]}` };
+    const id = /^\/repositories\/(\d+)\/releases\/assets\/(\d+)$/.exec(p);
+    return id ? { kind: 'release', name: `repository ${id[1]}`, item: `asset ${id[2]}` } : undefined;
   }
   return undefined;
 }
@@ -121,27 +128,30 @@ export const readKey = (r: CountedRead) => `${r.kind}:${r.name}@${r.item}`;
 /** The file of a run's declaration in its run dir (`<runs>/<runId>/`), the daemon's, never mounted in the sandbox. */
 export const DECLARED_READS = 'declared-reads.json';
 
-/** The files of the repository's root read, and what each declares; one that cannot be read declares nothing. */
-const LOCKFILES: [file: string, kind: CountedRead['kind'], read: (text: string) => CountedRead[]][] = [
-  ['package-lock.json', 'npm', npmLock],
-  ['npm-shrinkwrap.json', 'npm', npmLock],
-  ['yarn.lock', 'npm', urls],
-  ['uv.lock', 'pypi', urls],
-  ['poetry.lock', 'pypi', poetryLock],
-  ['requirements.txt', 'pypi', requirements],
+/**
+ * The files of the repository's root read, and what each declares; one that cannot be read declares nothing. `whole`: it
+ * locks the whole tree, so its ecosystem is judged once it declares a read; requirements.txt pins the direct dependencies alone.
+ */
+const LOCKFILES: [file: string, kind: CountedRead['kind'], read: (text: string) => CountedRead[], whole: boolean][] = [
+  ['package-lock.json', 'npm', npmLock, true],
+  ['npm-shrinkwrap.json', 'npm', npmLock, true],
+  ['yarn.lock', 'npm', yarnLock, true],
+  ['uv.lock', 'pypi', urls, true],
+  ['poetry.lock', 'pypi', poetryLock, true],
+  ['requirements.txt', 'pypi', requirements, false],
 ];
 
 export function declaredReads(workspace: string): DeclaredReads {
   const judged = new Set<CountedRead['kind']>();
   const reads = new Set<string>();
-  for (const [file, kind, read] of LOCKFILES) {
+  for (const [file, kind, read, whole] of LOCKFILES) {
     let found: CountedRead[];
     try {
       found = read(readFileSync(join(workspace, file), 'utf8'));
     } catch {
       continue;
     }
-    judged.add(kind);
+    if (whole && found.length) judged.add(kind);
     for (const r of found) reads.add(readKey(r));
   }
   return { judged: [...judged], reads: [...reads] };
@@ -164,22 +174,33 @@ function urls(text: string): CountedRead[] {
   return out;
 }
 
+/** Yarn 1's URLs, Yarn 2+'s `resolution: "<name>@npm:<version>"`. */
+function yarnLock(text: string): CountedRead[] {
+  return [...urls(text), ...[...text.matchAll(/resolution: "((?:@[^@"/]+\/)?[^@"]+)@npm:([^"]+)"/g)].map((m) => ({ kind: 'npm' as const, name: m[1]!, item: m[2]! }))];
+}
+
+/** An entry of a lockfile's JSON, an object or nothing: a malformed one is left out, not the whole file. */
+const entry = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {});
+const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+
 /** package-lock.json, v1 to v3: each installed package's version, under its real name (an alias's `name`), and its URL. */
 function npmLock(text: string): CountedRead[] {
-  const lock = JSON.parse(text) as { packages?: Record<string, { name?: string; version?: string; resolved?: string }>; dependencies?: Record<string, unknown> };
+  const lock = entry(JSON.parse(text));
   const out = urls(text);
-  for (const [path, p] of Object.entries(lock.packages ?? {})) {
-    const name = p.name ?? (path.includes('node_modules/') ? path.split('node_modules/').pop() : undefined);
-    if (name && p.version) out.push({ kind: 'npm', name, item: p.version });
+  for (const [path, v] of Object.entries(entry(lock['packages']))) {
+    const p = entry(v);
+    const name = str(p['name']) ?? (path.includes('node_modules/') ? path.split('node_modules/').pop() : undefined);
+    const version = str(p['version']);
+    if (name && version) out.push({ kind: 'npm', name, item: version });
   }
-  const v1 = (deps: Record<string, unknown> | undefined) => {
-    for (const [name, d] of Object.entries(deps ?? {})) {
-      const dep = d as { version?: string; dependencies?: Record<string, unknown> };
-      if (dep.version) out.push({ kind: 'npm', name, item: dep.version });
-      v1(dep.dependencies);
+  const v1 = (deps: unknown) => {
+    for (const [name, d] of Object.entries(entry(deps))) {
+      const version = str(entry(d)['version']);
+      if (version) out.push({ kind: 'npm', name, item: version });
+      v1(entry(d)['dependencies']);
     }
   };
-  v1(lock.dependencies);
+  v1(lock['dependencies']);
   return out;
 }
 

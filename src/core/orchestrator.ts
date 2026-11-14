@@ -1016,8 +1016,9 @@ export class Orchestrator {
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
-    // What the repository's lockfiles declare before the agent touches them, out of its mounts: its security log judges its reads by it (ORC-370).
-    await writeFile(join(runDir, DECLARED_READS), JSON.stringify(declaredReads(ws.path)));
+    // What the repository's lockfiles declare before this run's agent touches them, out of its mounts: its security log judges
+    // its reads by it (ORC-370). Below `limited`, the run reaches no registry nor forge.
+    if (policy.level === 'limited') await writeFile(join(runDir, DECLARED_READS), JSON.stringify(declaredReads(ws.path)));
     return sandboxes.create({
       runId,
       ticketId,

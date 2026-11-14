@@ -593,6 +593,13 @@ describe('EgressProxy', () => {
       expect((await viaTls(other, 'registry.npmjs.org', 'GET', tarball('3.0.0'))).status).toBe(200);
     });
 
+    it('counts a GET alone: a HEAD moves no download counter, and uses up no cap', async () => {
+      const sock = await proxy.openRun('run-1', LIMITED_ONLY, undefined, { versionsPerPackage: 1, assetsPerRepo: 1 });
+      for (const v of ['1.0.0', '2.0.0', '3.0.0']) expect((await viaTls(sock, 'registry.npmjs.org', 'HEAD', tarball(v))).status, v).toBe(200);
+      expect((await viaTls(sock, 'registry.npmjs.org', 'GET', tarball('4.0.0'))).status).toBe(200);
+      expect((await viaTls(sock, 'registry.npmjs.org', 'GET', tarball('5.0.0'))).status).toBe(403);
+    });
+
     it('caps the release assets of a repository at the default for a run opened without caps of its own', async () => {
       const sock = await proxy.open('run-1', LIMITED_ONLY);
       for (let i = 0; i < READ_CAPS.assetsPerRepo; i++) expect((await viaTls(sock, 'github.com', 'GET', `/owner/repo/releases/download/v${i}/a.zip`)).status).toBe(200);

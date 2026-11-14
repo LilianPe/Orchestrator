@@ -617,11 +617,11 @@ export class EgressProxy {
   }
 
   /**
-   * The read that moves a public counter a checked request is, counted below `full` (ORC-370); `false` once refused past
-   * the run's cap, journaled as suspicious. At `full`, a setup, no agent runs: nothing is counted.
+   * The read that moves a public counter a checked GET is, counted below `full` (ORC-370); `false` once refused past
+   * the run's cap, journaled as suspicious. A HEAD or an OPTIONS downloads nothing; at `full`, a setup, no agent runs.
    */
   private counted(run: Run, res: ServerResponse, method: string, host: string, path: string): CountedRead | undefined | false {
-    const read = run.policy.level === 'full' ? undefined : countedRead(host, path);
+    const read = run.policy.level === 'full' || method !== 'GET' ? undefined : countedRead(host, path);
     const v = read && run.reads.admit(read);
     if (!v || v.ok) return read;
     this.refuse(run, res, method, host, path, v.reason, 403, { read, suspicious: true });
