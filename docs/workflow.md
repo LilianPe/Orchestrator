@@ -90,8 +90,8 @@ You can redefine only some of them; after merging, all five must have a name. `r
 ### `limits`
 | Key | Type | Default | Effect when the limit is reached |
 |---|---|---|---|
-| `parallel_sessions` | integer > 0 | 3 | Number of simultaneous runs in the `dev` queue, if `factory.yml` does not set `concurrency`; the sandbox of a check (`verify`, `red`) counts as one, and waits for a free slot before any new launch (ORC-353). Beyond that, runs wait in a persistent queue. Each run in the `dev` queue also receives `PORT = workspace.ports.base + slot number` (0 to `parallel_sessions - 1`). |
-| `question_sessions` | integer > 0 | 2 | Same for the `questions` queue. |
+| `parallel_sessions` | integer > 0 | 3 | Accepted, no longer read (ORC-390): the `dev` queue's capacity is `concurrency` of `factory.yml` ([`configuration.md`](configuration.md)). |
+| `question_sessions` | integer > 0 | 2 | Accepted, no longer read (ORC-390): the `questions` queue's capacity is a fixed 2. |
 | `per_run.turns` | integer > 0 | 150 | Number of assistant messages in a run, a message counting once even if written over several lines of the stream. Beyond that, the run is interrupted; its result is `limit`. A job with `step` never exceeds its step's turns: `per_run` and its `limits` can only lower them. |
 | `per_run.duration` | duration | `90m` | Maximum duration of a run, same `limit` result. |
 | `verify_attempts` | integer ≥ 0 | 4 (preset) | Number of verification passes before blocking the ticket (see `jobs.*.verify`). `0` and `1` block on the first failure. By default, the bound from the [`factory/default` preset](preset.md): 3 returns to the run, the 4th failure blocks. |
@@ -123,7 +123,7 @@ There is no "unlimited" value: see section 8.
 
 There is no budget in dollars (ORC-216): a `usd` key left in `per_run` or a job's `limits` is ignored. Budgets count tokens and turns: `budgets` of `factory.yml` ([`configuration.md`](configuration.md)).
 
-> Queue capacities (`parallel_sessions`, `question_sessions`) are global to the instance: they are read from the workflow of the **first** project in `config.yaml`. The other limits are specific to each project.
+> Queue capacities are global to the instance and set outside the workflow (ORC-390): `concurrency` of `factory.yml` for the `dev` queue (3 by default), a fixed 2 for the `questions` queue. The sandbox of a check (`verify`, `red`) takes a `dev` slot too, and waits for a free one before any new launch (ORC-353). Beyond that, runs wait in a persistent queue. Each run in the `dev` queue receives `PORT = workspace.ports.base + slot number` (0 to `concurrency - 1`). The other limits are specific to each project.
 
 ### `workspace`
 | Key | Type | Default | Effect |
@@ -344,7 +344,7 @@ To express an "or", write several rules in a row: the first one that matches win
    - `knowledge` job (`learn`, `remember` of a version frozen before ORC-193): refused, only logged;
    - `dev` queue while a run or checks are in progress on this ticket: the job is put **on hold on the ticket** and launched as soon as the current run is finished. There is only one waiting slot per ticket: a new request replaces the previous one;
    - queue paused or the Claude account's usage limit reached: queued;
-   - no free slot in the queue (`parallel_sessions` / `question_sessions`): queued;
+   - no free slot in the queue (`concurrency` of `factory.yml` / 2 for questions): queued;
    - otherwise: launch.
 5. Launch: `pickup` checks if needed, preparation of the workspace (`workspace`), `on_start.move`, choice of session (`session`), prompt construction (`/<skill>`, ticket, `input`), then Claude Code with the job's `model` and `limits`.
 6. End of the run: fixed behavior of `run.finished` (checks, `on_success`, or block).
@@ -357,13 +357,12 @@ The two queues:
 
 Each example below is a complete and valid `.relais/workflow.yml` (a test in the repository loads them all with the pack).
 
-### Increasing parallelism
+### Moving the dev ports
+
+Parallelism is `concurrency` of `factory.yml` (ORC-390); the workflow only moves the ports its runs receive.
 
 ```yaml
 version: 1
-limits:
-  parallel_sessions: 5
-  question_sessions: 3
 workspace:
   ports: { base: 4200 }
 ```

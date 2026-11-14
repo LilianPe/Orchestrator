@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
-import { EventBus } from '../../src/core/bus.js';
+import { EventBus } from '../../src/server/live-feed.js';
 import { newTicketState } from '../../src/core/types.js';
 import { createApp } from '../../src/server/app.js';
 import { RUN_LEASE_MS } from '../../src/store/types.js';

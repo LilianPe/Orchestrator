@@ -10,7 +10,7 @@ import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/
 import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { ReplaySource } from '../ghost/delegate.js';
 import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
-import type { BusMessage, EventBus } from '../core/bus.js';
+import type { BusMessage, EventBus } from './live-feed.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';

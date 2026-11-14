@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EventBus } from '../../src/core/bus.js';
+import { EventBus } from '../../src/server/live-feed.js';
 import { createApp } from '../../src/server/app.js';
 import { createHarness } from '../helpers/harness.js';
 

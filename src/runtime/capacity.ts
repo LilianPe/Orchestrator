@@ -1,9 +1,14 @@
+import type { QueueName } from '../core/types.js';
 import type { QueueClaim, QueueItem, Store } from '../store/types.js';
-import type { QueueName } from './types.js';
 
-/** Dev runs at once: `concurrency` of factory.yml (ORC-203), else `limits.parallel_sessions` of the workflow. */
-export function devCapacity(concurrency: number | undefined, parallelSessions: number | undefined): number {
-  return concurrency ?? parallelSessions ?? 3;
+/** Dev runs at once when factory.yml sets no `concurrency` (ORC-203). */
+export const DEV_CAPACITY = 3;
+/** Question runs at once (ORC-390): a constant until someone needs it set. */
+export const ANSWER_CAPACITY = 2;
+
+/** The slots of each queue (ORC-390): dev runs are `concurrency` of factory.yml; a workflow's `limits` set none. */
+export function queueCapacity(concurrency?: number): Record<QueueName, number> {
+  return { dev: concurrency ?? DEV_CAPACITY, questions: ANSWER_CAPACITY };
 }
 
 export class Scheduler {

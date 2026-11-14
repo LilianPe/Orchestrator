@@ -114,7 +114,7 @@ describe('a short outage blocks no ticket and loses no result (ORC-343)', () => 
   });
 
   it('criterion 2: a queued start that meets GitHub down at its launch runs once GitHub is back', async () => {
-    const h = createHarness({ projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
+    const h = createHarness({ concurrency: 1 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     h.runner.enqueue({ hold: true }, { hold: true });
