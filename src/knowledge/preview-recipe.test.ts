@@ -94,7 +94,7 @@ describe("the factory's writer of start recipes (ORC-386)", () => {
     const warning = await recipes.record('acme/shop', { recipe: valid.recipe, sha: SHA, port: 4200, runId: 'run-1', ticket: 'REL-1', at: new Date('2026-11-14T10:00:00Z') }, undefined, vet);
     expect(warning).toBeUndefined();
     expect(recipes.read('acme/shop')).toEqual(valid);
-    expect(git(origin, 'log', '-1', '--format=%s%n%an', 'main')).toBe('preview(acme/shop): start recipe validated on c0ffee000000 (REL-1)\nRelais factory');
+    expect(git(origin, 'log', '-1', '--format=%s%n%an', 'main')).toBe('preview(acme/shop): start recipe validated on c0ffee000000 (REL-1)\nOrchestrator factory');
     expect(git(origin, 'show', 'main:notes/preview/acme/shop.md')).toContain('npm run dev');
     expect(git(repo, 'status', '--porcelain')).toBe('');
   });
