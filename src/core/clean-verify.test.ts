@@ -1134,12 +1134,12 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     expect(shooter.calls).toEqual([]);
   });
 
-  it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green', async () => {
-    for (const opts of [{ shooter: null }, { start: null }] as const) {
+  it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green (ORC-397 criterion 2)', async () => {
+    for (const [opts, why] of [[{ shooter: null }, 'browser'], [{ start: null }, '`preview` in .factory/config.yml']] as const) {
       const { req } = visual({ page: 'new page\n', ...opts });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
-      expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.any(String) });
+      expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.stringContaining(why) });
       expect(res.visual?.proof.captures).toBeUndefined();
     }
   });
@@ -1151,13 +1151,6 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       expect(res.visual?.proof.captures).toHaveLength(6);
       expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
     }
-  });
-
-  it('ORC-397 criterion 2: without `preview` nor workspace.preview, the proof is unavailable, saying where to declare one', async () => {
-    const { req, shooter } = visual({ page: 'new page\n', start: null });
-    const res = await runCleanVerify(req);
-    expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.stringContaining('`preview` in .factory/config.yml') });
-    expect(shooter.calls).toEqual([]);
   });
 
   it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {
