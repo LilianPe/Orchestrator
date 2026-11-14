@@ -68,6 +68,19 @@ describe('the statuses of the MVP (ORC-170)', () => {
     expect(moves(h)).toEqual(['In Progress', 'AI Review', 'Human Review', 'AI Review', 'Human Review']);
   });
 
+  it('a first dev that commits nothing has no PR: the ticket is blocked on a question to a human, not left silent in In Progress', async () => {
+    const h = delegable();
+    h.publisher.refuseNext('empty');
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+
+    expect(skills(h)).toEqual(['/factory:dev']);
+    expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true, blockKind: 'question' });
+    expect((await h.ticket()).prNumber).toBeUndefined();
+    expect(h.tracker.issues.get('REL-1')!.labels).toContain('Bloqué');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('Question: What should I do');
+    expect(moves(h)).toEqual(['In Progress']);
+  });
+
   it('a reply that commits nothing leaves the ticket in Human Review, on the commit already reviewed: no review again', async () => {
     const h = delegable();
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });

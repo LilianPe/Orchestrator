@@ -118,6 +118,18 @@ describe('the publish effect (ORC-125)', () => {
       expect(decide(verifying({ prNumber: undefined }), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow).effects).toEqual([{ kind: 'post_output', style: 'summary', runId: 'r1' }]);
     });
 
+    it('no PR and nothing committed: the end is blocked on a question to a human, not left silent in In Progress', () => {
+      const t = verifying({ prNumber: undefined });
+      const end = ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc', empty: true });
+      const out = decide(t, end, workflow);
+      expect(reviewing(out)).toEqual([]);
+      expect(out.effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1' });
+      expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ step: 'build', question: expect.stringContaining('?') }) });
+      expect(after(t, end, out)).toMatchObject({ blocked: true, blockKind: 'question', logical: 'dev' });
+      // A commit with no PR (kept, as a ghost run keeps it) is not this case: nothing blocked.
+      expect(decide(t, ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow).events.some((e) => e.type === 'ticket.blocked')).toBe(false);
+    });
+
     it('the commit shown in Human Review, already reviewed: the ticket stays there, for every fix', () => {
       const shown = verifying({ logical: 'human_review', reviewSha: 'abc' });
       for (const job of ['dev-feedback', 'fix-human', 'fix-ci']) {

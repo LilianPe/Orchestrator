@@ -79,6 +79,7 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   if (!stays && job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
+  if (idle === NO_PR && at.event.type === 'publish.done' && at.event.payload.empty) return nothingDone(out, at.workflow, job.name);
   if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
   // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
   else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove ?? undefined));
@@ -93,8 +94,20 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
  */
 function nothingToReview({ event, ticket }: { event: FactoryEvent; ticket: TicketState | undefined }): string | undefined {
   const sha = event.type === 'publish.done' || event.type === 'verify.passed' ? event.payload.sha : undefined;
-  if (!ticket?.prNumber) return 'no PR';
+  if (!ticket?.prNumber) return NO_PR;
   return sha && ticket.logical === 'human_review' && sha === ticket.reviewSha ? `${sha.slice(0, 12)} already reviewed` : undefined;
+}
+
+const NO_PR = 'no PR';
+
+/**
+ * An end with no PR whose publication found nothing committed (ORC-170): the work left nothing, not even a PR to review. The ticket
+ * would sit in its status with nothing running: it is blocked on a question to a human instead, which a reply relaunches.
+ */
+function nothingDone(out: Decision, workflow: Workflow, job: string): Decision {
+  const reason = `The run ${job} ended without a commit: there is no PR, and nothing to review.`;
+  const question = 'What should I do: relaunch it with more detail, change the ticket, or close it?';
+  return block(out, workflow, { kind: 'question', reason, body: `${reason} ${question}\n\nReply in this thread and I will resume.`, job, tried: [`Started the run ${job}: it committed nothing.`], question });
 }
 
 /**

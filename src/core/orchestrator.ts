@@ -1768,13 +1768,13 @@ export class Orchestrator {
     const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId, at: this.d.clock.now() };
     const payload = { runId: c.runId, job: c.job, sha: c.sha };
     const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:kept:${rowId}`, type: 'publish.refused', payload: { ...payload, reason } }));
-    const done = async () => void (await this.accept({ ...base, id: `publish-done:kept:${rowId}`, type: 'publish.done', payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }));
+    const done = async (empty = false) => void (await this.accept({ ...base, id: `publish-done:kept:${rowId}`, type: 'publish.done', payload: { ...payload, ...(c.output ? { output: c.output } : {}), ...(empty ? { empty: true as const } : {}) } }));
     const refusal = this.publishRefusal(project, t, c.sha);
     if (refusal) return refuse(refusal);
     if (!t.branch || !t.worktreePath) return refuse(`no branch or no worktree for ${t.ticketId}.`);
     const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath);
     // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
-    if (!diff?.trim()) return done();
+    if (!diff?.trim()) return done(true);
     let text;
     try {
       text = await this.policy.pr(describePr(c.output, publishFacts(t, c)));
@@ -2273,7 +2273,7 @@ export class Orchestrator {
     const payload = { runId: c.runId, job: c.job, sha: c.sha };
     const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId };
     const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:${key.id}`, type: 'publish.refused', at: this.d.clock.now(), payload: { ...payload, reason } }));
-    const published = async () => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }));
+    const published = async (empty = false) => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}), ...(empty ? { empty: true as const } : {}) } }));
     const known = key.replay ? await this.d.store.getMeta(mark) : undefined;
     if (known) return refuse(known);
     let reason: string;
@@ -2299,7 +2299,7 @@ export class Orchestrator {
         if (err instanceof OutputRefused) reason = `the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`;
         else if (err instanceof PublishRefused) {
           // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
-          if (err.code === 'empty') return published();
+          if (err.code === 'empty') return published(true);
           reason = err.message;
         } else throw err;
       }
