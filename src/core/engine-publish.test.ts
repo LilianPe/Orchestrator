@@ -134,6 +134,11 @@ describe('the publish effect (ORC-125)', () => {
       const handed = decide(waiting, end, workflow);
       expect(handed.events.some((e) => e.type === 'ticket.blocked')).toBe(false);
       expect(handed.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev-feedback' }));
+      // A relayed question alone is no answer from the human: blocked, the question waits for the reply.
+      const relayed = verifying({ prNumber: undefined, linearSessionId: 's1', relayed: [{ runId: 'q1', at: 1 }] });
+      const asked = decide(relayed, end, workflow);
+      expect(asked.events.some((e) => e.type === 'ticket.blocked')).toBe(true);
+      expect(asked.effects.some((e) => e.kind === 'start_run')).toBe(false);
       // A commit with no PR (kept, as a ghost run keeps it) is not this case: nothing blocked.
       expect(decide(t, ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow).events.some((e) => e.type === 'ticket.blocked')).toBe(false);
     });

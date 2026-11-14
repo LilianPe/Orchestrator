@@ -79,7 +79,7 @@ function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   if (!stays && job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
   if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
-  if (idle === NO_PR && at.event.type === 'publish.done' && at.event.payload.empty && !at.ticket?.blocked) return nothingDone(out, at, job);
+  if (idle === NO_PR && at.event.type === 'publish.done' && at.event.payload.empty && !at.ticket?.blocked && !awaitsAgent(at.ticket?.humanInbox ?? [])) return nothingDone(out, at.workflow, job.name);
   if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
   // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
   else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove ?? undefined));
@@ -101,17 +101,15 @@ function nothingToReview({ event, ticket }: { event: FactoryEvent; ticket: Ticke
 const NO_PR = 'no PR';
 
 /**
- * An end with no PR whose publication found nothing committed (ORC-170): the work left nothing, not even a PR to review. A
- * message already waiting for the agent is handed over to it, as at any end; otherwise the ticket would sit in its status with
- * nothing running: it is blocked on a question to a human instead, which a reply answers. A block already there stays (the caller).
+ * An end with no PR whose publication found nothing committed (ORC-170): the work left nothing, not even a PR to review, and
+ * the ticket would sit in its status with nothing running. It is blocked on a question to a human instead, which a reply
+ * answers. Not when the human's feedback already waits for the agent (the end hands it over, as any end does), nor over a
+ * block already there (the caller): a relayed question alone waits for the reply, as on any block.
  */
-function nothingDone(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec): Decision {
-  const started = out.effects.length;
-  handOver(out, at, job, at.ticket?.logical);
-  if (out.effects.slice(started).some((e) => e.kind === 'start_run')) return out;
-  const reason = `The run ${job.name} ended without a commit: there is no PR, and nothing to review.`;
+function nothingDone(out: Decision, workflow: Workflow, job: string): Decision {
+  const reason = `The run ${job} ended without a commit: there is no PR, and nothing to review.`;
   const question = 'What should I do: relaunch it with more detail, change the ticket, or close it?';
-  return block(out, at.workflow, { kind: 'question', reason, body: `${reason} ${question}\n\nReply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: it committed nothing.`], question });
+  return block(out, workflow, { kind: 'question', reason, body: `${reason} ${question}\n\nReply in this thread and I will resume.`, job, tried: [`Started the run ${job}: it committed nothing.`], question });
 }
 
 /**
