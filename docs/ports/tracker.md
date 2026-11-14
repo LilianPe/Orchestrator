@@ -32,7 +32,7 @@ The writes that can be replayed without harm are those that write a final state:
 
 ## Fencing
 
-None at the port level: it has no notion of an attempt. Echoes of our own writes (labels, statuses) are filtered by the engine (`putEcho`/`isEcho`), not by the adapter.
+None at the port level: it has no notion of an attempt. The factory's own writes come back without a time window (ORC-346): their Linear webhook is known by its actor, the app user (`appUserId`); for the reconciliation, `setLabels` tells what it changed and the issue's `updatedAt` after it, which the engine records in the labels it knows, and a move is recorded as the factory makes it (`status.recorded`).
 
 ## What the suite asks of the implementation
 

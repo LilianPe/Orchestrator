@@ -24,7 +24,7 @@ import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { Q } from '../adapters/tracker/linear/queries.js';
-import { knownLabels, recordLabels, serial } from '../adapters/tracker/linear/labels.js';
+import { knownLabels, recordLabels, recordWrite, serial } from '../adapters/tracker/linear/labels.js';
 import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
@@ -247,8 +247,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       accept: (e): Promise<boolean> => orchestrator.accept(e), now: () => clock.now(), log: (level, m) => log(`${level === 'warn' ? 'Warning: ' : ''}replay: ${m}`),
       startTime,
     });
+    // One turn for the webhook, the reconciliation and the factory's own label writes around the known labels (ORC-185, ORC-346).
+    const labelsTurn = serial();
     const orchestrator = new Orchestrator({
       replays,
+      labelsWritten: (projectId, ticketId, written) => labelsTurn(() => recordWrite(store, projectId, ticketId, written)),
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
@@ -318,8 +321,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const accept = (e: FactoryEvent) => orchestrator.accept(e);
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
-    // One turn for the webhook and the reconciliation around the known labels (ORC-185).
-    const labelsTurn = serial();
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
     const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeTokenOf(), !sandboxes, log);
     const ingest = createLinearIngest({
@@ -343,7 +344,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         stateNameById: (t, id) => linearTracker?.stateNameById(t, id),
         stateTypeById: (t, id) => linearTracker?.stateTypeById(t, id),
         labelNameById: (t, id) => linearTracker?.labelNameById(t, id),
-        isEcho: (k) => store.isEcho(k, clock.now()),
+        // Read from the settings until Linear is connected: a webhook of the factory's write before a restart may come first.
+        factoryActor: () => linearTracker?.appUserId ?? linearSettings(o.home, yml)?.appUserId,
         commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
         now: () => clock.now(),
         knownLabels: (pid, id) => knownLabels(store, pid, id),

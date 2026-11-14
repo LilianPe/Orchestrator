@@ -20,7 +20,7 @@ import {
 } from '../adapters/sandbox/types.js';
 import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
-import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
+import { IssueNotFoundError, type ActivityInput, type LabelsWritten, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
@@ -226,6 +226,8 @@ export interface OrchestratorDeps {
   forge: Forge;
   /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
   reconcile?: (project: ProjectRuntime) => Promise<void>;
+  /** Records the factory's own label write in the labels the reconciliation compares Linear with (ORC-346). */
+  labelsWritten?: (projectId: string, ticketId: string, written: LabelsWritten) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
   /**
@@ -400,7 +402,6 @@ const behindLaunch = (launch: NonNullable<TicketState['launching']>, start: Pend
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
 
-const ECHO_MS = 60_000;
 /** The `meta` key of the installation's id (`instanceId`). */
 const INSTANCE_KEY = 'instance-id';
 
@@ -1534,7 +1535,7 @@ export class Orchestrator {
     // `decide` keeps in step with its own changes follows here (ORC-170). A failed write does not undo the change.
     const label = blockedLabelChange(before, next.blocked);
     if (label) {
-      await this.setLabels(t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
+      await this.setLabels(t.projectId, t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
     }
     return next;
   }
@@ -2012,7 +2013,7 @@ export class Orchestrator {
       case 'merge':
         return this.merge(project, t, c.sha, key);
       case 'labels':
-        return this.setLabels(ticketId, c.add, c.remove);
+        return this.setLabels(project.id, ticketId, c.add, c.remove);
       case 'comment':
         return this.commentOnce(ticketId, c.body, key);
       case 'block_comment':
@@ -2170,11 +2171,12 @@ export class Orchestrator {
     return s;
   }
 
-  /** Labels written by the factory, echoed so that their webhook is not read as a human's change. */
-  private async setLabels(ticketId: string, add: string[], remove: string[]): Promise<void> {
-    for (const l of add) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'added'), this.d.clock.now() + ECHO_MS);
-    for (const l of remove) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'removed'), this.d.clock.now() + ECHO_MS);
-    await this.d.tracker.setLabels(ticketId, add, remove);
+  /**
+   * Labels written by the factory (ORC-346): what the write set goes into the labels known (`labelsWritten`), so a pass
+   * that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
+   */
+  private async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
+    await this.d.labelsWritten?.(projectId, ticketId, await this.d.tracker.setLabels(ticketId, add, remove));
   }
 
   /**
@@ -2199,10 +2201,10 @@ export class Orchestrator {
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     if (this.silenced(project.id, `the move of ${t.ticketId} to ${to}`)) return;
-    await state(this.d.store.putEcho(stateEchoKey(t.ticketId, stateName), this.d.clock.now() + ECHO_MS));
-    await this.d.tracker.moveTo(t.ticketId, stateName);
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
+    // Read before the move: the status is recorded right after its write, which is how a pass knows it (ORC-346).
     const reviewSha = to !== 'human_review' ? undefined : keepReviewSha ? t.reviewSha : await this.headShown(project, t);
+    await this.d.tracker.moveTo(t.ticketId, stateName);
     await state(this.apply(await state(this.ticket(project.id, t.ticketId)), { type: 'status.recorded', to, ...(reviewSha ? { reviewSha } : {}) }));
   }
 

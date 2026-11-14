@@ -7,7 +7,7 @@ import { unroutedReason } from '../../../core/routing.js';
 import { newTicketState, type FactoryEvent } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { FakeTracker, STANDARD_STATES } from '../fake.js';
-import { knownLabels, recordLabels } from './labels.js';
+import { knownLabels, recordLabels, recordWrite } from './labels.js';
 import { Reconciler, reconcileOnce } from './reconcile.js';
 
 const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
@@ -397,13 +397,18 @@ describe('reconcileOnce — labels (ORC-185)', () => {
     expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 200 });
   });
 
-  it('a label the factory itself just wrote is not reported as a human change', async () => {
+  it('a label the factory wrote is no human change, however late the pass; a human label beside it whose webhook was lost still is (ORC-346)', async () => {
     const { tracker, store } = await setup();
+    const issue = tracker.issues.get('REL-1')!;
+    issue.updatedAt = 10;
     await pass(tracker, store);
-    tracker.issues.get('REL-1')!.labels = ['bug', 'Bloqué'];
-    await store.putEcho('label:REL-1:Bloqué', 1_000);
-    expect(await pass(tracker, store)).toEqual([]);
-    expect((await knownLabels(store, 'p', 'REL-1'))?.labels).toEqual(['Bloqué', 'bug']);
+    // A human adds `x`, its webhook lost; the factory then adds `Bloqué` and takes `bug` off, and records its write.
+    issue.labels = ['bug', 'x', 'Bloqué'];
+    await recordWrite(store, 'p', 'REL-1', { added: ['Bloqué'], removed: ['bug'], at: 20 });
+    issue.labels = ['x', 'Bloqué'];
+    issue.updatedAt = 20;
+    expect((await pass(tracker, store)).map((e) => e.payload)).toEqual([{ label: 'x', change: 'added' }]);
+    expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['Bloqué', 'x'], at: 20 });
   });
 });
 

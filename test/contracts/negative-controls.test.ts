@@ -16,7 +16,7 @@ import type { Publication, Publisher } from '../../src/adapters/publisher/types.
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import type { Sandbox, SandboxRequest, SandboxRequirements } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
-import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
+import type { LabelsWritten, TrackerIssue } from '../../src/adapters/tracker/types.js';
 import { FakeClock } from '../../src/core/clock.js';
 import type { RunOutcome, VerifyFailure } from '../../src/core/types.js';
 import { runVerify, type VerifyResult } from '../../src/core/verify.js';
@@ -575,8 +575,8 @@ describeTrackerContract(
   'a tracker whose setLabels ignores an unknown issue',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
-        if (this.issues.has(identifier)) await super.setLabels(identifier, add, remove);
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
+        return this.issues.has(identifier) ? super.setLabels(identifier, add, remove) : { added: [], removed: [], at: 0 };
       }
     },
   ),
@@ -700,8 +700,8 @@ describeTrackerContract(
   'a tracker whose setLabels ignores the removals',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[]): Promise<void> {
-        await super.setLabels(identifier, add, []);
+      override async setLabels(identifier: string, add: string[]): Promise<LabelsWritten> {
+        return super.setLabels(identifier, add, []);
       }
     },
   ),
@@ -712,11 +712,11 @@ describeTrackerContract(
   'a tracker whose setLabels rejects the removal of a label the issue does not have',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
         const { labels } = await this.getIssue(identifier);
         const absent = remove.find((l) => !labels.includes(l));
         if (absent) throw new Error(`label ${absent} is not on ${identifier}`);
-        await super.setLabels(identifier, add, remove);
+        return super.setLabels(identifier, add, remove);
       }
     },
   ),
@@ -727,9 +727,9 @@ describeTrackerContract(
   'a tracker whose setLabels drops the labels the team does not have yet',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
         const known = new Set([...this.issues.values()].flatMap((i) => i.labels));
-        await super.setLabels(identifier, add.filter((l) => known.has(l)), remove);
+        return super.setLabels(identifier, add.filter((l) => known.has(l)), remove);
       }
     },
   ),
@@ -740,9 +740,9 @@ describeTrackerContract(
   'a tracker whose replayed setLabels takes off the labels it adds again',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
         const { labels } = await this.getIssue(identifier);
-        await super.setLabels(identifier, add.filter((l) => !labels.includes(l)), [...remove, ...add.filter((l) => labels.includes(l))]);
+        return super.setLabels(identifier, add.filter((l) => !labels.includes(l)), [...remove, ...add.filter((l) => labels.includes(l))]);
       }
     },
   ),

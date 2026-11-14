@@ -26,6 +26,7 @@ import type { VisualShooter } from '../../src/adapters/browser/types.js';
 import type { CleanVerifier, CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
+import { recordWrite } from '../../src/adapters/tracker/linear/labels.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
 import type { Faults } from './faults.js';
@@ -364,6 +365,8 @@ export function createHarness(
     effectRetry: opts.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
     // Each life resolves roles through its own adapters and keeps its own cache, as a process does.
     reconcile: opts.reconcile,
+    // As the daemon records the factory's own label writes (ORC-346).
+    labelsWritten: (projectId, ticketId, written) => recordWrite(store, projectId, ticketId, written),
     fullReadPaths: opts.fullReadPaths,
     repoVariables: opts.repoVariables,
     repoConfig: opts.repoConfig,
