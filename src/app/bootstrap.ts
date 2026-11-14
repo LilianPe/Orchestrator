@@ -35,8 +35,8 @@ import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variabl
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
-import { loadWorkflow } from '../config/load-workflow.js';
 import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { EventBus } from '../core/bus.js';
@@ -101,18 +101,16 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const githubApp = resolveGithubApp(instance, env);
   const githubSecret = githubWebhookSecret(instance, env);
 
-  const projects: ProjectRuntime[] = instance.projects.map((p) => {
-    const projectFile = join(p.repoPath, '.factory/workflow.yml');
-    const workflow = loadWorkflow({ packDir, projectFile: existsSync(projectFile) ? projectFile : undefined, settings: stepSettings(yml) });
-    return {
-      id: p.id,
-      repoPath: p.repoPath,
-      teamKey: p.linearTeamKey,
-      // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
-      workflow: isFantome(p) ? asFantome(workflow) : workflow,
-      ...(projectEffects(p) ? { effects: 'none' as const } : {}),
-    };
-  });
+  // The workflow of factory/default for every project: a repository's `.factory/workflow.yml` is ignored (ORC-388).
+  const workflow = defaultWorkflow(stepSettings(yml));
+  const projects: ProjectRuntime[] = instance.projects.map((p) => ({
+    id: p.id,
+    repoPath: p.repoPath,
+    teamKey: p.linearTeamKey,
+    // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
+    workflow: isFantome(p) ? asFantome(workflow) : workflow,
+    ...(projectEffects(p) ? { effects: 'none' as const } : {}),
+  }));
   const limits = projects[0]?.workflow.limits;
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.

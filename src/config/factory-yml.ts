@@ -5,7 +5,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { MAX_DIFF } from '../checks/diff-size.js';
 import type { Effort } from '../presets/preset.js';
-import type { StepSettings } from './load-workflow.js';
+import type { StepSettings } from '../presets/workflow.js';
 
 /**
  * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, optional, next to `config.yaml`

@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import type { Exec } from '../adapters/exec.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
+import { stringify } from 'yaml';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
+import { REPO_CONFIG_PATH } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -19,51 +21,51 @@ export interface InitDeps {
   exec: Exec;
 }
 
-/** What `init` proposes for a repository: its install, its checks, and the test command the red check appends the new tests to. */
+/** What `init` proposes for a repository's `.factory/config.yml`: its install, and its checks by name. */
 interface Detected {
   setup: string[];
-  verify: string[];
-  red?: string;
+  commands: Record<string, string>;
 }
 
-/**
- * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has. pnpm
- * hands a `--` to the script as it is (`vitest run -- x.test.ts` filters nothing, measured on pnpm 10.20): its red
- * command has none.
- */
+/** npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has. */
 function detectNode(repo: string): Detected {
   const pkgFile = join(repo, 'package.json');
-  if (!existsSync(pkgFile)) return { setup: [], verify: [] };
+  if (!existsSync(pkgFile)) return { setup: [], commands: {} };
   const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
   const npmLock = existsSync(join(repo, 'package-lock.json'));
   const pnpm = !npmLock && existsSync(join(repo, 'pnpm-lock.yaml'));
   const pm = pnpm ? 'pnpm' : 'npm';
   const setup = pnpm ? ['pnpm install --frozen-lockfile'] : npmLock ? ['npm ci'] : [];
-  const verify = ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `${pm} ${s === 'test' ? 'test' : `run ${s}`}`);
-  return { setup, verify, red: scripts.test ? (pnpm ? 'pnpm test' : 'npm test --') : undefined };
+  const commands = Object.fromEntries(['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => [s, `${pm} ${s === 'test' ? 'test' : `run ${s}`}`]));
+  return { setup, commands };
 }
 
 /**
  * uv (ORC-172), on its lockfile only, and every command `--frozen`: `uv run` alone locks again first, and drops a lockfile
  * made under `exclude-newer` (the setup's age cap, which verify does not set) or one the agent's `pyproject.toml` no
  * longer matches; without the network, it fails (measured on uv 0.13.7). A plain `uv sync` rewrites it too
- * (docs/repository-configuration.md).
+ * (docs/repository-configuration.md). Named after their tool, beside Node's.
  */
 function detectPython(repo: string): Detected {
-  if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], verify: [] };
-  return { setup: ['uv sync --frozen'], verify: ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'], red: 'uv run --frozen pytest' };
+  if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], commands: {} };
+  return { setup: ['uv sync --frozen'], commands: { ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' } };
 }
 
-/** Both when the repository has both: the red check runs one command, Node's, and `init` says what it leaves out. */
-function detect(repo: string): Detected & { note?: string } {
+/** Both when the repository has both. */
+function detect(repo: string): Detected {
   const node = detectNode(repo);
   const python = detectPython(repo);
-  return {
-    setup: [...node.setup, ...python.setup],
-    verify: [...node.verify, ...python.verify],
-    red: node.red ?? python.red,
-    note: node.red && python.red ? `The red check runs "${node.red}": the Python tests a tests step adds are not checked red (jobs.tests.red takes one command).` : undefined,
-  };
+  return { setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands } };
+}
+
+/** What `init` prints before the `.factory/config.yml` it proposes (ORC-388): it writes nothing in the repository. */
+export const PROPOSAL_HEADER = `Proposed ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing in the repository):
+`;
+
+/** The repository's `.factory/config.yml`, as `init` detects it: none when it detects nothing. */
+function proposal({ setup, commands }: Detected): string | undefined {
+  if (!setup.length && !Object.keys(commands).length) return undefined;
+  return PROPOSAL_HEADER + stringify({ ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) });
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
@@ -111,33 +113,10 @@ export async function runInit(d: InitDeps): Promise<void> {
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
 
-  const wfFile = join(repoPath, '.factory/workflow.yml');
-  if (!existsSync(wfFile)) {
-    const { setup, verify: detected, red, note } = detect(repoPath);
-    if (note) io.print(note);
-    const verify = (await io.ask('Verification commands after each run (separated by ;)', detected.join('; ')))
-      .split(';')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    mkdirSync(join(repoPath, '.factory'), { recursive: true });
-    writeFileSync(
-      wfFile,
-      [
-        'version: 1',
-        'extends: standard',
-        'tracker:',
-        '  kind: linear',
-        `  team: ${teamKey}`,
-        'workspace:',
-        `  setup: ${JSON.stringify(setup)}`,
-        'jobs:',
-        '  dev:',
-        `    verify: ${JSON.stringify(verify)}`,
-        ...(red ? ['  tests:', `    red: ${JSON.stringify({ command: red })}`] : []),
-        '',
-      ].join('\n'),
-    );
-  }
+  // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
+  // default branch, which `init` proposes and leaves to commit.
+  const proposed = proposal(detect(repoPath));
+  if (proposed) io.print(proposed);
 
   saveInstance(d.home, cfg);
   io.print(

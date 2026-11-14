@@ -1,14 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { packDir } from '../../test/helpers/harness.js';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
-import { loadWorkflow } from '../config/load-workflow.js';
-import { runInit, type InitIO } from './init.js';
+import { parseRepoConfig } from '../config/repo-config.js';
+import { PROPOSAL_HEADER, runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   const printed: string[] = [];
@@ -25,19 +24,23 @@ const gitTop: (repo: string) => Exec = (repo) => async (cmd, args) =>
 const NPM = { 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }), 'package-lock.json': '{}' };
 const PNPM_LOCK = { 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" };
 
-/** Runs init, every proposal kept, on a repository of `files` (over the Python fixture with `python`): the workflow it wrote merged with the pack, and what it printed. */
-async function initWorkflow(files: Record<string, string>, o: { python?: boolean } = {}) {
+/**
+ * Runs init on a repository of `files` (over the Python fixture with `python`): the `.factory/config.yml` it proposed, read as
+ * the factory reads one, and whether it wrote a file in the repository.
+ */
+async function initProposal(files: Record<string, string>, o: { python?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
   const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   if (o.python) copyPythonRepo(repo);
   for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
-  const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret', '']);
+  const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
   await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
-  return { wf: loadWorkflow({ packDir, projectFile: join(repo, '.factory/workflow.yml') }), printed: io.printed.join('\n') };
+  const proposal = io.printed.find((p) => p.startsWith(PROPOSAL_HEADER));
+  return { config: proposal === undefined ? undefined : parseRepoConfig(proposal.slice(PROPOSAL_HEADER.length)), wrote: existsSync(join(repo, '.factory')) };
 }
 
 describe('factory init', () => {
-  it('writes config, secrets and the project workflow', async () => {
+  it('writes config and secrets, and nothing in the repository: its .factory/config.yml is proposed (ORC-388)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     execFileSync('git', ['init', '-q'], { cwd: repo });
@@ -50,64 +53,59 @@ describe('factory init', () => {
         return { stdout: '', stderr: 'x', code: 1 };
       }
     };
-    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret', '']);
+    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: realExec });
 
     const cfg = loadInstance(home);
     expect(cfg.relay).toEqual({ kind: 'smee', url: 'https://smee.io/abc' });
     expect(cfg.projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
     expect(loadSecrets(home).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret', webhookSecret: 'whsecret' });
-    const wf = readFileSync(join(repo, '.factory/workflow.yml'), 'utf8');
-    expect(wf).toContain('team: REL');
-    expect(wf).toContain('npm test');
-    expect(wf).toContain('npm ci');
+    expect(existsSync(join(repo, '.factory'))).toBe(false);
     const out = io.printed.join('\n');
+    expect(out).toContain(`${PROPOSAL_HEADER}setup: npm ci\ncommands:\n  test: npm test\n`);
     expect(out).toContain('http://localhost:4100/oauth/callback');
     expect(out).toContain('https://smee.io/abc');
     expect(out).toContain('Agent session events');
     expect(existsSync(join(home, 'config.yaml'))).toBe(true);
   });
 
-  it('criterion 1 (ORC-172): a Python repository with no config gets uv sync --frozen, ruff, mypy and pytest, the red check included', async () => {
-    const { wf } = await initWorkflow({}, { python: true });
-    expect(wf.workspace.setup).toEqual(['uv sync --frozen']);
-    expect(wf.jobs.dev!.verify).toEqual(['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest']);
-    expect(wf.jobs.tests!.red?.command).toBe('uv run --frozen pytest');
+  it('criterion 1 (ORC-172): a Python repository with no config gets uv sync --frozen, ruff, mypy and pytest', async () => {
+    const { config, wrote } = await initProposal({}, { python: true });
+    expect(wrote).toBe(false);
+    expect(config?.setup).toBe('uv sync --frozen');
+    expect(config?.commands).toEqual({ ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' });
   });
 
   it('a pyproject.toml without uv.lock proposes nothing: a `uv run` would write a lockfile into the worktree', async () => {
-    const { wf } = await initWorkflow({ 'pyproject.toml': '[project]\nname = "x"\n' });
-    expect(wf.workspace.setup).toEqual([]);
-    expect(wf.jobs.dev!.verify).toEqual([]);
-    expect(wf.jobs.tests!.red?.command).toBe('npm test --');
+    const { config, wrote } = await initProposal({ 'pyproject.toml': '[project]\nname = "x"\n' });
+    expect(config).toBeUndefined();
+    expect(wrote).toBe(false);
   });
 
-  it('a repository with both proposes both, the red check on the Node tests, and says so', async () => {
-    const { wf, printed } = await initWorkflow(NPM, { python: true });
-    expect(wf.workspace.setup).toEqual(['npm ci', 'uv sync --frozen']);
-    expect(wf.jobs.dev!.verify).toEqual(['npm test', 'uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest']);
-    expect(wf.jobs.tests!.red?.command).toBe('npm test --');
-    expect(printed).toContain('the Python tests a tests step adds are not checked red');
+  it('a repository with both proposes both', async () => {
+    const { config } = await initProposal(NPM, { python: true });
+    expect(config?.setup).toBe('npm ci && uv sync --frozen');
+    expect(config?.commands).toEqual({ test: 'npm test', ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' });
   });
 
   it('a TypeScript repository with a pnpm-lock.yaml gets pnpm commands', async () => {
-    const { wf } = await initWorkflow({ 'package.json': JSON.stringify({ scripts: { lint: 'eslint .', typecheck: 'tsc', test: 'vitest run' } }), ...PNPM_LOCK });
-    expect(wf.workspace.setup).toEqual(['pnpm install --frozen-lockfile']);
-    expect(wf.jobs.dev!.verify).toEqual(['pnpm run lint', 'pnpm run typecheck', 'pnpm test']);
-    expect(wf.jobs.tests!.red?.command).toBe('pnpm test');
+    const { config } = await initProposal({ 'package.json': JSON.stringify({ scripts: { lint: 'eslint .', typecheck: 'tsc', test: 'vitest run' } }), ...PNPM_LOCK });
+    expect(config?.setup).toBe('pnpm install --frozen-lockfile');
+    expect(config?.commands).toEqual({ lint: 'pnpm run lint', typecheck: 'pnpm run typecheck', test: 'pnpm test' });
   });
 
   it('a package-lock.json next to a pnpm-lock.yaml stays npm, as before', async () => {
-    const { wf } = await initWorkflow({ ...NPM, ...PNPM_LOCK });
-    expect(wf.workspace.setup).toEqual(['npm ci']);
-    expect(wf.jobs.tests!.red?.command).toBe('npm test --');
+    const { config } = await initProposal({ ...NPM, ...PNPM_LOCK });
+    expect(config?.setup).toBe('npm ci');
+    expect(config?.commands).toEqual({ test: 'npm test' });
   });
+
   it('asks the webhook signing secret again until it is not empty', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     const exec = gitTop(repo);
     const asked: string[] = [];
-    const answers = ['REL', 'cid', 'csecret', '', '  ', 'whsecret', ''];
+    const answers = ['REL', 'cid', 'csecret', '', '  ', 'whsecret'];
     const io: InitIO = {
       ask: async (q, def) => {
         asked.push(q);
@@ -130,7 +128,7 @@ describe('factory init', () => {
     saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project], limits: {} });
     const exec: Exec = async (cmd, args) =>
       cmd === 'git' && args[0] === 'rev-parse' ? { stdout: '', stderr: 'not a git repository', code: 128 } : { stdout: '', stderr: '', code: 0 };
-    const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret', '']);
+    const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
     expect(loadInstance(home).projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
   });

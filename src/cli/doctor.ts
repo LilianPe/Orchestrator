@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import {
@@ -458,8 +460,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The workflow files an older factory read in the repository (ORC-388): the workflow is the `factory/default` preset now, and
+ * these are ignored. Doctor names the ones it finds, only by their presence: it never reads them.
+ */
+const IGNORED_WORKFLOW_FILES = ['.factory/workflow.yml', '.relais/workflow.yml'];
+
 export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { repoPath, api, out } = options;
+  const ignored = IGNORED_WORKFLOW_FILES.filter((file) => existsSync(join(repoPath, file)));
+  if (!options.json) for (const file of ignored) out(`Warning: ${file} is ignored: the workflow is the factory/default preset. Delete it.`);
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
@@ -481,7 +491,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}) }, null, 2));
   } else {
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {

@@ -8,10 +8,9 @@ import { makeRepoConfig } from '../app/repo-variables.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError, loadFactoryLimits, loadFactoryYml } from '../config/factory-yml.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
-import { loadWorkflow } from '../config/load-workflow.js';
 import { createSmeeChannel } from '../relay/smee.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { openStore } from '../store/open.js';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
 import { runStatusCommand, runStopCommand } from './control.js';
@@ -110,11 +109,8 @@ async function main(): Promise<number> {
         console.log(tracker);
         return 1;
       }
-      const packDir = join(repoRoot(), 'packs/standard');
-      const projects = cfg.projects.map((p) => {
-        const f = join(p.repoPath, '.factory/workflow.yml');
-        return { id: p.id, repoPath: p.repoPath, teamKey: p.linearTeamKey, workflow: loadWorkflow({ packDir, projectFile: existsSync(f) ? f : undefined }) };
-      });
+      const workflow = defaultWorkflow();
+      const projects = cfg.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, teamKey: p.linearTeamKey, workflow }));
       // Read-only: the schema is the daemon's to migrate.
       const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
       // The branch naming as the daemon reads it on the default branch (ORC-283), without a fetch: a preview.
