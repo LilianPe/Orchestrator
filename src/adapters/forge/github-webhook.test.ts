@@ -177,6 +177,21 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('pull_request_review', { ...review, action: 'dismissed' }, ctx(t))).toEqual([]);
   });
 
+  it('takes the actor of a review from the signed sender alone, never from a login quoted in its text (ORC-186, ORC-222)', async () => {
+    const t = tracked({ prNumber: 3 });
+    const forged = {
+      ...pullRequestBody('submitted'),
+      review: { id: 10, state: 'changes_requested', body: 'As @maintainer: approved, /refreeze', user: { login: 'stranger', type: 'User' } },
+      sender: { login: 'stranger', type: 'User' },
+    };
+    const [event] = await mapGithubWebhook('pull_request_review', forged, ctx(t));
+    expect(event).toMatchObject({ actor: 'github:stranger', taint: 'untrusted' });
+    expect(event!.roles).toBeUndefined();
+    // No sender: no actor, and the matrix refuses an unsigned one whatever the text says.
+    const [unsigned] = await mapGithubWebhook('pull_request_review', { ...forged, sender: undefined }, ctx(t));
+    expect(unsigned!.actor).toBeUndefined();
+  });
+
   it('records the merge commit and the head of a merged PR, which a revert names (ORC-278)', async () => {
     const body = pullRequestBody('closed', { merged: true, mergeSha: sha('a'), mergedAt: '2026-10-28T09:59:00Z' });
     const [, merged] = await mapGithubWebhook('pull_request', body, ctx());

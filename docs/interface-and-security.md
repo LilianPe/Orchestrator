@@ -80,8 +80,8 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `POST /api/tickets/:projet/:ticket/take-over/bundle` | A bundle handed back (the raw file, 100 MB at most), checked by the factory before any push | password + origin check |
 | `GET /oauth/start` | Starts the Linear connection | password |
 | `GET /oauth/callback` | Linear OAuth callback | random, single-use `state` parameter |
-| `POST /webhooks/linear` | Linear webhooks | HMAC signature + 60 s freshness |
-| `POST /webhooks/github` | GitHub webhooks | HMAC signature `X-Hub-Signature-256` + deduplication by event id |
+| `POST /webhooks/linear` | Linear webhooks; the smee relay hands its messages to the same check | HMAC signature + 60 s freshness on the signed `webhookTimestamp`; 401 otherwise, nothing written |
+| `POST /webhooks/github` | GitHub webhooks | HMAC signature `X-Hub-Signature-256`; 401 otherwise, nothing written. GitHub dates no delivery, so no freshness: a replayed delivery is a duplicate by event id |
 | `/agent/*` | Agent API (`relais-agent`) | current run's token (`Authorization: Bearer`); `/agent/search` searches the Linear team of the run's ticket only, never the whole workspace the factory's token reads (ORC-349) |
 
 With sandboxes (`FACTORY_CONTAINER_CLI`, see [`configuration.md`](configuration.md#environment-variables)), a **second server** serves only `/agent/*`, with the same routes and the same run token, on `FACTORY_AGENT_PORT` (interface port + 1) and `FACTORY_AGENT_HOST` (`127.0.0.1`): the containers, which have no network, reach it through the daemon's egress proxy (see [below](#sandbox-network)). Any other route returns 404 there. The interface stays at the `host` address.
@@ -94,7 +94,7 @@ To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `c
 
 > host: 0.0.0.0 expose l'interface et l'API de Relais hors de cette machine. Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.
 
-With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401.
+With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401. A test lists the routes the password leaves open (ORC-222): a new inbound route fails it until it has a guard of its own, and each webhook route is tested on the running daemon, unsigned, signed with another secret and stale.
 
 The `relais status|pause|resume|stop` commands send `RELAIS_UI_PASSWORD` if the variable is set in the shell.
 

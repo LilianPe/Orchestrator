@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHmac, generateKeyPairSync } from 'node:crypto';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -325,5 +326,64 @@ describe('bootstrap', () => {
     } finally {
       await app.stop();
     }
+  });
+
+  // Every inbound webhook, as the daemon wires it (ORC-222): no body reaches the inbox unless signed with its secret, and fresh when
+  // the provider dates it. The checks themselves are tested with each ingest; here, that each route and the relay go through them.
+  describe('signed webhooks (ORC-222)', () => {
+    const hmac = (secret: string, raw: string) => createHmac('sha256', secret).update(raw).digest('hex');
+
+    it('refuses on each webhook route a body unsigned, signed with another secret, or stale, and takes a signed fresh one', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4166, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
+      const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { GH_WEBHOOK_SECRET: 'github-secret' } });
+      try {
+        const post = (path: string, raw: string, headers: Record<string, string> = {}) =>
+          fetch(`http://127.0.0.1:4166${path}`, { method: 'POST', body: raw, headers: { 'content-type': 'application/json', ...headers } }).then((r) => r.status);
+
+        const linear = (at: number) => JSON.stringify({ type: 'Reaction', action: 'create', webhookTimestamp: at, data: { id: 'r1' } });
+        const fresh = linear(Date.now());
+        expect(await post('/webhooks/linear', fresh)).toBe(401);
+        expect(await post('/webhooks/linear', fresh, { 'linear-signature': hmac('another-secret', fresh) })).toBe(401);
+        const stale = linear(Date.now() - 10 * 60_000);
+        expect(await post('/webhooks/linear', stale, { 'linear-signature': hmac('linear-secret', stale) })).toBe(401);
+        expect(await post('/webhooks/linear', fresh, { 'linear-signature': hmac('linear-secret', fresh) })).toBe(200);
+
+        // GitHub dates no delivery: the signature alone, and the inbox keeps each event once by its id.
+        const ping = JSON.stringify({ zen: 'Keep it logically awesome.', hook_id: 1 });
+        const github = (signature?: string) => post('/webhooks/github', ping, { 'x-github-event': 'ping', ...(signature ? { 'x-hub-signature-256': signature } : {}) });
+        expect(await github()).toBe(401);
+        expect(await github(`sha256=${hmac('another-secret', ping)}`)).toBe(401);
+        expect(await github(`sha256=${hmac('github-secret', ping)}`)).toBe(200);
+      } finally {
+        await app.stop();
+      }
+    });
+
+    it('refuses a webhook the smee relay brings unsigned or stale, as the route does', async () => {
+      const raws = [
+        JSON.stringify({ type: 'Reaction', action: 'create', webhookTimestamp: Date.now(), data: { id: 'r1' } }),
+        JSON.stringify({ type: 'Reaction', action: 'create', webhookTimestamp: Date.now() - 10 * 60_000, data: { id: 'r2' } }),
+      ];
+      const messages = [{ body: JSON.parse(raws[0]!) }, { 'linear-signature': hmac('linear-secret', raws[1]!), body: JSON.parse(raws[1]!) }];
+      const sse = createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+        for (const m of messages) res.write(`data: ${JSON.stringify(m)}\n\n`);
+      });
+      await new Promise<void>((r) => sse.listen(4167, '127.0.0.1', r));
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4165, host: '127.0.0.1', relay: { kind: 'smee', url: 'http://127.0.0.1:4167/chan' }, projects: [], limits: {} });
+      saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
+      const logs: string[] = [];
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      try {
+        await vi.waitFor(() => expect(logs.filter((m) => m.startsWith('relay: webhook rejected with 401'))).toHaveLength(2), { timeout: 5_000 });
+      } finally {
+        await app.stop();
+        sse.closeAllConnections();
+        sse.close();
+      }
+    });
   });
 });
