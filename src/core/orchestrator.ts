@@ -99,7 +99,7 @@ import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, u
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from './diff-class.js';
-import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
+import { blockingFindings, contestedInput, findingsInput, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -1774,7 +1774,8 @@ export class Orchestrator {
     if (!t.branch || !t.worktreePath) return refuse(`no branch or no worktree for ${t.ticketId}.`);
     const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath);
     // A run that committed nothing has nothing to show: it ends as it would have, without a PR. An unreadable diff says nothing of it.
-    if (!diff?.trim()) return done(diff !== undefined);
+    const nothing = diff !== undefined && (!diff.trim() || diff === NO_CHANGE);
+    if (diff === undefined || nothing) return done(nothing);
     let text;
     try {
       text = await this.policy.pr(describePr(c.output, publishFacts(t, c)));

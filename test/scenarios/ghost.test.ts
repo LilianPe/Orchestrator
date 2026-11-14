@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { runGhost, type GhostOptions } from '../../src/cli/ghost.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { Spec } from '../../src/core/spec.js';
+import { NO_CHANGE } from '../../src/core/review.js';
 import { KEPT_PR } from '../../src/store/types.js';
 import { createHarness } from '../helpers/harness.js';
 
@@ -69,6 +70,11 @@ describe('a project without effects (ORC-231)', () => {
     empty.workspaces.ticketDiffs.set(WORKTREE, '');
     await empty.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(await empty.ticket()).toMatchObject({ blocked: true, blockKind: 'question' });
+    // The diff as the git adapter reads it when nothing changed (capDiff's text), not only an empty one.
+    const unchanged = verified({ aiReview: true });
+    unchanged.workspaces.ticketDiffs.set(WORKTREE, NO_CHANGE);
+    await unchanged.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await unchanged.ticket()).toMatchObject({ blocked: true, blockKind: 'question' });
     const unreadable = verified({ aiReview: true });
     unreadable.workspaces.ticketDiffs.delete(WORKTREE);
     await unreadable.send('ticket.delegated', { linearSessionId: 'ls-1' });
