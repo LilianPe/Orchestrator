@@ -15,6 +15,17 @@ export interface SecretSourceSubject {
   syntax?: { kind: SecretSourceKind; valid: string; invalid: string };
 }
 
+/** What the daemon's log may keep of an error: its message and its whole cause chain, an object cause by its JSON. */
+function errorText(err: unknown, depth = 0): string {
+  if (err === undefined || depth > 10) return '';
+  if (err instanceof Error) return `${err.message}\n${errorText(err.cause, depth + 1)}`;
+  try {
+    return JSON.stringify(err) ?? String(err);
+  } catch {
+    return String(err);
+  }
+}
+
 export function describeSecretSourceContract(name: string, make: () => SecretSourceSubject | Promise<SecretSourceSubject>, options?: ContractOptions): void {
   describeContract(`SecretSource contract: ${name}`, options, (it) => {
     it('reads the value at a path it holds', async () => {
@@ -32,14 +43,14 @@ export function describeSecretSourceContract(name: string, make: () => SecretSou
       const s = await make();
       const err = await rejection(s.source.read(s.missing));
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).not.toContain(s.present.value);
+      expect(errorText(err)).not.toContain(s.present.value);
     });
 
     it('a source out of service rejects, without any value', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'down');
       const err = await rejection(s.down.read(s.present.path));
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).not.toContain(s.present.value);
+      expect(errorText(err)).not.toContain(s.present.value);
     });
 
     it('its kind checks a path without reading it', async (ctx) => {

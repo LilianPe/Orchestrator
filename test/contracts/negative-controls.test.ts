@@ -1065,6 +1065,20 @@ const tellsTheValue: SecretSource = {
 };
 describeSecretSourceContract('a secret source whose error tells a value it holds', secretsThat({ source: tellsTheValue }), { violates: [SECRET_MISSING] });
 
+const causeTellsTheValue: SecretSource = {
+  read: async (path) => {
+    if (path === 'kv/app#seed') return SECRET_VALUE;
+    throw new Error(`no secret at ${path}`, { cause: { body: `{"keys":{"seed":"${SECRET_VALUE}"}}` } });
+  },
+};
+describeSecretSourceContract('a secret source whose error cause tells a value it holds', secretsThat({ source: causeTellsTheValue }), { violates: [SECRET_MISSING] });
+
+describeSecretSourceContract(
+  'a secret source whose error cause, out of service, is an error telling the value',
+  secretsThat({ down: { read: async () => Promise.reject(new Error('unreachable', { cause: new Error(`last value ${SECRET_VALUE}`) })) } }),
+  { violates: [SECRET_DOWN] },
+);
+
 describeSecretSourceContract('a secret source that answers from a stale copy when it is out of service', secretsThat({ down: { read: async () => SECRET_VALUE } }), { violates: [SECRET_DOWN] });
 
 describeSecretSourceContract(
