@@ -81,7 +81,10 @@ export interface VisualRequest {
   intake: boolean;
   /** The browser; absent (no sandbox with one), a required proof is unavailable. */
   shooter?: VisualShooter;
-  /** What starts the application (`workspace.preview`); absent, a required proof is unavailable. */
+  /**
+   * What starts the application by the workflow's `workspace.preview`, until it goes (ORC-388): the base's `preview` in
+   * `.factory/config.yml` comes first (ORC-397). Neither, a required proof is unavailable.
+   */
   start?: string;
   port: number;
   /** The page shot: `visual_scenario.url` of `submit_result`, `/` without one. */
@@ -334,12 +337,13 @@ async function planVisual(
   const changed = zFields(await at.git.raw('diff', '--name-only', '-z', '--no-renames', at.from, at.sha));
   const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
   if (proof.decision !== 'required' || at.refused) return { proof };
+  const start = at.config.preview ?? v.start;
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
-  else if (!v.start) proof.unavailable = 'no command starts the application (`workspace.preview`)';
+  else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH})`;
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
   // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
   else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;
-  else return { proof, shooting: { ...v, shooter: v.shooter, start: v.start } };
+  else return { proof, shooting: { ...v, shooter: v.shooter, start } };
   return { proof };
 }
 
