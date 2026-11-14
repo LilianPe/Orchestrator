@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { journalSchemaOf, migratePgStore } from '../../src/store/pg/migrate.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
@@ -44,6 +44,18 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
   });
 
   it('keeps the journal of a schema migrated before ORC-334, left in drizzle', async () => {
+    // drizzle is one schema of the whole database: two runs on one DATABASE_URL take it one after the other.
+    const lock = new Client({ connectionString: PG_URL });
+    await lock.connect();
+    try {
+      await lock.query(`select pg_advisory_lock(hashtext('orc-334: the drizzle schema'))`);
+      await legacyJournal();
+    } finally {
+      await lock.end();
+    }
+  });
+
+  async function legacyJournal(): Promise<void> {
     const legacy = await createTestSchema('factory_mig_legacy');
     const hadDrizzle = await queryOn(PG_URL, async (c) => (await c.query(`select 1 from pg_namespace where nspname = 'drizzle'`)).rowCount === 1);
     const pool = new Pool({ connectionString: legacy.url, max: 1 });
@@ -100,7 +112,7 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
       await legacy.drop();
       if (!hadDrizzle) await queryOn(PG_URL, (c) => c.query('drop schema if exists drizzle cascade'));
     }
-  });
+  }
 
   // A sequence or a foreign key is fine for the store, but EMPTY_ALL would then have to reset or order them.
   it('has neither sequence nor foreign key, which EMPTY_ALL relies on to reset a test schema', async () => {
