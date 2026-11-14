@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { SqliteStore } from '../store/sqlite-store.js';
-import { ANSWER_CAPACITY, queueCapacity, Scheduler } from './capacity.js';
+import { queueCapacity, Scheduler } from './capacity.js';
 
 describe('queueCapacity', () => {
   it('takes the dev slots from factory.yml concurrency alone, and answers a constant 2 (ORC-390)', () => {
-    expect(queueCapacity(5)).toEqual({ dev: 5, questions: ANSWER_CAPACITY });
-    expect(queueCapacity(undefined)).toEqual({ dev: 3, questions: 2 });
+    expect(queueCapacity(5)).toEqual({ dev: 5, questions: 2 });
+    expect(queueCapacity()).toEqual({ dev: 3, questions: 2 });
   });
 });
 

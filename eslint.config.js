@@ -2,6 +2,12 @@ import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+// The old orchestrator's pieces left core/ (ORC-390): the live feed is the server's, the queue capacity the runtime's.
+const movedOutOfCore = (prefixes) => [
+  { group: prefixes.flatMap((p) => [`${p}bus`, `${p}bus.js`]), message: 'core/bus is now src/server/live-feed.ts (ORC-390).' },
+  { group: prefixes.flatMap((p) => [`${p}scheduler`, `${p}scheduler.js`]), message: 'core/scheduler is now src/runtime/capacity.ts (ORC-390).' },
+];
+
 export default tseslint.config(
   { ignores: ['dist/**', 'web/dist/**', 'node_modules/**', 'coverage/**', 'spikes/**'] },
   js.configs.recommended,
@@ -17,16 +23,12 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
       ],
-      // The old orchestrator's pieces left core/ (ORC-390): the live feed is the server's, the queue capacity the runtime's.
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            { group: ['**/core/bus', '**/core/bus.js', './bus.js', './bus'], message: 'core/bus is now src/server/live-feed.ts (ORC-390).' },
-            { group: ['**/core/scheduler', '**/core/scheduler.js', './scheduler.js', './scheduler'], message: 'core/scheduler is now src/runtime/capacity.ts (ORC-390).' },
-          ],
-        },
-      ],
+      'no-restricted-imports': ['error', { patterns: movedOutOfCore(['**/core/']) }],
     },
+  },
+  {
+    // Inside core/, a sibling import names them too.
+    files: ['src/core/**'],
+    rules: { 'no-restricted-imports': ['error', { patterns: movedOutOfCore(['**/core/', './']) }] },
   },
 );

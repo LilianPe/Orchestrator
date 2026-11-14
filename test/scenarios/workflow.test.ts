@@ -161,6 +161,17 @@ describe('standard workflow', () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });
 
+  it('a merge keeps a question waiting in the queue: only the dev work stops (ORC-268)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    await h.send('control.pause', {});
+    await h.send('session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ce choix ?', author: 'L' });
+    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv' });
+    expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['ask']);
+    await h.send('control.resume', {});
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask']);
+  });
+
   it('a merge keeps a question waiting for an answer slot: only the dev work stops (ORC-268)', async () => {
     // Two answers at once, whatever the workflow says (ORC-390): the third question waits for a slot, and the merge leaves it there.
     const h = createHarness({ projectYaml: 'version: 1\nlimits: { question_sessions: 1 }\n' });
