@@ -1773,8 +1773,8 @@ export class Orchestrator {
     if (refusal) return refuse(refusal);
     if (!t.branch || !t.worktreePath) return refuse(`no branch or no worktree for ${t.ticketId}.`);
     const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath);
-    // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
-    if (!diff?.trim()) return done(true);
+    // A run that committed nothing has nothing to show: it ends as it would have, without a PR. An unreadable diff says nothing of it.
+    if (!diff?.trim()) return done(diff !== undefined);
     let text;
     try {
       text = await this.policy.pr(describePr(c.output, publishFacts(t, c)));

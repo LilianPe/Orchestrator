@@ -64,6 +64,17 @@ describe('a project without effects (ORC-231)', () => {
     expect((await h.ticket()).verifyingRunId).toBeUndefined();
   });
 
+  it('with the AI review, a diff read empty is a run that committed nothing: blocked on a question; an unreadable diff is not (ORC-170)', async () => {
+    const empty = verified({ aiReview: true });
+    empty.workspaces.ticketDiffs.set(WORKTREE, '');
+    await empty.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await empty.ticket()).toMatchObject({ blocked: true, blockKind: 'question' });
+    const unreadable = verified({ aiReview: true });
+    unreadable.workspaces.ticketDiffs.delete(WORKTREE);
+    await unreadable.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(await unreadable.ticket()).toMatchObject({ blocked: false });
+  });
+
   it('nowhere to keep its effects: the ticket is blocked, and still nothing goes out', async () => {
     const h = verified({ noEffect: { keptEffectsDir: false } });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
