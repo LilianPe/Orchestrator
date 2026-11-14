@@ -107,6 +107,20 @@ describe('the relay of a question through the run inbox (ORC-182)', () => {
   });
 });
 
+describe('the start recipe the build agent found (ORC-386)', () => {
+  it('takes a command and its setup steps, each a short line', () => {
+    expect(parseAgentOutput({ ...done, preview: { command: 'npm run dev', setup: ['npm run build'] } }).ok).toBe(true);
+    expect(parseAgentOutput({ ...done, preview: { command: 'npm run dev', setup: [] } }).ok).toBe(true);
+  });
+
+  it('refuses an empty command, a line break, too many setup steps or an unknown key, naming the field', () => {
+    expect(parseAgentOutput({ ...done, preview: { command: ' ', setup: [] } })).toEqual({ ok: false, error: expect.stringContaining('preview.command') });
+    expect(parseAgentOutput({ ...done, preview: { command: 'npm run dev\nrm -rf /', setup: [] } })).toEqual({ ok: false, error: expect.stringContaining('preview.command') });
+    expect(parseAgentOutput({ ...done, preview: { command: 'x', setup: ['a', 'b', 'c', 'd', 'e', 'f'] } })).toEqual({ ok: false, error: expect.stringContaining('preview.setup') });
+    expect(parseAgentOutput({ ...done, preview: { command: 'x', setup: [], port: 3000 } }).ok).toBe(false);
+  });
+});
+
 describe('attemptOutcome', () => {
   const blocked = (reason?: 'needs_input' | 'spec_impossible'): AgentOutput => ({ ...done, status: 'blocked', question: '?', ...(reason ? { reason } : {}) });
   it.each([

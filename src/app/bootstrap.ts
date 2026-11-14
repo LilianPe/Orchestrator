@@ -47,6 +47,7 @@ import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
+import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, isLoopbackHost } from '../server/app.js';
 import { EventBus } from '../server/live-feed.js';
@@ -258,6 +259,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
       // A replayed ticket's (ORC-376): its checkout at transaction time, read as it is, never pulled.
       ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()) } : {}),
+      // The factory's one write to it (ORC-386): the start recipes it validated, in the same clone, one git at a time with the pull.
+      ...(kb ? { previewRecipes: new PreviewRecipes(kb) } : {}),
       store,
       clock,
       bus,

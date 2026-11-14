@@ -53,6 +53,16 @@ export const findingSchema = z
 
 export type Finding = z.infer<typeof findingSchema>;
 
+/** A line of a start recipe: one shell line, short, which the knowledge base keeps as it is. */
+const recipeLine = z.string().trim().min(1).max(300).regex(/^[^\r\n\0]*$/, 'one line');
+
+/**
+ * How to start the application (ORC-386), as the `build` agent found it when the factory asked: the setup steps, then the command,
+ * which listens on `PORT`. The factory probes it before anything uses it or the knowledge base keeps it.
+ */
+export const previewRecipeSchema = z.object({ command: recipeLine, setup: z.array(recipeLine).max(5) }).strict();
+export type PreviewRecipe = z.infer<typeof previewRecipeSchema>;
+
 /** A commit the agent names: a short or full sha. */
 const commitSha = z.string().regex(/^[0-9a-f]{7,40}$/, 'a commit sha (7 to 40 hex characters)');
 
@@ -96,6 +106,8 @@ export const agentOutputSchema = z
     trusted: list.optional(),
     review_hints: z.array(z.object({ file: item.min(1), reason: item.min(1) }).strict()).max(OUTPUT_LIMITS.items),
     visual_scenario: z.object({ url: z.string().min(1), steps: z.array(z.string()) }).strict().optional(),
+    /** How to start the application (ORC-386), when the prompt asked the agent to find it: nothing declares it, nothing learned it. */
+    preview: previewRecipeSchema.optional(),
     /** The `intake` step's assessment (ORC-206); its guard reads nothing else. */
     intake: intakeAssessmentSchema.optional(),
     /** The `spec_draft` step's spec (ORC-212): `spec_check` judges it, the factory publishes it. */

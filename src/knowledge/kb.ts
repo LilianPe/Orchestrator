@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, posix } from 'node:path';
 import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { unfenced } from '../core/prompt.js';
@@ -22,6 +22,11 @@ const FETCH_DEADLINE_MS = 60_000;
 /** How long a refresh serves the launches after it: a queue that drains fetches once. */
 const FRESH_MS = 30_000;
 
+/** Where the factory writes, and only there (ORC-386): the start recipes it validated. */
+const PREVIEW_DIR = 'notes/preview';
+/** Who commits the factory's notes: the factory, never a human's identity nor the clone's. */
+const FACTORY_IDENTITY = ['user.name=Relais factory', 'user.email=factory@relais.invalid'];
+
 /** Characters of INDEX.md a session gets in its system prompt (ORC-38). Proposal: settled with the prompt budget (ORC-254). */
 export const KB_INDEX_MAX = 8000;
 
@@ -32,6 +37,8 @@ export class KnowledgeBase {
   private last: { ended?: number; index: Promise<KbIndex> } | undefined;
   /** Every git it runs, hardened as every git the daemon runs on the host: no hook nor fsmonitor of the clone runs as the daemon. */
   private git: Exec;
+  /** The pull and the factory's writes (ORC-386), one at a time in the clone. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private repoPath: string,
@@ -65,7 +72,7 @@ export class KnowledgeBase {
     if (last && (last.ended === undefined || Date.now() - last.ended < this.freshMs)) return last.index;
     const next: NonNullable<typeof this.last> = {
       index: (async () => {
-        const why = await this.pull().catch((err: Error) => `not pulled, the agents read it as it is: ${err.message}`);
+        const why = await this.serial(() => this.pull()).catch((err: Error) => `not pulled, the agents read it as it is: ${err.message}`);
         return { ...this.readIndex(), ...(why ? { warning: `Knowledge base: ${why}` } : {}) };
       })(),
     };
@@ -73,6 +80,41 @@ export class KnowledgeBase {
     next.index.then(ended, ended);
     this.last = next;
     return next.index;
+  }
+
+  get path(): string {
+    return this.repoPath;
+  }
+
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(work, work);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  /**
+   * The factory's narrow write (ORC-386), never an agent's: one note under `notes/preview/`, committed as the factory with
+   * `message`, pushed when the clone has a remote. Undefined once pushed; else what to log: no remote (the commit stays in the
+   * clone), or a push refused, its commit then undone so that the clone still pulls fast-forward. Nothing to commit, nothing done.
+   */
+  commitNote(path: string, content: string, message: string): Promise<string | undefined> {
+    if (posix.normalize(path) !== path || !path.startsWith(`${PREVIEW_DIR}/`) || !path.endsWith('.md')) {
+      return Promise.reject(new Error(`the factory writes only notes under ${PREVIEW_DIR}/ in the knowledge base, not ${path}`));
+    }
+    return this.serial(async () => {
+      const git = (...a: string[]) => mustExec(this.git, 'git', ['-C', this.repoPath, ...a]);
+      const before = (await git('rev-parse', 'HEAD')).trim();
+      mkdirSync(dirname(join(this.repoPath, path)), { recursive: true });
+      writeFileSync(join(this.repoPath, path), content);
+      await git('add', '--', path);
+      if (!(await git('status', '--porcelain', '--', path)).trim()) return undefined;
+      await git(...FACTORY_IDENTITY.flatMap((c) => ['-c', c]), 'commit', '--quiet', '--no-verify', '-m', message, '--', path);
+      if (!(await git('remote')).trim()) return `knowledge base: no remote, ${path} is committed in the clone only`;
+      const pushed = await this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env: { GIT_TERMINAL_PROMPT: '0' }, timeoutMs: FETCH_DEADLINE_MS });
+      if (pushed.code === 0) return undefined;
+      await git('reset', '--quiet', '--keep', before);
+      return `knowledge base: push refused, ${path} undone in the clone (it served this ticket): ${pushed.stderr.trim().slice(-500)}`;
+    });
   }
 
   readIndex(maxChars = KB_INDEX_MAX): KbIndex {
