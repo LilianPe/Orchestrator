@@ -159,11 +159,13 @@ const LOCKFILES: [file: string, kind: CountedRead['kind'], read: (text: string) 
 export async function declaredReads(show: (file: string) => Promise<string | undefined>): Promise<DeclaredReads> {
   const judged = new Set<CountedRead['kind']>();
   const reads = new Set<string>();
-  for (const [file, kind, read, whole] of LOCKFILES) {
+  // Read side by side, kept in this order: a read that fails, or a file past its cap, declares nothing.
+  const texts = await Promise.all(LOCKFILES.map(([file]) => show(file).catch(() => undefined)));
+  for (const [i, [, kind, read, whole]] of LOCKFILES.entries()) {
+    const text = texts[i];
+    if (text === undefined || text.startsWith('\0too large')) continue;
     let found: CountedRead[];
     try {
-      const text = await show(file);
-      if (text === undefined || text.startsWith('\0')) continue;
       found = read(text);
     } catch {
       continue;

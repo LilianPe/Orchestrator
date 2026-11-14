@@ -1007,12 +1007,12 @@ export class Orchestrator {
   private async declaredAtBase(project: ProjectRuntime, ws: Workspace): Promise<DeclaredReads | undefined> {
     try {
       const show = await this.d.workspaces.baseReader(project.repoPath, ws.path);
-      if (show) return await declaredReads(show);
-      this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: no worktree with a commit`);
+      if (!show) throw new Error('no worktree with a commit');
+      return await declaredReads(show);
     } catch (err) {
       this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: ${(err as Error).message}`);
+      return undefined;
     }
-    return undefined;
   }
 
   /**
