@@ -33,14 +33,15 @@ export function crashAfterAck(target: string): { response: { status: number }; e
 const SECRET = 'inbox-test-secret';
 const NOW = 1_000;
 
-const sign = (body: unknown) => {
+/** A Linear delivery of `body`, signed with `secret`. */
+export const signLinear = (body: unknown, secret = SECRET): { raw: string; headers: Record<string, string> } => {
   const raw = JSON.stringify(body);
-  return { raw, headers: { 'linear-signature': createHmac('sha256', SECRET).update(raw).digest('hex') } };
+  return { raw, headers: { 'linear-signature': createHmac('sha256', secret).update(raw).digest('hex') } };
 };
 
 /** A signed Linear delegation of `identifier` (session as-1 unless named), as Linear posts it at `at`. */
 export function signedDelegation(at = NOW, identifier = 'REL-1', sessionId = 'as-1'): { raw: string; headers: Record<string, string> } {
-  return sign({
+  return signLinear({
     type: 'AgentSessionEvent',
     action: 'created',
     webhookTimestamp: at,
@@ -51,7 +52,7 @@ export function signedDelegation(at = NOW, identifier = 'REL-1', sessionId = 'as
 
 /** A signed mention of the agent in a comment of REL-1 (a question, new session `sessionId`), posted at `at`. */
 export function signedMention(sessionId: string, body: string, at = NOW): { raw: string; headers: Record<string, string> } {
-  return sign({
+  return signLinear({
     type: 'AgentSessionEvent',
     action: 'created',
     webhookTimestamp: at,
@@ -61,7 +62,7 @@ export function signedMention(sessionId: string, body: string, at = NOW): { raw:
 
 /** A signed reply in session `sessionId` of REL-1, posted at `at`. */
 export function signedReply(sessionId: string, body: string, at = NOW): { raw: string; headers: Record<string, string> } {
-  return sign({
+  return signLinear({
     type: 'AgentSessionEvent',
     action: 'prompted',
     webhookTimestamp: at,
@@ -105,7 +106,7 @@ export function signedIssueUpdate(at = NOW): { raw: string; headers: Record<stri
   const body = JSON.parse(readFileSync(join(import.meta.dirname, '../../src/adapters/tracker/linear/fixtures/issue-moved-labeled.json'), 'utf8')) as { webhookTimestamp: number; data: { updatedAt: string } };
   body.webhookTimestamp = at;
   body.data.updatedAt = new Date(at).toISOString();
-  return sign(body);
+  return signLinear(body);
 }
 
 /** What the daemon reads of the team for `signedIssueUpdate`: its two states and its two labels. */
