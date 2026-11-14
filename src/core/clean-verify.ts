@@ -20,9 +20,8 @@ import { isTestSpec } from '../checks/test-files.js';
 import { probeStart } from '../checks/preview-probe.js';
 import { brief, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
-import { recipeStart } from '../knowledge/preview-recipe.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
-import type { PreviewRecipe } from './agent-output.js';
+import { recipeStart, type PreviewRecipe } from './agent-output.js';
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -286,22 +285,19 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     failures.push(...settled.failures);
     flaky = settled.flaky;
     if (failures.length) return verdict();
-    // The recipe the agent found (ORC-386), probed by the factory in a sandbox of its own at network `none`, nothing mounted.
-    if (probe) {
-      // In the image the captures run in: a recipe that answers there is one they can start.
-      const probed = await inBox('preview', cloneDir, [], (id) => probeStart(sandboxes, id, { start: recipeStart(probe), port: req.visual!.port, env }), req.visual!.shooter?.requirements);
-      preview = probed.answered ? { of: 'found', answered: true } : { of: 'found', answered: false, detail: probed.detail };
-      if (!probed.answered && proof?.decision === 'required') {
-        proof.start = 'none';
-        proof.unavailable ??= `the start command the agent found did not answer on port ${req.visual!.port}: ${brief(probed.detail.split('\n').at(-1) ?? '')}`;
+    if (!shooting) {
+      // The recipe the agent found (ORC-386), with no capture to take it with: probed by the factory in a sandbox of its own at
+      // network `none`, nothing mounted, in the image the captures run in, so that the next ticket has it.
+      if (probe) {
+        const probed = await inBox('preview', cloneDir, [], (id) => probeStart(sandboxes, id, { start: recipeStart(probe), port: req.visual!.port, env }), req.visual!.shooter?.requirements);
+        preview = probed.answered ? { of: 'found', answered: true } : { of: 'found', answered: false, detail: probed.detail };
       }
-      if (!probed.answered) return verdict();
+      return verdict();
     }
-    if (!shooting) return verdict();
     const judged = await shootBoth(sandboxes, inBox, shooting, { from, sha, env, cloneDir, beforeDir, setUp });
     failures.push(...judged.failures);
     if (judged.unavailable) proof!.unavailable = judged.unavailable;
-    if (judged.stale !== undefined) preview = { of: 'learned', answered: false, detail: judged.stale };
+    preview = judged.recipe;
     return verdict(judged.files);
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
@@ -352,8 +348,8 @@ async function testRunners(git: CloneGit, sha: string, commands: readonly string
   return runners;
 }
 
-/** `learnedStart`: its start is the knowledge base's (ORC-386), whose failure to start is the recipe's, not the branch's. */
-type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>> & { learnedStart: boolean };
+/** `recipe`: its start is a recipe, learned or found (ORC-386), not the repository's own: its shots are its probe. */
+type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>> & { recipe?: 'learned' | 'found' };
 
 /**
  * The decision on the diff (ORC-176), and what takes a required proof, or why it cannot be taken: then indicative (ORC-152), no
@@ -367,22 +363,23 @@ async function planVisual(
   const changed = zFields(await at.git.raw('diff', '--name-only', '-z', '--no-renames', at.from, at.sha));
   const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
   if (at.refused) return { proof };
-  // Declared first, then learned (ORC-386); the recipe the agent found only when neither, probed even with no proof to take.
+  // Declared first, then learned (ORC-386); the recipe the agent found only when neither, tried even with no proof to take.
   const declared = at.config.preview ?? v.start;
   const learned = declared ? undefined : v.learned;
   // The shots run without the repository's services (ORC-282), and so would the probe: no recipe to find there.
   const probe = declared || learned || at.config.services.length ? undefined : v.found;
-  const recipe = learned ?? probe;
   const plan = probe ? { probe } : {};
   if (proof.decision !== 'required') return { proof, ...plan };
-  const start = declared ?? (recipe && recipeStart(recipe));
-  proof.start = declared ? 'declared' : learned ? 'learned' : probe ? 'found' : 'none';
+  const recipe: Shooting['recipe'] = learned ? 'learned' : probe ? 'found' : undefined;
+  const chosen = learned ?? probe;
+  const start = declared ?? (chosen && recipeStart(chosen));
+  proof.start = declared ? 'declared' : (recipe ?? 'none');
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH}), and the knowledge base has learned none`;
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
   // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
   else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;
-  else return { proof, shooting: { ...v, shooter: v.shooter, start, learnedStart: !declared && !probe }, ...plan };
+  else return { proof, shooting: { ...v, shooter: v.shooter, start, ...(recipe ? { recipe } : {}) }, ...plan };
   return { proof, ...plan };
 }
 
@@ -406,7 +403,7 @@ async function shootBoth(
   inBox: ReturnType<typeof boxOpener>,
   v: Shooting,
   at: { from: string; sha: string; env: Record<string, string>; cloneDir: string; beforeDir: string; setUp: (suffix: string, dir: string) => Promise<void> },
-): Promise<Judged & { stale?: string }> {
+): Promise<Judged & { recipe?: PreviewOutcome }> {
   const shot = (side: 'before' | 'after', dir: string, sha: string) =>
     inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths: WIDTHS, env: at.env }), v.shooter.requirements);
   const after = await shot('after', at.cloneDir, at.sha);
@@ -416,12 +413,15 @@ async function shootBoth(
       await at.setUp('visual', at.beforeDir);
       return shot('before', at.beforeDir, at.from);
     })());
-  // A learned recipe that starts the application neither on the commit nor on the base is stale (ORC-386): no fault of the
-  // branch, the proof unavailable. One the base still starts with is the branch's to fix, as a declared start would be.
-  if (v.learnedStart && !after.started && !(await before()).started) {
-    return { failures: [], files: [], stale: after.detail, unavailable: `the start recipe learned in the knowledge base started the application neither on ${at.sha.slice(0, 12)} nor on the base ${at.from.slice(0, 12)}: ${brief(after.detail)}; it is invalidated` };
+  // A recipe that starts the application neither on the commit nor on the base is a bad recipe (ORC-386), learned or found: no
+  // fault of the branch, the proof unavailable. One the base still starts with is the branch's to fix, as a declared start would be.
+  if (v.recipe && !after.started && !(await before()).started) {
+    const which = v.recipe === 'learned' ? 'the start recipe learned in the knowledge base' : 'the start command the agent found';
+    return { failures: [], files: [], recipe: { of: v.recipe, answered: false, detail: after.detail }, unavailable: `${which} started the application neither on ${at.sha.slice(0, 12)} nor on the base ${at.from.slice(0, 12)}: ${brief(after.detail)}` };
   }
-  return judgeShots(after, before, { before: at.from, after: at.sha }, v.gate);
+  const judged = await judgeShots(after, before, { before: at.from, after: at.sha }, v.gate);
+  // The found recipe started the application on the commit: the shot was its probe.
+  return v.recipe === 'found' && after.started ? { ...judged, recipe: { of: 'found', answered: true } } : judged;
 }
 
 /** `.factory/config.yml` as the base branch holds it, in the clone: never as the agent's branch does. */

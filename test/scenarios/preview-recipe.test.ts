@@ -7,6 +7,7 @@ import { FakeShooter } from '../../src/adapters/browser/fake.js';
 import { VISUAL_PROOF_CHECK, type VisualProof } from '../../src/checks/visual-proof.js';
 import type { AgentOutput, PreviewRecipe } from '../../src/core/agent-output.js';
 import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean-verify.js';
+import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { KnowledgeBase } from '../../src/knowledge/kb.js';
 import { PreviewRecipes, type RecipeNote } from '../../src/knowledge/preview-recipe.js';
 import { createHarness } from '../helpers/harness.js';
@@ -133,6 +134,28 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
     expect(h.publisher.asked[0]!.body).toContain('**Start command**: none');
     expect(h.forge.checkRuns.find((c) => c.name === VISUAL_PROOF_CHECK)).toMatchObject({ conclusion: 'neutral', summary: expect.stringContaining('learned none') });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
+  });
+
+  it("the one search owed is neither asked nor spent where the base's config declares a start or services", async () => {
+    for (const config of ['preview: npm start\n', 'services: [postgres]\n']) {
+      const kb = kbRepo();
+      const h = createHarness({
+        sandboxed: true,
+        visualShooter: new FakeShooter(),
+        previewRecipes: kb.recipes,
+        repoConfig: async () => parseRepoConfig(config),
+        cleanVerify: async () => ({ ok: true, failures: [], sha: SHA, tree: 't', commands: [] }),
+      });
+      h.tracker.addIssue({ identifier: 'REL-1', title: 'Restyle the button', description: 'Restyle the settings button.\n\nAcceptance criteria:\n1. It is blue.' });
+      h.workspaces.heads.set(WORKTREE, SHA);
+      const at = new Date();
+      await kb.recipes.record('p', { recipe: NPM_DEV, sha: SHA, port: 4200, runId: 'r0', ticket: 'REL-0', at }, undefined, async () => {});
+      await kb.recipes.invalidate('p', kb.recipes.read('p') as RecipeNote, { reason: 'gone', sha: SHA, ticket: 'REL-0', at }, async () => {});
+      h.runner.enqueue(dev());
+      await delegate(h);
+      expect(h.runner.requests[0]!.prompt).not.toContain(SEARCH);
+      expect(kb.recipes.read('p')).toMatchObject({ status: 'invalid', searchesLeft: 1 });
+    }
   });
 
   it('a write the knowledge base refuses is logged: the verdict stands', async () => {

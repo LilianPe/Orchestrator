@@ -258,9 +258,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       keptEffectsDir: paths.kept,
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
       // A replayed ticket's (ORC-376): its checkout at transaction time, read as it is, never pulled.
-      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()) } : {}),
       // The factory's one write to it (ORC-386): the start recipes it validated, in the same clone, one git at a time with the pull.
-      ...(kb ? { previewRecipes: new PreviewRecipes(kb) } : {}),
+      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()), previewRecipes: new PreviewRecipes(kb) } : {}),
       store,
       clock,
       bus,

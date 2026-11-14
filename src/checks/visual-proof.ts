@@ -69,7 +69,9 @@ export const captureLabel = (c: Pick<VisualCapture, 'side' | 'sha' | 'width'>): 
 const sha256 = (png: Uint8Array): string => createHash('sha256').update(png).digest('hex');
 const fail = (output: string): VerifyFailure => ({ command: VISUAL_PROOF_CHECK, exitCode: 1, output });
 /** What the base's failure says in the journal and the published check: its first line, short, as code. Its log stays out. */
-export const brief = (detail: string): string => mdCode((detail.split('\n')[0] ?? '').slice(0, 200));
+/** A detail's first line, cut: what a reason says of a long output. */
+export const firstLine = (detail: string): string => detail.split('\n')[0]!.slice(0, 200);
+export const brief = (detail: string): string => mdCode(firstLine(detail));
 
 /** A refusal of the policy is a verdict on the capture; any other rejection (its scanner down) is an infrastructure failure, and goes on. */
 async function vetted<T>(work: () => Promise<T>): Promise<{ files: T } | { refused: string }> {

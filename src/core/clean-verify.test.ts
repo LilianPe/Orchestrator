@@ -1181,17 +1181,15 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       expect(res.preview).toBeUndefined();
     });
 
-    it('criterion 1: a found recipe is probed by the factory first, at network none with nothing mounted, then shoots', async () => {
+    it('criterion 1: a found recipe the proof needs is tried by the captures themselves: started on the commit, it answered', async () => {
       const { req, shooter, sandboxes } = visual({ page: 'new page\n', start: null, found: FOUND });
-      answers(sandboxes, 0, 'answered\n');
       const res = await runCleanVerify(req);
       expect(res.preview).toEqual({ of: 'found', answered: true });
-      const box = sandboxes.created.find((c) => c.runId === 'r1-preview');
-      // In the image the captures run in: what answers there is what they can start.
-      expect(box).toMatchObject({ network: 'none', mounts: [], requirements: { browser: true } });
-      expect(sandboxes.ran.find((r) => r.box === 'r1-preview')).toMatchObject({ command: FOUND.command });
       expect(res.visual?.proof).toMatchObject({ start: 'found' });
+      expect(res.visual?.proof.captures).toHaveLength(6);
       expect(shooter.calls.map((c) => c.start)).toEqual([FOUND.command, FOUND.command]);
+      // No second start of it: the shot after was its probe.
+      expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
     });
 
     it('a found recipe is probed even when this diff needs no proof, so the next ticket has it', async () => {
@@ -1201,16 +1199,27 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       expect(res.preview).toEqual({ of: 'found', answered: true });
       expect(res.visual?.proof).toEqual({ decision: 'not_applicable', triggers: [] });
       expect(shooter.calls).toEqual([]);
+      // Probed by the factory at network none with nothing mounted, in the image the captures run in.
+      expect(sandboxes.created.find((c) => c.runId === 'r1-preview')).toMatchObject({ network: 'none', mounts: [], requirements: { browser: true } });
+      expect(sandboxes.ran.find((r) => r.box === 'r1-preview')).toMatchObject({ command: FOUND.command });
     });
 
-    it('criterion 5: a found recipe that does not answer leaves the proof unavailable with why, nothing shot, the commit green', async () => {
-      const { req, shooter, sandboxes } = visual({ page: 'new page\n', start: null, found: FOUND });
+    it('a found recipe probed with no proof to take that does not answer: said, with what it printed', async () => {
+      const { req, sandboxes } = visual({ start: null, found: FOUND });
       answers(sandboxes, 1, 'nothing answers on port 4201 after 60 s\nError: Cannot find module vite\n');
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
       expect(res.preview).toEqual({ of: 'found', answered: false, detail: expect.stringContaining('Cannot find module vite') });
-      expect(res.visual?.proof).toMatchObject({ start: 'none', unavailable: expect.stringContaining('did not answer on port 4201') });
-      expect(shooter.calls).toEqual([]);
+    });
+
+    it('criterion 5: a found recipe that starts the application neither on the commit nor on the base: unavailable with why, the commit green', async () => {
+      const { req, shooter } = visual({ page: 'new page\n', start: null, found: FOUND });
+      shooter.answer = () => ({ started: false, detail: 'Error: Cannot find module vite' });
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(true);
+      expect(res.preview).toEqual({ of: 'found', answered: false, detail: 'Error: Cannot find module vite' });
+      expect(res.visual?.proof).toMatchObject({ start: 'found', unavailable: expect.stringContaining('the start command the agent found started the application neither on') });
+      expect(shooter.calls).toHaveLength(2);
     });
 
     it('criterion 4: a learned recipe that starts the application neither on the commit nor on the base is stale, no failure of the branch', async () => {

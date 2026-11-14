@@ -3,8 +3,10 @@ import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { parseGitHubRemote } from '../adapters/forge/github-app.js';
+import { firstLine } from '../checks/visual-proof.js';
 import { previewRecipeSchema, type PreviewRecipe } from '../core/agent-output.js';
-import type { KnowledgeBase } from './kb.js';
+import type { PreviewOutcome } from '../core/clean-verify.js';
+import { PREVIEW_DIR, type KnowledgeBase } from './kb.js';
 
 export type { PreviewRecipe };
 
@@ -48,8 +50,6 @@ const frontSchema = z
   })
   .strict();
 
-/** The setup, then the command: one line the shell runs, on `PORT`. */
-export const recipeStart = (r: PreviewRecipe): string => [...r.setup, r.command].join(' && ');
 
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
@@ -62,17 +62,34 @@ export function repoNameOf(originUrl: string | undefined, fallback: string): str
   return ref && SEGMENT.test(ref.owner) && SEGMENT.test(ref.name) ? `${ref.owner}/${ref.name}` : fallback;
 }
 
-export const recipeNotePath = (repo: string): string => `notes/preview/${repo}.md`;
+export const recipeNotePath = (repo: string): string => `${PREVIEW_DIR}/${repo}.md`;
+
+export const isNote = (n: ReadNote): n is RecipeNote => n !== undefined && n !== 'unreadable';
 
 /** A search is owed with no note, or once after an invalidation; never past a valid note, nor over a note a human broke. */
-export const searchOwed = (n: ReadNote): boolean => n === undefined || (n !== 'unreadable' && n.status === 'invalid' && n.searchesLeft === 1);
+export const searchOwed = (n: ReadNote): boolean => n === undefined || (isNote(n) && n.status === 'invalid' && n.searchesLeft === 1);
+
+/** What decides whether the `build` agent searches a recipe (ORC-386): the same inputs at its launch and at its check. */
+export interface SearchContext {
+  step: string | undefined;
+  /** The instance has a browser: a recipe has a proof to serve. */
+  canShoot: boolean;
+  /** A replayed ticket (ORC-376) writes nothing to the knowledge base. */
+  replayed: boolean;
+  /** The repository declares its start (`preview`). */
+  declared: boolean;
+  /** The repository declares `services`, which the captures and the probe run without (ORC-282). */
+  services: boolean;
+}
+
+export const searchAsked = (c: SearchContext, note: ReadNote): boolean => c.step === 'build' && c.canShoot && !c.replayed && !c.declared && !c.services && searchOwed(note);
 
 export function formatRecipeNote(n: RecipeNote): string {
   const front = {
     type: 'command',
     key: 'preview',
     scope: n.scope,
-    value: { command: n.recipe.command, setup: [...n.recipe.setup] },
+    value: n.recipe,
     evidence: [{ kind: 'command', sha: n.sha, port: n.port, checked_at: n.checkedAt }],
     origin: n.origin,
     ticket: n.ticket,
@@ -132,7 +149,7 @@ export class PreviewRecipes {
 
   /** The repository's note, in the knowledge base or, for a replayed ticket (ORC-376), in its checkout at the ticket's start. */
   read(repo: string, at?: string): ReadNote {
-    const f = join(at ?? this.kb.path, recipeNotePath(repo));
+    const f = join(at ?? this.kb.repoPath, recipeNotePath(repo));
     return existsSync(f) ? parseRecipeNote(readFileSync(f, 'utf8')) : undefined;
   }
 
@@ -140,7 +157,7 @@ export class PreviewRecipes {
   record(repo: string, r: { recipe: PreviewRecipe; sha: string; port: number; runId: string; ticket: string; at: Date }, previous: ReadNote, vet: Vet): Promise<string | undefined> {
     const note: RecipeNote = {
       scope: `repo:${repo}`, recipe: r.recipe, sha: r.sha, port: r.port, checkedAt: isoDay(r.at), origin: `agent:build@${r.runId}`, ticket: r.ticket,
-      status: 'valid', research: previous !== undefined && previous !== 'unreadable' && previous.status === 'invalid',
+      status: 'valid', research: isNote(previous) && previous.status === 'invalid',
     };
     return this.write(repo, note, previous, `start recipe validated on ${r.sha.slice(0, 12)} (${r.ticket})`, vet);
   }
@@ -154,6 +171,19 @@ export class PreviewRecipes {
   /** The one search after an invalidation found no recipe that answers: none owed any more. */
   searchSpent(repo: string, note: RecipeNote, at: { ticket: string; sha: string }, vet: Vet): Promise<string | undefined> {
     return this.write(repo, { ...note, searchesLeft: 0 }, note, `no start recipe found again on ${at.sha.slice(0, 12)} (${at.ticket})`, vet);
+  }
+
+  /**
+   * What `verify` made of the recipe (ORC-386), as the note `note` stood before the check: the found recipe that answered, recorded;
+   * the learned one that no longer starts, invalidated; the one search owed, asked and finding none that answers, spent.
+   */
+  settle(repo: string, note: ReadNote, s: { asked: boolean; found: PreviewRecipe | undefined; outcome: PreviewOutcome | undefined; sha: string; port: number; runId: string; ticket: string; at: Date }, vet: Vet): Promise<string | undefined> {
+    const o = s.outcome;
+    if (o?.of === 'found' && o.answered && s.found) return this.record(repo, { recipe: s.found, sha: s.sha, port: s.port, runId: s.runId, ticket: s.ticket, at: s.at }, note, vet);
+    if (o?.of === 'learned' && isNote(note)) return this.invalidate(repo, note, { reason: firstLine(o.detail) || 'the application did not start', sha: s.sha, ticket: s.ticket, at: s.at }, vet);
+    // No recipe handed back, or one tried that did not answer; never one the check did not reach.
+    if (s.asked && isNote(note) && (!s.found || o?.of === 'found')) return this.searchSpent(repo, note, { ticket: s.ticket, sha: s.sha }, vet);
+    return Promise.resolve(undefined);
   }
 
   /** `note` over `read`, the note its writer read before its check: another ticket's write since then wins, this one is dropped. */

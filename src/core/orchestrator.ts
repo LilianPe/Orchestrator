@@ -48,7 +48,7 @@ import {
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
-import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
+import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from './agent-output.js';
 import { describePr, START_SAID, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from '../server/live-feed.js';
@@ -66,7 +66,7 @@ import { branchName, namesTicket } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
-import { repoNameOf, searchOwed, type PreviewRecipes, type ReadNote } from '../knowledge/preview-recipe.js';
+import { isNote, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -1196,9 +1196,19 @@ export class Orchestrator {
     // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
     if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
     const recipe = await this.recipeOf(project, t);
-    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, job, output, recipe) });
-    // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push.
-    if (recipe) this.track(this.keepRecipe(project, t, run.id, job, output, recipe, res));
+    // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
+    const asked = !!recipe && searchAsked(this.searchContext(project, job, run.repoConfig), recipe.note);
+    const found = asked ? output?.preview : undefined;
+    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, output, recipe?.note, found) });
+    // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push. Never a replayed ticket's.
+    const recipes = this.d.previewRecipes;
+    if (recipe && recipes && !project.replayed) {
+      const settled = recipes.settle(recipe.repo, recipe.note, { asked, found, outcome: res.preview, sha: res.sha, port: project.workflow.workspace.portBase, runId: run.id, ticket: t.ticketId, at: new Date(this.d.clock.now()) }, (text) => this.policy.vet(text, 'start recipe'));
+      this.track(settled.then(
+        (said) => void (said && this.log('warn', `${t.ticketId}: ${said}`)),
+        (err: Error) => this.log('warn', `${t.ticketId}: start recipe of ${recipe.repo} not written to the knowledge base: ${err.message}`),
+      ));
+    }
     return res;
   }
 
@@ -1220,39 +1230,15 @@ export class Orchestrator {
     }
   }
 
-  /**
-   * The `build` agent finds how to start the application (ORC-386) when the proof has a browser to shoot with, nothing declares the
-   * start, and the knowledge base owes a search; never a replayed ticket's, which writes nothing to it.
-   */
-  private searchesRecipe(project: ProjectRuntime, job: JobSpec, note: ReadNote): boolean {
-    return job.step === 'build' && !!this.d.visualProof && !project.replayed && !project.workflow.workspace.preview && searchOwed(note);
-  }
-
-  /**
-   * What `verify` made of the recipe (ORC-386), into the knowledge base by its narrow writer, never by a replayed ticket: the found
-   * recipe that answered, recorded; the learned one that no longer starts, invalidated; the one search owed that found none, spent.
-   * A write that fails is logged: the verdict stands, and the recipe served this check.
-   */
-  private async keepRecipe(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, output: AgentOutput | undefined, r: { repo: string; note: ReadNote }, res: CleanVerifyResult): Promise<void> {
-    const recipes = this.d.previewRecipes;
-    if (!recipes || project.replayed) return;
-    const vet = (text: string) => this.policy.vet(text, 'start recipe');
-    const at = new Date(this.d.clock.now());
-    const { note } = r;
-    const p = res.preview;
-    try {
-      let said: string | undefined;
-      if (p?.of === 'found' && p.answered && output?.preview) {
-        said = await recipes.record(r.repo, { recipe: output.preview, sha: res.sha, port: project.workflow.workspace.portBase, runId, ticket: t.ticketId, at }, note, vet);
-      } else if (p?.of === 'learned' && note && note !== 'unreadable') {
-        said = await recipes.invalidate(r.repo, note, { reason: (p.detail.split('\n')[0] ?? '').slice(0, 200) || 'the application did not start', sha: res.sha, ticket: t.ticketId, at }, vet);
-      } else if (note && note !== 'unreadable' && this.searchesRecipe(project, job, note) && (!output?.preview || p?.of === 'found')) {
-        said = await recipes.searchSpent(r.repo, note, { ticket: t.ticketId, sha: res.sha }, vet);
-      }
-      if (said) this.log('warn', `${t.ticketId}: ${said}`);
-    } catch (err) {
-      this.log('warn', `${t.ticketId}: start recipe of ${r.repo} not written to the knowledge base: ${(err as Error).message}`);
-    }
+  /** What decides, at a `build` launch and at its check alike, whether its agent searches a start recipe (ORC-386). */
+  private searchContext(project: ProjectRuntime, job: JobSpec, config: RepoConfig | undefined): SearchContext {
+    return {
+      step: job.step,
+      canShoot: !!this.d.visualProof,
+      replayed: !!project.replayed,
+      declared: !!(config?.preview ?? project.workflow.workspace.preview),
+      services: !!config?.services.length,
+    };
   }
 
   /**
@@ -1296,16 +1282,15 @@ export class Orchestrator {
   }
 
   /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
-  private visualRequest(project: ProjectRuntime, t: TicketState, job: JobSpec, output: AgentOutput | undefined, recipe: { note: ReadNote } | undefined): VisualRequest {
+  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined, note: ReadNote, found: PreviewRecipe | undefined): VisualRequest {
     const { preview, portBase } = project.workflow.workspace;
-    const note = recipe?.note;
     return {
       intake: t.visualProof === 'required',
       ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
       ...(preview ? { start: preview } : {}),
       // ORC-386: the learned recipe; the one the agent found only where it was asked to search.
-      ...(note && note !== 'unreadable' && note.status === 'valid' ? { learned: note.recipe } : {}),
-      ...(recipe && output?.preview && this.searchesRecipe(project, job, note) ? { found: output.preview } : {}),
+      ...(isNote(note) && note.status === 'valid' ? { learned: note.recipe } : {}),
+      ...(found ? { found } : {}),
       port: portBase,
       path: scenarioPath(output?.visual_scenario?.url),
       gate: (c) => this.policy.capture(c),
@@ -3113,9 +3098,8 @@ export class Orchestrator {
       // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
       const specShown = !!t.spec && job.queue === 'dev' && (job.step === 'spec_draft' ? !t.spec.approval : !!t.spec.approval);
       // Nothing declares how to start the application, nothing learned it (ORC-386): the build agent finds it.
-      // Not where the captures could not run either: without the repository's services (ORC-282).
-      const recipe = job.step === 'build' && !config.preview && !config.services.length ? await this.recipeOf(project, t) : undefined;
-      const previewSearch = !!recipe && this.searchesRecipe(project, job, recipe.note);
+      const recipe = job.step === 'build' ? await this.recipeOf(project, t) : undefined;
+      const previewSearch = !!recipe && searchAsked(this.searchContext(project, job, config), recipe.note);
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },

@@ -62,6 +62,8 @@ const recipeLine = z.string().trim().min(1).max(300).regex(/^[^\r\n\0]*$/, 'one 
  */
 export const previewRecipeSchema = z.object({ command: recipeLine, setup: z.array(recipeLine).max(5) }).strict();
 export type PreviewRecipe = z.infer<typeof previewRecipeSchema>;
+/** The setup, then the command: one line the shell runs, on `PORT`. */
+export const recipeStart = (r: PreviewRecipe): string => [...r.setup, r.command].join(' && ');
 
 /** A commit the agent names: a short or full sha. */
 const commitSha = z.string().regex(/^[0-9a-f]{7,40}$/, 'a commit sha (7 to 40 hex characters)');

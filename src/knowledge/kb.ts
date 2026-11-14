@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, posix } from 'node:path';
 import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
+import { within } from '../core/clean-verify.js';
+import { STALLED } from '../publish/publish.js';
 import { unfenced } from '../core/prompt.js';
 
 export interface KbHit {
@@ -23,7 +25,9 @@ const FETCH_DEADLINE_MS = 60_000;
 const FRESH_MS = 30_000;
 
 /** Where the factory writes, and only there (ORC-386): the start recipes it validated. */
-const PREVIEW_DIR = 'notes/preview';
+export const PREVIEW_DIR = 'notes/preview';
+/** What a push killed at its deadline gets to let go of its output. */
+const PUSH_GRACE_MS = 5_000;
 /** Who commits the factory's notes: the factory, never a human's identity nor the clone's. */
 const FACTORY_IDENTITY = ['user.name=Relais factory', 'user.email=factory@relais.invalid'];
 
@@ -39,9 +43,13 @@ export class KnowledgeBase {
   private git: Exec;
   /** The pull and the factory's writes (ORC-386), one at a time in the clone. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** When a pull last brought the clone up to its remote: a write within `freshMs` of it pulls no more. */
+  private pulledAt: number | undefined;
+  /** Whether the clone has a remote, asked once: the daemon does not change it. */
+  private remote: Promise<boolean> | undefined;
 
   constructor(
-    private repoPath: string,
+    readonly repoPath: string,
     exec: Exec = execCmd,
     private freshMs = FRESH_MS,
   ) {
@@ -63,6 +71,7 @@ export class KnowledgeBase {
     const current = (await git('branch', '--show-current')).stdout.trim();
     if (current !== branch) return `on ${current || 'a detached HEAD'}, not on its default branch ${branch}: not pulled, the agents read it as it is`;
     await mustExec(this.git, 'git', ['-C', this.repoPath, 'merge', '--ff-only', head.ref]);
+    this.pulledAt = Date.now();
     return undefined;
   }
 
@@ -80,10 +89,6 @@ export class KnowledgeBase {
     next.index.then(ended, ended);
     this.last = next;
     return next.index;
-  }
-
-  get path(): string {
-    return this.repoPath;
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -106,21 +111,27 @@ export class KnowledgeBase {
     }
     return this.serial(async () => {
       const git = (...a: string[]) => mustExec(this.git, 'git', ['-C', this.repoPath, ...a]);
-      const remote = !!(await git('remote')).trim();
-      if (remote) {
+      const remote = await (this.remote ??= git('remote').then((out) => !!out.trim()));
+      if (remote && !(this.pulledAt !== undefined && Date.now() - this.pulledAt < this.freshMs)) {
         const why = await this.pull().catch((err: Error) => `not pulled: ${err.message}`);
         if (why) return `knowledge base: ${why}; ${path} not written`;
+        // The launches right after it read the index this pull brought: none fetches again behind the write.
+        this.last = { ended: Date.now(), index: Promise.resolve(this.readIndex()) };
       }
       const file = join(this.repoPath, path);
-      if (!stillAsRead(existsSync(file) ? readFileSync(file, 'utf8') : undefined)) return `knowledge base: ${path} changed since it was read; not written over`;
+      const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+      if (!stillAsRead(current)) return `knowledge base: ${path} changed since it was read; not written over`;
+      if (current === content) return undefined;
       const before = (await git('rev-parse', 'HEAD')).trim();
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, content);
       await git('add', '--', path);
-      if (!(await git('status', '--porcelain', '--', path)).trim()) return undefined;
       await git(...FACTORY_IDENTITY.flatMap((c) => ['-c', c]), 'commit', '--quiet', '--no-verify', '-m', message, '--', path);
       if (!remote) return `knowledge base: no remote, ${path} is committed in the clone only`;
-      const pushed = await this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env: { GIT_TERMINAL_PROMPT: '0' }, timeoutMs: FETCH_DEADLINE_MS });
+      // As `fetchOrigin` reaches the forge: a stalled transfer aborted, and the deadline kept even by an ssh child that holds the output.
+      const silent = `the knowledge base's remote no longer responds after ${FETCH_DEADLINE_MS / 1000} s`;
+      const push = this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: FETCH_DEADLINE_MS });
+      const pushed = await within(push, FETCH_DEADLINE_MS + PUSH_GRACE_MS, silent).catch((err: Error) => ({ code: 1, stdout: '', stderr: err.message }));
       if (pushed.code === 0) return undefined;
       await git('reset', '--quiet', '--keep', before);
       return `knowledge base: push refused, ${path} undone in the clone (it served this ticket): ${pushed.stderr.trim().slice(-500)}`;

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { KnowledgeBase } from './kb.js';
-import { formatRecipeNote, parseRecipeNote, PreviewRecipes, recipeNotePath, recipeStart, repoNameOf, searchOwed, type RecipeNote } from './preview-recipe.js';
+import { recipeStart } from '../core/agent-output.js';
+import { formatRecipeNote, parseRecipeNote, PreviewRecipes, recipeNotePath, repoNameOf, searchAsked, searchOwed, type RecipeNote } from './preview-recipe.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' }).trim();
 const SHA = 'c0ffee'.padEnd(40, '0');
@@ -66,6 +67,13 @@ describe('the format of a start recipe (ORC-386)', () => {
     expect(repoNameOf(undefined, 'p')).toBe('p');
     expect(recipeNotePath('acme/shop')).toBe('notes/preview/acme/shop.md');
     expect(recipeNotePath('p')).toBe('notes/preview/p.md');
+  });
+
+  it('asks the build agent only where a proof could use it: a browser, nothing declared, no services, no replay, a search owed', () => {
+    const ask = { step: 'build', canShoot: true, replayed: false, declared: false, services: false };
+    expect(searchAsked(ask, undefined)).toBe(true);
+    expect(searchAsked(ask, valid)).toBe(false);
+    for (const over of [{ step: 'fix' }, { canShoot: false }, { replayed: true }, { declared: true }, { services: true }]) expect(searchAsked({ ...ask, ...over }, undefined)).toBe(false);
   });
 
   it('owes a search without a note, and once after an invalidation, never after a valid or unreadable note', () => {
