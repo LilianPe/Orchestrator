@@ -25,8 +25,8 @@ A reference is written `<source>:<path>`: `env:NPM_TOKEN`, or `coffre:kv/app#see
 
 - The value is read at each `setup` that gets the repository's secrets, for the names its `.factory/config.yml` declares under `setup_secrets` only, before the setup's container exists. A setup on work nobody reviewed gets no secret and reads none.
 - A source that fails, or a reference it does not hold: no setup container is created, the worktree is removed, and the ticket is blocked as a launch error, whose message names the secret and its reference, never the value. There is no fallback to another source.
-- The journal receives names only: the replay does not change.
-- Masking and `sealSecrets` use the values of this launch. Every value read stays masked in the transcripts while the daemon runs, a rotated one included. After a crash, the worktree is made anew (ORC-211's mark), so a rotation needs nothing more.
+- The journal receives names, and the reference of a secret that blocked the ticket, never a value: the replay does not change.
+- `sealSecrets` uses the values of this launch. The values of a source that reads the daemon's environment (`env`, or a source of `kind: env`) are masked in the transcripts from the daemon's start; those of another source once a setup read them, and while the daemon runs, a rotated one included. After a restart, a run reattached before any new setup masks none of the latter.
 
 ## Idempotence
 
@@ -42,8 +42,8 @@ None: a value has no attempt. The setup that reads it belongs to its run, which 
 
 ## Adding an adapter
 
-Its file under `src/adapters/secrets/`, one line in `SECRET_SOURCE_KINDS`, a test that runs `describeSecretSourceContract` on it, and its options here. Nothing else changes: the engine reads every source through `SecretReader`.
+Its file under `src/adapters/secrets/`, one line in `SECRET_SOURCE_KINDS`, a test that runs `describeSecretSourceContract` on it, and its options here. Two tests pin that only `env` is registered (`reader.test.ts`, `factory-yml.test.ts`): they change with the first real manager. The engine reads every source through `SecretReader`.
 
 ## Known gaps
 
-None.
+- The options of a `secret_sources` declaration are passed to its adapter as written: they are neither resolved from `env:NAME` nor masked. An adapter whose options hold a credential needs that first.

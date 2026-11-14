@@ -44,7 +44,7 @@ A case that passes against every subject proves nothing if it would also pass ag
 | Tracker | unknown ticket on read and on write, status missing from the team, replayed `moveTo`, final state of `setLabels`, effects of writes, `ensureSession`, `listDelegated` |
 | SandboxProvider | `destroy` of an unknown or already destroyed id, replayed `create`, one sandbox per run, a new one after `destroy`, `exec` (result, unknown id), `spawnCommand` on an unknown id, `findByAttempt`, `list`, refusal of an unmet requirement |
 | Publisher | republishing a branch, one PR per branch, a new PR after merge or close |
-| SecretSource | a path it does not hold, a source out of service (each: no answer, no value in the error), a path its kind checks |
+| SecretSource | a path it does not hold, a source out of service (each: no answer, no value in the error or its causes), a replayed read, a path its kind checks |
 
 The faulty subjects for each case are named by the titles in `negative-controls.test.ts`. Happy-path cases have no control: a run that succeeds, a command that passes, a first `publish`, a first `create` and its network level, the nominal reads of the Tracker and the Forge (`getIssue`, `search`, `findPr` that finds the PR, snapshots).
 
