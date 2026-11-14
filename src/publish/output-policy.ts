@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { execCmd, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
-import type { ActivityInput, IssueHistory, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
+import type { ActivityInput, IssueHistory, LabelsWritten, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 import { agentOutputSchema, type AgentOutput } from '../core/agent-output.js';
 import { boxOpener, gitleaksArgv, gitleaksFindings, sandboxGitleaksArgv, withDeadline } from '../core/clean-verify.js';
 import type { PlanStep } from '../core/session-plan.js';
@@ -253,7 +253,7 @@ export class PolicedTracker implements Tracker {
   listDelegated(teamKey: string): Promise<TrackerIssue[]> { return this.tracker.listDelegated(teamKey); }
   search(term: string, teamKey: string): Promise<SearchHit[]> { return this.tracker.search(term, teamKey); }
   moveTo(id: string, state: string): Promise<void> { return this.tracker.moveTo(id, state); }
-  setLabels(id: string, add: string[], remove: string[]): Promise<void> { return this.tracker.setLabels(id, add, remove); }
+  setLabels(id: string, add: string[], remove: string[]): Promise<LabelsWritten | void> { return this.tracker.setLabels(id, add, remove); }
   findComment(id: string, effectId: string): Promise<string | undefined> { return this.tracker.findComment(id, effectId); }
   react(commentId: string, emoji: string, effectId?: string): Promise<void> { return this.tracker.react(commentId, emoji, effectId); }
   findReaction(commentId: string, effectId: string): Promise<string | undefined> { return this.tracker.findReaction(commentId, effectId); }

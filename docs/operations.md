@@ -75,7 +75,7 @@ As soon as it is read, each line of the run's output is masked (`[masked]`), bef
 Examples of reading the database (with `sqlite3`, daemon stopped or read-only):
 
 ```bash
-sqlite3 ~/.relais/relais.db '.tables'      # tickets, events, runs, timers, queue, echoes, meta
+sqlite3 ~/.relais/relais.db '.tables'      # tickets, events, runs, timers, queue, meta
 sqlite3 ~/.relais/relais.db "select id, status, cost_usd, datetime(started_at/1000,'unixepoch') from runs order by started_at desc limit 10"
 ```
 

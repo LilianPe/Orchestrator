@@ -3,7 +3,7 @@ import type { PlanStep } from '../../../core/session-plan.js';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
 import type { CompletedIssue } from '../../../core/baseline.js';
-import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type DatedIssue, type IssueHistory, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
+import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
 import { allNodes, type Connection } from '../../graphql-pages.js';
 import { Q } from './queries.js';
@@ -132,7 +132,8 @@ export class LinearTracker implements Tracker, TeamDirectory {
 
   constructor(
     private api: LinearApi,
-    private appUserId: string,
+    /** The factory's app user: the delegate of its tickets, and the actor of its own writes in a webhook (ORC-346). */
+    readonly appUserId: string,
   ) {}
 
   /** `relations`: every page of its relations too, for a read of the ticket; a write needs its labels only. */
@@ -322,7 +323,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
    * Before adding a label, the team's labels are read again: a group made since the start counts.
    * Two labels of one group in `add` cannot both hold: refused, rather than one picked silently.
    */
-  async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+  async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten | void> {
     const team = teamOf(identifier);
     const issue = await this.node(identifier);
     const has = new Map(issue.labels.nodes.map((l) => [l.name, l]));
@@ -339,11 +340,13 @@ export class LinearTracker implements Tracker, TeamDirectory {
       if (other !== undefined && other !== name) throw new Error(`Exclusive labels asked for together: "${other}" and "${name}" (same Linear group)`);
       groups.set(group, name);
     }
-    const removedLabelIds = issue.labels.nodes
-      .filter((l) => !add.includes(l.name) && (remove.includes(l.name) || (l.parent?.id !== undefined && groups.has(l.parent.id))))
-      .map((l) => l.id);
-    if (addedLabelIds.length === 0 && removedLabelIds.length === 0) return;
-    await this.api.gql(Q.issueUpdate, { id: issue.id, input: { addedLabelIds, removedLabelIds } });
+    const removed = issue.labels.nodes.filter((l) => !add.includes(l.name) && (remove.includes(l.name) || (l.parent?.id !== undefined && groups.has(l.parent.id))));
+    if (addedLabelIds.length === 0 && removed.length === 0) return;
+    const { issueUpdate } = await this.api.gql<{ issueUpdate: { issue: { updatedAt: string } } }>(Q.issueUpdate, {
+      id: issue.id,
+      input: { addedLabelIds, removedLabelIds: removed.map((l) => l.id) },
+    });
+    return { added: add.filter((name) => !has.has(name)), removed: removed.map((l) => l.name), at: Date.parse(issueUpdate.issue.updatedAt) };
   }
 
   async comment(identifier: string, body: string, effectId?: string): Promise<void> {

@@ -395,12 +395,7 @@ describe.skipIf(!url)('PgStore integration', () => {
     expect((await store.listQueue()).map((item) => item.ticketId)).toEqual(['E']);
   });
 
-  it('expires echoes and persists meta across store instances', async () => {
-    await store.putEcho('state:REL-1:Done', 100);
-    expect(await store.isEcho('state:REL-1:Done', 99)).toBe(true);
-    expect(await store.isEcho('state:REL-1:Done', 101)).toBe(false);
-    expect(await store.isEcho('state:REL-2:Done', 99)).toBe(false);
-
+  it('persists meta across store instances', async () => {
     await store.setMeta('paused', '1');
     expect(await store.getMeta('paused')).toBe('1');
     expect(await store.getMeta('missing')).toBeUndefined();

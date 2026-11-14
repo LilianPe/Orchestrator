@@ -4,7 +4,7 @@ import { openBlockers } from '../../../core/pickup.js';
 import { isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import type { Store } from '../../../store/types.js';
-import { IssueNotFoundError, labelEchoKey, stateEchoKey, type Tracker, type TrackerIssue } from '../types.js';
+import { IssueNotFoundError, type Tracker, type TrackerIssue } from '../types.js';
 import { knownLabels, labelChanges, recordLabels, type Serial } from './labels.js';
 import { teamOf } from './tracker.js';
 
@@ -50,15 +50,21 @@ export async function routedIssues(d: { tracker: Pick<Tracker, 'listDelegated'>;
 /** What one pass of one project writes: every event at the pass's time, under the ticket's project. */
 type Emit = <T extends EventType>(t: { ticketId: string }, base: typeof UNSIGNED | typeof TRUSTED, id: string, type: T, payload: EventPayloads[T]) => Promise<unknown>;
 
-/** A move to a status of the workflow the factory has not recorded, and did not make itself: unsigned, so it never merges. */
-async function catchUpMove(d: ReconcileDeps, emit: Emit, p: ProjectRuntime, t: TicketState, stateName: string, at: number): Promise<void> {
+/**
+ * A move to a status of the workflow the factory has not recorded: unsigned, so it never merges. The factory's own move
+ * is recorded as it writes it (`status.recorded`, ORC-346): no window of time tells it.
+ */
+async function catchUpMove(emit: Emit, p: ProjectRuntime, t: TicketState, stateName: string): Promise<void> {
   const to = logicalFromName(p.workflow.states, stateName);
-  if (!to || to === t.logical || (await d.store.isEcho(stateEchoKey(t.ticketId, stateName), at))) return;
+  if (!to || to === t.logical) return;
   await emit(t, UNSIGNED, `reconcile:moved:${p.id}:${t.ticketId}:${stateName}:${t.updatedAt}`, 'status.changed', { from: t.logical, to });
 }
 
-/** The label changes of a delegated ticket since the factory last read its labels; the first reading only records them. */
-async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, team: string[], issue: TrackerIssue, t: TicketState, at: number): Promise<void> {
+/**
+ * The label changes of a delegated ticket since the factory last read its labels; the first reading only records them.
+ * The factory's own writes are in that reading as it makes them (`recordWrite`, ORC-346).
+ */
+async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, team: string[], issue: TrackerIssue, t: TicketState): Promise<void> {
   const read = issue.updatedAt ?? 0;
   const known = await knownLabels(d.store, projectId, issue.identifier);
   // A webhook recorded a newer state of the issue than this pass read: it is the one to keep.
@@ -66,8 +72,6 @@ async function catchUpLabels(d: ReconcileDeps, emit: Emit, projectId: string, te
   const changes = known ? labelChanges(known.labels, issue.labels) : [];
   if (known && known.at === read && !changes.length) return;
   for (const c of changes) {
-    // The factory's own write, whose webhook has not come yet: no human change.
-    if (await d.store.isEcho(labelEchoKey(issue.identifier, c.label, c.change), at)) continue;
     // Keyed by Linear's version of the issue: a label put back later is a new change, not a duplicate.
     await emit(t, UNSIGNED, `reconcile:label:${projectId}:${issue.identifier}:${c.label}:${c.change}:${issue.updatedAt ?? t.updatedAt}`, 'label.changed', { ...c, ...(namesOtherRepo(team, projectId, c.label) ? { otherRepo: true } : {}) });
   }
@@ -121,8 +125,8 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
       await inTurn(() => recordLabels(d.store, p.id, issue.identifier, issue.labels, issue.updatedAt ?? 0));
       continue;
     }
-    await catchUpMove(d, emit, p, t, issue.stateName, at);
-    await inTurn(() => catchUpLabels(d, emit, p.id, team, issue, t, at));
+    await catchUpMove(emit, p, t, issue.stateName);
+    await inTurn(() => catchUpLabels(d, emit, p.id, team, issue, t));
     // The wait on « blocked by » tickets ends here (ORC-363): their move to Done reaches no webhook of this ticket, and may be
     // another team's; the ticket's own relations, read again each pass, also see one taken off.
     if (t.waitingOn && !openBlockers(issue).length) {
@@ -157,7 +161,7 @@ async function reconcileProject(d: ReconcileDeps, p: ProjectRuntime, team: strin
     }
     // Still delegated and open: nothing to catch up.
     if (issue?.delegateId && issue.stateType !== 'completed' && issue.stateType !== 'canceled') continue;
-    if (issue?.stateType === 'completed') await catchUpMove(d, emit, p, t, issue.stateName, at);
+    if (issue?.stateType === 'completed') await catchUpMove(emit, p, t, issue.stateName);
     // A cancel stops the work of a delegated ticket itself (ORC-170); `decide` stops nothing on another.
     const cancel = issue?.stateType === 'canceled' && t.delegated;
     if (issue && cancel) {

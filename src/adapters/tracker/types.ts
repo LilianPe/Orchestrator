@@ -59,14 +59,14 @@ export function effectMarker(effectId: string): string {
 /** A comment the factory wrote for an outbox effect: never a human's reply, whichever actor Linear names (ORC-196). */
 export const isEffectComment = (body: string): boolean => body.includes(EFFECT_MARKER);
 
-/** The echo key of a status the factory itself moved the ticket to (`putEcho`), for the webhook of its own move to be dropped. */
-export function stateEchoKey(identifier: string, stateName: string): string {
-  return `state:${identifier}:${stateName}`;
-}
-
-/** The echo key of a label the factory itself added or took off (`putEcho`), for the webhook of its own write to be dropped. */
-export function labelEchoKey(identifier: string, label: string, change: 'added' | 'removed'): string {
-  return change === 'added' ? `label:${identifier}:${label}` : `label-removed:${identifier}:${label}`;
+/**
+ * What a label write changed on the ticket, a group's other labels taken off included, and the issue's `updatedAt` after it
+ * (ORC-346): what the factory then knows of the ticket's labels, so a pass that reads them sees no human change.
+ */
+export interface LabelsWritten {
+  added: string[];
+  removed: string[];
+  at: number;
 }
 
 /** The tracker has no such issue (deleted, or never existed): an answer about the issue, unlike a read error. */
@@ -92,8 +92,8 @@ export interface Tracker {
   /** The issues of the team `teamKey` alone that match `term` (ORC-349): an agent never searches the whole workspace. */
   search(term: string, teamKey: string): Promise<SearchHit[]>;
   moveTo(identifier: string, stateName: string): Promise<void>;
-  /** Final state: adds `add`, takes off `remove`; writes nothing when the ticket already reads so. */
-  setLabels(identifier: string, add: string[], remove: string[]): Promise<void>;
+  /** Final state: adds `add`, takes off `remove`; writes nothing, and says nothing, when the ticket already reads so. */
+  setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten | void>;
   /** With `effectId`, the comment carries `effectMarker(effectId)`, for `findComment` to find it. */
   comment(identifier: string, body: string, effectId?: string): Promise<void>;
   /** The id of the ticket's comment written for `effectId`, if there is one. */

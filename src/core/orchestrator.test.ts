@@ -10,7 +10,6 @@ import type { Runner } from '../adapters/runner/types.js';
 import type { ReplaySource } from '../ghost/delegate.js';
 import type { Verifier } from './verify.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
-import { stateEchoKey } from '../adapters/tracker/types.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
 import type { loadWorkflow } from '../config/load-workflow.js';
 import { loadTestWorkflow } from '../../test/helpers/harness.js';
@@ -103,16 +102,6 @@ describe('Orchestrator', () => {
     await orch.drained();
     expect(await store.getTicket('p', 'REL-1')).toMatchObject({ delegated: true });
     expect(await store.pendingInbox(10)).toEqual([]);
-  });
-
-  it('marks its own move as an echo under the key the webhook and the reconciliation look up', async () => {
-    const { store, tracker, orch } = setup();
-    tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await orch.accept(delegated());
-    await orch.drained();
-    const moves = tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1] as string);
-    expect(moves.length).toBeGreaterThan(0);
-    for (const name of moves) expect(await store.isEcho(stateEchoKey('REL-1', name), 1_000)).toBe(true);
   });
 
   it('ignores a duplicate event id', async () => {

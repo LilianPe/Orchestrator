@@ -1,6 +1,6 @@
 import type { PlanStep } from '../../core/session-plan.js';
 import type { TeamDirectory } from '../roles/types.js';
-import { IssueNotFoundError, type ActivityInput, type DatedIssue, type IssueHistory, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
+import { IssueNotFoundError, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
 /** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
 export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done'] as const;
@@ -187,7 +187,8 @@ export class FakeTracker implements Tracker, TeamDirectory {
    * As the Linear adapter: a write only when the labels change, so a replay records nothing (ORC-162);
    * adding a label of a group takes the group's other labels off, two of one group are refused (ORC-160).
    */
-  async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+  /** Its `at` is the issue's `updatedAt` as a test set it: the fake keeps no version of its own. */
+  async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten | void> {
     const i = this.must(identifier);
     const groups = new Map<string, string>();
     for (const l of add) {
@@ -204,7 +205,9 @@ export class FakeTracker implements Tracker, TeamDirectory {
     const next = [...new Set([...i.labels.filter((l) => add.includes(l) || !off(l)), ...add])];
     if (next.length === i.labels.length && next.every((l) => i.labels.includes(l))) return;
     this.record('setLabels', identifier, add, remove);
+    const written = { added: next.filter((l) => !i.labels.includes(l)), removed: i.labels.filter((l) => !next.includes(l)), at: i.updatedAt ?? 0 };
     i.labels = next;
+    return written;
   }
 
   /** The effect id, when given, is recorded after the body: `comments()` reads the bodies as written by the factory. */

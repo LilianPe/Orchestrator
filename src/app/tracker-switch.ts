@@ -1,5 +1,5 @@
 import type { PlanStep } from '../core/session-plan.js';
-import type { ActivityInput, IssueHistory, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
+import type { ActivityInput, IssueHistory, LabelsWritten, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 
 export class TrackerSwitch implements Tracker {
   current: Tracker | undefined;
@@ -20,7 +20,7 @@ export class TrackerSwitch implements Tracker {
   listDelegated(k: string): Promise<TrackerIssue[]> { return Promise.resolve().then(() => this.t().listDelegated(k)); }
   search(q: string, k: string): Promise<SearchHit[]> { return Promise.resolve().then(() => this.t().search(q, k)); }
   moveTo(id: string, s: string): Promise<void> { return Promise.resolve().then(() => this.t().moveTo(id, s)); }
-  setLabels(id: string, a: string[], r: string[]): Promise<void> { return Promise.resolve().then(() => this.t().setLabels(id, a, r)); }
+  setLabels(id: string, a: string[], r: string[]): Promise<LabelsWritten | void> { return Promise.resolve().then(() => this.t().setLabels(id, a, r)); }
   comment(id: string, b: string, e?: string): Promise<void> { return Promise.resolve().then(() => this.t().comment(id, b, e)); }
   findComment(id: string, e: string): Promise<string | undefined> { return Promise.resolve().then(() => this.t().findComment(id, e)); }
   react(c: string, emoji: string, e?: string): Promise<void> { return Promise.resolve().then(() => this.t().react(c, emoji, e)); }

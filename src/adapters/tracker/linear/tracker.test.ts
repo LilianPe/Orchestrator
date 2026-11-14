@@ -20,6 +20,8 @@ function fakeLinear(handlers: Record<string, Handler>) {
 }
 
 /** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
+/** The issue's `updatedAt` after a write, as Linear answers `issueUpdate`. */
+const UPDATED = '2026-11-14T10:00:00.000Z';
 const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
 const node = {
   id: 'uuid-1', identifier: 'REL-1', title: 'Export', description: 'Desc', url: 'https://linear.app/x/REL-1', priority: 2,
@@ -112,7 +114,7 @@ describe('LinearTracker', () => {
   it('a write reads no page of relations past the first: it needs the labels only (ORC-363)', async () => {
     const { api, calls } = fakeLinear({
       Issue: () => ({ issue: { ...node, inverseRelations: conn([], 'r-next') } }),
-      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     await new LinearTracker(api, 'app-1').setLabels('REL-1', [], ['bug']);
     expect(calls.map((c) => c.op)).not.toContain('IssueRelations');
@@ -206,7 +208,7 @@ describe('LinearTracker', () => {
       Issue: () => ({ issue: node }),
       TeamLabels: (v) => (!v['after'] ? { issueLabels: conn([{ id: 'l1', name: 'bug' }], 'l-next') } : { issueLabels: conn([{ id: 'l-251', name: 'agent:stop' }]) }),
       TeamStates: (v) => (!v['after'] ? { workflowStates: conn(states.workflowStates.nodes, 's-next') } : { workflowStates: conn([{ id: 's-done', name: 'Done', type: 'completed', position: 2 }]) }),
-      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     const t = new LinearTracker(api, 'app-1');
     await t.setLabels('REL-1', ['agent:stop'], []);
@@ -217,7 +219,7 @@ describe('LinearTracker', () => {
   });
 
   it('moves by state name', async () => {
-    const { api, calls } = fakeLinear({ Issue: () => ({ issue: node }), TeamStates: () => states, IssueUpdate: () => ({ issueUpdate: { success: true } }) });
+    const { api, calls } = fakeLinear({ Issue: () => ({ issue: node }), TeamStates: () => states, IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }) });
     await new LinearTracker(api, 'app-1').moveTo('REL-1', 'In Progress');
     expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { stateId: 's-dev' } } });
   });
@@ -262,7 +264,7 @@ describe('LinearTracker', () => {
       TeamLabels: () => ({ issueLabels: conn([{ id: 'l1', name: 'bug' }]) }),
       Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Factory' }] } }),
       LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'l2', name: v.input.name } } }),
-      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     await new LinearTracker(api, 'app-1').setLabels('REL-1', ['agent:stop'], ['bug']);
     expect(calls.find((c) => c.op === 'LabelCreate')!.vars).toEqual({ input: { name: 'agent:stop', teamId: 't-1', color: '#26b5ce' } });
@@ -273,7 +275,7 @@ describe('LinearTracker', () => {
     const { api, calls } = fakeLinear({
       Issue: () => ({ issue: { ...node, labels: conn([{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }]) } }),
       TeamLabels: () => ({ issueLabels: conn([{ id: 'l1', name: 'bug' }, { id: 'l2', name: 'agent:pris' }]) }),
-      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     const t = new LinearTracker(api, 'app-1');
     await t.setLabels('REL-1', ['agent:pris'], ['agent:attente']);
@@ -288,15 +290,16 @@ describe('LinearTracker', () => {
     const { api, calls } = fakeLinear({
       Issue: () => ({ issue: { ...node, labels: conn(onIssue) } }),
       TeamLabels: () => ({ issueLabels: conn([{ id: 'l1', name: 'bug' }, { id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }]) }),
-      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     const t = new LinearTracker(api, 'app-1');
-    await t.setLabels('REL-1', ['prio:haute'], []);
+    // What it changed, the group's other label included, at the issue's version after it: what the factory then knows (ORC-346).
+    expect(await t.setLabels('REL-1', ['prio:haute'], [])).toEqual({ added: ['prio:haute'], removed: ['prio:basse'], at: Date.parse(UPDATED) });
     expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: ['l-high'], removedLabelIds: ['l-low'] } } });
-    // The final state reads as asked: a replay writes nothing.
+    // The final state reads as asked: a replay writes nothing, and says nothing.
     onIssue = [{ id: 'l1', name: 'bug' }, { id: 'l-high', name: 'prio:haute', parent: group }];
     const before = calls.length;
-    await t.setLabels('REL-1', ['prio:haute'], []);
+    expect(await t.setLabels('REL-1', ['prio:haute'], [])).toBeUndefined();
     expect(calls.slice(before).map((c) => c.op)).toEqual(['Issue']);
     // Both labels of the group on the ticket (set by hand before the group existed): the one asked stays.
     onIssue = [{ id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }];
@@ -311,7 +314,7 @@ describe('LinearTracker', () => {
       Issue: () => ({ issue: { ...node, labels: conn([{ id: 'l-low', name: 'prio:basse', parent: { id: 'g' } }]) } }),
       TeamStates: () => states,
       TeamLabels: () => ({ issueLabels: conn(teamLabels) }),
-      IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     const t = new LinearTracker(api, 'app-1');
     await t.warm('REL');

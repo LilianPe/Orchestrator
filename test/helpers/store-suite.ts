@@ -772,11 +772,8 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.pendingInbox(10)).toEqual([]);
   });
 
-  it('expires echoes and keeps meta', async () => {
+  it('keeps meta', async () => {
     const s = await store();
-    await s.putEcho('state:REL-1:Done', 100);
-    expect(await s.isEcho('state:REL-1:Done', 99)).toBe(true);
-    expect(await s.isEcho('state:REL-1:Done', 101)).toBe(false);
     await s.setMeta('paused', '1');
     expect(await s.getMeta('paused')).toBe('1');
   });
