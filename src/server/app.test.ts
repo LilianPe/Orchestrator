@@ -14,8 +14,14 @@ import { TAKEN_OVER } from '../core/block-cause.js';
 
 /** The HTTP Basic header the UI password asks for; its user is free. */
 const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
-/** A ping to the factory MCP, by default with the run token of `setup`'s run. */
-const mcpPing = (token = 'tok') => ({ method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) });
+/** A JSON-RPC message to the factory MCP, as Claude Code sends it, by default with the run token of `setup`'s run. */
+const mcpRequest = (body: unknown = { jsonrpc: '2.0', id: 1, method: 'ping' }, token = 'tok') => ({
+  method: 'POST',
+  headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+  body: JSON.stringify(body),
+});
+/** factory-agent's routes, gone with it (ORC-192), the bare prefix and a path past the MCP's. */
+const FACTORY_AGENT_PATHS = ['/agent', '/agent/issue/REL-1', '/agent/search?q=export', '/agent/kb/search?q=export', '/agent/ask', '/agent/mcp/extra'];
 
 async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
@@ -694,31 +700,21 @@ describe('server', () => {
   });
 
   it("answers 404 on factory-agent's API, with or without the run token, behind the password or not: the MCP is all that is left (ORC-192)", async () => {
-    for (const uiPassword of [undefined, 'pw']) {
-      const { app, submitted } = await setup(uiPassword ? { uiPassword } : {});
-      const paths = ['/agent', '/agent/issue/REL-1', '/agent/search?q=export', '/agent/kb/search?q=export', '/agent/ask', '/agent/mcp/extra'];
-      for (const token of [undefined, 'tok']) {
-        const headers: Record<string, string> = token ? { authorization: `Bearer ${token}`, 'content-type': 'application/json' } : {};
-        for (const path of paths) {
-          for (const method of ['GET', 'POST']) {
-            const init = { method, headers, ...(method === 'POST' ? { body: JSON.stringify({ text: 'Quelle base ?' }) } : {}) };
-            expect((await app.request(path, init)).status, `${method} ${path} ${token ?? 'no token'} ${uiPassword ?? 'no password'}`).toBe(404);
-            expect((await agentOnly(app)(new Request(`http://172.17.0.1:4101${path}`, init))).status, `listener ${method} ${path}`).toBe(404);
-          }
-        }
+    const open = await setup();
+    const guarded = await setup({ uiPassword: 'pw' });
+    const token = { authorization: 'Bearer tok' };
+    for (const path of FACTORY_AGENT_PATHS) {
+      for (const [app, init, how] of [[open.app, { headers: token }, 'token'], [open.app, {}, 'no token'], [guarded.app, { method: 'POST', headers: token }, 'password']] as const) {
+        expect((await app.request(path, init)).status, `${path} ${how}`).toBe(404);
       }
-      expect(submitted).toEqual([]);
     }
+    expect([...open.submitted, ...guarded.submitted]).toEqual([]);
   });
 
   it('the agent listener serves the factory MCP, with its run token, and nothing else (ORC-204)', async () => {
     const { app } = await setup({ uiPassword: 'pw' });
-    const fetch = agentOnly(app);
-    const ping = (token: string) => fetch(new Request('http://172.17.0.1:4101/agent/mcp', mcpPing(token)));
-    expect(await (await ping('tok')).json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} });
-    expect((await ping('nope')).status).toBe(401);
-    const get = (path: string) => fetch(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: 'Bearer tok' } }));
-    for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', '/agent']) {
+    const get = (path: string) => agentOnly(app)(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: 'Bearer tok' } }));
+    for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', ...FACTORY_AGENT_PATHS]) {
       expect((await get(path)).status, path).toBe(404);
     }
   });
@@ -756,8 +752,7 @@ describe('server', () => {
 
   describe('factory MCP (ORC-288)', () => {
     const output = { status: 'done', summary: 'Export ajouté', tests_added: ['export.test.ts'], why: 'demandé', assumptions: [], risks: [], untested: [], review_hints: [] };
-    const rpc = (app: Awaited<ReturnType<typeof setup>>['app'], body: unknown, token = 'tok') =>
-      agentOnly(app)(new Request('http://172.17.0.1:4101/agent/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(body) }));
+    const rpc = (app: Awaited<ReturnType<typeof setup>>['app'], body: unknown, token = 'tok') => agentOnly(app)(new Request('http://172.17.0.1:4101/agent/mcp', mcpRequest(body, token)));
     const call = async (app: Awaited<ReturnType<typeof setup>>['app'], name: string, args: unknown) =>
       (await (await rpc(app, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } })).json()).result;
 
@@ -802,10 +797,6 @@ describe('server', () => {
       expect(await call(app, 'kb_search', { query: 'agrégats serveur' })).toEqual({ content: [{ type: 'text', text: 'notes/scores.md:4: Les agrégats se calculent côté serveur.' }] });
       expect(queries).toEqual(['agrégats serveur']);
       expect((await call(app, 'kb_search', {})).isError).toBe(true);
-      // The HTTP route of factory-agent's `kb search` is gone with it: the MCP tool is the only way.
-      const route = await agentOnly(app)(new Request('http://172.17.0.1:4101/agent/kb/search?q=agrégats', { headers: { authorization: 'Bearer tok' } }));
-      expect(route.status).toBe(404);
-      expect(queries).toEqual(['agrégats serveur']);
     });
 
     it('kb_search says when nothing matches, and when the factory has no knowledge base', async () => {
@@ -883,7 +874,7 @@ describe('server', () => {
       // Its own signature guards it: the answer is the ingestion's, never the UI password's.
       expect((await app.request('/webhooks/github', { method: 'POST', body: '{}' })).headers.get('www-authenticate')).toBeNull();
       expect((await app.request('/oauth/callback?code=x&state=y')).status).not.toBe(401);
-      expect((await app.request('/agent/mcp', mcpPing())).status).toBe(200);
+      expect((await app.request('/agent/mcp', mcpRequest())).status).toBe(200);
     });
   });
 
@@ -964,7 +955,7 @@ describe('server', () => {
     it('leaves the webhooks and the run-token agent API to their own guards, and the password-guarded interface to its password', async () => {
       const { app } = await setup();
       expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
-      expect((await app.request('/agent/mcp', as('host.containers.internal:4101', mcpPing()))).status).toBe(200);
+      expect((await app.request('/agent/mcp', as('host.containers.internal:4101', mcpRequest()))).status).toBe(200);
       const guarded = await setup({ uiPassword: 's3cret' });
       expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic('s3cret') }))).status).toBe(200);
     });

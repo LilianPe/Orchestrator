@@ -91,8 +91,9 @@ describe('standard pack', () => {
   it('names no factory-agent, gone with the agent API: a question ends the turn with a blocked submit_result (ORC-192)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
     expect(s.permissions.allow.filter((rule: string) => rule.includes('factory-agent'))).toEqual([]);
-    expect(hook({ FACTORY_TICKET: 'REL-1' }).additionalContext).not.toContain('factory-agent');
-    expect(hook({ FACTORY_TICKET: 'REL-1' }).additionalContext).toContain('`status: "blocked"`');
+    const rules = hook({ FACTORY_TICKET: 'REL-1' }).additionalContext;
+    expect(rules).not.toContain('factory-agent');
+    expect(rules).toContain('`status: "blocked"`');
     for (const name of readdirSync(join(pack, 'skills'))) {
       expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('factory-agent');
     }
