@@ -1041,6 +1041,7 @@ describe('contractCases', () => {
 const SECRET_MISSING = 'a path it does not hold rejects, without any value';
 const SECRET_DOWN = 'a source out of service rejects, without any value';
 const SECRET_PATH = 'its kind checks a path without reading it';
+const SECRET_REPLAY = 'a read is replayed with the same value';
 const SECRET_VALUE = 'seed-secret-value';
 
 function secretsThat(patch: Partial<SecretSourceSubject>): () => SecretSourceSubject {
@@ -1086,6 +1087,12 @@ describeSecretSourceContract(
   secretsThat({ down: { read: async () => Promise.reject(new Error(`unreachable; last value ${SECRET_VALUE}`)) } }),
   { violates: [SECRET_DOWN] },
 );
+
+function changesAtTheSecondRead(): SecretSource {
+  let reads = 0;
+  return { read: async (path) => (path === 'kv/app#seed' ? (reads++ === 0 ? SECRET_VALUE : 'another-secret-value') : Promise.reject(new Error('no secret'))) };
+}
+describeSecretSourceContract('a secret source that answers another value at the second read', () => secretsThat({ source: changesAtTheSecondRead() })(), { violates: [SECRET_REPLAY] });
 
 describeSecretSourceContract(
   'a secret source kind that accepts any path',
