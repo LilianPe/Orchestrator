@@ -106,7 +106,8 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
   it('has neither sequence nor foreign key, which EMPTY_ALL relies on to reset a test schema', async () => {
     const { rows } = await queryOn(PG_URL, (c) =>
       c.query<{ kind: string; name: string }>(
-        `select 'sequence' as kind, sequence_name as name from information_schema.sequences where sequence_schema = $1
+        // pg_class rather than information_schema.sequences, which leaves out those of identity columns.
+        `select 'sequence' as kind, relname as name from pg_class where relkind = 'S' and relnamespace = $1::regnamespace
          union all
          select 'foreign key', constraint_name from information_schema.table_constraints where table_schema = $1 and constraint_type = 'FOREIGN KEY'`,
         [a.name],
