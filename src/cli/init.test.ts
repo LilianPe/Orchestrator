@@ -173,7 +173,7 @@ describe('factory init: the command that starts the application, in the same pro
     expect((await initProposal({ 'package.json': pkg({ test: 'vitest run', build: 'tsc' }) })).config?.preview).toBeUndefined();
     expect((await initProposal({}, { python: true })).config?.preview).toBeUndefined();
     expect((await initProposal({ 'package.json': '{ "scripts": { "dev": "vite" }, }' })).config).toBeUndefined();
-    expect((await initProposal({ 'package.json': 'null' })).config).toBeUndefined();
+    for (const pkgJson of ['null', '[]', '1']) expect((await initProposal({ 'package.json': pkgJson, 'package-lock.json': '{}' })).config).toBeUndefined();
   });
 
   it('a preview alone is still a proposal', async () => {

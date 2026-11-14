@@ -318,7 +318,8 @@ async function testRunners(git: CloneGit, sha: string, commands: readonly string
   return runners;
 }
 
-type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter'>> & { start: string };
+/** A request to shoot: a browser, and the base's `preview` as what starts the application. */
+type Shooting = VisualRequest & { shooter: VisualShooter; start: string };
 
 /**
  * The decision on the diff (ORC-176), and what takes a required proof, or why it cannot be taken: then indicative (ORC-152), no

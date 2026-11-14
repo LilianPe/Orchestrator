@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
-import { stringify } from 'yaml';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
@@ -28,15 +28,21 @@ interface Detected {
   preview?: string;
 }
 
-/** The scripts of the repository's package.json: none without one, or with one that does not parse (a proposal never fails init). */
+/**
+ * The scripts of the repository's package.json: none without one, or with one that does not parse or is not an object (npm
+ * would refuse it too; a proposal never fails init).
+ */
 function nodeScripts(repo: string): Record<string, string> | undefined {
   const pkgFile = join(repo, 'package.json');
   if (!existsSync(pkgFile)) return undefined;
+  let pkg: unknown;
   try {
-    return (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> } | null)?.scripts ?? {};
+    pkg = JSON.parse(readFileSync(pkgFile, 'utf8'));
   } catch {
     return undefined;
   }
+  if (typeof pkg !== 'object' || pkg === null || Array.isArray(pkg)) return undefined;
+  return (pkg as { scripts?: Record<string, string> }).scripts ?? {};
 }
 
 /**
@@ -81,13 +87,11 @@ export const PROPOSAL_HEADER = `Proposed ${REPO_CONFIG_PATH}, to commit on the d
 
 /** The repository's `.factory/config.yml`, as `init` detects it: none when it detects nothing. */
 function proposal({ setup, commands, preview }: Detected): string | undefined {
-  if (!setup.length && !Object.keys(commands).length && !preview) return undefined;
   const checks = { ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
-  return (
-    PROPOSAL_HEADER +
+  const text =
     (Object.keys(checks).length ? stringify(checks) : '') +
-    (preview ? `# What starts the application for the visual proof: it must listen on PORT.\n${stringify({ preview })}` : '')
-  );
+    (preview ? `# What starts the application for the visual proof: it must listen on PORT.\n${stringify({ preview })}` : '');
+  return text ? PROPOSAL_HEADER + text : undefined;
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
