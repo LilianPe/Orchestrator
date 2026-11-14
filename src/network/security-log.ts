@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { readCapped } from '../adapters/read-capped.js';
 import { BUILT_IN_TOOLS } from '../presets/tools.js';
 import type { SecurityLog, SecurityStats } from '../store/types.js';
+import { READ_KINDS, unusualReads, type CountedRead } from './reads.js';
 
 /** The rules of the pack's PreToolUse hook (`packs/standard/hooks/pre-tool-use.mjs`): a refusal naming another is forged. */
 export const REFUSAL_RULES = [
@@ -37,16 +38,38 @@ const text = (max: number) => z.string().max(max).refine((s) => !s.includes('\0'
 const at = z.iso.datetime().transform((s) => Date.parse(s));
 const bytes = z.number().int().nonnegative();
 
+/** A read that moves a public counter (ORC-370): what of its path is kept, to audit what a run read of a registry or a forge. */
+const countedRead = z.object({ kind: z.enum(READ_KINDS), name: text(300).min(1), item: text(300).min(1) });
+
 const egressLine = z.object({
   at,
   method: text(32),
   host: text(300),
   port: z.number().int().min(0).max(65_535).optional(),
-  // Its path, and the reason the proxy gave, which names it, are not read: they can hold a secret.
+  // Its path, and the reason the proxy gave, which names it, are not read: they can hold a secret. A counted read's
+  // package and version, or asset, are (ORC-370): one this log cannot vouch for is dropped, the line kept.
   ok: z.boolean(),
   up: bytes,
   down: bytes,
+  read: countedRead.optional().catch(undefined),
+  suspicious: z.literal(true).optional(),
 });
+
+/** What the lockfiles of a run's repository declared when it started (`DeclaredReads`, written by the orchestrator). */
+const declaredFile = z.object({ judged: z.array(z.enum(READ_KINDS)), reads: z.array(z.string()) });
+const DECLARED_MAX_BYTES = 16 * 1024 * 1024;
+
+/** The run's declaration, undefined when there is none or it cannot be read: no read is then judged unusual. */
+function declared(path: string | undefined): ((read: CountedRead) => boolean) | undefined {
+  const read = path === undefined ? undefined : readCapped(path, DECLARED_MAX_BYTES);
+  if (read === undefined || read === 'not a file' || read.cut) return undefined;
+  try {
+    const d = declaredFile.safeParse(JSON.parse(read.text));
+    return d.success ? unusualReads(d.data) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The command a line names, or the path of a refused read, is not read: it can hold a secret. */
 const refusalLine = (ticketId: string) =>
@@ -100,19 +123,24 @@ const isNote = (raw: unknown) => typeof raw === 'object' && raw !== null && (raw
 
 /**
  * A run's security log (ORC-296), from the proxy's journal (`egress`, absent without a proxy) and the
- * hook's refusals log: the rule and the host, never a command nor a path. Never throws on what a journal
- * holds: a bad line is skipped and counted.
+ * hook's refusals log: the rule and the host, never a command nor a path, but a counted read's package and version
+ * or asset (ORC-370), flagged `suspicious` when the proxy refused it past the run's cap, `unusual` when the lockfiles
+ * `declared` at the run's start do not name it. Never throws on what a journal holds: a bad line is skipped and counted.
  */
 export function readSecurityLog(
   run: Pick<SecurityLog, 'runId' | 'projectId' | 'ticketId' | 'at'>,
-  paths: { egress?: string; refusals: string },
+  paths: { egress?: string; refusals: string; declared?: string },
 ): SecurityLog {
   const egress = parse(paths.egress, EGRESS_MAX_BYTES, egressLine, isNote);
   const refusals = parse(paths.refusals, REFUSALS_MAX_BYTES, refusalLine(run.ticketId));
+  const unusual = declared(paths.declared);
   // The lines' fields not declared above, a command, a path, the proxy's reason, are already left out by the parse.
   return {
     ...run,
-    egress: egress.entries,
+    egress: egress.entries.map(({ read, suspicious, ...e }) => {
+      const flag = suspicious ? 'suspicious' : read && e.ok && unusual?.(read) ? 'unusual' : undefined;
+      return { ...e, ...(read ? { read } : {}), ...(flag ? { flag } : {}) };
+    }),
     refusals: refusals.entries.map(({ at, tool, rule }) => ({ at, tool, rule })),
     skipped: { egress: egress.skipped, refusals: refusals.skipped },
   };
@@ -143,6 +171,8 @@ export function refusalSummary(log: SecurityLog): string | undefined {
     const named = hosts.slice(0, HOSTS_SHOWN).map(([h, n]) => `\`${h}\` (${n})`);
     out.push(`- hosts refused by the proxy: ${[...named, ...(other ? [`${other} other${other > 1 ? 's' : ''}`] : [])].join(', ')}`);
   }
+  const suspicious = refused.filter((e) => e.flag === 'suspicious').length;
+  if (suspicious) out.push(`- ${suspicious} read${suspicious > 1 ? 's' : ''} refused as suspicious (past the per-run cap of distinct versions or release assets)`);
   const skipped = log.skipped.egress + log.skipped.refusals;
   if (skipped) out.push(`\n${skipped} log line${skipped > 1 ? 's' : ''} ignored (malformed or forged).`);
   return out.join('\n');

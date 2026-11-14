@@ -54,6 +54,20 @@ describe('the egress proxy as a service of its own (ORC-203)', () => {
     }
   };
 
+  it("hands the proxy the caps of factory.yml with each run, and refuses caps that are not positive integers (ORC-370)", async () => {
+    const openRun = vi.spyOn(proxy, 'openRun');
+    const capped = new EgressClient(path, { reads: { versionsPerPackage: 2, assetsPerRepo: 3 } });
+    try {
+      await capped.open('run-1', LIMITED);
+      expect(openRun).toHaveBeenLastCalledWith('run-1', LIMITED, undefined, { versionsPerPackage: 2, assetsPerRepo: 3 });
+      await client.open('run-2', LIMITED);
+      expect(openRun).toHaveBeenLastCalledWith('run-2', LIMITED, undefined, undefined);
+      await expect(new EgressClient(path, { reads: { versionsPerPackage: 0, assetsPerRepo: 3 } }).open('run-3', LIMITED)).rejects.toThrow(/versionsPerPackage/);
+    } finally {
+      await capped.closeAll();
+    }
+  });
+
   it("hands the proxy the daemon's Claude token with each run, and none when the daemon has none (ORC-337)", async () => {
     // What reaches the Claude API through the run's socket: the token the run really uses.
     const { server, upstream } = await httpsUpstream(dir, (req, res) => res.end(String(req.headers.authorization)));

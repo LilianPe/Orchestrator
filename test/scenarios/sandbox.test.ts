@@ -824,6 +824,20 @@ describe("a run's security log", () => {
     expect(JSON.stringify(h.tracker.activities('ls-1'))).not.toContain('secret-name');
   });
 
+  it("keeps a run's counted reads, flags unusual what its repository's lockfiles did not declare at its start, and counts the suspicious in the summary (ORC-370)", async () => {
+    const read = (host: string, r: object, extra: object = {}) => JSON.stringify({ at, method: 'GET', host, path: '/x', ok: true, up: 0, down: 0, read: r, ...extra });
+    const { h, runId } = await runWith([
+      // The fake worktree has no lockfile: an npm read is not judged, a release asset no lockfile names is unusual.
+      read('registry.npmjs.org', { kind: 'npm', name: 'lodash', item: '1.0.0' }),
+      read('github.com', { kind: 'release', name: 'o/r', item: 'v1/a.zip' }),
+      read('github.com', { kind: 'release', name: 'o/r', item: 'v2/a.zip' }, { ok: false, reason: 'suspicious: more than 5 release assets of o/r in this run', suspicious: true }),
+    ], []);
+    expect(existsSync(join(h.runsDir!, runId, 'declared-reads.json'))).toBe(true);
+    const log = await h.store.securityLog(runId);
+    expect(log!.egress.map((e) => [e.read?.item, e.flag])).toEqual([['1.0.0', undefined], ['v1/a.zip', 'unusual'], ['v2/a.zip', 'suspicious']]);
+    expect(summaries(h)[0]!.body).toContain('1 read refused as suspicious');
+  });
+
   it('skips and counts the forged lines, posts nothing for a run without a refusal, and the run ends as it would', async () => {
     const { h, runId } = await runWith([request('registry.npmjs.org', true)], ['{"rule":"push"}', 'garbage', refusal('push', 'REL-9')]);
     expect(await h.store.securityLog(runId)).toMatchObject({ refusals: [], skipped: { refusals: 3 } });
