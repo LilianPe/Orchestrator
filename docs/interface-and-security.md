@@ -94,7 +94,7 @@ To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `c
 
 > host: 0.0.0.0 expose l'interface et l'API de Relais hors de cette machine. Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.
 
-With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401. A test lists the routes the password leaves open (ORC-222): a new inbound route fails it until it has a guard of its own, and each webhook route is tested on the running daemon, unsigned, signed with another secret and stale.
+With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401. A test lists the routes the password leaves open (ORC-222): a new inbound route fails it until it has a guard of its own, and each webhook route and the smee relay are tested on the running daemon, unsigned and signed with another secret, Linear's stale too (GitHub dates no delivery).
 
 The `relais status|pause|resume|stop` commands send `RELAIS_UI_PASSWORD` if the variable is set in the shell.
 

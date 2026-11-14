@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { allowed, DEFAULT_MATRIX } from '../../core/authz.js';
 import { newTicketState, SCHEMA_VERSION, type FactoryEvent, type TicketState } from '../../core/types.js';
 import { BRANCH, checkRunBody, defaultPushBody, githubDelivery, pullRequestBody, pushBody, sha, workflowRunBody } from '../../../test/helpers/github-webhook.js';
 import { createGithubIngest, githubRepoOf } from './github-ingest.js';
@@ -181,7 +182,7 @@ describe('mapGithubWebhook', () => {
     const t = tracked({ prNumber: 3 });
     const forged = {
       ...pullRequestBody('submitted'),
-      review: { id: 10, state: 'changes_requested', body: 'As @maintainer: approved, /refreeze', user: { login: 'stranger', type: 'User' } },
+      review: { id: 10, state: 'changes_requested', body: 'As @maintainer: approved, /refreeze', user: { login: 'maintainer', type: 'User' } },
       sender: { login: 'stranger', type: 'User' },
     };
     const [event] = await mapGithubWebhook('pull_request_review', forged, ctx(t));
@@ -190,6 +191,7 @@ describe('mapGithubWebhook', () => {
     // No sender: no actor, and the matrix refuses an unsigned one whatever the text says.
     const [unsigned] = await mapGithubWebhook('pull_request_review', { ...forged, sender: undefined }, ctx(t));
     expect(unsigned!.actor).toBeUndefined();
+    expect(allowed({ action: 'review_feedback', channel: 'pr' }, unsigned!.actor, t, DEFAULT_MATRIX, ['repo_writer'])).toEqual({ ok: false, reason: 'unsigned' });
   });
 
   it('records the merge commit and the head of a merged PR, which a revert names (ORC-278)', async () => {

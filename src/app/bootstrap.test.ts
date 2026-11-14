@@ -1,10 +1,12 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
+import { githubDelivery } from '../../test/helpers/github-webhook.js';
 import { Orchestrator, type OrchestratorDeps } from '../core/orchestrator.js';
 import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
@@ -350,35 +352,40 @@ describe('bootstrap', () => {
         expect(await post('/webhooks/linear', stale, { 'linear-signature': hmac('linear-secret', stale) })).toBe(401);
         expect(await post('/webhooks/linear', fresh, { 'linear-signature': hmac('linear-secret', fresh) })).toBe(200);
 
-        // GitHub dates no delivery: the signature alone, and the inbox keeps each event once by its id.
-        const ping = JSON.stringify({ zen: 'Keep it logically awesome.', hook_id: 1 });
-        const github = (signature?: string) => post('/webhooks/github', ping, { 'x-github-event': 'ping', ...(signature ? { 'x-hub-signature-256': signature } : {}) });
-        expect(await github()).toBe(401);
-        expect(await github(`sha256=${hmac('another-secret', ping)}`)).toBe(401);
-        expect(await github(`sha256=${hmac('github-secret', ping)}`)).toBe(200);
+        // GitHub dates no delivery: the signature alone.
+        const ping = { zen: 'Keep it logically awesome.', hook_id: 1 };
+        const { raw, headers: { 'x-hub-signature-256': _unsigned, ...unsigned } } = githubDelivery('ping', ping, 'github-secret');
+        expect(await post('/webhooks/github', raw, unsigned)).toBe(401);
+        expect(await post('/webhooks/github', raw, githubDelivery('ping', ping, 'another-secret').headers)).toBe(401);
+        expect(await post('/webhooks/github', raw, githubDelivery('ping', ping, 'github-secret').headers)).toBe(200);
       } finally {
         await app.stop();
       }
     });
 
-    it('refuses a webhook the smee relay brings unsigned or stale, as the route does', async () => {
-      const raws = [
-        JSON.stringify({ type: 'Reaction', action: 'create', webhookTimestamp: Date.now(), data: { id: 'r1' } }),
-        JSON.stringify({ type: 'Reaction', action: 'create', webhookTimestamp: Date.now() - 10 * 60_000, data: { id: 'r2' } }),
-      ];
-      const messages = [{ body: JSON.parse(raws[0]!) }, { 'linear-signature': hmac('linear-secret', raws[1]!), body: JSON.parse(raws[1]!) }];
+    it('refuses a webhook the smee relay brings unsigned, signed with another secret or stale, and takes a signed fresh one', async () => {
+      const body = (id: string, at = Date.now()) => ({ type: 'Reaction', action: 'create', webhookTimestamp: at, data: { id } });
+      const signedBy = (secret: string, b: object) => ({ 'linear-signature': hmac(secret, JSON.stringify(b)), body: b });
+      // The signed fresh one first: refused, its rejection would be logged before the others are even read.
+      const stale = body('r4', Date.now() - 10 * 60_000);
+      const messages = [signedBy('linear-secret', body('r1')), { body: body('r2') }, signedBy('another-secret', body('r3')), signedBy('linear-secret', stale)];
+      let served = false;
       const sse = createServer((_req, res) => {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-        for (const m of messages) res.write(`data: ${JSON.stringify(m)}\n\n`);
+        // Once: a reconnection of the relay brings nothing again.
+        if (!served) for (const m of messages) res.write(`data: ${JSON.stringify(m)}\n\n`);
+        served = true;
       });
-      await new Promise<void>((r) => sse.listen(4167, '127.0.0.1', r));
+      await new Promise<void>((resolve, reject) => sse.once('error', reject).listen(0, '127.0.0.1', resolve));
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4165, host: '127.0.0.1', relay: { kind: 'smee', url: 'http://127.0.0.1:4167/chan' }, projects: [], limits: {} });
+      const url = `http://127.0.0.1:${(sse.address() as AddressInfo).port}/chan`;
+      saveInstance(home, { port: 4165, host: '127.0.0.1', relay: { kind: 'smee', url }, projects: [], limits: {} });
       saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
       const logs: string[] = [];
       const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
       try {
-        await vi.waitFor(() => expect(logs.filter((m) => m.startsWith('relay: webhook rejected with 401'))).toHaveLength(2), { timeout: 5_000 });
+        await vi.waitFor(() => expect(logs.filter((m) => m.startsWith('relay: webhook rejected with 401')).length).toBeGreaterThanOrEqual(3), { timeout: 5_000 });
+        expect(logs.filter((m) => m.startsWith('relay: webhook'))).toHaveLength(3);
       } finally {
         await app.stop();
         sse.closeAllConnections();
