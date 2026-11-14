@@ -7,7 +7,6 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
 import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
-import { teamOf, type Tracker } from '../adapters/tracker/types.js';
 import type { ReplaySource } from '../ghost/delegate.js';
 import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
 import type { BusMessage, EventBus } from './live-feed.js';
@@ -45,8 +44,7 @@ export interface ServerDeps {
   githubWebhook: (raw: string, headers: Record<string, string | undefined>) => Promise<{ status: number }>;
   oauth?: { authorizeUrl: () => string; callback: (code: string, state: string) => Promise<void> };
   linearConnected: () => boolean;
-  tracker: Pick<Tracker, 'getIssue' | 'search' | 'activity'>;
-  /** The replay of closed tickets (ORC-376): a replayed ticket's run reads the ticket as of its start, through no tracker. */
+  /** The replay of closed tickets (ORC-376): a replayed ticket's run searches the knowledge base as of its start. */
   replays?: ReplaySource;
   /**
    * The MCP's `kb_search` (ORC-232), on the server's clone of the knowledge base; `repo`, another checkout of it (a replayed
@@ -89,8 +87,6 @@ export function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '').toLowerCase();
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
-
-type AgentEnv = { Variables: { run: RunRecord } };
 
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;
@@ -160,16 +156,23 @@ function operator(c: Context, password: string | undefined): Pick<FactoryEvent, 
   return { actor: `dashboard:${user || 'local'}`, roles: ['operator'] };
 }
 
+/** The factory MCP (ORC-288): all the agents reach of the factory (ORC-192). */
+export const AGENT_MCP_PATH = '/agent/mcp';
+
+/** Public, guarded by their own: the webhooks, the OAuth callback, and `/agent`, so that what is not the MCP there answers 404, never 401. */
+/** The agents' prefix: the MCP and, everywhere else under it, a 404 (ORC-192). */
+export const isAgentPath = (path: string) => path === '/agent' || path.startsWith('/agent/');
+
 function isPublicPath(method: string, path: string): boolean {
-  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || path === '/agent' || path.startsWith('/agent/');
+  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || isAgentPath(path);
 }
 
 /**
- * The agent API alone (ORC-204), for the listener the sandboxes reach off the loopback: every other
+ * The factory MCP alone (ORC-204, ORC-192), for the listener the sandboxes reach off the loopback: every other
  * path answers 404. Node's server has already resolved `..` in the URL Hono routes on.
  */
 export function agentOnly(app: Hono): (req: Request) => Response | Promise<Response> {
-  return (req) => (new URL(req.url).pathname.startsWith('/agent/') ? app.fetch(req) : new Response('Not Found', { status: 404 }));
+  return (req) => (new URL(req.url).pathname === AGENT_MCP_PATH ? app.fetch(req) : new Response('Not Found', { status: 404 }));
 }
 
 function publicRun({ token: _t, ...rest }: RunRecord) {
@@ -577,52 +580,27 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ok: true });
   });
 
-  const agent = new Hono<AgentEnv>();
-  agent.use('*', async (c, next) => {
-    const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
-    const run = token ? await d.store.findRunByToken(token) : undefined;
-    if (!run || run.status !== 'running') return c.json({ error: 'unauthorized' }, 401);
-    c.set('run', run);
-    await next();
-  });
-  /** The run's ticket as a replay keeps it (ORC-376); undefined for any other run. */
-  const replayedOf = (run: RunRecord) => d.replays?.of(run.projectId, run.ticketId);
-  agent.get('/issue/:id', async (c) => {
-    const run = c.get('run');
-    if (c.req.param('id') !== run.ticketId) return c.json({ error: 'forbidden' }, 403);
-    return c.json((await replayedOf(run))?.issue ?? (await d.tracker.getIssue(run.ticketId)));
-  });
-  // The run's team alone (ORC-349): the factory's token reads the whole workspace, the agent reads its ticket's team.
-  agent.get('/search', async (c) => {
-    const run = c.get('run');
-    // A replayed ticket (ORC-376): Linear holds now what was written after its start, the human's work among it.
-    if (await replayedOf(run)) return c.json({ error: 'a replayed ticket searches no tracker: it holds what was written after the ticket\'s start' }, 403);
-    return c.json(await d.tracker.search(c.req.query('q') ?? '', teamOf(run.ticketId)));
-  });
   // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
   const ask = async (run: RunRecord, question: string) => {
     const at = d.clock.now();
     await d.submit({ ...TRUSTED, id: `ask:${run.id}:${at}`, type: 'agent.asked', at, projectId: run.projectId, ticketId: run.ticketId, payload: { question, job: run.job, ...(run.linearSessionId ? { linearSessionId: run.linearSessionId } : {}) } });
   };
-  agent.post('/ask', async (c) => {
-    const { text } = (await c.req.json()) as { text?: string };
-    if (!text) return c.json({ error: 'text required' }, 400);
-    await ask(c.get('run'), text);
-    return c.json({ ok: true });
-  });
-  agent.post('/mcp', async (c) => {
+  // The factory MCP alone under /agent (ORC-192): factory-agent's routes are gone, every other path is a 404, token or not.
+  app.post(AGENT_MCP_PATH, async (c) => {
+    const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
+    const run = token ? await d.store.findRunByToken(token) : undefined;
+    if (!run || run.status !== 'running') return c.json({ error: 'unauthorized' }, 401);
     let msg: unknown;
     try {
       msg = await c.req.json();
     } catch {
       return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400);
     }
-    const run = c.get('run');
     const search = d.knowledgeSearch;
     // A replayed ticket's run (ORC-376): the knowledge base at its start, never the one of now, which may hold a note learned from
     // its own PR; none with `--memory off`.
     const kbSearch = search && (async (q: string) => {
-      const replayed = await replayedOf(run);
+      const replayed = await d.replays?.of(run.projectId, run.ticketId);
       if (!replayed) return search(q);
       return replayed.knowledge ? search(q, replayed.knowledge) : [];
     });
@@ -630,8 +608,9 @@ export function createApp(d: ServerDeps): Hono {
     return res ? c.json(res) : c.body(null, 202);
   });
   // No SSE stream to GET: the MCP transport's answer for a server that offers none.
-  agent.all('/mcp', (c) => c.body(null, 405, { Allow: 'POST' }));
-  app.route('/agent', agent);
+  app.all(AGENT_MCP_PATH, (c) => c.body(null, 405, { Allow: 'POST' }));
+  app.all('/agent', (c) => c.notFound());
+  app.all('/agent/*', (c) => c.notFound());
 
   app.get('*', (c) => {
     if (!d.webDir) return c.notFound();
