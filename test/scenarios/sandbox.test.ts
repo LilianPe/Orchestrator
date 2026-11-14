@@ -496,6 +496,14 @@ describe('a disposable sandbox per attempt', () => {
       expect(told).not.toContain('registry-secret');
     });
 
+    it('reads an env: secret from the daemon environment at the setup, as in production (ORC-308)', async () => {
+      const envVars = async () => ({ env: {}, setupSecrets: { NPM_TOKEN: { source: 'env', path: 'ORG_NPM_TOKEN' } }, missing: [] });
+      const h = createHarness({ sandboxed: true, secretEnv: { ORG_NPM_TOKEN: 'npm-secret-value' }, projectYaml: SETUP, repoVariables: envVars });
+      await delegate(h);
+      expect(setups(h)[0]!.opts!.env).toMatchObject({ NPM_TOKEN: 'npm-secret-value' });
+      expect(h.secrets.values()).toEqual(['npm-secret-value']);
+    });
+
     it('reads no secret for a setup on work nobody reviewed (ORC-308)', async () => {
       const sources = vault();
       const h = createHarness({ sandboxed: true, secretSources: sources, projectYaml: SETUP, repoVariables });
