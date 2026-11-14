@@ -249,6 +249,12 @@ describe('factory.yml (ORC-209, part B)', () => {
       ]);
     });
 
+    it('skips a secret written without a value, as repos[].env does, and refuses an empty text', () => {
+      const yml = parseFactoryYml('repos:\n  - { linear_team: ENG, github: org/app, secrets: { NPM_TOKEN: , K: env:NPM_TOKEN } }\n', ENV);
+      expect(yml.repos![0]!.secrets).toEqual({ K: { source: 'env', path: 'NPM_TOKEN' } });
+      expect(violations('repos:\n  - { linear_team: ENG, github: org/app, secrets: { NPM_TOKEN: "" } }\n')).toEqual(['repos[0].secrets.NPM_TOKEN: a non-empty text is expected']);
+    });
+
     it('names the key of a source or a kind that only an object prototype holds, never a crash', () => {
       expect(violations('repos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "constructor:foo" } }\n')).toEqual([
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',

@@ -379,6 +379,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (Object.keys(secretSources).length) out.secretSources = secretSources;
   /** A repository secret's reference (ORC-308): its source declared, its path one its adapter accepts; nothing read. */
   const reference = (path: string, v: unknown): SecretRef | undefined => {
+    // Written without a value: skipped, as before ORC-308 and as `repos[].env` does; the setup then reports it missing.
+    if (v === undefined || v === null) return undefined;
     if (typeof v !== 'string' || v === '') {
       violations.push(`${path}: a non-empty text is expected`);
       return undefined;
