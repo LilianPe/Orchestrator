@@ -358,6 +358,11 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
           violations.push(`${path}: built in, it is not declared`);
           continue;
         }
+        // Assigned as a key, it would set an object's prototype: the source would vanish while its references passed.
+        if (name === '__proto__') {
+          violations.push(`${path}: not a name a source can take`);
+          continue;
+        }
         adapters.set(name, undefined);
         if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
           violations.push(`${path}: an object \`{ kind, … }\` is expected`);

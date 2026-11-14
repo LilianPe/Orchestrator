@@ -260,6 +260,10 @@ describe('factory.yml (ORC-209, part B)', () => {
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);
       expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env)']);
+      expect(violations('secret_sources: { __proto__: { kind: env } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "__proto__:FOO" } }\n')).toEqual([
+        'secret_sources.__proto__: not a name a source can take',
+        'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
+      ]);
     });
 
     it('only knows env by default: no real secret manager is shipped', () => {
