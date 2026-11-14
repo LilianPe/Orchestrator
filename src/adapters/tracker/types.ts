@@ -60,8 +60,9 @@ export function effectMarker(effectId: string): string {
 export const isEffectComment = (body: string): boolean => body.includes(EFFECT_MARKER);
 
 /**
- * What a label write changed on the ticket, a group's other labels taken off included, and the issue's `updatedAt` after it
- * (ORC-346): what the factory then knows of the ticket's labels, so a pass that reads them sees no human change.
+ * The labels a write set and took off, a group's other labels included, and the issue's `updatedAt` after it (ORC-346): what
+ * the factory then knows of the ticket's labels, so a pass that reads them sees no human change. Told by a write that had
+ * nothing to change too: a retry after a failed record records it then. `at` is 0 when Linear gives no version.
  */
 export interface LabelsWritten {
   added: string[];
@@ -92,8 +93,8 @@ export interface Tracker {
   /** The issues of the team `teamKey` alone that match `term` (ORC-349): an agent never searches the whole workspace. */
   search(term: string, teamKey: string): Promise<SearchHit[]>;
   moveTo(identifier: string, stateName: string): Promise<void>;
-  /** Final state: adds `add`, takes off `remove`; writes nothing, and says nothing, when the ticket already reads so. */
-  setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten | void>;
+  /** Final state: adds `add`, takes off `remove`; writes nothing when the ticket already reads so. */
+  setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten>;
   /** With `effectId`, the comment carries `effectMarker(effectId)`, for `findComment` to find it. */
   comment(identifier: string, body: string, effectId?: string): Promise<void>;
   /** The id of the ticket's comment written for `effectId`, if there is one. */

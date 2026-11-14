@@ -72,6 +72,9 @@ const isNotFound = (e: LinearGqlError) => e.extensions?.type === 'invalid input'
  * object by it. A sha256 of the effect id with the version and variant bits of a v4: the same effect
  * always gets the same id.
  */
+/** An issue's `updatedAt` as a number; 0 when Linear gives none readable. */
+const version = (updatedAt: string | undefined): number => (updatedAt && Number.isFinite(Date.parse(updatedAt)) ? Date.parse(updatedAt) : 0);
+
 export function effectUuid(kind: 'comment' | 'activity' | 'reaction', effectId: string): string {
   const h = createHash('sha256').update(`factory:${kind}:${effectId}`).digest();
   h[6] = (h[6]! & 0x0f) | 0x40;
@@ -324,7 +327,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
    * Before adding a label, the team's labels are read again: a group made since the start counts.
    * Two labels of one group in `add` cannot both hold: refused, rather than one picked silently.
    */
-  async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten | void> {
+  async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
     const team = teamOf(identifier);
     const issue = await this.node(identifier);
     const has = new Map(issue.labels.nodes.map((l) => [l.name, l]));
@@ -342,12 +345,17 @@ export class LinearTracker implements Tracker, TeamDirectory {
       groups.set(group, name);
     }
     const removed = issue.labels.nodes.filter((l) => !add.includes(l.name) && (remove.includes(l.name) || (l.parent?.id !== undefined && groups.has(l.parent.id))));
-    if (addedLabelIds.length === 0 && removed.length === 0) return;
-    const { issueUpdate } = await this.api.gql<{ issueUpdate: { issue: { updatedAt: string } } }>(Q.issueUpdate, {
+    const written = (updatedAt: string | undefined): LabelsWritten => ({
+      added: [...new Set(add)],
+      removed: [...new Set([...remove, ...removed.map((l) => l.name)])].filter((name) => !add.includes(name)),
+      at: version(updatedAt),
+    });
+    if (addedLabelIds.length === 0 && removed.length === 0) return written(issue.updatedAt);
+    const { issueUpdate } = await this.api.gql<{ issueUpdate: { issue?: { updatedAt?: string } | null } }>(Q.issueUpdate, {
       id: issue.id,
       input: { addedLabelIds, removedLabelIds: removed.map((l) => l.id) },
     });
-    return { added: add.filter((name) => !has.has(name)), removed: removed.map((l) => l.name), at: Date.parse(issueUpdate.issue.updatedAt) };
+    return written(issueUpdate.issue?.updatedAt);
   }
 
   async comment(identifier: string, body: string, effectId?: string): Promise<void> {

@@ -188,7 +188,7 @@ export class FakeTracker implements Tracker, TeamDirectory {
    * adding a label of a group takes the group's other labels off, two of one group are refused (ORC-160).
    */
   /** Its `at` is the issue's `updatedAt` as a test set it: the fake keeps no version of its own. */
-  async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten | void> {
+  async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
     const i = this.must(identifier);
     const groups = new Map<string, string>();
     for (const l of add) {
@@ -203,9 +203,9 @@ export class FakeTracker implements Tracker, TeamDirectory {
       return remove.includes(l) || (group !== undefined && groups.has(group));
     };
     const next = [...new Set([...i.labels.filter((l) => add.includes(l) || !off(l)), ...add])];
-    if (next.length === i.labels.length && next.every((l) => i.labels.includes(l))) return;
+    const written = { added: [...new Set(add)], removed: [...new Set([...remove, ...i.labels.filter((l) => !next.includes(l))])].filter((l) => !add.includes(l)), at: i.updatedAt ?? 0 };
+    if (next.length === i.labels.length && next.every((l) => i.labels.includes(l))) return written;
     this.record('setLabels', identifier, add, remove);
-    const written = { added: next.filter((l) => !i.labels.includes(l)), removed: i.labels.filter((l) => !next.includes(l)), at: i.updatedAt ?? 0 };
     i.labels = next;
     return written;
   }

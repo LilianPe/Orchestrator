@@ -19,9 +19,9 @@ function fakeLinear(handlers: Record<string, Handler>) {
   return { api: new LinearApi(async () => 'tok', fetchImpl), calls };
 }
 
-/** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
 /** The issue's `updatedAt` after a write, as Linear answers `issueUpdate`. */
 const UPDATED = '2026-11-14T10:00:00.000Z';
+/** A GraphQL connection page: `next` is the cursor of the page after it, `null` on the last one. */
 const conn = <N>(nodes: N[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } });
 const node = {
   id: 'uuid-1', identifier: 'REL-1', title: 'Export', description: 'Desc', url: 'https://linear.app/x/REL-1', priority: 2,
@@ -293,13 +293,13 @@ describe('LinearTracker', () => {
       IssueUpdate: () => ({ issueUpdate: { success: true, issue: { updatedAt: UPDATED } } }),
     });
     const t = new LinearTracker(api, 'app-1');
-    // What it changed, the group's other label included, at the issue's version after it: what the factory then knows (ORC-346).
+    // What it set and took off, the group's other label included, at the issue's version after it: what the factory then knows (ORC-346).
     expect(await t.setLabels('REL-1', ['prio:haute'], [])).toEqual({ added: ['prio:haute'], removed: ['prio:basse'], at: Date.parse(UPDATED) });
     expect(calls.at(-1)).toEqual({ op: 'IssueUpdate', vars: { id: 'uuid-1', input: { addedLabelIds: ['l-high'], removedLabelIds: ['l-low'] } } });
-    // The final state reads as asked: a replay writes nothing, and says nothing.
+    // The final state reads as asked: a replay writes nothing, and tells the same labels at the issue's version, for a record that failed.
     onIssue = [{ id: 'l1', name: 'bug' }, { id: 'l-high', name: 'prio:haute', parent: group }];
     const before = calls.length;
-    expect(await t.setLabels('REL-1', ['prio:haute'], [])).toBeUndefined();
+    expect(await t.setLabels('REL-1', ['prio:haute'], [])).toEqual({ added: ['prio:haute'], removed: [], at: 0 });
     expect(calls.slice(before).map((c) => c.op)).toEqual(['Issue']);
     // Both labels of the group on the ticket (set by hand before the group existed): the one asked stays.
     onIssue = [{ id: 'l-low', name: 'prio:basse', parent: group }, { id: 'l-high', name: 'prio:haute', parent: group }];

@@ -253,7 +253,7 @@ export class PolicedTracker implements Tracker {
   listDelegated(teamKey: string): Promise<TrackerIssue[]> { return this.tracker.listDelegated(teamKey); }
   search(term: string, teamKey: string): Promise<SearchHit[]> { return this.tracker.search(term, teamKey); }
   moveTo(id: string, state: string): Promise<void> { return this.tracker.moveTo(id, state); }
-  setLabels(id: string, add: string[], remove: string[]): Promise<LabelsWritten | void> { return this.tracker.setLabels(id, add, remove); }
+  setLabels(id: string, add: string[], remove: string[]): Promise<LabelsWritten> { return this.tracker.setLabels(id, add, remove); }
   findComment(id: string, effectId: string): Promise<string | undefined> { return this.tracker.findComment(id, effectId); }
   react(commentId: string, emoji: string, effectId?: string): Promise<void> { return this.tracker.react(commentId, emoji, effectId); }
   findReaction(commentId: string, effectId: string): Promise<string | undefined> { return this.tracker.findReaction(commentId, effectId); }

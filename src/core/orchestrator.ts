@@ -2184,7 +2184,6 @@ export class Orchestrator {
    */
   private async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
     const written = await this.d.tracker.setLabels(ticketId, add, remove);
-    if (!written) return;
     const inTurn = this.d.labelsTurn ?? ((task) => task());
     await inTurn(() => recordWrite(this.d.store, projectId, ticketId, written));
   }
@@ -2211,9 +2210,10 @@ export class Orchestrator {
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     if (this.silenced(project.id, `the move of ${t.ticketId} to ${to}`)) return;
-    await this.d.tracker.moveTo(t.ticketId, stateName);
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
+    // Read before the move: the status is recorded right after its write, which is how a pass knows it (ORC-346).
     const reviewSha = to !== 'human_review' ? undefined : keepReviewSha ? t.reviewSha : await this.headShown(project, t);
+    await this.d.tracker.moveTo(t.ticketId, stateName);
     await state(this.apply(await state(this.ticket(project.id, t.ticketId)), { type: 'status.recorded', to, ...(reviewSha ? { reviewSha } : {}) }));
   }
 
