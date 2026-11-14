@@ -333,7 +333,6 @@ async function planVisual(
   const changed = zFields(await at.git.raw('diff', '--name-only', '-z', '--no-renames', at.from, at.sha));
   const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
   if (proof.decision !== 'required' || at.refused) return { proof };
-  // What starts the application: the base's `preview` in `.factory/config.yml` (ORC-397), the only place it is declared.
   const start = at.config.preview;
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH})`;

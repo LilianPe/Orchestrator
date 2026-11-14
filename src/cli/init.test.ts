@@ -32,11 +32,18 @@ async function initProposal(files: Record<string, string>, o: { python?: boolean
   const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
   const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   if (o.python) copyPythonRepo(repo);
+  const factoryBefore = Object.keys(files).some((path) => path.startsWith('.factory/'));
+  if (factoryBefore) mkdirSync(join(repo, '.factory'));
   for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
   const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
   await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
   const proposal = io.printed.find((p) => p.startsWith(PROPOSAL_HEADER));
-  return { config: proposal === undefined ? undefined : parseRepoConfig(proposal.slice(PROPOSAL_HEADER.length)), wrote: existsSync(join(repo, '.factory')) };
+  return {
+    config: proposal === undefined ? undefined : parseRepoConfig(proposal.slice(PROPOSAL_HEADER.length)),
+    proposal,
+    printed: io.printed,
+    wrote: !factoryBefore && existsSync(join(repo, '.factory')),
+  };
 }
 
 describe('factory init', () => {
@@ -101,16 +108,9 @@ describe('factory init', () => {
   });
 
   it('proposes nothing over an existing .factory/config.yml, and says an old .factory/workflow.yml is ignored', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
-    for (const [path, content] of Object.entries(NPM)) writeFileSync(join(repo, path), content);
-    mkdirSync(join(repo, '.factory'));
-    writeFileSync(join(repo, '.factory/config.yml'), 'commands: { test: npm test }\n');
-    writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\n');
-    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
-    expect(io.printed.some((p) => p.startsWith(PROPOSAL_HEADER))).toBe(false);
-    expect(io.printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+    const { proposal, printed } = await initProposal({ ...NPM, '.factory/config.yml': 'commands: { test: npm test }\n', '.factory/workflow.yml': 'version: 1\n' });
+    expect(proposal).toBeUndefined();
+    expect(printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {
@@ -157,20 +157,16 @@ describe('factory init: the command that starts the application, in the same pro
   });
 
   it('one proposal with setup, commands and preview, the preview said to listen on PORT', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
-    writeFileSync(join(repo, 'package.json'), pkg({ test: 'vitest run', dev: 'vite' }));
-    writeFileSync(join(repo, 'package-lock.json'), '{}');
-    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
-    const proposals = io.printed.filter((p) => p.includes('.factory/config.yml, to commit'));
-    expect(proposals).toEqual([
+    const { printed } = await initProposal({ 'package.json': pkg({ test: 'vitest run', dev: 'vite' }), 'package-lock.json': '{}' });
+    expect(printed.filter((p) => p.includes('.factory/config.yml, to commit'))).toEqual([
       `${PROPOSAL_HEADER}setup: npm ci\ncommands:\n  test: npm test\n# What starts the application for the visual proof: it must listen on PORT.\npreview: npm run dev\n`,
     ]);
   });
 
   it('proposes none without such a script, nor for a Python repository, which has no start script by convention; nothing over a package.json that does not parse', async () => {
     expect((await initProposal({ 'package.json': pkg({ test: 'vitest run', build: 'tsc' }) })).config?.preview).toBeUndefined();
+    expect((await initProposal({ 'package.json': JSON.stringify({ scripts: { dev: true, test: 'vitest run' } }) })).config).toEqual(expect.objectContaining({ commands: { test: 'npm test' } }));
+    expect((await initProposal({ 'package.json': JSON.stringify({ scripts: { dev: true } }) })).config?.preview).toBeUndefined();
     expect((await initProposal({}, { python: true })).config?.preview).toBeUndefined();
     expect((await initProposal({ 'package.json': '{ "scripts": { "dev": "vite" }, }' })).config).toBeUndefined();
     for (const pkgJson of ['null', '[]', '1']) expect((await initProposal({ 'package.json': pkgJson, 'package-lock.json': '{}' })).config).toBeUndefined();

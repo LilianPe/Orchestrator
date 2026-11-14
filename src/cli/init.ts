@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
+import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH } from '../config/repo-config.js';
@@ -29,8 +30,8 @@ interface Detected {
 }
 
 /**
- * The scripts of the repository's package.json: none without one, or with one that does not parse or is not an object (npm
- * would refuse it too; a proposal never fails init).
+ * The scripts of the repository's package.json, those that are a command: none without one, or with one that does not parse
+ * or is not an object (npm would refuse it too; a proposal never fails init).
  */
 function nodeScripts(repo: string): Record<string, string> | undefined {
   const pkgFile = join(repo, 'package.json');
@@ -41,8 +42,9 @@ function nodeScripts(repo: string): Record<string, string> | undefined {
   } catch {
     return undefined;
   }
-  if (typeof pkg !== 'object' || pkg === null || Array.isArray(pkg)) return undefined;
-  return (pkg as { scripts?: Record<string, string> }).scripts ?? {};
+  if (!isRecord(pkg)) return undefined;
+  const scripts = isRecord(pkg['scripts']) ? pkg['scripts'] : {};
+  return Object.fromEntries(Object.entries(scripts).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''));
 }
 
 /**
@@ -79,7 +81,7 @@ function detectPython(repo: string): Detected {
 function detect(repo: string): Detected {
   const node = detectNode(repo);
   const python = detectPython(repo);
-  return { setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands }, ...(node.preview ? { preview: node.preview } : {}) };
+  return { ...node, setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands } };
 }
 
 /** What `init` prints before the `.factory/config.yml` it proposes (ORC-388): it writes nothing in the repository. */

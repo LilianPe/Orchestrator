@@ -99,8 +99,12 @@ export const rawWorkflowSchema = z
       .partial()
       .optional(),
     workspace: z
-      // `preview` went to `.factory/config.yml` (ORC-397, ORC-388): a project file that still sets it loads, the key dropped.
-      .object({ setup: z.array(z.string()), ports: z.object({ base: z.number().int().positive() }) })
+      .object({
+        setup: z.array(z.string()),
+        ports: z.object({ base: z.number().int().positive() }),
+        /** Read by nothing since ORC-388 (`.factory/config.yml`'s `preview`, ORC-397), accepted so a project file that still sets it loads. */
+        preview: z.string().min(1),
+      })
       .partial()
       .optional(),
     on: z.record(z.string(), z.array(rawRuleSchema)).optional(),
