@@ -70,5 +70,5 @@ With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY
 
 ## Security: known limits
 - At startup, Relais writes `<RELAIS_HOME>/run-settings.json` (the pack's settings + read refusals on `secrets.json`, `relais.db`, `transcripts/` and `logs/` of the real `RELAIS_HOME`) and passes it to each run via `--settings`. Check: the file exists and contains the real path (`/data/...` in Docker).
-- A run's environment contains neither `LINEAR_*` nor the daemon's `RELAIS_*` (only `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT` are set).
+- A run's environment contains neither `LINEAR_*` nor the daemon's `RELAIS_*` (only `RELAIS_API`, `RELAIS_RUN_TOKEN` and `RELAIS_TICKET` are set, with the pack hook's settings).
 - Residual risk: the pack allows `Bash(node:*)`, `Bash(npx:*)`, `Bash(npm:*)`. An agent (or an injection in a ticket) can therefore read `secrets.json` through a script (`node -e "…readFileSync(…)"`): Claude Code's deny lists are advisory, not a security boundary. The agent runs as the same user as the daemon. Do not deploy Relais on tickets coming from untrusted people as long as runs do not run under a separate user.

@@ -10,7 +10,7 @@ import { PRODUCT_NAME } from '../product.js';
  */
 export interface McpDeps {
   store: Pick<Store, 'setMeta'>;
-  /** The `/agent/ask` effect: an elicitation in Linear, the ticket blocked. */
+  /** The question journaled (`agent.asked`): told in Linear, the ticket blocked. */
   ask: (run: RunRecord, text: string) => Promise<void>;
   /** The knowledge base's search, on the server's clone (ORC-232): the runner reads no repository. Absent: no knowledge base. */
   kbSearch?: (query: string) => Promise<KbHit[]>;

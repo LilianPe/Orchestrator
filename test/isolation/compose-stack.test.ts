@@ -65,7 +65,6 @@ const ws = join(home, 'workspaces/recette');
 mkdirSync(ws, { recursive: true });
 const sbx = await provider.create({
   runId, ticketId: 'REC-1', workspacePath: ws, network: 'limited', requirements: DEFAULT_REQUIREMENTS,
-  mounts: ['bin', 'package.json', 'node_modules', 'dist'].map((p) => ({ host: join(root, p), target: '/factory/app/' + p, readOnly: true })),
 });
 const out = { root };
 try {
@@ -81,7 +80,7 @@ try {
   const fetch = (url, method) => "node -e \"fetch('" + url + "',{method:'" + method + "'}).then((r)=>console.log(r.status),(e)=>{console.log('failed',e.cause?.message??e.message);process.exit(1)})\"";
   out.refusedHost = await sh(fetch('https://example.com/', 'GET'));
   out.refusedMethod = await sh(fetch('https://registry.npmjs.org/is-odd', 'POST'));
-  out.agentApi = await sh(fetch('http://host.docker.internal:4101/agent/issue', 'GET'));
+  out.agentApi = await sh(fetch('http://host.docker.internal:4101/agent/mcp', 'POST'));
   out.dns = await sh("node -e \"require('dns').lookup('registry.npmjs.org',(e)=>{console.log(e?e.code:'resolved')})\"");
   await sh('touch /work/from-runner');
   out.fileOwner = statSync(join(ws, 'from-runner')).uid === process.getuid();
@@ -218,7 +217,8 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
 
   it('gives a runner node, pnpm, python, uv, git and claude', () => {
     expect(result.versions.code, result.versions.out).toBe(0);
-    expect(result.agent.code).toBe(0);
+    // factory-agent is gone with the agent API (ORC-192): the factory MCP is all a run reaches of the factory.
+    expect(result.agent.code).not.toBe(0);
   });
 
   it('installs with pnpm and uv through the proxy, and journals it', () => {

@@ -2,7 +2,6 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { FakeTracker } from '../adapters/tracker/fake.js';
 import { EventBus } from './live-feed.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
@@ -15,12 +14,12 @@ import { TAKEN_OVER } from '../core/block-cause.js';
 
 /** The HTTP Basic header the UI password asks for; its user is free. */
 const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
+/** A ping to the factory MCP with the run token of `setup`'s run. */
+const mcpPing = () => ({ method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) });
 
 async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
-  const tracker = new FakeTracker();
-  tracker.addIssue({ identifier: 'REL-1', title: 'Export' });
   const submitted: FactoryEvent[] = [];
   const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
   const webDir = mkdtempSync(join(tmpdir(), 'factory-web-'));
@@ -29,7 +28,7 @@ async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimite
   const githubWebhook = vi.fn(async () => ({ status: 401 }));
   const app = createApp({
     store, bus, clock: new FakeClock(10), submit: (e) => void submitted.push(e), isPaused: () => false, linearWebhook, githubWebhook,
-    linearConnected: () => true, tracker, capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
+    linearConnected: () => true, capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir, webDir, ...extra,
   });
   await store.putTicket(newTicketState('p', 'REL-1', 'Export', 'dev', 1));
@@ -37,7 +36,7 @@ async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimite
     id: 'r1', projectId: 'p', ticketId: 'REL-1', job: 'dev', queue: 'dev', status: 'running', claudeSessionId: 'c', linearSessionId: 'ls-1',
     startedAt: 1, costUsd: 0.5, turns: 2, lastText: '', token: 'tok', cwd: '/w',
   });
-  return { app, store, bus, tracker, submitted, linearWebhook, githubWebhook, transcriptsDir, webDir };
+  return { app, store, bus, submitted, linearWebhook, githubWebhook, transcriptsDir, webDir };
 }
 
 describe('server', () => {
@@ -694,51 +693,35 @@ describe('server', () => {
     });
   });
 
-  it('protects the agent API with the run token', async () => {
-    const { app } = await setup();
-    expect((await app.request('/agent/issue/REL-1')).status).toBe(401);
-    const ok = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
-    expect((await ok.json()).identifier).toBe('REL-1');
-    expect((await app.request('/agent/issue/REL-2', { headers: { authorization: 'Bearer tok' } })).status).toBe(403);
-  });
-
-  it("a replayed ticket's run reads the ticket as of its start, and searches no tracker, which holds what came after (ORC-376)", async () => {
-    const replayed = { repoPath: '/ghost/g1/REL-1/repo', knowledge: '/ghost/g1/REL-1/knowledge', issue: { identifier: 'REL-1', title: 'Export, as it was', description: 'Before.', url: '', stateName: '', stateType: 'unstarted', labels: [], teamKey: 'REL', priority: 0, createdAt: 0 } };
-    const { app, tracker } = await setup({ replays: { of: async (p, t) => (p === 'p' && t === 'REL-1' ? replayed : undefined) } });
-    tracker.addIssue({ identifier: 'REL-2', title: 'Export follow-up, after the PR' });
-    const issue = await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } });
-    expect(await issue.json()).toMatchObject({ identifier: 'REL-1', title: 'Export, as it was', description: 'Before.' });
-    const search = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
-    expect(search.status).toBe(403);
-    expect(((await search.json()) as { error: string }).error).toContain('replayed');
-  });
-
-  it("searches the run's team alone, not the whole Linear workspace with the factory's token (ORC-349)", async () => {
-    const { app, tracker } = await setup();
-    tracker.addIssue({ identifier: 'REL-2', title: 'Export to CSV' });
-    tracker.addIssue({ identifier: 'HR-7', title: 'Export of salaries' });
-    const res = await app.request('/agent/search?q=export', { headers: { authorization: 'Bearer tok' } });
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { identifier: string }[]).map((h) => h.identifier).sort()).toEqual(['REL-1', 'REL-2']);
-  });
-
-  it('the agent listener serves the agent API, with its run token, and nothing else (ORC-204)', async () => {
-    const { app } = await setup({ uiPassword: 'pw' });
-    const fetch = agentOnly(app);
-    const get = (path: string, token = 'tok') => fetch(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: `Bearer ${token}` } }));
-    expect((await (await get('/agent/issue/REL-1')).json()).identifier).toBe('REL-1');
-    expect((await get('/agent/issue/REL-1', 'nope')).status).toBe(401);
-    for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', '/agent']) {
-      expect((await get(path)).status, path).toBe(404);
+  it("answers 404 on factory-agent's API, with or without the run token, behind the password or not: the MCP is all that is left (ORC-192)", async () => {
+    for (const uiPassword of [undefined, 'pw']) {
+      const { app, submitted } = await setup(uiPassword ? { uiPassword } : {});
+      const paths = ['/agent', '/agent/issue/REL-1', '/agent/search?q=export', '/agent/kb/search?q=export', '/agent/ask', '/agent/mcp/extra'];
+      for (const token of [undefined, 'tok']) {
+        const headers: Record<string, string> = token ? { authorization: `Bearer ${token}`, 'content-type': 'application/json' } : {};
+        for (const path of paths) {
+          for (const method of ['GET', 'POST']) {
+            const init = { method, headers, ...(method === 'POST' ? { body: JSON.stringify({ text: 'Quelle base ?' }) } : {}) };
+            expect((await app.request(path, init)).status, `${method} ${path} ${token ?? 'no token'} ${uiPassword ?? 'no password'}`).toBe(404);
+            expect((await agentOnly(app)(new Request(`http://172.17.0.1:4101${path}`, init))).status, `listener ${method} ${path}`).toBe(404);
+          }
+        }
+      }
+      expect(submitted).toEqual([]);
     }
   });
 
-  it('agent ask journals the question, and tells nothing itself: `decide` blocks and the outbox writes it', async () => {
-    const { app, tracker, submitted } = await setup();
-    const res = await app.request('/agent/ask', { method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ text: 'Quelle base ?' }) });
-    expect(res.status).toBe(200);
-    expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', projectId: 'p', ticketId: 'REL-1', payload: { question: 'Quelle base ?', job: expect.any(String), linearSessionId: 'ls-1' } })]);
-    expect(tracker.activities('ls-1')).toEqual([]);
+  it('the agent listener serves the factory MCP, with its run token, and nothing else (ORC-204)', async () => {
+    const { app } = await setup({ uiPassword: 'pw' });
+    const fetch = agentOnly(app);
+    const ping = (token: string) =>
+      fetch(new Request('http://172.17.0.1:4101/agent/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) }));
+    expect(await (await ping('tok')).json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} });
+    expect((await ping('nope')).status).toBe(401);
+    const get = (path: string) => fetch(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: 'Bearer tok' } }));
+    for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', '/agent']) {
+      expect((await get(path)).status, path).toBe(404);
+    }
   });
 
   it('returns a transcript and serves the UI', async () => {
@@ -822,7 +805,7 @@ describe('server', () => {
       expect((await call(app, 'kb_search', {})).isError).toBe(true);
       // The HTTP route of factory-agent's `kb search` is gone with it: the MCP tool is the only way.
       const route = await agentOnly(app)(new Request('http://172.17.0.1:4101/agent/kb/search?q=agrégats', { headers: { authorization: 'Bearer tok' } }));
-      expect(route.headers.get('content-type')).not.toContain('application/json');
+      expect(route.status).toBe(404);
       expect(queries).toEqual(['agrégats serveur']);
     });
 
@@ -864,10 +847,10 @@ describe('server', () => {
       expect(await store.getMeta('agent-output:r1')).toBeUndefined();
     });
 
-    it('ask journals the question, like /agent/ask', async () => {
+    it('ask journals the question, and tells nothing itself (the server reads no tracker): `decide` blocks and the outbox writes it', async () => {
       const { app, submitted } = await setup();
       expect((await call(app, 'ask', { text: 'Quelle base ?' })).isError).toBeUndefined();
-      expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', payload: expect.objectContaining({ question: 'Quelle base ?' }) })]);
+      expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', projectId: 'p', ticketId: 'REL-1', payload: { question: 'Quelle base ?', job: expect.any(String), linearSessionId: 'ls-1' } })]);
       expect((await call(app, 'ask', {})).isError).toBe(true);
     });
 
@@ -901,7 +884,7 @@ describe('server', () => {
       // Its own signature guards it: the answer is the ingestion's, never the UI password's.
       expect((await app.request('/webhooks/github', { method: 'POST', body: '{}' })).headers.get('www-authenticate')).toBeNull();
       expect((await app.request('/oauth/callback?code=x&state=y')).status).not.toBe(401);
-      expect((await app.request('/agent/issue/REL-1', { headers: { authorization: 'Bearer tok' } })).status).toBe(200);
+      expect((await app.request('/agent/mcp', mcpPing())).status).toBe(200);
     });
   });
 
@@ -982,7 +965,7 @@ describe('server', () => {
     it('leaves the webhooks and the run-token agent API to their own guards, and the password-guarded interface to its password', async () => {
       const { app } = await setup();
       expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
-      expect((await app.request('/agent/issue/REL-1', as('host.containers.internal:4101', { headers: { authorization: 'Bearer tok' } }))).status).toBe(200);
+      expect((await app.request('/agent/mcp', as('host.containers.internal:4101', mcpPing()))).status).toBe(200);
       const guarded = await setup({ uiPassword: 's3cret' });
       expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic('s3cret') }))).status).toBe(200);
     });

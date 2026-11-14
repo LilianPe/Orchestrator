@@ -86,7 +86,19 @@ describe('standard pack', () => {
     expect(s.permissions.allow.filter((rule: string) => writes.test(rule))).toEqual([]);
     // A joker on a whole command line would refuse a commit message that says "push": `git -C . push` is the hook's, which reads the words.
     expect(s.permissions.deny.filter((rule: string) => /^Bash\(git \*/.test(rule) && rule.includes('push'))).toEqual([]);
-    expect(s.permissions.allow).toContain('Bash(factory-agent:*)');
+  });
+
+  it('names no factory-agent, gone with the agent API: a question ends the turn with a blocked submit_result (ORC-192)', () => {
+    const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
+    expect(s.permissions.allow.filter((rule: string) => rule.includes('factory-agent'))).toEqual([]);
+    expect(hook({ FACTORY_TICKET: 'REL-1' }).additionalContext).not.toContain('factory-agent');
+    expect(hook({ FACTORY_TICKET: 'REL-1' }).additionalContext).toContain('`status: "blocked"`');
+    for (const name of readdirSync(join(pack, 'skills'))) {
+      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('factory-agent');
+    }
+    for (const name of ['dev', 'feedback', 'fix-ci', 'receiving-review', 'debugging']) {
+      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toContain('`status: "blocked"`');
+    }
   });
 
   it("allows the factory MCP's tools, that a headless run would refuse otherwise (ORC-188)", () => {
@@ -169,13 +181,9 @@ describe('standard pack', () => {
     writeFileSync(join(kb, 'INDEX.md'), '- scores.md — server-side aggregates\n');
     expect(hook({ FACTORY_KNOWLEDGE: kb }).additionalContext).not.toContain('server-side aggregates');
     expect(plain.additionalContext).toContain('mcp__factory__kb_search');
-    expect(plain.additionalContext).not.toContain('factory-agent kb');
   });
 
   it('has the answer agent, and every skill that searched it, search the knowledge base with kb_search (ORC-232)', () => {
     expect(readFileSync(join(pack, 'skills/ask/SKILL.md'), 'utf8')).toContain('mcp__factory__kb_search');
-    for (const name of readdirSync(join(pack, 'skills'))) {
-      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('factory-agent kb');
-    }
   });
 });

@@ -113,7 +113,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
   });
 });
 
-describe('the question of an agent through `/agent/ask` (ORC-196)', () => {
+describe("the question of an agent through the factory MCP's `ask` (ORC-196)", () => {
   it('is told by the comment, then a reply resumes the job at work once it ended', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });

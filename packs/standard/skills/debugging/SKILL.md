@@ -37,7 +37,7 @@ You do not understand something: say so in your message rather than pretending.
 
 ## Three failed fixes: stop
 
-If three successive fixes fail, or if each fix reveals a problem elsewhere, it is no longer a wrong hypothesis: it is the design. Do not try a fourth. Undo the attempts, describe in your message what you established, what was tried and why it was not enough, and ask the design question with `factory-agent ask "<question>"`, then end your turn.
+If three successive fixes fail, or if each fix reveals a problem elsewhere, it is no longer a wrong hypothesis: it is the design. Do not try a fourth. Undo the attempts, describe in your message what you established, what was tried and why it was not enough, and end your turn with the design question: `submit_result` with `status: "blocked"` and the `question`.
 
 ## No cause in the code
 

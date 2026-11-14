@@ -22,7 +22,6 @@ function control(h: H): ControlDeps & { lines: string[] } {
     linearWebhook: () => ({ status: 200 }),
     githubWebhook: async () => ({ status: 200 }),
     linearConnected: () => true,
-    tracker: h.tracker,
     capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-cli-')),
   });
