@@ -37,7 +37,7 @@ You do not understand something: say so in your message rather than pretending.
 
 ## Three failed fixes: stop
 
-If three successive fixes fail, or if each fix reveals a problem elsewhere, it is no longer a wrong hypothesis: it is the design. Do not try a fourth. Undo the attempts, describe in your message what you established, what was tried and why it was not enough, and end your turn with the design question: `submit_result` with `status: "blocked"` and the `question`.
+If three successive fixes fail, or if each fix reveals a problem elsewhere, it is no longer a wrong hypothesis: it is the design. Do not try a fourth. Undo the attempts and end your turn with the design question: `submit_result` with `status: "blocked"` and a `question` that says what you established, what was tried and why it was not enough (nothing written as a message is published).
 
 ## No cause in the code
 

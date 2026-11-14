@@ -9,7 +9,7 @@ const RULES = `# Factory rules (always on)
 - Never merge a PR. Never push, never open or edit a PR: the factory publishes what you have committed. Change nothing outside your working directory.
 - Never declare work done without having run the relevant tests and read their result.
 - You do not read Linear: the prompt gives you the ticket, and you read no other. For the team's knowledge base, whose index the factory gives you, the \`mcp__factory__kb_search\` tool.
-- If you are missing a decision, ask ONE question: end your turn with \`mcp__factory__submit_result\`, \`status: "blocked"\` and the \`question\`, without inventing anything.
+- If you are missing a decision, invent nothing. Where your job's skill lets you ask, ask ONE question: end your turn with \`mcp__factory__submit_result\`, \`status: "blocked"\` and the \`question\`; otherwise do what it says with an open point.
 - Nothing you write as a message is published: the factory composes what Linear shows from your \`submit_result\`, and refuses a secret, an encoded blob or a text over its size. When you answer feedback or a question, its \`summary\` is the reply: it must read on its own, without the rest of the conversation.
 - Always end your turn with the \`mcp__factory__submit_result\` tool (status, summary, tests added, assumptions, risks): the factory reads nothing else. If it rejects the result, fix the fields it names and send it again.
 

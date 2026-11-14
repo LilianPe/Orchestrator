@@ -14,8 +14,8 @@ import { TAKEN_OVER } from '../core/block-cause.js';
 
 /** The HTTP Basic header the UI password asks for; its user is free. */
 const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
-/** A ping to the factory MCP with the run token of `setup`'s run. */
-const mcpPing = () => ({ method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) });
+/** A ping to the factory MCP, by default with the run token of `setup`'s run. */
+const mcpPing = (token = 'tok') => ({ method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) });
 
 async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
@@ -714,8 +714,7 @@ describe('server', () => {
   it('the agent listener serves the factory MCP, with its run token, and nothing else (ORC-204)', async () => {
     const { app } = await setup({ uiPassword: 'pw' });
     const fetch = agentOnly(app);
-    const ping = (token: string) =>
-      fetch(new Request('http://172.17.0.1:4101/agent/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) }));
+    const ping = (token: string) => fetch(new Request('http://172.17.0.1:4101/agent/mcp', mcpPing(token)));
     expect(await (await ping('tok')).json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} });
     expect((await ping('nope')).status).toBe(401);
     const get = (path: string) => fetch(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: 'Bearer tok' } }));

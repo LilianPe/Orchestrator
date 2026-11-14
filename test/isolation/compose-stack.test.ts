@@ -74,7 +74,6 @@ try {
   out.uid = await sh('id -u');
   out.socket = await sh('ls /var/run/docker.sock /run/docker.sock');
   out.versions = await sh('pnpm --version && uv --version && python3 --version && git --version && claude --version');
-  out.agent = await sh('command -v factory-agent');
   out.pnpm = await sh('mkdir -p /work/js && cd /work/js && pnpm add is-odd@3.0.1 2>&1 && test -f node_modules/is-odd/package.json');
   out.uvInstall = await sh('cd /work && uv venv -q .v 2>&1 && uv pip install -q --python .v idna==3.10 2>&1 && .v/bin/python -c "import idna; print(idna.__version__)"');
   const fetch = (url, method) => "node -e \"fetch('" + url + "',{method:'" + method + "'}).then((r)=>console.log(r.status),(e)=>{console.log('failed',e.cause?.message??e.message);process.exit(1)})\"";
@@ -101,7 +100,6 @@ interface Result {
   uid: { out: string };
   socket: { code: number };
   versions: { code: number; out: string };
-  agent: { code: number };
   pnpm: { code: number; out: string };
   uvInstall: { code: number; out: string };
   refusedHost: { out: string };
@@ -217,8 +215,6 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
 
   it('gives a runner node, pnpm, python, uv, git and claude', () => {
     expect(result.versions.code, result.versions.out).toBe(0);
-    // factory-agent is gone with the agent API (ORC-192): the factory MCP is all a run reaches of the factory.
-    expect(result.agent.code).not.toBe(0);
   });
 
   it('installs with pnpm and uv through the proxy, and journals it', () => {

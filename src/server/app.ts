@@ -163,11 +163,11 @@ function isPublicPath(method: string, path: string): boolean {
 }
 
 /**
- * The agent API alone (ORC-204), for the listener the sandboxes reach off the loopback: every other
+ * The factory MCP alone (ORC-204, ORC-192), for the listener the sandboxes reach off the loopback: every other
  * path answers 404. Node's server has already resolved `..` in the URL Hono routes on.
  */
 export function agentOnly(app: Hono): (req: Request) => Response | Promise<Response> {
-  return (req) => (new URL(req.url).pathname.startsWith('/agent/') ? app.fetch(req) : new Response('Not Found', { status: 404 }));
+  return (req) => (new URL(req.url).pathname === '/agent/mcp' ? app.fetch(req) : new Response('Not Found', { status: 404 }));
 }
 
 function publicRun({ token: _t, ...rest }: RunRecord) {
