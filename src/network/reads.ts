@@ -1,6 +1,4 @@
-import { join } from 'node:path';
 import { z } from 'zod';
-import { readCapped } from '../adapters/read-capped.js';
 import { normalizePypiName } from '../checks/deps.js';
 import type { Verdict } from './levels.js';
 
@@ -81,7 +79,7 @@ export function countedRead(host: string, path: string): CountedRead | undefined
     return m ? { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `${m[3] ?? m[4]}/${m[5]}` } : undefined;
   }
   if (host === 'api.github.com') {
-    // By its repository's name, or its id: the same asset under two names, each capped (ponytail: the id is not resolved).
+    // By its repository's name, or its id: `ReadCounter` counts an asset under the first of the two it was read by (ORC-396).
     const m = /^\/repos\/([^/]+)\/([^/]+)\/releases\/assets\/(\d+)$/.exec(p);
     if (m) return { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `asset ${m[3]}` };
     const id = /^\/repositories\/(\d+)\/releases\/assets\/(\d+)$/.exec(p);
@@ -96,12 +94,19 @@ const KIND = { npm: 'npm package', pypi: 'PyPI project', release: 'repository' }
 export class ReadCounter {
   /** By package or repository, the reads of each version or asset. */
   private readonly seen = new Map<string, Map<string, number>>();
+  /**
+   * By asset id, the repository it was first counted under (ORC-396). An id is GitHub's, unique across repositories: read
+   * again by its repository's id after its name, or the other way round, it is the same asset, which no read of the API
+   * needs to tell. A pair that GitHub would refuse only merges two counts, never splits one.
+   */
+  private readonly assets = new Map<string, string>();
 
   constructor(private readonly caps: ReadCaps) {}
 
   /** Lets the read through, counted, or refuses it past its cap: a refused read is not counted. */
   admit(read: CountedRead): Verdict {
-    const key = `${read.kind}:${read.name}`;
+    const asset = read.kind === 'release' && read.item.startsWith('asset ') ? read.item : undefined;
+    const key = (asset && this.assets.get(asset)) ?? `${read.kind}:${read.name}`;
     let items = this.seen.get(key);
     const reads = items?.get(read.item) ?? 0;
     if (reads >= READ_REPEATS_MAX) return { ok: false, reason: `suspicious: ${KIND[read.kind]} ${read.name} ${read.item} read more than ${READ_REPEATS_MAX} times in this run` };
@@ -113,12 +118,13 @@ export class ReadCounter {
     }
     if (!items) this.seen.set(key, (items = new Map()));
     items.set(read.item, reads + 1);
+    if (asset) this.assets.set(asset, key);
     return { ok: true };
   }
 }
 
 /**
- * What a run's repository declares it reads (ORC-370), from its lockfiles at the root when the run starts: `judged`, the
+ * What a run's repository declares it reads (ORC-370), from its lockfiles at the root of the ticket's base commit: `judged`, the
  * ecosystems it has a lockfile for, whose other reads are unusual; `reads`, the reads declared, as `readKey` spells them.
  */
 export interface DeclaredReads {
@@ -144,18 +150,19 @@ const LOCKFILES: [file: string, kind: CountedRead['kind'], read: (text: string) 
   ['requirements.txt', 'pypi', requirements, false],
 ];
 
-/** A lockfile is the repository's: read as `readCapped` reads what it does not trust, neither a link nor a FIFO, and bounded. */
-const LOCKFILE_MAX_BYTES = 64 * 1024 * 1024;
-
-export function declaredReads(workspace: string): DeclaredReads {
+/**
+ * What the lockfiles declare, each read by `show` at the ticket's base commit (ORC-396), never in the worktree: an earlier
+ * attempt may have declared there what it means to read. `show` gives a file past its cap as `\0too large: …`.
+ */
+export async function declaredReads(show: (file: string) => Promise<string | undefined>): Promise<DeclaredReads> {
   const judged = new Set<CountedRead['kind']>();
   const reads = new Set<string>();
   for (const [file, kind, read, whole] of LOCKFILES) {
-    const text = readCapped(join(workspace, file), LOCKFILE_MAX_BYTES);
-    if (text === undefined || text === 'not a file' || text.cut) continue;
+    const text = await show(file);
+    if (text === undefined || text.startsWith('\0')) continue;
     let found: CountedRead[];
     try {
-      found = read(text.text);
+      found = read(text);
     } catch {
       continue;
     }

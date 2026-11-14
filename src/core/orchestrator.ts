@@ -114,7 +114,7 @@ import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { READ_TOOLS } from '../presets/tools.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
-import { DECLARED_READS, declaredReads } from '../network/reads.js';
+import { DECLARED_READS, declaredReads, type DeclaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -1000,6 +1000,22 @@ export class Orchestrator {
   }
 
   /**
+   * The reads the lockfiles declare at the ticket's base commit (ORC-396): the worktree's fork point from the default branch,
+   * read on the factory's repository, never the worktree, where an earlier attempt may have declared what it means to read.
+   * A worktree that cannot be read so declares nothing: its release assets are unusual, no package is judged.
+   */
+  private async declaredAtBase(project: ProjectRuntime, ws: Workspace): Promise<DeclaredReads> {
+    try {
+      const reader = await this.d.workspaces.branchReader(project.repoPath, ws.path, { fetch: false });
+      if (reader) return await declaredReads((file) => reader.showAtFork(file));
+      this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: no worktree with a commit`);
+    } catch (err) {
+      this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: ${(err as Error).message}`);
+    }
+    return { judged: [], reads: [] };
+  }
+
+  /**
    * The attempt's sandbox (ORC-204): the worktree, its git dir inside (ORC-317), the ticket's
    * Claude session dir as `~/.claude` (`--resume` across attempts) when the attempt runs the ticket
    * session, else an empty per-run dir there, removed with the sandbox: a review or a question starts in
@@ -1016,9 +1032,9 @@ export class Orchestrator {
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
-    // What the repository's lockfiles declare before this run's agent touches them, out of its mounts: its security log judges
-    // its reads by it (ORC-370). Below `limited`, the run reaches no registry nor forge.
-    if (policy.level === 'limited') await writeFile(join(runDir, DECLARED_READS), JSON.stringify(declaredReads(ws.path)));
+    // What the repository's lockfiles declare, out of its mounts: its security log judges its reads by it (ORC-370). Below
+    // `limited`, the run reaches no registry nor forge.
+    if (policy.level === 'limited') await writeFile(join(runDir, DECLARED_READS), JSON.stringify(await this.declaredAtBase(project, ws)));
     return sandboxes.create({
       runId,
       ticketId,

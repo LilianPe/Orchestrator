@@ -158,12 +158,15 @@ function counts(keys: string[]): [string, number][] {
 
 /**
  * What the factory posts in the ticket's session after a run with refusals (ORC-296): refusals per rule,
- * hosts the proxy refused. Never a command nor a path: they can hold a secret. Undefined without a refusal.
+ * hosts the proxy refused. Never a command nor a path: they can hold a secret. Its unusual reads are counted too, posted
+ * alone when the run had no refusal: how many a run makes is measured before any cap is set on them (ORC-396).
+ * Undefined without a refusal nor an unusual read.
  */
 export function refusalSummary(log: SecurityLog): string | undefined {
   const refused = log.egress.filter((e) => !e.ok);
-  if (log.refusals.length === 0 && refused.length === 0) return undefined;
-  const out = ['Refusals during this run:'];
+  const unusual = log.egress.filter((e) => e.flag === 'unusual').length;
+  if (log.refusals.length === 0 && refused.length === 0 && !unusual) return undefined;
+  const out = [log.refusals.length || refused.length ? 'Refusals during this run:' : 'Reads during this run:'];
   for (const [rule, n] of counts(log.refusals.map((r) => r.rule))) out.push(`- rule \`${rule}\`: ${n}`);
   const hosts = counts(refused.map((e) => e.host).filter((h) => PLAIN_HOST.test(h)));
   const other = refused.length - hosts.reduce((s, [, n]) => s + n, 0) + hosts.slice(HOSTS_SHOWN).reduce((s, [, n]) => s + n, 0);
@@ -173,6 +176,7 @@ export function refusalSummary(log: SecurityLog): string | undefined {
   }
   const suspicious = refused.filter((e) => e.flag === 'suspicious').length;
   if (suspicious) out.push(`- ${suspicious} read${suspicious > 1 ? 's' : ''} refused as suspicious (past the per-run cap of distinct versions or release assets)`);
+  if (unusual) out.push(`- ${unusual} read${unusual > 1 ? 's' : ''} let through that the lockfiles of the base commit do not declare (unusual)`);
   const skipped = log.skipped.egress + log.skipped.refusals;
   if (skipped) out.push(`\n${skipped} log line${skipped > 1 ? 's' : ''} ignored (malformed or forged).`);
   return out.join('\n');

@@ -67,8 +67,9 @@ export interface WorkspaceManager {
   /**
    * A worktree's branch as the path rules read it (ORC-338), on the factory's repository against its default branch: the
    * same `gitReader` as the clone's. With `fetch`, the forge's default branch, its `HEAD` fetched as the clone fetches it
-   * (ORC-358); without, the repository's own, no forge read. None for a path that is no worktree. Without sandboxes only,
-   * where `verify` reads no clone.
+   * (ORC-358); without, the repository's own, no forge read. None for a path that is no worktree. The path rules read it
+   * without sandboxes only, where `verify` reads no clone; the lockfiles a run's reads are judged by are read at its fork
+   * point, sandboxes or not (ORC-396).
    */
   branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined>;
   /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */

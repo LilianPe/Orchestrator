@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { execFailure } from '../../src/adapters/exec.js';
@@ -783,8 +783,9 @@ describe('the ticket session across attempts', () => {
 /** ORC-296: a run's two security journals go into the base when its sandbox is destroyed, a summary of its refusals to the ticket's session. */
 describe("a run's security log", () => {
   /** A held dev run of REL-1 whose journals hold `egress` and `refusals` lines when it ends. */
-  async function runWith(egress: string[], refusals: string[]) {
+  async function runWith(egress: string[], refusals: string[], setup: (h: ReturnType<typeof createHarness>) => void = () => {}) {
     const h = createHarness({ sandboxed: true });
+    setup(h);
     h.runner.enqueue({ hold: true });
     await delegate(h);
     const runId = (await h.ticket()).activeRunId!;
@@ -836,6 +837,18 @@ describe("a run's security log", () => {
     const log = await h.store.securityLog(runId);
     expect(log!.egress.map((e) => [e.read?.item, e.flag])).toEqual([['1.0.0', undefined], ['v1/a.zip', 'unusual'], ['v2/a.zip', 'suspicious']]);
     expect(summaries(h)[0]!.body).toContain('1 read refused as suspicious');
+  });
+
+  it("judges a run's reads by the lockfiles of the ticket's base commit, never by those an earlier attempt left in its worktree (ORC-396)", async () => {
+    const lock = (version: string) => JSON.stringify({ packages: { 'node_modules/lodash': { version } } });
+    const read = (version: string) => JSON.stringify({ at, method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, up: 0, down: 0, read: { kind: 'npm', name: 'lodash', item: version } });
+    const { h, runId } = await runWith([read('1.0.0'), read('9.9.9')], [], (h) =>
+      // An earlier attempt declared 9.9.9 in the worktree's lockfile, committed: the base commit declares 1.0.0.
+      h.workspaces.branches.set('/tmp/factory-fake/p/REL-1', { changed: [{ path: 'package-lock.json', deleted: false }], fork: { 'package-lock.json': lock('1.0.0') }, head: { 'package-lock.json': lock('9.9.9') } }),
+    );
+    expect(JSON.parse(readFileSync(join(h.runsDir!, runId, 'declared-reads.json'), 'utf8'))).toEqual({ judged: ['npm'], reads: ['npm:lodash@1.0.0'] });
+    const log = await h.store.securityLog(runId);
+    expect(log!.egress.map((e) => [e.read?.item, e.flag])).toEqual([['1.0.0', undefined], ['9.9.9', 'unusual']]);
   });
 
   it('skips and counts the forged lines, posts nothing for a run without a refusal, and the run ends as it would', async () => {

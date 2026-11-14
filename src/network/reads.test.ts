@@ -1,9 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { LIMITED } from './levels.js';
-import { COUNTED_HOSTS, countedRead,declaredReads, READ_CAPS, READ_NAMES_MAX, READ_REPEATS_MAX, ReadCounter, unusualReads } from './reads.js';
+import { COUNTED_HOSTS, countedRead, declaredReads, READ_CAPS, READ_NAMES_MAX, READ_REPEATS_MAX, ReadCounter, unusualReads } from './reads.js';
 
 describe('countedRead (ORC-370)', () => {
   it('names an npm tarball by its package and version, scoped or not, on either registry host', () => {
@@ -83,6 +80,17 @@ describe('ReadCounter (ORC-370)', () => {
     expect(c.admit(asset('v3/a'))).toMatchObject({ ok: false, reason: expect.stringMatching(/more than 2 release assets of owner\/repo/) as string });
   });
 
+  it('counts an asset read by its repository\'s name, then by its repository\'s id, as one asset: its reads and its place under the cap (ORC-396)', () => {
+    const c = new ReadCounter({ versionsPerPackage: 3, assetsPerRepo: 2 });
+    const byName = countedRead('api.github.com', '/repos/Owner/Repo/releases/assets/789')!;
+    const byId = countedRead('api.github.com', '/repositories/123/releases/assets/789')!;
+    for (let i = 0; i < READ_REPEATS_MAX; i++) expect(c.admit(i % 2 ? byId : byName), String(i)).toEqual({ ok: true });
+    expect(c.admit(byId)).toMatchObject({ ok: false, reason: expect.stringMatching(/asset 789 read more than/) as string });
+    // One place under the cap of owner/repo: one more of its assets goes through, the next is refused.
+    expect(c.admit({ kind: 'release', name: 'owner/repo', item: 'v1/a.zip' })).toEqual({ ok: true });
+    expect(c.admit({ ...byName, item: 'asset 790' })).toMatchObject({ ok: false });
+  });
+
   it('defaults to caps a lockfile install stays under', () => {
     expect(READ_CAPS.versionsPerPackage).toBeGreaterThanOrEqual(8);
     expect(READ_CAPS.assetsPerRepo).toBeGreaterThanOrEqual(3);
@@ -97,12 +105,13 @@ describe('ReadCounter (ORC-370)', () => {
 });
 
 describe('declaredReads and unusualReads (ORC-370)', () => {
-  let ws = '';
-  beforeEach(() => (ws = mkdtempSync(join(tmpdir(), 'reads-'))));
-  afterEach(() => rmSync(ws, { recursive: true, force: true }));
+  // The lockfiles as the ticket's base commit holds them, by path (ORC-396): the reader `declaredReads` is handed.
+  let files: Record<string, string> = {};
+  beforeEach(() => (files = {}));
+  const show = async (file: string) => files[file];
 
-  it('reads the versions of package-lock.json, an alias by its real package', () => {
-    writeFileSync(join(ws, 'package-lock.json'), JSON.stringify({
+  it('reads the versions of package-lock.json, an alias by its real package', async () => {
+    files['package-lock.json'] = JSON.stringify({
       lockfileVersion: 3,
       packages: {
         '': { name: 'app' },
@@ -111,8 +120,8 @@ describe('declaredReads and unusualReads (ORC-370)', () => {
         'node_modules/old-lodash': { name: 'lodash', version: '3.0.0', resolved: 'https://registry.npmjs.org/lodash/-/lodash-3.0.0.tgz' },
         'packages/local': { version: '0.0.0' },
       },
-    }));
-    const unusualRead = unusualReads(declaredReads(ws));
+    });
+    const unusualRead = unusualReads(await declaredReads(show));
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '4.17.21' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '3.0.0' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: '@types/node', item: '24.0.1' })).toBe(false);
@@ -122,12 +131,12 @@ describe('declaredReads and unusualReads (ORC-370)', () => {
     expect(unusualRead({ kind: 'release', name: 'owner/repo', item: 'v1/a' })).toBe(true);
   });
 
-  it('reads the URLs of yarn.lock and uv.lock, the pins of requirements.txt and the packages of poetry.lock', () => {
-    writeFileSync(join(ws, 'yarn.lock'), 'lodash@^4:\n  version "4.17.21"\n  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#abc"\n');
-    writeFileSync(join(ws, 'uv.lock'), '[[package]]\nname = "tool"\nsdist = { url = "https://github.com/owner/repo/releases/download/v1/tool.tar.gz" }\n');
-    writeFileSync(join(ws, 'requirements.txt'), '# pinned\nRequests==2.32.3 ; python_version >= "3.9"\nflask>=3\n');
-    writeFileSync(join(ws, 'poetry.lock'), '[[package]]\nname = "zope.interface"\nversion = "7.0"\n');
-    const unusualRead = unusualReads(declaredReads(ws));
+  it('reads the URLs of yarn.lock and uv.lock, the pins of requirements.txt and the packages of poetry.lock', async () => {
+    files['yarn.lock'] = 'lodash@^4:\n  version "4.17.21"\n  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#abc"\n';
+    files['uv.lock'] = '[[package]]\nname = "tool"\nsdist = { url = "https://github.com/owner/repo/releases/download/v1/tool.tar.gz" }\n';
+    files['requirements.txt'] = '# pinned\nRequests==2.32.3 ; python_version >= "3.9"\nflask>=3\n';
+    files['poetry.lock'] = '[[package]]\nname = "zope.interface"\nversion = "7.0"\n';
+    const unusualRead = unusualReads(await declaredReads(show));
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '4.17.21' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '1.0.0' })).toBe(true);
     expect(unusualRead({ kind: 'release', name: 'owner/repo', item: 'v1/tool.tar.gz' })).toBe(false);
@@ -136,26 +145,33 @@ describe('declaredReads and unusualReads (ORC-370)', () => {
     expect(unusualRead({ kind: 'pypi', name: 'flask', item: '3.0.0' })).toBe(true);
   });
 
-  it('judges nothing of an ecosystem the repository has no lockfile for, and survives a lockfile it cannot read', () => {
-    writeFileSync(join(ws, 'package-lock.json'), '{ not json');
-    const unusualRead = unusualReads(declaredReads(ws));
+  it('judges nothing of an ecosystem the repository has no lockfile for, and survives a lockfile it cannot read', async () => {
+    files['package-lock.json'] = '{ not json';
+    const unusualRead = unusualReads(await declaredReads(show));
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '1' })).toBe(false);
   });
 
-  it('reads the resolutions of a Yarn 2+ lockfile, and keeps what a package-lock declares around a malformed entry', () => {
-    writeFileSync(join(ws, 'yarn.lock'), '"lodash@npm:^4":\n  version: 4.17.21\n  resolution: "lodash@npm:4.17.21"\n\n"@types/node@npm:^24":\n  resolution: "@types/node@npm:24.0.1"\n');
-    writeFileSync(join(ws, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/x': null, 'node_modules/debug': { version: '4.0.0' } }, dependencies: { y: 'not an object' } }));
-    const unusualRead = unusualReads(declaredReads(ws));
+  it('declares nothing of a lockfile too large for the read of the base commit (ORC-396)', async () => {
+    // What `showAtFork` gives of a blob past its cap, in place of its content.
+    files['package-lock.json'] = '\0too large: 0123abcd';
+    files['yarn.lock'] = '\0too large: 4567ef\nlodash@^4:\n  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"\n';
+    expect(await declaredReads(show)).toEqual({ judged: [], reads: [] });
+  });
+
+  it('reads the resolutions of a Yarn 2+ lockfile, and keeps what a package-lock declares around a malformed entry', async () => {
+    files['yarn.lock'] = '"lodash@npm:^4":\n  version: 4.17.21\n  resolution: "lodash@npm:4.17.21"\n\n"@types/node@npm:^24":\n  resolution: "@types/node@npm:24.0.1"\n';
+    files['package-lock.json'] = JSON.stringify({ packages: { 'node_modules/x': null, 'node_modules/debug': { version: '4.0.0' } }, dependencies: { y: 'not an object' } });
+    const unusualRead = unusualReads(await declaredReads(show));
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '4.17.21' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: '@types/node', item: '24.0.1' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: 'debug', item: '4.0.0' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: 'debug', item: '4.0.1' })).toBe(true);
   });
 
-  it('judges an ecosystem only by a lockfile that declares its whole tree: requirements.txt pins only the direct dependencies, an empty lockfile nothing', () => {
-    writeFileSync(join(ws, 'requirements.txt'), 'requests==2.32.3\n');
-    writeFileSync(join(ws, 'yarn.lock'), '# empty\n');
-    const unusualRead = unusualReads(declaredReads(ws));
+  it('judges an ecosystem only by a lockfile that declares its whole tree: requirements.txt pins only the direct dependencies, an empty lockfile nothing', async () => {
+    files['requirements.txt'] = 'requests==2.32.3\n';
+    files['yarn.lock'] = '# empty\n';
+    const unusualRead = unusualReads(await declaredReads(show));
     expect(unusualRead({ kind: 'pypi', name: 'urllib3', item: '2.0.0' })).toBe(false);
     expect(unusualRead({ kind: 'npm', name: 'lodash', item: '1' })).toBe(false);
   });

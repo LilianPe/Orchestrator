@@ -77,10 +77,10 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   /**
    * Each worktree's branch as the path rules read it (ORC-338), as a test sets it: what it changed since the fork point,
-   * what it changed since each of its ancestors, and the default branch's config. A worktree not set changed nothing;
-   * one in `gone` is no worktree at all.
+   * what it changed since each of its ancestors, the default branch's config, and its files at the fork point and at its
+   * head by content (ORC-396). A worktree not set changed nothing; one in `gone` is no worktree at all.
    */
-  branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string }>();
+  branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string; fork?: Record<string, string>; head?: Record<string, string> }>();
   gone = new Set<string>();
   /** What each `changedSince` was asked: the mark, and the human heads left out. */
   sinceAsked: { rev: string; humanPushes: readonly HumanPush[] }[] = [];
@@ -97,8 +97,8 @@ export class FakeWorkspaces implements WorkspaceManager {
         this.sinceAsked.push({ rev, humanPushes });
         return b.since?.[rev] ?? b.changed.map((f) => f.path);
       },
-      showAtFork: async () => undefined,
-      showAtHead: async () => undefined,
+      showAtFork: async (p) => b.fork?.[p],
+      showAtHead: async (p) => b.head?.[p],
       baseConfig: async () => b.baseConfig,
     };
   }
