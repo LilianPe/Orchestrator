@@ -9,7 +9,7 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import type { ChangelogEntry, SecurityLog } from '../store/types.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { AGENT_MCP_PATH, agentOnly, createApp, type ServerDeps, type TakeOverDesk } from './app.js';
+import { AGENT_MCP_PATH, agentOnly, createApp, isAgentPath, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
 /** The HTTP Basic header the UI password asks for; its user is free. */
@@ -883,13 +883,12 @@ describe('server', () => {
       const { app } = await setup({ uiPassword: 's3cret' });
       const open: string[] = [];
       for (const { method, path } of app.routes) {
-        const agent = path === '/agent' || path.startsWith('/agent/');
-        // An ALL route of `/agent` is probed with GET: POST would reach the MCP's own handler first.
-        const m = method === 'ALL' ? (agent ? 'GET' : 'POST') : method;
+        // `/agent` passes the password, so no Basic challenge there: the MCP answers 401 without its run token to POST and 405
+        // otherwise (its ALL routes are probed with GET), every other path 404 (ORC-192). A route added there fails here.
+        const agent = isAgentPath(path);
+        const m = method !== 'ALL' ? method : agent ? 'GET' : 'POST';
         const res = await app.request(path.replace(/:[^/]+|\*/g, 'x'), { method: m, body: m === 'GET' ? undefined : '{}' });
         const challenge = res.headers.get('www-authenticate');
-        // `/agent` passes the password, so no Basic challenge there: the MCP's run token answers 401 (405 to any method but
-        // POST), and every other path serves nothing (ORC-192). A route added there, even token-guarded, fails here.
         const expected = path !== AGENT_MCP_PATH ? 404 : m === 'POST' ? 401 : 405;
         const guarded = agent ? !challenge && res.status === expected : challenge?.startsWith('Basic ');
         if (!guarded) open.push(`${m} ${path}`);

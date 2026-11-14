@@ -160,8 +160,11 @@ function operator(c: Context, password: string | undefined): Pick<FactoryEvent, 
 export const AGENT_MCP_PATH = '/agent/mcp';
 
 /** Public, guarded by their own: the webhooks, the OAuth callback, and `/agent`, so that what is not the MCP there answers 404, never 401. */
+/** The agents' prefix: the MCP and, everywhere else under it, a 404 (ORC-192). */
+export const isAgentPath = (path: string) => path === '/agent' || path.startsWith('/agent/');
+
 function isPublicPath(method: string, path: string): boolean {
-  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || path === '/agent' || path.startsWith('/agent/');
+  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || isAgentPath(path);
 }
 
 /**
