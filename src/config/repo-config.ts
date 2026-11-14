@@ -18,6 +18,8 @@ export interface RepoConfig {
   extends: typeof PRESET;
   setup?: string;
   commands: Record<string, string>;
+  /** What starts the application on `PORT` for the visual proof (ORC-397): absent, a required proof is unavailable. */
+  preview?: string;
   /** Names of the variables the runner gets, setup and agent (ORC-211): the values are the server's (`factory.yml`), never here. */
   env: string[];
   /** Names of the secrets the `setup` alone gets, sealed before the agent starts (ORC-211). */
@@ -87,7 +89,7 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
+const KEYS = ['extends', 'setup', 'commands', 'preview', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
 const strings = z.array(z.string().min(1));
 
 const VARIABLE = /^[A-Z][A-Z0-9_]*$/;
@@ -140,6 +142,9 @@ export function parseRepoConfig(text: string | undefined, o: { defaultBranch?: s
   }
   const setup = read('setup', z.string().min(1), 'a command is expected');
   const commands = read('commands', z.record(z.string(), z.string().min(1)), 'an object `name: command` is expected', 'a non-empty command is expected');
+  // `preview:` left blank is a command forgotten, not an absent key: the proof would be unavailable with no word of why.
+  if (r['preview'] === null) violations.push('preview: a command is expected');
+  const preview = read('preview', z.string().trim().min(1), 'a command is expected');
   const env = read('env', strings, 'an array of variable names is expected', 'a non-empty variable name is expected');
   const setupSecrets = read('setup_secrets', strings, 'an array of variable names is expected', 'a non-empty variable name is expected');
   for (const [key, names] of [['env', env], ['setup_secrets', setupSecrets]] as const) {
@@ -200,6 +205,7 @@ export function parseRepoConfig(text: string | undefined, o: { defaultBranch?: s
     extends: PRESET,
     ...(setup ? { setup } : {}),
     commands: commands ?? {},
+    ...(preview ? { preview } : {}),
     env: env ?? [],
     setupSecrets: setupSecrets ?? [],
     services: services ?? [],

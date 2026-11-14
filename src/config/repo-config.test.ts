@@ -161,6 +161,19 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
     });
   });
 
+  describe('the command that starts the application for the visual proof (ORC-397)', () => {
+    it('reads it; without it, there is none', () => {
+      expect(parseRepoConfig('preview: npm run dev\n').preview).toBe('npm run dev');
+      expect(parseRepoConfig(undefined).preview).toBeUndefined();
+    });
+
+    it('refuses an empty one, which would start nothing', () => {
+      for (const text of ['preview: ""\n', 'preview: "  "\n', 'preview:\n', 'preview: [npm, run, dev]\n']) {
+        expect(violations(text)).toEqual(['preview: a command is expected']);
+      }
+    });
+  });
+
   it('always keeps the forbidden paths of the socle, whatever the file adds', () => {
     expect(parseRepoConfig(EXAMPLE).forbiddenPaths).toEqual(expect.arrayContaining(['.factory/**', '.github/**', 'claims/**']));
   });
