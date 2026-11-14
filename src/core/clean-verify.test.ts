@@ -1134,13 +1134,22 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     expect(shooter.calls).toEqual([]);
   });
 
-  it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green', async () => {
-    for (const opts of [{ shooter: null }, { start: null }] as const) {
+  it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green (ORC-397 criterion 2)', async () => {
+    for (const [opts, why] of [[{ shooter: null }, 'browser'], [{ start: null }, '`preview` in .factory/config.yml']] as const) {
       const { req } = visual({ page: 'new page\n', ...opts });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
-      expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.any(String) });
+      expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.stringContaining(why) });
       expect(res.visual?.proof.captures).toBeUndefined();
+    }
+  });
+
+  it("ORC-397 criterion 1: the base's `preview` in .factory/config.yml starts the application, before workspace.preview", async () => {
+    for (const start of [null, 'npm start'] as const) {
+      const { req, shooter } = visual({ page: 'new page\n', config: `${VISUAL}preview: npm run dev\n`, start });
+      const res = await runCleanVerify(req);
+      expect(res.visual?.proof.captures).toHaveLength(6);
+      expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
     }
   });
 

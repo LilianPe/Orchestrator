@@ -146,3 +146,37 @@ describe('factory init', () => {
     expect(loadInstance(home).projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
   });
 });
+
+describe('factory init: the command that starts the application, in the same proposal (ORC-397)', () => {
+  const pkg = (scripts: Record<string, string>) => JSON.stringify({ scripts });
+
+  it('takes the first of dev, start and preview the package.json has, with its package manager', async () => {
+    expect((await initProposal({ 'package.json': pkg({ preview: 'vite preview', start: 'node .', dev: 'vite' }), 'package-lock.json': '{}' })).config?.preview).toBe('npm run dev');
+    expect((await initProposal({ 'package.json': pkg({ preview: 'vite preview', start: 'node .' }) })).config?.preview).toBe('npm run start');
+    expect((await initProposal({ 'package.json': pkg({ preview: 'vite preview' }), ...PNPM_LOCK })).config?.preview).toBe('pnpm run preview');
+  });
+
+  it('one proposal with setup, commands and preview, the preview said to listen on PORT', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    writeFileSync(join(repo, 'package.json'), pkg({ test: 'vitest run', dev: 'vite' }));
+    writeFileSync(join(repo, 'package-lock.json'), '{}');
+    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
+    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
+    const proposals = io.printed.filter((p) => p.includes('.factory/config.yml, to commit'));
+    expect(proposals).toEqual([
+      `${PROPOSAL_HEADER}setup: npm ci\ncommands:\n  test: npm test\n# What starts the application for the visual proof: it must listen on PORT.\npreview: npm run dev\n`,
+    ]);
+  });
+
+  it('proposes none without such a script, nor for a Python repository, which has no start script by convention; nothing over a package.json that does not parse', async () => {
+    expect((await initProposal({ 'package.json': pkg({ test: 'vitest run', build: 'tsc' }) })).config?.preview).toBeUndefined();
+    expect((await initProposal({}, { python: true })).config?.preview).toBeUndefined();
+    expect((await initProposal({ 'package.json': '{ "scripts": { "dev": "vite" }, }' })).config).toBeUndefined();
+    expect((await initProposal({ 'package.json': 'null' })).config).toBeUndefined();
+  });
+
+  it('a preview alone is still a proposal', async () => {
+    expect((await initProposal({ 'package.json': pkg({ dev: 'vite' }) })).config).toMatchObject({ preview: 'npm run dev', commands: {} });
+  });
+});

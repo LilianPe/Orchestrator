@@ -139,14 +139,14 @@ export function purgeRunDirs(dir: string, now: number): string[] {
 }
 
 /**
- * Deletes the session dirs (`<sessions>/<project>/<ticket>`, ORC-217) of the closed tickets (done, or
- * their PR closed without merge, in the store's projection) whose dir was last changed 30 days ago or
+ * Deletes the session dirs (`<sessions>/<project>/<ticket>`, ORC-217) of the closed tickets (done, cancelled
+ * by a human (ORC-170), or their PR closed without merge, in the store's projection) whose dir was last changed 30 days ago or
  * more; returns them as `<project>/<ticket>`. A ticket the store does not know is left.
  */
 export async function purgeSessionDirs(dir: string, now: number, store: Pick<Store, 'getTicket'>): Promise<string[]> {
   const closed = async (projectId: string, ticketId: string) => {
     const t = await store.getTicket(projectId, ticketId);
-    return !!t && (t.logical === 'done' || t.prState === 'CLOSED');
+    return !!t && (t.logical === 'done' || t.logical === 'cancelled' || t.prState === 'CLOSED');
   };
   const removed: string[] = [];
   for (const project of dirs(dir)) {

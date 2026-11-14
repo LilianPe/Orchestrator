@@ -129,6 +129,35 @@ describe('decide — YAML rules of the standard pack', () => {
       expect(decide(waiting, cancelled, workflow).effects).toContainEqual({ kind: 'labels', add: [], remove: ['Bloqué'] });
     });
 
+    it('a cancelled ticket is in the logical state cancelled, and a human move takes it out of it', () => {
+      const after = reduce(ticket({ logical: 'dev', delegated: true }), cancelled)!;
+      expect(after.logical).toBe('cancelled');
+      expect(reduce(after, ev('status.changed', { from: null, to: 'todo' }))!.logical).toBe('todo');
+    });
+
+    it('a cancelled ticket is settled: a late failure blocks it no more', () => {
+      const after = reduce(ticket({ logical: 'dev', delegated: true }), cancelled)!;
+      const out = decide(after, ev('effect.failed', { kind: 'comment', error: 'Linear down', eventId: 'e1' } as never), workflow);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
+      expect(out.trace).toContain('effect.failed ignored: ticket cancelled');
+    });
+
+    it('a delegation of a cancelled ticket starts no run', () => {
+      const after = reduce(ticket({ logical: 'dev', delegated: true }), cancelled)!;
+      const out = decide(after, ev('ticket.delegated', { linearSessionId: 's2' }), workflow);
+      expect(out.effects.map((e) => e.kind)).not.toContain('start_run');
+    });
+
+    it('the PR of a cancelled ticket closed afterwards: recorded closed, the ticket neither blocked nor told to relaunch', () => {
+      const after = reduce(ticket({ logical: 'dev', delegated: true, prNumber: 3, prState: 'OPEN' }), cancelled)!;
+      const out = decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), workflow);
+      expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
+      expect(out.effects).toEqual([]);
+      // Nor do the workflow's own `pr.closed` rules apply to it.
+      const ruled = { ...workflow, on: { ...workflow.on, 'pr.closed': [{ do: 'stop' as const }] } } as typeof workflow;
+      expect(decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), ruled).events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
+    });
+
     it('cancelling a ticket the factory does not work on decides nothing', () => {
       expect(decide(ticket({ logical: 'dev', delegated: false }), cancelled, workflow).effects).toEqual([]);
     });
@@ -551,7 +580,7 @@ describe('decide — taint', () => {
 describe('decide — built-ins', () => {
   it('run success without verify applies on_success', () => {
     const unchecked = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, repoChecks: undefined } } } as typeof workflow;
-    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unchecked);
+    const out = decide(ticket({ logical: 'dev', activeRunId: 'r1', prNumber: 7 }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), unchecked);
     expect(out).toEqual(
       decision({
         effects: [

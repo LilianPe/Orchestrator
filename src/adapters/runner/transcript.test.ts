@@ -120,13 +120,14 @@ describe('transcript retention', () => {
     expect(purgeRunDirs(join(tmpdir(), 'factory-no-such-dir-'), now)).toEqual([]);
   });
 
-  it('purges the session dirs of closed tickets older than 30 days, and leaves open or unknown tickets (ORC-217)', async () => {
+  it('purges the session dirs of closed tickets older than 30 days, cancelled ones included, and leaves open or unknown tickets (ORC-217, ORC-170)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'factory-sessions-'));
     const tickets: Record<string, Partial<TicketState>> = {
       'p/DONE': { logical: 'done' },
       'p/YOUNG': { logical: 'done' },
       'p/CLOSED': { logical: 'human_review', prState: 'CLOSED' },
       'p/OPEN': { logical: 'human_review', prState: 'OPEN' },
+      'p/CANCELLED': { logical: 'cancelled', prState: 'OPEN' },
     };
     const store = { getTicket: async (p: string, t: string) => tickets[`${p}/${t}`] as TicketState | undefined };
     const dirs = {
@@ -134,10 +135,11 @@ describe('transcript retention', () => {
       young: aged(root, 'p/YOUNG', 30 * DAY - 60_000),
       closed: aged(root, 'p/CLOSED', 40 * DAY),
       open: aged(root, 'p/OPEN', 90 * DAY),
+      cancelled: aged(root, 'p/CANCELLED', 30 * DAY),
       unknown: aged(root, 'p/GONE', 90 * DAY),
     };
-    expect((await purgeSessionDirs(root, now, store)).sort()).toEqual(['p/CLOSED', 'p/DONE']);
-    expect(Object.fromEntries(Object.entries(dirs).map(([k, d]) => [k, existsSync(d)]))).toEqual({ done: false, young: true, closed: false, open: true, unknown: true });
+    expect((await purgeSessionDirs(root, now, store)).sort()).toEqual(['p/CANCELLED', 'p/CLOSED', 'p/DONE']);
+    expect(Object.fromEntries(Object.entries(dirs).map(([k, d]) => [k, existsSync(d)]))).toEqual({ done: false, young: true, closed: false, open: true, cancelled: false, unknown: true });
   });
 });
 

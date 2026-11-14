@@ -21,23 +21,38 @@ export interface InitDeps {
   exec: Exec;
 }
 
-/** What `init` proposes for a repository's `.factory/config.yml`: its install, and its checks by name. */
+/** What `init` proposes for a repository's `.factory/config.yml`: its install, its checks by name, and what starts the application. */
 interface Detected {
   setup: string[];
   commands: Record<string, string>;
+  preview?: string;
 }
 
-/** npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has. */
-function detectNode(repo: string): Detected {
+/** The scripts of the repository's package.json: none without one, or with one that does not parse (a proposal never fails init). */
+function nodeScripts(repo: string): Record<string, string> | undefined {
   const pkgFile = join(repo, 'package.json');
-  if (!existsSync(pkgFile)) return { setup: [], commands: {} };
-  const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+  if (!existsSync(pkgFile)) return undefined;
+  try {
+    return (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> } | null)?.scripts ?? {};
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has, and as its
+ * `preview` (ORC-397) the first of `dev`, `start` and `preview`.
+ */
+function detectNode(repo: string): Detected {
+  const scripts = nodeScripts(repo);
+  if (!scripts) return { setup: [], commands: {} };
   const npmLock = existsSync(join(repo, 'package-lock.json'));
   const pnpm = !npmLock && existsSync(join(repo, 'pnpm-lock.yaml'));
   const pm = pnpm ? 'pnpm' : 'npm';
   const setup = pnpm ? ['pnpm install --frozen-lockfile'] : npmLock ? ['npm ci'] : [];
   const commands = Object.fromEntries(['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => [s, `${pm} ${s === 'test' ? 'test' : `run ${s}`}`]));
-  return { setup, commands };
+  const start = ['dev', 'start', 'preview'].find((s) => scripts[s]);
+  return { setup, commands, ...(start ? { preview: `${pm} run ${start}` } : {}) };
 }
 
 /**
@@ -51,20 +66,28 @@ function detectPython(repo: string): Detected {
   return { setup: ['uv sync --frozen'], commands: { ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' } };
 }
 
-/** Both when the repository has both. */
+/**
+ * Both when the repository has both. A `preview` from Node's scripts only: no convention names a start script for Python (a
+ * `[project.scripts]` entry is a console command, not a server).
+ */
 function detect(repo: string): Detected {
   const node = detectNode(repo);
   const python = detectPython(repo);
-  return { setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands } };
+  return { setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands }, ...(node.preview ? { preview: node.preview } : {}) };
 }
 
 /** What `init` prints before the `.factory/config.yml` it proposes (ORC-388): it writes nothing in the repository. */
 export const PROPOSAL_HEADER = `Proposed ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing in the repository):\n`;
 
 /** The repository's `.factory/config.yml`, as `init` detects it: none when it detects nothing. */
-function proposal({ setup, commands }: Detected): string | undefined {
-  if (!setup.length && !Object.keys(commands).length) return undefined;
-  return PROPOSAL_HEADER + stringify({ ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) });
+function proposal({ setup, commands, preview }: Detected): string | undefined {
+  if (!setup.length && !Object.keys(commands).length && !preview) return undefined;
+  const checks = { ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
+  return (
+    PROPOSAL_HEADER +
+    (Object.keys(checks).length ? stringify(checks) : '') +
+    (preview ? `# What starts the application for the visual proof: it must listen on PORT.\n${stringify({ preview })}` : '')
+  );
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
