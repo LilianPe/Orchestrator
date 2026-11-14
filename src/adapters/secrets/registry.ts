@@ -10,6 +10,11 @@ export const SECRET_SOURCE_KINDS: Readonly<Record<string, SecretSourceKind>> = {
   env: envSecretKind,
 };
 
+/** The adapter `kind` names, an own entry of `kinds` only: `constructor` or `toString` name none. */
+export function kindOf(kinds: Readonly<Record<string, SecretSourceKind>>, kind: string): SecretSourceKind | undefined {
+  return Object.hasOwn(kinds, kind) ? kinds[kind] : undefined;
+}
+
 /** A source as `factory.yml` declares it, validated against its kind. */
 export interface SecretSourceDecl {
   kind: string;
@@ -24,7 +29,7 @@ export function openSecretSources(
 ): Record<string, SecretSource> {
   const sources: Record<string, SecretSource> = {};
   for (const [name, decl] of Object.entries({ env: { kind: 'env', options: {} }, ...declared })) {
-    const kind = kinds[decl.kind];
+    const kind = kindOf(kinds, decl.kind);
     if (!kind) throw new Error(`secret_sources.${name}: no adapter ${decl.kind}`);
     sources[name] = kind.create(decl.options, env);
   }

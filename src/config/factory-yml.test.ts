@@ -249,6 +249,13 @@ describe('factory.yml (ORC-209, part B)', () => {
       ]);
     });
 
+    it('names the key of a source or a kind that only an object prototype holds, never a crash', () => {
+      expect(violations('repos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "constructor:foo" } }\n')).toEqual([
+        'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
+      ]);
+      expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env)']);
+    });
+
     it('only knows env by default: no real secret manager is shipped', () => {
       expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual(['secret_sources.coffre.kind: no adapter vault (env)']);
     });

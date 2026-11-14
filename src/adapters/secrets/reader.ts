@@ -24,7 +24,7 @@ export class SecretReader {
 
   private async one(name: string, ref: SecretRef): Promise<string> {
     const at = `the secret ${name} (${refText(ref)})`;
-    const source = this.sources[ref.source];
+    const source = Object.hasOwn(this.sources, ref.source) ? this.sources[ref.source] : undefined;
     if (!source) throw new Error(`${at} could not be read: no source ${ref.source}`);
     const value = await source.read(ref.path).catch((err: Error) => {
       throw new Error(`${at} could not be read: ${err.message}`, { cause: err });

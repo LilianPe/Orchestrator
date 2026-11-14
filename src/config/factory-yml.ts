@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { ENV_NAME } from '../adapters/secrets/env.js';
-import { SECRET_SOURCE_KINDS, type SecretSourceDecl } from '../adapters/secrets/registry.js';
+import { kindOf, SECRET_SOURCE_KINDS, type SecretSourceDecl } from '../adapters/secrets/registry.js';
 import type { SecretRef, SecretSourceKind } from '../adapters/secrets/types.js';
 import { MAX_DIFF } from '../checks/diff-size.js';
 import { READ_CAPS, type ReadCaps } from '../network/reads.js';
@@ -347,7 +347,7 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   const sourcesRaw = r['secret_sources'];
   const secretSources: Record<string, SecretSourceDecl> = {};
   /** The adapter of each source a reference may name, `env` built in; undefined for a faulty declaration, already refused. */
-  const adapters: Record<string, SecretSourceKind | undefined> = { env: kinds['env'] };
+  const adapters = new Map<string, SecretSourceKind | undefined>([['env', kindOf(kinds, 'env')]]);
   if (sourcesRaw !== undefined && sourcesRaw !== null) {
     if (typeof sourcesRaw !== 'object' || Array.isArray(sourcesRaw)) violations.push('secret_sources: an object is expected');
     else {
@@ -358,20 +358,20 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
           violations.push(`${path}: built in, it is not declared`);
           continue;
         }
-        adapters[name] = undefined;
+        adapters.set(name, undefined);
         if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
           violations.push(`${path}: an object \`{ kind, … }\` is expected`);
           continue;
         }
         const { kind, ...options } = decl as Record<string, unknown>;
-        const adapter = typeof kind === 'string' ? kinds[kind] : undefined;
+        const adapter = typeof kind === 'string' ? kindOf(kinds, kind) : undefined;
         if (!adapter) {
           violations.push(kind == null ? `${path}.kind: required (${known})` : `${path}.kind: no adapter ${String(kind)} (${known})`);
           continue;
         }
         // Kept despite faulty options: its references are still checked against its adapter.
         violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
-        adapters[name] = adapter;
+        adapters.set(name, adapter);
         secretSources[name] = { kind: kind as string, options };
       }
     }
@@ -389,8 +389,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       return undefined;
     }
     const ref = { source: v.slice(0, colon), path: v.slice(colon + 1) };
-    if (!(ref.source in adapters)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
-    const kind = adapters[ref.source];
+    if (!adapters.has(ref.source)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
+    const kind = adapters.get(ref.source);
     if (!kind) return undefined;
     const fault = kind.checkPath(ref.path);
     if (fault) violations.push(`${path}: ${fault}`);

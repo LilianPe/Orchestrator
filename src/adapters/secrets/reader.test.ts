@@ -27,6 +27,10 @@ describe('SecretReader', () => {
     await expect(reader().read({ X: { source: 'gone', path: 'p' } })).rejects.toThrow('the secret X (gone:p) could not be read: no source gone');
   });
 
+  it('a source that only an object prototype holds is not open', async () => {
+    await expect(reader().read({ X: { source: 'constructor', path: 'p' } })).rejects.toThrow('the secret X (constructor:p) could not be read: no source constructor');
+  });
+
   it('keeps every value it read, for the masking', async () => {
     const r = reader();
     expect(r.values()).toEqual([]);
@@ -43,6 +47,10 @@ describe('openSecretSources', () => {
     expect(Object.keys(sources).sort()).toEqual(['coffre', 'env']);
     expect(await sources['coffre']!.read('p')).toBe('value-of-p');
     expect(await sources['env']!.read('A')).toBe('value-of-a');
+  });
+
+  it('refuses a kind that only an object prototype holds', () => {
+    expect(() => openSecretSources({ a: { kind: 'toString', options: {} } })).toThrow('secret_sources.a: no adapter toString');
   });
 
   it('only env is registered: no real secret manager is shipped', () => {
