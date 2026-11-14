@@ -126,6 +126,14 @@ describe('the publish effect (ORC-125)', () => {
       expect(out.effects).toContainEqual({ kind: 'post_output', style: 'summary', runId: 'r1' });
       expect(out.effects).toContainEqual({ kind: 'block_comment', block: expect.objectContaining({ step: 'build', question: expect.stringContaining('?') }) });
       expect(after(t, end, out)).toMatchObject({ blocked: true, blockKind: 'question', logical: 'dev' });
+      // A ticket already blocked keeps its block: a dead letter stays one.
+      const dead = verifying({ prNumber: undefined, blocked: true, blockReason: 'dead', blockKind: 'dead_letter' });
+      expect(decide(dead, end, workflow).events.some((e) => e.type === 'ticket.blocked')).toBe(false);
+      // A message already waiting for the agent is handed over to it: the human has answered already.
+      const waiting = verifying({ prNumber: undefined, linearSessionId: 's1', humanInbox: [{ author: 'L', body: 'fais le CSV', at: 1, source: 'session', kind: 'instruction' }] });
+      const handed = decide(waiting, end, workflow);
+      expect(handed.events.some((e) => e.type === 'ticket.blocked')).toBe(false);
+      expect(handed.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev-feedback' }));
       // A commit with no PR (kept, as a ghost run keeps it) is not this case: nothing blocked.
       expect(decide(t, ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow).events.some((e) => e.type === 'ticket.blocked')).toBe(false);
     });
