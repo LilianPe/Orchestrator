@@ -636,18 +636,18 @@ jobs:
       return repo;
     }
 
-    it('warns about .factory/workflow.yml and .relais/workflow.yml, ignored, to delete, without reading them or changing the verdict', async () => {
-      const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml', '.relais/workflow.yml']) });
+    it('warns about .factory/workflow.yml and .relais/workflow.yml, ignored, to delete, without reading them or changing the verdict', async () => { // transition, à retirer
+      const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml', '.relais/workflow.yml']) }); // transition, à retirer
       expect(result.code).toBe(0);
       expect(result.lines).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
-      expect(result.lines).toContain('Warning: .relais/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+      expect(result.lines).toContain('Warning: .relais/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.'); // transition, à retirer
     });
 
     it('lists them in the JSON report', async () => {
       const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml']), json: true });
       expect(JSON.parse(result.text)).toMatchObject({ accepted: true, ignored: ['.factory/workflow.yml'] });
-      const failed = await doctor([], [], { repoPath: repoWith(['.relais/workflow.yml']), json: true, fake: { failWorkflows: true } });
-      expect(JSON.parse(failed.text)).toMatchObject({ accepted: false, ignored: ['.relais/workflow.yml'] });
+      const failed = await doctor([], [], { repoPath: repoWith(['.relais/workflow.yml']), json: true, fake: { failWorkflows: true } }); // transition, à retirer
+      expect(JSON.parse(failed.text)).toMatchObject({ accepted: false, ignored: ['.relais/workflow.yml'] }); // transition, à retirer
     });
 
     it('says nothing of a repository without one', async () => {
