@@ -153,6 +153,9 @@ describe('decide — YAML rules of the standard pack', () => {
       const out = decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), workflow);
       expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
       expect(out.effects).toEqual([]);
+      // Nor do the workflow's own `pr.closed` rules apply to it.
+      const ruled = { ...workflow, on: { ...workflow.on, 'pr.closed': [{ do: 'stop' as const }] } } as typeof workflow;
+      expect(decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), ruled).events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
     });
 
     it('cancelling a ticket the factory does not work on decides nothing', () => {
