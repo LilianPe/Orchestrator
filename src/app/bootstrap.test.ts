@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
-import { createHmac, generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { githubDelivery } from '../../test/helpers/github-webhook.js';
+import { signLinear } from '../../test/helpers/linear-webhook.js';
 import { Orchestrator, type OrchestratorDeps } from '../core/orchestrator.js';
 import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
@@ -333,42 +334,48 @@ describe('bootstrap', () => {
   // Every inbound webhook, as the daemon wires it (ORC-222): no body reaches the inbox unless signed with its secret, and fresh when
   // the provider dates it. The checks themselves are tested with each ingest; here, that each route and the relay go through them.
   describe('signed webhooks (ORC-222)', () => {
-    const hmac = (secret: string, raw: string) => createHmac('sha256', secret).update(raw).digest('hex');
+    const reaction = (id: string, at = Date.now()) => ({ type: 'Reaction', action: 'create', webhookTimestamp: at, data: { id } });
+    const tenMinutesAgo = () => Date.now() - 10 * 60_000;
+    const boot = (port: number, relay: Parameters<typeof saveInstance>[1]['relay'], o: { env?: NodeJS.ProcessEnv; log?: (m: string) => void } = {}) => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port, host: '127.0.0.1', relay, projects: [], limits: {} });
+      saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
+      return startFactory({ home, fakeRunner: true, log: o.log ?? (() => {}), env: o.env ?? {} });
+    };
 
     it('refuses on each webhook route a body unsigned, signed with another secret, or stale, and takes a signed fresh one', async () => {
-      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4166, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-      saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
-      const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { GH_WEBHOOK_SECRET: 'github-secret' } });
+      const app = await boot(4166, { kind: 'none' }, { env: { GH_WEBHOOK_SECRET: 'github-secret' } });
       try {
-        const post = (path: string, raw: string, headers: Record<string, string> = {}) =>
+        const post = (path: string, { raw, headers }: { raw: string; headers: Record<string, string> }) =>
           fetch(`http://127.0.0.1:4166${path}`, { method: 'POST', body: raw, headers: { 'content-type': 'application/json', ...headers } }).then((r) => r.status);
 
-        const linear = (at: number) => JSON.stringify({ type: 'Reaction', action: 'create', webhookTimestamp: at, data: { id: 'r1' } });
-        const fresh = linear(Date.now());
-        expect(await post('/webhooks/linear', fresh)).toBe(401);
-        expect(await post('/webhooks/linear', fresh, { 'linear-signature': hmac('another-secret', fresh) })).toBe(401);
-        const stale = linear(Date.now() - 10 * 60_000);
-        expect(await post('/webhooks/linear', stale, { 'linear-signature': hmac('linear-secret', stale) })).toBe(401);
-        expect(await post('/webhooks/linear', fresh, { 'linear-signature': hmac('linear-secret', fresh) })).toBe(200);
+        const fresh = signLinear(reaction('r1'), 'linear-secret');
+        expect(await post('/webhooks/linear', { raw: fresh.raw, headers: {} })).toBe(401);
+        expect(await post('/webhooks/linear', signLinear(reaction('r1'), 'another-secret'))).toBe(401);
+        expect(await post('/webhooks/linear', signLinear(reaction('r1', tenMinutesAgo()), 'linear-secret'))).toBe(401);
+        expect(await post('/webhooks/linear', fresh)).toBe(200);
 
         // GitHub dates no delivery: the signature alone.
         const ping = { zen: 'Keep it logically awesome.', hook_id: 1 };
-        const { raw, headers: { 'x-hub-signature-256': _unsigned, ...unsigned } } = githubDelivery('ping', ping, 'github-secret');
-        expect(await post('/webhooks/github', raw, unsigned)).toBe(401);
-        expect(await post('/webhooks/github', raw, githubDelivery('ping', ping, 'another-secret').headers)).toBe(401);
-        expect(await post('/webhooks/github', raw, githubDelivery('ping', ping, 'github-secret').headers)).toBe(200);
+        const signed = githubDelivery('ping', ping, 'github-secret');
+        const { 'x-hub-signature-256': _signature, ...unsigned } = signed.headers;
+        expect(await post('/webhooks/github', { raw: signed.raw, headers: unsigned })).toBe(401);
+        expect(await post('/webhooks/github', githubDelivery('ping', ping, 'another-secret'))).toBe(401);
+        expect(await post('/webhooks/github', signed)).toBe(200);
       } finally {
         await app.stop();
       }
     });
 
     it('refuses a webhook the smee relay brings unsigned, signed with another secret or stale, and takes a signed fresh one', async () => {
-      const body = (id: string, at = Date.now()) => ({ type: 'Reaction', action: 'create', webhookTimestamp: at, data: { id } });
-      const signedBy = (secret: string, b: object) => ({ 'linear-signature': hmac(secret, JSON.stringify(b)), body: b });
-      // The signed fresh one first: refused, its rejection would be logged before the others are even read.
-      const stale = body('r4', Date.now() - 10 * 60_000);
-      const messages = [signedBy('linear-secret', body('r1')), { body: body('r2') }, signedBy('another-secret', body('r3')), signedBy('linear-secret', stale)];
+      const relayed = (d: { raw: string; headers: Record<string, string> }) => ({ ...d.headers, body: JSON.parse(d.raw) });
+      // The signed fresh one first: were it refused, its rejection would be logged before the others are read.
+      const messages = [
+        relayed(signLinear(reaction('r1'), 'linear-secret')),
+        { body: reaction('r2') },
+        relayed(signLinear(reaction('r3'), 'another-secret')),
+        relayed(signLinear(reaction('r4', tenMinutesAgo()), 'linear-secret')),
+      ];
       let served = false;
       const sse = createServer((_req, res) => {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -377,15 +384,12 @@ describe('bootstrap', () => {
         served = true;
       });
       await new Promise<void>((resolve, reject) => sse.once('error', reject).listen(0, '127.0.0.1', resolve));
-      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      const url = `http://127.0.0.1:${(sse.address() as AddressInfo).port}/chan`;
-      saveInstance(home, { port: 4165, host: '127.0.0.1', relay: { kind: 'smee', url }, projects: [], limits: {} });
-      saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
       const logs: string[] = [];
-      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      const app = await boot(4165, { kind: 'smee', url: `http://127.0.0.1:${(sse.address() as AddressInfo).port}/chan` }, { log: (m) => void logs.push(m) });
       try {
-        await vi.waitFor(() => expect(logs.filter((m) => m.startsWith('relay: webhook rejected with 401')).length).toBeGreaterThanOrEqual(3), { timeout: 5_000 });
-        expect(logs.filter((m) => m.startsWith('relay: webhook'))).toHaveLength(3);
+        const relayLogs = () => logs.filter((m) => m.startsWith('relay: webhook'));
+        await vi.waitFor(() => expect(relayLogs().length).toBeGreaterThanOrEqual(3), { timeout: 5_000 });
+        expect(relayLogs()).toEqual(Array(3).fill(expect.stringMatching(/^relay: webhook rejected with 401/)));
       } finally {
         await app.stop();
         sse.closeAllConnections();

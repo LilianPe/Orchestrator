@@ -911,9 +911,9 @@ describe('server', () => {
       const open: string[] = [];
       for (const { method, path } of app.routes) {
         const m = method === 'ALL' ? 'POST' : method;
-        const res = await app.request(path.replace(/:[^/]+/g, 'x').replace(/\*/g, 'x'), { method: m, body: m === 'GET' ? undefined : '{}' });
+        const res = await app.request(path.replace(/:[^/]+|\*/g, 'x'), { method: m, body: m === 'GET' ? undefined : '{}' });
         // `/agent/*` passes the password: its run token answers 401, without a Basic challenge.
-        const guarded = path.startsWith('/agent') ? res.status === 401 : res.headers.get('www-authenticate')?.startsWith('Basic ');
+        const guarded = path === '/agent' || path.startsWith('/agent/') ? res.status === 401 : res.headers.get('www-authenticate')?.startsWith('Basic ');
         if (!guarded) open.push(`${m} ${path}`);
       }
       expect([...new Set(open)].sort()).toEqual(['GET /oauth/callback', 'POST /webhooks/github', 'POST /webhooks/linear']);

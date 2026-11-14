@@ -1,6 +1,5 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { allowed, DEFAULT_MATRIX } from '../../core/authz.js';
 import { newTicketState, SCHEMA_VERSION, type FactoryEvent, type TicketState } from '../../core/types.js';
 import { BRANCH, checkRunBody, defaultPushBody, githubDelivery, pullRequestBody, pushBody, sha, workflowRunBody } from '../../../test/helpers/github-webhook.js';
 import { createGithubIngest, githubRepoOf } from './github-ingest.js';
@@ -188,10 +187,9 @@ describe('mapGithubWebhook', () => {
     const [event] = await mapGithubWebhook('pull_request_review', forged, ctx(t));
     expect(event).toMatchObject({ actor: 'github:stranger', taint: 'untrusted' });
     expect(event!.roles).toBeUndefined();
-    // No sender: no actor, and the matrix refuses an unsigned one whatever the text says.
+    // No sender: no actor, which the matrix refuses whatever the text says (`src/core/authz.test.ts`).
     const [unsigned] = await mapGithubWebhook('pull_request_review', { ...forged, sender: undefined }, ctx(t));
     expect(unsigned!.actor).toBeUndefined();
-    expect(allowed({ action: 'review_feedback', channel: 'pr' }, unsigned!.actor, t, DEFAULT_MATRIX, ['repo_writer'])).toEqual({ ok: false, reason: 'unsigned' });
   });
 
   it('records the merge commit and the head of a merged PR, which a revert names (ORC-278)', async () => {
