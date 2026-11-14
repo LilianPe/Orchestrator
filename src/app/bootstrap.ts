@@ -30,7 +30,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { claudeAccountReader, disabledControls, loadFactoryYml, stepSettings, ticketCapOf } from '../config/factory-yml.js';
+import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
@@ -40,17 +40,17 @@ import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
-import { EventBus } from '../core/bus.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
-import { devCapacity, Scheduler } from '../core/scheduler.js';
+import { queueCapacity, Scheduler } from '../runtime/capacity.js';
 import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, isLoopbackHost } from '../server/app.js';
+import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
@@ -114,7 +114,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   }));
   // Said at each start, not only by `factory doctor`.
   for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
-  const limits = projects[0]?.workflow.limits;
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
@@ -156,8 +155,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       return true;
     };
 
-    const devSessions = devCapacity(yml?.concurrency, limits?.parallelSessions);
-    const scheduler = new Scheduler(store, { dev: devSessions, questions: limits?.questionSessions ?? 2 });
+    const capacity = queueCapacity(yml?.concurrency);
+    const scheduler = new Scheduler(store, capacity);
     // The chosen account replaces a host run's login (ORC-211). The sandboxes' token goes to the proxy alone (ORC-337):
     // it sets it on their model calls, which hold a placeholder; the runner only asks whether there is one. factory.yml's `claude`
     // section is read again at each launch: a change of `active` counts from the next run, without a restart (ORC-215).
@@ -173,11 +172,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
-    const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf }) : new EgressProxy({
+    // The caps of the reads that move a public counter (ORC-370), factory.yml's: handed to the proxy with each run.
+    const reads = readCapsOf(yml);
+    const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf, reads }) : new EgressProxy({
       dir: paths.network,
       caDir: paths.egressCa,
       log,
       claudeToken: claudeTokenOf,
+      reads,
       agentApi: { host: agentHostInSandbox, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
@@ -410,8 +412,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       linearConnected: () => !!trackerSwitch.current,
       tracker: trackerSwitch,
       capacity: () => ({
-        dev: { used: scheduler.inUse('dev'), total: devSessions },
-        questions: { used: scheduler.inUse('questions'), total: limits?.questionSessions ?? 2 },
+        dev: { used: scheduler.inUse('dev'), total: capacity.dev },
+        questions: { used: scheduler.inUse('questions'), total: capacity.questions },
       }),
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,

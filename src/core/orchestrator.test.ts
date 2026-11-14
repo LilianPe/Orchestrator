@@ -16,13 +16,13 @@ import type { loadWorkflow } from '../config/load-workflow.js';
 import { loadTestWorkflow } from '../../test/helpers/harness.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { hashText } from './attempt-labels.js';
-import { EventBus } from './bus.js';
+import { EventBus } from '../server/live-feed.js';
 import { FakeClock } from './clock.js';
 import { fullReadEnv, Orchestrator } from './orchestrator.js';
 import { runRepair } from '../cli/repair.js';
 import type { StoredEvent } from './upcast.js';
 import type { EffectRetry } from '../runtime/outbox.js';
-import { Scheduler } from './scheduler.js';
+import { Scheduler } from '../runtime/capacity.js';
 import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from './types.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');

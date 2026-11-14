@@ -55,6 +55,52 @@ describe('the security log of a run (ORC-296)', () => {
     expect(log.skipped.egress).toBe(0);
   });
 
+  describe('reads that move a public counter (ORC-370)', () => {
+    const read = (item: string, kind = 'npm', name = 'lodash') => ({ kind, name, item });
+    const declared = (paths: { egress: string }, value: object) => {
+      const at = join(paths.egress, '..', 'declared-reads.json');
+      writeFileSync(at, JSON.stringify(value));
+      return at;
+    };
+
+    it('keeps the package and the version of a counted read, its query never, a refusal past the cap flagged suspicious', () => {
+      const log = readSecurityLog(RUN, files([egressLine({ path: '/lodash/-/lodash-1.0.0.tgz', read: read('1.0.0') }), egressLine({ ok: false, reason: 'suspicious: x', suspicious: true, read: read('2.0.0') })], []));
+      expect(log.egress.map(({ ok, read, flag }) => ({ ok, read, flag }))).toEqual([
+        { ok: true, read: read('1.0.0'), flag: undefined },
+        { ok: false, read: read('2.0.0'), flag: 'suspicious' },
+      ]);
+    });
+
+    it('flags unusual a read the lockfiles did not declare when the run started; with no declaration, none', () => {
+      const lines = [egressLine({ read: read('1.0.0') }), egressLine({ read: read('9.9.9') }), egressLine({ read: read('v1/a.zip', 'release', 'owner/repo') }), egressLine({ ok: false, suspicious: true, read: read('8.0.0') })];
+      const paths = files(lines, []);
+      const flags = (log: SecurityLog) => log.egress.map((e) => e.flag);
+      expect(flags(readSecurityLog(RUN, { ...paths, declared: declared(paths, { judged: ['npm'], reads: ['npm:lodash@1.0.0'] }) }))).toEqual([undefined, 'unusual', 'unusual', 'suspicious']);
+      expect(flags(readSecurityLog(RUN, paths))).toEqual([undefined, undefined, undefined, 'suspicious']);
+      // A declaration that does not parse judges nothing, and the log is read all the same.
+      expect(flags(readSecurityLog(RUN, { ...paths, declared: declared(paths, { judged: 'npm' }) }))).toEqual([undefined, undefined, undefined, 'suspicious']);
+    });
+
+    it('drops a read it cannot vouch for, the line kept: a kind it does not know, a name too long', () => {
+      const log = readSecurityLog(RUN, files([egressLine({ read: read('1', 'cargo') }), egressLine({ read: read('1', 'npm', 'x'.repeat(1000)) })], []));
+      expect(log.egress.map((e) => e.read)).toEqual([undefined, undefined]);
+      expect(log.skipped.egress).toBe(0);
+    });
+
+    it('counts the suspicious reads in the summary posted after the run', () => {
+      const log = readSecurityLog(RUN, files([egressLine({ ok: false, suspicious: true, read: read('2') }), egressLine({ ok: false, suspicious: true, read: read('3') })], []));
+      expect(refusalSummary(log)).toContain('- 2 reads refused as suspicious (past the per-run cap of distinct versions or release assets)');
+    });
+
+    it('counts the unusual reads in the summary too, beside the suspicious (ORC-396)', () => {
+      const lines = [egressLine({ read: read('9.9.9') }), egressLine({ read: read('v1/a.zip', 'release', 'owner/repo') }), egressLine({ read: read('1.0.0') }), egressLine({ ok: false, suspicious: true, read: read('8.0.0') })];
+      const paths = files(lines, []);
+      const log = readSecurityLog(RUN, { ...paths, declared: declared(paths, { judged: ['npm'], reads: ['npm:lodash@1.0.0'] }) });
+      expect(refusalSummary(log)).toContain('- 1 read refused as suspicious');
+      expect(refusalSummary(log)).toContain('- 2 reads let through that the lockfiles of the base commit do not declare (unusual)');
+    });
+  });
+
   it('is empty when a journal is missing', () => {
     expect(readSecurityLog(RUN, { ...files(undefined, undefined) })).toMatchObject({ egress: [], refusals: [], skipped: { egress: 0, refusals: 0 } });
     expect(readSecurityLog(RUN, { refusals: files(undefined, undefined).refusals })).toMatchObject({ egress: [], skipped: { egress: 0 } });

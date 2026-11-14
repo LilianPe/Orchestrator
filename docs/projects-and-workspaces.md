@@ -26,7 +26,7 @@ relais init        # same Linear application key: answer with the same credentia
 
 `init` adds the project (or replaces the one with the same `repoPath`) and proposes its `.factory/config.yml`, which it does not write. Then restart `relais up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
 
-> The queue capacities (`parallel_sessions`, `question_sessions`) are global and read from the workflow of the **first** project in the list. The other settings are specific to each project.
+> The queue capacities are global to the instance: `concurrency` of `factory.yml` for the `dev` queue, a fixed 2 for the `questions` queue (ORC-390). The other settings are specific to each project.
 
 ### One team, several repositories
 
@@ -77,7 +77,7 @@ Details and examples: [`workflow.md`](workflow.md#workspace).
 
 ### Ports
 
-Each run in the `dev` queue receives a `PORT` variable unique among concurrent runs: `workspace.ports.base` (4200 by default) + slot number (0 to `parallel_sessions - 1`). If your tests or your dev server read `PORT`, several tickets can run in parallel without conflict. Runs in the `questions` queue do not receive one.
+Each run in the `dev` queue receives a `PORT` variable unique among concurrent runs: `workspace.ports.base` (4200 by default) + slot number (0 to `concurrency - 1`). If your tests or your dev server read `PORT`, several tickets can run in parallel without conflict. Runs in the `questions` queue do not receive one.
 
 ## Shared knowledge base
 

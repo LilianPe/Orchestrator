@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
-import { EventBus } from '../core/bus.js';
+import { EventBus } from './live-feed.js';
 import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';

@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { BRANCH_NAME, branchName, legacyBranchName } from '../../core/naming.js';
 import { capDiff, DIFF_MAX } from '../../core/review.js';
-import { forkPoint, gitAt, gitReader, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
+import { forkPoint, gitAt, gitReader, isYes, parseRawDiff, within, zFields, type BranchReader, type CloneGit } from '../../core/clean-verify.js';
 import { STALLED } from '../../publish/publish.js';
 import { execCmd, execFailure, HARDENING, mustExec, TIMED_OUT, type Exec } from '../exec.js';
 import { readCapped } from '../read-capped.js';
@@ -365,6 +365,15 @@ export class GitWorkspaces implements WorkspaceManager {
     if (!at) return undefined;
     const base = o.fetch ? await this.forgeHead(repoPath) : await originHead(this.exec, repoPath);
     return gitReader(at.git, base, await forkPoint(at.git, at.head, base), at.head);
+  }
+
+  async baseReader(repoPath: string, path: string): Promise<BranchReader['showAtFork'] | undefined> {
+    const [at, trunk] = await Promise.all([this.worktreeGit(repoPath, path), originHead(this.exec, repoPath)]);
+    if (!at) return undefined;
+    // A head with no commit in common with the default branch, an orphan the agent wrote, would declare nothing: the branch
+    // instead. A failure of git (the branch missing) throws: no base is not an empty one.
+    const fork = await at.git.status('merge-base', trunk, at.head);
+    return gitReader(at.git, trunk, isYes(fork) ? fork.stdout.trim() : trunk, at.head).showAtFork;
   }
 
   /** The commit of the forge's `HEAD`, fetched to a ref of its own, read, then removed: two reads at once never share one. */

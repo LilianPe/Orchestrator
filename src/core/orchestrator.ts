@@ -51,7 +51,7 @@ import {
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
 import { describePr, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
-import type { EventBus } from './bus.js';
+import type { EventBus } from '../server/live-feed.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
@@ -73,7 +73,7 @@ import { branchAnew, heldByOther, pendingOf, reduce, samePending } from './reduc
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
-import type { Scheduler } from './scheduler.js';
+import type { Scheduler } from '../runtime/capacity.js';
 import {
   CREATES_TICKET,
   type Blocker,
@@ -114,6 +114,7 @@ import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { READ_TOOLS } from '../presets/tools.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
+import { DECLARED_READS, declaredReads, type DeclaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -982,7 +983,11 @@ export class Orchestrator {
     try {
       const log = readSecurityLog(
         { runId, projectId: owner.projectId, ticketId: owner.ticketId, at: this.d.clock.now() },
-        { ...(this.d.egressJournal ? { egress: this.d.egressJournal(runId) } : {}), refusals: join(this.d.runsDir!, runId, 'refusals', 'refusals.jsonl') },
+        {
+          ...(this.d.egressJournal ? { egress: this.d.egressJournal(runId) } : {}),
+          refusals: join(this.d.runsDir!, runId, 'refusals', 'refusals.jsonl'),
+          declared: join(this.d.runsDir!, runId, DECLARED_READS),
+        },
       );
       if (!(await this.d.store.putSecurityLog(log))) return;
       const { egress, refusals } = log.skipped;
@@ -991,6 +996,22 @@ export class Orchestrator {
       if (summary && owner.linearSessionId && !this.silenced(owner.projectId, `the security summary of ${runId}`)) await this.d.tracker.activity(owner.linearSessionId, { type: 'thought', body: summary });
     } catch (err) {
       this.log('error', `security log of ${runId} not recorded: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * The reads the lockfiles declare at the ticket's base commit (ORC-396), read on the factory's repository, never in the
+   * worktree, where an earlier attempt may have declared what it means to read (`baseReader`). A worktree whose base cannot
+   * be read gets no declaration: none of its reads is judged unusual, and the daemon's log says why.
+   */
+  private async declaredAtBase(project: ProjectRuntime, ws: Workspace): Promise<DeclaredReads | undefined> {
+    try {
+      const show = await this.d.workspaces.baseReader(project.repoPath, ws.path);
+      if (!show) throw new Error('no worktree with a commit');
+      return await declaredReads(show);
+    } catch (err) {
+      this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: ${(err as Error).message}`);
+      return undefined;
     }
   }
 
@@ -1011,6 +1032,10 @@ export class Orchestrator {
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
+    // What the repository's lockfiles declare, out of its mounts: its security log judges its reads by it (ORC-370). Below
+    // `limited`, the run reaches no registry nor forge.
+    const declared = policy.level === 'limited' ? await this.declaredAtBase(project, ws) : undefined;
+    if (declared) await writeFile(join(runDir, DECLARED_READS), JSON.stringify(declared));
     return sandboxes.create({
       runId,
       ticketId,

@@ -337,6 +337,12 @@ export const egressRequests = pgTable(
     ok: boolean('ok').notNull(),
     up: bigint('up', { mode: 'number' }).notNull(),
     down: bigint('down', { mode: 'number' }).notNull(),
+    /** A read that moves a public counter (ORC-370): `npm`, `pypi` or `release`, its package or repository, its version or asset. */
+    readKind: text('read_kind'),
+    readName: text('read_name'),
+    readItem: text('read_item'),
+    /** `suspicious`, refused past the run's cap; `unusual`, absent from the repository's lockfiles. */
+    flag: text('flag'),
   },
   (t) => [primaryKey({ columns: [t.runId, t.n] }), index('egress_requests_at_idx').on(t.at)],
 );

