@@ -876,6 +876,21 @@ describe('server', () => {
       expect((await app.request('/oauth/callback?code=x&state=y')).status).not.toBe(401);
       expect((await app.request('/agent/mcp', mcpRequest())).status).toBe(200);
     });
+
+    // ORC-222: what the password does not guard is guarded by a signature (the webhooks, each tested in bootstrap.test.ts), the
+    // OAuth state, or the run token. A route added open outside these fails here before it ships unsigned.
+    it('leaves no other route open: a new inbound route needs its own guard', async () => {
+      const { app } = await setup({ uiPassword: 's3cret' });
+      const open: string[] = [];
+      for (const { method, path } of app.routes) {
+        const m = method === 'ALL' ? 'POST' : method;
+        const res = await app.request(path.replace(/:[^/]+|\*/g, 'x'), { method: m, body: m === 'GET' ? undefined : '{}' });
+        // `/agent/*` passes the password: its run token answers 401, without a Basic challenge.
+        const guarded = path === '/agent' || path.startsWith('/agent/') ? res.status === 401 : res.headers.get('www-authenticate')?.startsWith('Basic ');
+        if (!guarded) open.push(`${m} ${path}`);
+      }
+      expect([...new Set(open)].sort()).toEqual(['GET /oauth/callback', 'POST /webhooks/github', 'POST /webhooks/linear']);
+    });
   });
 
   describe('CSRF', () => {

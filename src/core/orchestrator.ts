@@ -98,7 +98,7 @@ import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, u
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
 import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from './diff-class.js';
-import { blockingFindings, contestedInput, findingsInput, inlineComment, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
+import { blockingFindings, contestedInput, findingsInput, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -1764,13 +1764,14 @@ export class Orchestrator {
     const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId, at: this.d.clock.now() };
     const payload = { runId: c.runId, job: c.job, sha: c.sha };
     const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:kept:${rowId}`, type: 'publish.refused', payload: { ...payload, reason } }));
-    const done = async () => void (await this.accept({ ...base, id: `publish-done:kept:${rowId}`, type: 'publish.done', payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }));
+    const done = async (empty = false) => void (await this.accept({ ...base, id: `publish-done:kept:${rowId}`, type: 'publish.done', payload: { ...payload, ...(c.output ? { output: c.output } : {}), ...(empty ? { empty: true as const } : {}) } }));
     const refusal = this.publishRefusal(project, t, c.sha);
     if (refusal) return refuse(refusal);
     if (!t.branch || !t.worktreePath) return refuse(`no branch or no worktree for ${t.ticketId}.`);
     const diff = await this.d.workspaces.ticketDiff(project.repoPath, t.worktreePath);
-    // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
-    if (!diff?.trim()) return done();
+    // A run that committed nothing has nothing to show: it ends as it would have, without a PR. An unreadable diff says nothing of it.
+    const nothing = diff !== undefined && (!diff.trim() || diff === NO_CHANGE);
+    if (diff === undefined || nothing) return done(nothing);
     let text;
     try {
       text = await this.policy.pr(describePr(c.output, publishFacts(t, c)));
@@ -2269,7 +2270,7 @@ export class Orchestrator {
     const payload = { runId: c.runId, job: c.job, sha: c.sha };
     const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId };
     const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:${key.id}`, type: 'publish.refused', at: this.d.clock.now(), payload: { ...payload, reason } }));
-    const published = async () => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}) } }));
+    const published = async (empty = false) => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}), ...(empty ? { empty: true as const } : {}) } }));
     const known = key.replay ? await this.d.store.getMeta(mark) : undefined;
     if (known) return refuse(known);
     let reason: string;
@@ -2295,7 +2296,7 @@ export class Orchestrator {
         if (err instanceof OutputRefused) reason = `the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`;
         else if (err instanceof PublishRefused) {
           // A run that committed nothing has nothing to show: it ends as it would have, without a PR.
-          if (err.code === 'empty') return published();
+          if (err.code === 'empty') return published(true);
           reason = err.message;
         } else throw err;
       }

@@ -54,7 +54,7 @@ export interface Flow {
   working: WorkingRun[];
   queued: { ticketId: string; job: string }[];
   done: FlowTicket[];
-  /** Unfinished tickets in none of the above (no run, nothing asked of a human): still reachable. */
+  /** Unfinished tickets (neither done nor cancelled) in none of the above (no run, nothing asked of a human): still reachable. */
   others: FlowTicket[];
 }
 
@@ -106,7 +106,7 @@ export function buildFlow({ now, tickets, running, verifying, queue, measures }:
     .slice(0, DONE_LIMIT);
 
   const shown = new Set([...humanReview, ...gates, ...running, ...verifying, ...queue].map(flowKey));
-  const others = tickets.filter((t) => !t.blocked && t.logical !== 'done' && !shown.has(flowKey(t))).sort((a, b) => b.updatedAt - a.updatedAt);
+  const others = tickets.filter((t) => !t.blocked && t.logical !== 'done' && t.logical !== 'cancelled' && !shown.has(flowKey(t))).sort((a, b) => b.updatedAt - a.updatedAt);
 
   const workingRun = (run: RunRecord, isVerifying: boolean): WorkingRun => {
     const key = flowKey(run);
