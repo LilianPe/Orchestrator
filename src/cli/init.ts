@@ -3,9 +3,9 @@ import { basename, join, resolve } from 'node:path';
 import type { Exec } from '../adapters/exec.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
+import { REPO_CONFIG_PATH } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
-import { REPO_CONFIG_PATH } from '../config/repo-config.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
@@ -74,7 +74,7 @@ function samePath(a: string, b: string): boolean {
 }
 
 /** What `init` prints before the `preview` it proposes (ORC-397). */
-export const PREVIEW_HEADER = `Proposed for ${REPO_CONFIG_PATH}, the command that starts the application on PORT for the visual proof:\n`;
+export const PREVIEW_HEADER = `Proposed for ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing there), the command that starts the application for the visual proof; it must listen on PORT:\n`;
 
 /**
  * The `preview` of `.factory/config.yml` (ORC-397): the first of the scripts `dev`, `start` and `preview` the package.json has,
@@ -84,7 +84,12 @@ export const PREVIEW_HEADER = `Proposed for ${REPO_CONFIG_PATH}, the command tha
 export function detectPreview(repo: string): string | undefined {
   const pkgFile = join(repo, 'package.json');
   if (!existsSync(pkgFile)) return undefined;
-  const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> } | null)?.scripts ?? {};
+  let scripts: Record<string, string>;
+  try {
+    scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> } | null)?.scripts ?? {};
+  } catch {
+    return undefined; // a proposal, never worth failing init over
+  }
   const script = ['dev', 'start', 'preview'].find((s) => scripts[s]);
   if (!script) return undefined;
   const pnpm = !existsSync(join(repo, 'package-lock.json')) && existsSync(join(repo, 'pnpm-lock.yaml'));

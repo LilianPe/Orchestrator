@@ -150,8 +150,9 @@ describe('factory init: the command that starts the application (ORC-397)', () =
     expect(detectPreview(repoOf({ 'package.json': pkg({ preview: 'vite preview' }), ...PNPM_LOCK }))).toBe('pnpm run preview');
   });
 
-  it('proposes none without such a script, nor for a Python repository, which has no start script by convention', () => {
+  it('proposes none without such a script, over a package.json that does not parse, nor for a Python repository, which has no start script by convention', () => {
     expect(detectPreview(repoOf({ 'package.json': pkg({ test: 'vitest run', build: 'tsc' }) }))).toBeUndefined();
+    expect(detectPreview(repoOf({ 'package.json': '{ "scripts": { "dev": "vite" }, }' }))).toBeUndefined();
     const python = repoOf({});
     copyPythonRepo(python);
     expect(detectPreview(python)).toBeUndefined();
