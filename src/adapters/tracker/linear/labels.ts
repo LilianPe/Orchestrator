@@ -3,7 +3,7 @@ import type { LabelsWritten } from '../types.js';
 
 /**
  * The labels of a ticket as the factory last read them in Linear (ORC-185): by the reconciliation, or by
- * an issue webhook once its events are in the inbox, the factory's own echoes included. A label change
+ * an issue webhook once its events are in the inbox, the factory's own writes included (ORC-346). A label change
  * is reported only when it differs from them, whichever source sees it first, so a rule under
  * `label.changed` is not run twice for one change. `at` is the issue's `updatedAt` in Linear when read:
  * a reading older than the one kept (a pass that read Linear before a webhook came, a webhook out of

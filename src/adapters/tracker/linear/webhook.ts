@@ -275,7 +275,7 @@ function issueIdentifier(body: any): string | undefined {
 
 /**
  * Applies an issue webhook's own label changes to the labels the factory knows (ORC-185), the factory's
- * own echoes included: what the reconciliation compares Linear with. A label the team's cache cannot
+ * own writes included: what the reconciliation compares Linear with. A label the team's cache cannot
  * name is left out; nothing is recorded for a ticket never read yet.
  */
 export async function recordIssueLabels(body: any, ctx: MapContext): Promise<void> {
