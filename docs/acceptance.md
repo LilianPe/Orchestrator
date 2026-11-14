@@ -48,7 +48,7 @@ Claude Code authentication is required: `ANTHROPIC_API_KEY`, or `CLAUDE_TOKEN_1`
 
 Then, by hand: `docker compose up -d` behind the host's reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or `docker compose --profile tls up -d`, UI at `https://<domain>`, same behavior as 3; a Linear webhook and a GitHub webhook delivered with a 200 (ORC-221). With `concurrency: 1`, delegate two tickets: only one runner runs (`docker ps --filter label=factory.attempt`).
 
-With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY_UI_PASSWORD`: the UI, `/api/*` and `/oauth/start` then require HTTP Basic authentication (any username, password = `FACTORY_UI_PASSWORD`). Still open: `POST /webhooks/linear` (signed), `GET /oauth/callback` and `/agent/*` (run token). Check: `curl -i https://<domain>/api/state` answers 401.
+With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY_UI_PASSWORD`: the UI, `/api/*` and `/oauth/start` then require HTTP Basic authentication (any username, password = `FACTORY_UI_PASSWORD`). Still open: `POST /webhooks/linear` and `POST /webhooks/github` (signed), `GET /oauth/callback`, and `POST /agent/mcp` (run token; every other `/agent` path answers 404, ORC-192). Check: `curl -i https://<domain>/api/state` answers 401.
 
 ## Optional live checks
 - `LINEAR_API_KEY=<personal key> npx vitest run src/adapters/tracker/linear/queries.live.test.ts`: all queries validate against the Linear schema.

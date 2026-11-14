@@ -157,7 +157,7 @@ function operator(c: Context, password: string | undefined): Pick<FactoryEvent, 
 }
 
 /** The factory MCP (ORC-288): all the agents reach of the factory (ORC-192). */
-const AGENT_MCP_PATH = '/agent/mcp';
+export const AGENT_MCP_PATH = '/agent/mcp';
 
 /** Public, guarded by their own: the webhooks, the OAuth callback, and `/agent`, so that what is not the MCP there answers 404, never 401. */
 function isPublicPath(method: string, path: string): boolean {
