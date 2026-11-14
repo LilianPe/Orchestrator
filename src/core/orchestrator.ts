@@ -15,7 +15,6 @@ import {
   SETTINGS_TARGET,
   WORKSPACE_TARGET,
   type Sandbox,
-  type SandboxMount,
   type SandboxProvider,
   type SpawnCommand,
 } from '../adapters/sandbox/types.js';
@@ -284,8 +283,6 @@ export interface OrchestratorDeps {
   egressJournal?: (runId: string) => string;
   /** Where the runner keeps the runs' transcripts (ORC-132): the answer agent reads the session at work there (ORC-182). Absent: it reads none. */
   transcriptsDir?: string;
-  /** Other host paths every sandbox mounts (the factory's install, for `factory-agent`). */
-  sandboxMounts?: readonly SandboxMount[];
   agentEnv: (run: RunRecord) => Record<string, string>;
   /**
    * Repository-relative paths a run of this ticket reads whole past the pack's read threshold (ORC-279): the frozen
@@ -1050,7 +1047,6 @@ export class Orchestrator {
         { host: refusalsDir, target: REFUSALS_TARGET, readOnly: false },
         { host: this.d.packDir, target: PACK_TARGET, readOnly: true },
         { host: this.settingsPath(), target: SETTINGS_TARGET, readOnly: true },
-        ...(this.d.sandboxMounts ?? []),
       ],
     });
   }

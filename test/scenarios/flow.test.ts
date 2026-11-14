@@ -8,7 +8,7 @@ type Harness = ReturnType<typeof createHarness>;
 function flowOf(h: Harness) {
   const app = createApp({
     store: h.store, bus: new EventBus(), clock: h.clock, submit: () => undefined, isPaused: () => false, 
-    linearWebhook: () => ({ status: 200 }), githubWebhook: async () => ({ status: 200 }), linearConnected: () => true, tracker: h.tracker,
+    linearWebhook: () => ({ status: 200 }), githubWebhook: async () => ({ status: 200 }), linearConnected: () => true,
     capacity: () => ({ dev: { used: 0, total: 1 }, questions: { used: 0, total: 1 } }), transcriptsDir: '.',
   });
   return async () => {

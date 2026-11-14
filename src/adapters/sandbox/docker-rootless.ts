@@ -120,14 +120,14 @@ const PROXY = 'http://127.0.0.1:3128';
 /** PID 1 of a sandbox with an egress: TCP on the loopback to the proxy's socket, so every tool can use HTTP(S)_PROXY. */
 const relay = (socket: string) => `const net=require('net');net.createServer((c)=>{const u=net.connect('${socket}');c.pipe(u).pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())}).listen(3128,'127.0.0.1')`;
 /**
- * The proxy's address for every tool, and the factory CA as its trust: Node (claude, npm, yarn,
- * factory-agent), OpenSSL (curl, Python), pip, git.
+ * The proxy's address for every tool, and the factory CA as its trust: Node (claude, npm, yarn),
+ * OpenSSL (curl, Python), pip, git.
  */
 const EGRESS_ENV = [
   ...['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'YARN_HTTP_PROXY', 'YARN_HTTPS_PROXY'].map((k) => `${k}=${PROXY}`),
   'NO_PROXY=localhost,127.0.0.1',
   'no_proxy=localhost,127.0.0.1',
-  // Node's own fetch (factory-agent) reads the variables above only with it.
+  // Node's own fetch (claude's client of the factory MCP) reads the variables above only with it.
   'NODE_USE_ENV_PROXY=1',
   ...['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'PIP_CERT', 'GIT_SSL_CAINFO', 'npm_config_cafile', 'YARN_HTTPS_CA_FILE_PATH'].map(
     (k) => `${k}=${EGRESS_CA}`,

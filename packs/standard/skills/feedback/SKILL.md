@@ -5,7 +5,7 @@ description: Apply review feedback (Linear, GitHub, checks or CI) to the ticket'
 
 # factory:feedback
 
-You resume the ticket's dev session, in its worktree and on its branch, already published by the factory. The "Feedback to address", "Blocking findings to address", "Failed checks" or "CI failures" block lists what must be handled. You are alone during your turn; your only channel to a human is `factory-agent ask "<question>"`, then end of turn.
+You resume the ticket's dev session, in its worktree and on its branch, already published by the factory. The "Feedback to address", "Blocking findings to address", "Failed checks" or "CI failures" block lists what must be handled. You are alone during your turn; your only channel to a human is a question that ends your turn: `submit_result` with `status: "blocked"` and the `question`.
 
 ## 1. Gather
 
@@ -19,7 +19,7 @@ You resume the ticket's dev session, in its worktree and on its branch, already 
 
 Read all the feedback, then apply `factory:receiving-review`: understand each item, verify its premise and its fix in the code, fix what is right with its proof (`factory:tdd`), refuse with a reason what is not.
 
-- Ambiguous human feedback, or feedback contrary to the ticket: ONE question with `factory-agent ask`, after having handled the independent feedback.
+- Ambiguous human feedback, or feedback contrary to the ticket: ONE question (`status: "blocked"`), after having handled the independent feedback.
 - Feedback that asks for something other than the ticket (a new feature): answer that it deserves its own ticket, unless the human explicitly asks for it in this ticket.
 - One commit per cause, message `<ID>: <what is fixed>`. Never `--amend` nor a rewrite: the branch is published, and the factory refuses a rewritten history.
 - **AI review findings**: one commit per finding fixed, never two findings in one commit, its message naming the finding (`<ID>: security-1, <what is fixed>`). A finding whose premise does not hold is contested, not fixed: say why, with the proof from the code. A contested finding stays open: the next review reads your justification and judges it again.
@@ -41,6 +41,6 @@ End your turn with `mcp__factory__submit_result`: its `summary` is this message,
 
 In English, one bullet per feedback item: `- <summarized feedback> → <what was done> (<short sha>)`, or `→ not applied: <reason>`. Then a **Verified** line (commands and result). End with the feedback not handled and why, if any.
 
-If you ask a question with `factory-agent ask`, this summary is not published: the question must also say what has already been handled.
+When you ask a question (`status: "blocked"`), the `question` is what Linear shows: it must also say what has already been handled.
 
 For **AI review findings**, `submit_result` also says what you did with each id of the block, every id once: in `fixed`, `{ finding, commit }` with the sha of its own commit; or in `contested`, `{ finding, justification }`. The factory refuses two findings on one commit.

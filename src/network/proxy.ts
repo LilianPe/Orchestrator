@@ -344,7 +344,7 @@ export class EgressProxy {
   private tunnel(run: Run, req: IncomingMessage, client: Duplex, head: Buffer): void {
     const { hostname: host, port } = target(req.url ?? '');
     client.on('error', () => client.destroy());
-    // Node's fetch (factory-agent, the MCP) tunnels even an http:// URL: the agent API, in clear inside.
+    // Node's fetch (the factory MCP's client) tunnels even an http:// URL: the agent API, in clear inside.
     const agent = this.agent(host, port);
     if (agent) {
       const v = agentVerdict(run.policy);
