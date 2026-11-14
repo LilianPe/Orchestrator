@@ -108,12 +108,8 @@ describe('standard pack', () => {
   });
 
   it("cites the MCP's ask in no skill nor hook: a question is a blocked submit_result (ORC-400)", () => {
-    for (const name of readdirSync(join(pack, 'skills'))) {
-      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('mcp__factory__ask');
-    }
-    for (const name of readdirSync(join(pack, 'hooks'))) {
-      expect(readFileSync(join(pack, 'hooks', name), 'utf8'), name).not.toContain('mcp__factory__ask');
-    }
+    const files = [...readdirSync(join(pack, 'skills')).map((s) => join('skills', s, 'SKILL.md')), ...readdirSync(join(pack, 'hooks')).map((h) => join('hooks', h))];
+    for (const file of files) expect(readFileSync(join(pack, file), 'utf8'), file).not.toContain('mcp__factory__ask');
   });
 
   it('tells no skill to push or to open a PR: the factory does (ORC-125)', () => {

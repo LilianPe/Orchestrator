@@ -836,13 +836,6 @@ describe('server', () => {
       expect(await store.getMeta('agent-output:r1')).toBeUndefined();
     });
 
-    it('has no ask tool, and journals nothing for it: a question ends the run with a blocked submit_result (ORC-400)', async () => {
-      const { app, submitted } = await setup();
-      const res = await (await rpc(app, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'ask', arguments: { text: 'Quelle base ?' } } })).json();
-      expect(res.error).toMatchObject({ code: -32602, message: 'Unknown tool: ask' });
-      expect(submitted).toEqual([]);
-    });
-
     it('answers 401 without a valid run token, -32601 on an unknown method, -32602 on an unknown tool', async () => {
       const { app } = await setup();
       expect((await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, 'nope')).status).toBe(401);
@@ -850,6 +843,9 @@ describe('server', () => {
       expect(unknown).toMatchObject({ jsonrpc: '2.0', id: 7, error: { code: -32601 } });
       const tool = await (await rpc(app, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'rm', arguments: {} } })).json();
       expect(tool.error.code).toBe(-32602);
+      // No ask (ORC-400): a question ends the run with a blocked submit_result.
+      const ask = await (await rpc(app, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'ask', arguments: { text: 'Quelle base ?' } } })).json();
+      expect(ask.error).toMatchObject({ code: -32602, message: 'Unknown tool: ask' });
     });
   });
 
