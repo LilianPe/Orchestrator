@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
+import { parseGitHubRemote } from '../adapters/forge/github-app.js';
 import { previewRecipeSchema, type PreviewRecipe } from '../core/agent-output.js';
 import type { KnowledgeBase } from './kb.js';
 
@@ -53,13 +54,12 @@ export const recipeStart = (r: PreviewRecipe): string => [...r.setup, r.command]
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 /**
- * The repository's `owner/name`, from its origin URL (https or scp-like), never with the URL's credentials; `fallback` (the
- * project's id) when the URL names none, a local path say.
+ * The repository's `owner/name`, read from its GitHub origin as the forge reads it (`parseGitHubRemote`), never with the URL's
+ * credentials; `fallback` (the project's id) when the URL names none, a local path say, or a name no file could carry.
  */
 export function repoNameOf(originUrl: string | undefined, fallback: string): string {
-  const path = originUrl?.match(/^[a-z][a-z0-9+.-]*:\/\/[^/]+\/(.+)$/i)?.[1] ?? originUrl?.match(/^[^/:@]+@[^/:]+:(.+)$/)?.[1];
-  const parts = path?.replace(/\.git$/, '').replace(/\/+$/, '').split('/') ?? [];
-  return parts.length === 2 && parts.every((p) => SEGMENT.test(p)) ? parts.join('/') : fallback;
+  const ref = originUrl ? parseGitHubRemote(originUrl) : undefined;
+  return ref && SEGMENT.test(ref.owner) && SEGMENT.test(ref.name) ? `${ref.owner}/${ref.name}` : fallback;
 }
 
 export const recipeNotePath = (repo: string): string => `notes/preview/${repo}.md`;
@@ -142,23 +142,25 @@ export class PreviewRecipes {
       scope: `repo:${repo}`, recipe: r.recipe, sha: r.sha, port: r.port, checkedAt: isoDay(r.at), origin: `agent:build@${r.runId}`, ticket: r.ticket,
       status: 'valid', research: previous !== undefined && previous !== 'unreadable' && previous.status === 'invalid',
     };
-    return this.write(repo, note, `start recipe validated on ${r.sha.slice(0, 12)} (${r.ticket})`, vet);
+    return this.write(repo, note, previous, `start recipe validated on ${r.sha.slice(0, 12)} (${r.ticket})`, vet);
   }
 
   /** A recipe that no longer starts the application: one search owed, none when it came from that search. */
   invalidate(repo: string, note: RecipeNote, why: { reason: string; sha: string; ticket: string; at: Date }, vet: Vet): Promise<string | undefined> {
     const invalid: RecipeNote = { ...note, status: 'invalid', invalidated: { reason: why.reason, sha: why.sha, ticket: why.ticket, at: isoDay(why.at) }, searchesLeft: note.research ? 0 : 1 };
-    return this.write(repo, invalid, `start recipe invalidated on ${why.sha.slice(0, 12)} (${why.ticket})`, vet);
+    return this.write(repo, invalid, note, `start recipe invalidated on ${why.sha.slice(0, 12)} (${why.ticket})`, vet);
   }
 
   /** The one search after an invalidation found no recipe that answers: none owed any more. */
   searchSpent(repo: string, note: RecipeNote, at: { ticket: string; sha: string }, vet: Vet): Promise<string | undefined> {
-    return this.write(repo, { ...note, searchesLeft: 0 }, `no start recipe found again on ${at.sha.slice(0, 12)} (${at.ticket})`, vet);
+    return this.write(repo, { ...note, searchesLeft: 0 }, note, `no start recipe found again on ${at.sha.slice(0, 12)} (${at.ticket})`, vet);
   }
 
-  private async write(repo: string, note: RecipeNote, what: string, vet: Vet): Promise<string | undefined> {
+  /** `note` over `read`, the note its writer read before its check: another ticket's write since then wins, this one is dropped. */
+  private async write(repo: string, note: RecipeNote, read: ReadNote, what: string, vet: Vet): Promise<string | undefined> {
     const text = formatRecipeNote(note);
     await vet(text);
-    return this.kb.commitNote(recipeNotePath(repo), text, `preview(${repo}): ${what}`);
+    const asRead = JSON.stringify(read);
+    return this.kb.commitNote(recipeNotePath(repo), text, `preview(${repo}): ${what}`, (current) => JSON.stringify(current === undefined ? undefined : parseRecipeNote(current)) === asRead);
   }
 }

@@ -27,8 +27,11 @@ export interface VisualProof {
   intake?: true;
   captures?: VisualCapture[];
   unavailable?: string;
-  /** Required, where its start command came from (ORC-386): declared by the repository, learned in the knowledge base, or none. */
-  start?: 'declared' | 'learned' | 'none';
+  /**
+   * Required, where its start command came from (ORC-386): declared by the repository, learned in the knowledge base, found by the
+   * build agent on this ticket and probed by the factory, or none.
+   */
+  start?: 'declared' | 'learned' | 'found' | 'none';
 }
 
 /**

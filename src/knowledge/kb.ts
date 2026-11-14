@@ -94,22 +94,32 @@ export class KnowledgeBase {
 
   /**
    * The factory's narrow write (ORC-386), never an agent's: one note under `notes/preview/`, committed as the factory with
-   * `message`, pushed when the clone has a remote. Undefined once pushed; else what to log: no remote (the commit stays in the
-   * clone), or a push refused, its commit then undone so that the clone still pulls fast-forward. Nothing to commit, nothing done.
+   * `message`, pushed when the clone has a remote. First the clone is brought up to its remote, as `pull` does: a clone it does
+   * not pull (off its default branch, a fetch that fails) is not written to. Then `stillAsRead` sees the note as it is now: a note
+   * another write changed since its writer read it is left alone. Undefined once pushed; else what to log: not written, no
+   * remote (the commit stays in the clone), or a push refused, its commit then undone so that the clone still pulls
+   * fast-forward. Nothing to commit, nothing done.
    */
-  commitNote(path: string, content: string, message: string): Promise<string | undefined> {
+  commitNote(path: string, content: string, message: string, stillAsRead: (current: string | undefined) => boolean = () => true): Promise<string | undefined> {
     if (posix.normalize(path) !== path || !path.startsWith(`${PREVIEW_DIR}/`) || !path.endsWith('.md')) {
       return Promise.reject(new Error(`the factory writes only notes under ${PREVIEW_DIR}/ in the knowledge base, not ${path}`));
     }
     return this.serial(async () => {
       const git = (...a: string[]) => mustExec(this.git, 'git', ['-C', this.repoPath, ...a]);
+      const remote = !!(await git('remote')).trim();
+      if (remote) {
+        const why = await this.pull().catch((err: Error) => `not pulled: ${err.message}`);
+        if (why) return `knowledge base: ${why}; ${path} not written`;
+      }
+      const file = join(this.repoPath, path);
+      if (!stillAsRead(existsSync(file) ? readFileSync(file, 'utf8') : undefined)) return `knowledge base: ${path} changed since it was read; not written over`;
       const before = (await git('rev-parse', 'HEAD')).trim();
-      mkdirSync(dirname(join(this.repoPath, path)), { recursive: true });
-      writeFileSync(join(this.repoPath, path), content);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
       await git('add', '--', path);
       if (!(await git('status', '--porcelain', '--', path)).trim()) return undefined;
       await git(...FACTORY_IDENTITY.flatMap((c) => ['-c', c]), 'commit', '--quiet', '--no-verify', '-m', message, '--', path);
-      if (!(await git('remote')).trim()) return `knowledge base: no remote, ${path} is committed in the clone only`;
+      if (!remote) return `knowledge base: no remote, ${path} is committed in the clone only`;
       const pushed = await this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env: { GIT_TERMINAL_PROMPT: '0' }, timeoutMs: FETCH_DEADLINE_MS });
       if (pushed.code === 0) return undefined;
       await git('reset', '--quiet', '--keep', before);

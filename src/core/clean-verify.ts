@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { WIDTHS, type VisualShooter } from '../adapters/browser/types.js';
+import { WIDTHS, type Shots, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
@@ -288,7 +288,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     if (failures.length) return verdict();
     // The recipe the agent found (ORC-386), probed by the factory in a sandbox of its own at network `none`, nothing mounted.
     if (probe) {
-      const probed = await inBox('preview', cloneDir, [], (id) => probeStart(sandboxes, id, { start: recipeStart(probe), port: req.visual!.port, env }));
+      // In the image the captures run in: a recipe that answers there is one they can start.
+      const probed = await inBox('preview', cloneDir, [], (id) => probeStart(sandboxes, id, { start: recipeStart(probe), port: req.visual!.port, env }), req.visual!.shooter?.requirements);
       preview = probed.answered ? { of: 'found', answered: true } : { of: 'found', answered: false, detail: probed.detail };
       if (!probed.answered && proof?.decision === 'required') {
         proof.start = 'none';
@@ -368,12 +369,14 @@ async function planVisual(
   if (at.refused) return { proof };
   // Declared first, then learned (ORC-386); the recipe the agent found only when neither, probed even with no proof to take.
   const declared = at.config.preview ?? v.start;
-  const recipe = declared ? undefined : (v.learned ?? v.found);
-  const probe = recipe === v.found ? v.found : undefined;
+  const learned = declared ? undefined : v.learned;
+  // The shots run without the repository's services (ORC-282), and so would the probe: no recipe to find there.
+  const probe = declared || learned || at.config.services.length ? undefined : v.found;
+  const recipe = learned ?? probe;
   const plan = probe ? { probe } : {};
   if (proof.decision !== 'required') return { proof, ...plan };
   const start = declared ?? (recipe && recipeStart(recipe));
-  proof.start = declared ? 'declared' : recipe ? 'learned' : 'none';
+  proof.start = declared ? 'declared' : learned ? 'learned' : probe ? 'found' : 'none';
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH}), and the knowledge base has learned none`;
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
@@ -407,14 +410,17 @@ async function shootBoth(
   const shot = (side: 'before' | 'after', dir: string, sha: string) =>
     inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths: WIDTHS, env: at.env }), v.shooter.requirements);
   const after = await shot('after', at.cloneDir, at.sha);
-  // A learned recipe that no longer starts the application is stale (ORC-386): no fault of the branch, the proof unavailable.
-  if (v.learnedStart && !after.started) {
-    return { failures: [], files: [], stale: after.detail, unavailable: `the start recipe learned in the knowledge base did not start the application on ${at.sha.slice(0, 12)}: ${brief(after.detail)}; it is invalidated` };
+  let shotBefore: Promise<Shots> | undefined;
+  const before = () =>
+    (shotBefore ??= (async () => {
+      await at.setUp('visual', at.beforeDir);
+      return shot('before', at.beforeDir, at.from);
+    })());
+  // A learned recipe that starts the application neither on the commit nor on the base is stale (ORC-386): no fault of the
+  // branch, the proof unavailable. One the base still starts with is the branch's to fix, as a declared start would be.
+  if (v.learnedStart && !after.started && !(await before()).started) {
+    return { failures: [], files: [], stale: after.detail, unavailable: `the start recipe learned in the knowledge base started the application neither on ${at.sha.slice(0, 12)} nor on the base ${at.from.slice(0, 12)}: ${brief(after.detail)}; it is invalidated` };
   }
-  const before = async () => {
-    await at.setUp('visual', at.beforeDir);
-    return shot('before', at.beforeDir, at.from);
-  };
   return judgeShots(after, before, { before: at.from, after: at.sha }, v.gate);
 }
 

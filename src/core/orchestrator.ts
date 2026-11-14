@@ -1194,10 +1194,11 @@ export class Orchestrator {
     }
     // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
     // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
-    const recipe = job.verifyFailure === 'block' ? undefined : await this.recipeOf(project, t);
-    const visual = job.verifyFailure === 'block' ? {} : { visual: this.visualRequest(project, t, job, output, recipe) };
-    const res = await this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}), ...visual });
-    if (recipe) await this.keepRecipe(project, t, run.id, job, output, recipe, res);
+    if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
+    const recipe = await this.recipeOf(project, t);
+    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, job, output, recipe) });
+    // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push.
+    if (recipe) this.track(this.keepRecipe(project, t, run.id, job, output, recipe, res));
     return res;
   }
 
@@ -3112,7 +3113,8 @@ export class Orchestrator {
       // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
       const specShown = !!t.spec && job.queue === 'dev' && (job.step === 'spec_draft' ? !t.spec.approval : !!t.spec.approval);
       // Nothing declares how to start the application, nothing learned it (ORC-386): the build agent finds it.
-      const recipe = job.step === 'build' && !config.preview ? await this.recipeOf(project, t) : undefined;
+      // Not where the captures could not run either: without the repository's services (ORC-282).
+      const recipe = job.step === 'build' && !config.preview && !config.services.length ? await this.recipeOf(project, t) : undefined;
       const previewSearch = !!recipe && this.searchesRecipe(project, job, recipe.note);
       const promptInput = {
         skill: job.skill,

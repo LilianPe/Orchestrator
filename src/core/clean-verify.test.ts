@@ -1187,9 +1187,10 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       const res = await runCleanVerify(req);
       expect(res.preview).toEqual({ of: 'found', answered: true });
       const box = sandboxes.created.find((c) => c.runId === 'r1-preview');
-      expect(box).toMatchObject({ network: 'none', mounts: [] });
+      // In the image the captures run in: what answers there is what they can start.
+      expect(box).toMatchObject({ network: 'none', mounts: [], requirements: { browser: true } });
       expect(sandboxes.ran.find((r) => r.box === 'r1-preview')).toMatchObject({ command: FOUND.command });
-      expect(res.visual?.proof).toMatchObject({ start: 'learned' });
+      expect(res.visual?.proof).toMatchObject({ start: 'found' });
       expect(shooter.calls.map((c) => c.start)).toEqual([FOUND.command, FOUND.command]);
     });
 
@@ -1212,16 +1213,34 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       expect(shooter.calls).toEqual([]);
     });
 
-    it('criterion 4: a learned recipe that no longer starts the application is no failure of the branch: unavailable, and said stale', async () => {
-      const { req, repo, shooter } = visual({ page: 'new page\n', start: null, learned: LEARNED });
-      const head = git(repo, 'rev-parse', BRANCH);
-      shooter.answer = ({ sha }) => (sha === head ? { started: false, detail: 'nothing answers on port 4201' } : undefined);
+    it('criterion 4: a learned recipe that starts the application neither on the commit nor on the base is stale, no failure of the branch', async () => {
+      const { req, shooter } = visual({ page: 'new page\n', start: null, learned: LEARNED });
+      shooter.answer = () => ({ started: false, detail: 'nothing answers on port 4201' });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
       expect(res.failures).toEqual([]);
       expect(res.preview).toEqual({ of: 'learned', answered: false, detail: 'nothing answers on port 4201' });
-      expect(res.visual?.proof).toMatchObject({ start: 'learned', unavailable: expect.stringContaining('learned') });
-      expect(shooter.calls).toHaveLength(1);
+      expect(res.visual?.proof).toMatchObject({ start: 'learned', unavailable: expect.stringContaining('neither on') });
+      expect(shooter.calls).toHaveLength(2);
+    });
+
+    it('a learned recipe the base still starts with, which the commit does not: the branch broke the application, the check fails', async () => {
+      const { req, repo, shooter } = visual({ page: 'new page\n', start: null, learned: LEARNED });
+      const head = git(repo, 'rev-parse', BRANCH);
+      shooter.answer = ({ sha }) => (sha === head ? { started: false, detail: 'TypeError at boot' } : undefined);
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(false);
+      expect(res.failures).toEqual([expect.objectContaining({ command: VISUAL_PROOF_CHECK, output: expect.stringContaining('TypeError at boot') })]);
+      expect(res.preview).toBeUndefined();
+      // The base shot once, to tell, and not again.
+      expect(shooter.calls).toHaveLength(2);
+    });
+
+    it('a repository with services: the found recipe is not probed, as the captures could not run it either', async () => {
+      const { req, sandboxes } = visual({ page: 'new page\n', start: null, found: FOUND, config: `${VISUAL}services: [postgres]\n` });
+      const res = await runCleanVerify(req);
+      expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
+      expect(res.preview).toBeUndefined();
     });
 
     it('a commit whose commands fail probes nothing', async () => {

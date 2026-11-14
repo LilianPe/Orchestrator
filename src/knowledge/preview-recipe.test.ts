@@ -161,6 +161,44 @@ describe("the factory's writer of start recipes (ORC-386)", () => {
     expect(readFileSync(join(repo, 'notes/preview/acme/shop.md'), 'utf8')).toContain('npm run dev');
   });
 
+  it('a clone off its default branch is not written to, as it is not pulled', async () => {
+    const { repo, origin } = kbRepo();
+    git(repo, 'switch', '-q', '-c', 'draft');
+    const before = git(origin, 'rev-parse', 'main');
+    const recipes = new PreviewRecipes(new KnowledgeBase(repo));
+    const warning = await recipes.record('acme/shop', { recipe: valid.recipe, sha: SHA, port: 4200, runId: 'run-1', ticket: 'REL-1', at: new Date() }, undefined, vet);
+    expect(warning).toMatch(/not on its default branch.*not written/);
+    expect(git(repo, 'log', '-1', '--format=%s')).toBe('init');
+    expect(git(origin, 'rev-parse', 'main')).toBe(before);
+  });
+
+  it('pulls before it writes: a remote that moved since the last refresh takes the write', async () => {
+    const { base, origin, repo } = kbRepo();
+    const other = join(base, 'other');
+    git(base, 'clone', '-q', origin, other);
+    writeFileSync(join(other, 'INDEX.md'), '- moved\n');
+    git(other, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-am', 'moved');
+    git(other, 'push', '-q');
+    const recipes = new PreviewRecipes(new KnowledgeBase(repo));
+    expect(await recipes.record('acme/shop', { recipe: valid.recipe, sha: SHA, port: 4200, runId: 'run-1', ticket: 'REL-1', at: new Date() }, undefined, vet)).toBeUndefined();
+    expect(git(origin, 'log', '--format=%s', 'main').split('\n')).toEqual(['preview(acme/shop): start recipe validated on c0ffee000000 (REL-1)', 'moved', 'init']);
+  });
+
+  it('a note another write changed since it was read is left alone: two tickets of the same search lose nothing', async () => {
+    const { repo } = kbRepo();
+    const recipes = new PreviewRecipes(new KnowledgeBase(repo));
+    const at = new Date('2026-11-15T10:00:00Z');
+    await recipes.record('acme/shop', { recipe: valid.recipe, sha: SHA, port: 4200, runId: 'run-1', ticket: 'REL-1', at }, undefined, vet);
+    await recipes.invalidate('acme/shop', recipes.read('acme/shop') as RecipeNote, { reason: 'gone', sha: SHA, ticket: 'REL-2', at }, vet);
+    // Tickets A and B both read the invalid note; A finds a recipe first, then B's search found none.
+    const read = recipes.read('acme/shop') as RecipeNote;
+    await recipes.record('acme/shop', { recipe: { command: 'make serve', setup: [] }, sha: SHA, port: 4200, runId: 'run-a', ticket: 'REL-A', at }, read, vet);
+    expect(await recipes.searchSpent('acme/shop', read, { ticket: 'REL-B', sha: SHA }, vet)).toMatch(/changed since it was read/);
+    expect(recipes.read('acme/shop')).toMatchObject({ status: 'valid', recipe: { command: 'make serve' } });
+    // A recipe read absent and written meanwhile is not written over either.
+    expect(await recipes.record('acme/shop', { recipe: valid.recipe, sha: SHA, port: 4200, runId: 'run-c', ticket: 'REL-C', at }, undefined, vet)).toMatch(/changed since it was read/);
+  });
+
   it('writes nowhere but under notes/preview/', async () => {
     const { repo } = kbRepo();
     const kb = new KnowledgeBase(repo);

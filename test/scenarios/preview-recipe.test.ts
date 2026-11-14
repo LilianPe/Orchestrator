@@ -66,12 +66,10 @@ function preview(opts: { result?: (req: CleanVerifyRequest) => Partial<CleanVeri
 
 const delegate = (h: ReturnType<typeof createHarness>, ticketId = 'REL-1') => h.send('ticket.delegated', { linearSessionId: `ls-${ticketId}` }, ticketId);
 const lastSubject = (origin: string) => git(origin, 'log', '-1', '--format=%s', 'main');
-/** A recipe as the knowledge base kept it, before its fate. */
-const learned: Omit<RecipeNote, 'status' | 'research'> = { scope: 'repo:p', recipe: NPM_DEV, sha: SHA, port: 4200, checkedAt: '2026-11-14', origin: 'agent:build@r0', ticket: 'REL-0' };
 
 describe('the start recipe learned in the knowledge base (ORC-386)', () => {
-  it('criterion 1: no recipe: the build agent is asked, its recipe probed by verify, recorded naming the ticket, and the PR says it was learned', async () => {
-    const { h, asked, recipes, origin } = preview({ result: () => ({ preview: { of: 'found', answered: true }, visual: required('learned') }) });
+  it('criterion 1: no recipe: the build agent is asked, its recipe probed by verify, recorded naming the ticket, and the PR says the agent found it', async () => {
+    const { h, asked, recipes, origin } = preview({ result: () => ({ preview: { of: 'found', answered: true }, visual: required('found') }) });
     h.runner.enqueue(dev({ preview: NPM_DEV }));
     await delegate(h);
     expect(h.runner.requests[0]!.prompt).toContain(SEARCH);
@@ -79,8 +77,8 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
     expect(asked[0]!.visual?.learned).toBeUndefined();
     expect(recipes.read('p')).toMatchObject({ status: 'valid', recipe: NPM_DEV, sha: SHA, ticket: 'REL-1', research: false });
     expect(lastSubject(origin)).toBe('preview(p): start recipe validated on c0ffee000000 (REL-1)');
-    expect(h.publisher.asked[0]!.body).toContain('**Start command**: learned in the knowledge base');
-    expect(h.forge.checkRuns.find((c) => c.name === VISUAL_PROOF_CHECK)).toMatchObject({ summary: expect.stringContaining('Start command: learned') });
+    expect(h.publisher.asked[0]!.body).toContain('**Start command**: found by the build agent on this ticket');
+    expect(h.forge.checkRuns.find((c) => c.name === VISUAL_PROOF_CHECK)).toMatchObject({ summary: expect.stringContaining('Start command: found by the build agent') });
   });
 
   it('criterion 2: a recipe recorded: no search, verify gets it, nothing written', async () => {
@@ -155,8 +153,14 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
 
   it('a recipe already invalidated twice is no search, and verify gets nothing to start', async () => {
     const { h, asked, recipes } = preview();
-    const found: RecipeNote = { ...learned, status: 'valid', research: true };
-    await recipes.invalidate('p', found, { reason: 'gone', sha: SHA, ticket: 'REL-0', at: new Date() }, async () => {});
+    const vet = async () => {};
+    const at = new Date();
+    const run = { recipe: NPM_DEV, sha: SHA, port: 4200, runId: 'r0', ticket: 'REL-0', at };
+    await recipes.record('p', run, undefined, vet);
+    await recipes.invalidate('p', recipes.read('p') as RecipeNote, { reason: 'gone', sha: SHA, ticket: 'REL-0', at }, vet);
+    await recipes.record('p', run, recipes.read('p'), vet);
+    await recipes.invalidate('p', recipes.read('p') as RecipeNote, { reason: 'gone again', sha: SHA, ticket: 'REL-0', at }, vet);
+    expect(recipes.read('p')).toMatchObject({ status: 'invalid', searchesLeft: 0 });
     h.runner.enqueue(dev({ preview: NPM_DEV }));
     await delegate(h);
     expect(h.runner.requests[0]!.prompt).not.toContain(SEARCH);
