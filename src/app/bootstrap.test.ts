@@ -127,13 +127,15 @@ describe('bootstrap', () => {
     const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockImplementation(async function (this: Orchestrator) {
       deps = (this as unknown as { d: OrchestratorDeps }).d;
     });
+    const logs: string[] = [];
     try {
-      const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
       await app.stop();
     } finally {
       recover.mockRestore();
     }
     expect(deps!.projects[0]!.workflow).toEqual(defaultWorkflow({ budgets: { maxTurns: { build: 40 } } }));
+    expect(logs).toContain('p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it. Its setup and checks go in .factory/config.yml.');
   });
 
   it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {

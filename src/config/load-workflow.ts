@@ -4,10 +4,8 @@ import { parse } from 'yaml';
 import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
-import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset } from '../presets/preset.js';
 import { READ_TOOLS } from '../presets/tools.js';
-import { agentStep, checkStepSettings, fromStep, presetBound, WorkflowError, type StepSettings } from '../presets/workflow.js';
+import { agentStep, checkStepSettings, fromStep, PER_RUN, preset, presetBound, WorkflowError, type StepSettings } from '../presets/workflow.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -168,8 +166,6 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSe
   };
 }
 
-// Compiled once, at load: a preset that breaks an invariant of the core never reaches the engine.
-const preset = compilePreset(factoryDefault).preset;
 
 export function loadWorkflow(opts: { packDir: string; projectFile?: string | undefined; settings?: StepSettings | undefined }): Workflow {
   const pack = readRaw(join(opts.packDir, 'workflow.yml'));
@@ -178,7 +174,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   const settings = opts.settings ?? {};
   checkStepSettings(settings);
-  const perRun = limits(raw.limits?.per_run, { turns: 150, durationMs: 90 * 60_000 });
+  const perRun = limits(raw.limits?.per_run, PER_RUN);
   const rawJobs = raw.jobs ?? {};
   const jobs: Record<string, JobSpec> = {};
   for (const name of Object.keys(rawJobs)) jobs[name] = buildJob(name, resolveJob(name, rawJobs), perRun, settings);

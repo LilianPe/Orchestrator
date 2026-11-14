@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -98,6 +98,19 @@ describe('factory init', () => {
     const { config } = await initProposal({ ...NPM, ...PNPM_LOCK });
     expect(config?.setup).toBe('npm ci');
     expect(config?.commands).toEqual({ test: 'npm test' });
+  });
+
+  it('proposes nothing over an existing .factory/config.yml, and says an old .factory/workflow.yml is ignored', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    for (const [path, content] of Object.entries(NPM)) writeFileSync(join(repo, path), content);
+    mkdirSync(join(repo, '.factory'));
+    writeFileSync(join(repo, '.factory/config.yml'), 'commands: { test: npm test }\n');
+    writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\n');
+    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
+    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
+    expect(io.printed.some((p) => p.startsWith(PROPOSAL_HEADER))).toBe(false);
+    expect(io.printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it. Its setup and checks go in .factory/config.yml.');
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {

@@ -25,6 +25,28 @@ describe('defaultWorkflow (ORC-388)', () => {
     expect(hashCanonical(defaultWorkflow(settings))).toBe(hashCanonical(pack));
   });
 
+  // What the loader refused in a YAML file, held by the TypeScript table on its own: it stays once the pack goes (ORC-389).
+  it('names only jobs and statuses it has: every run, every move, the blocking findings and the relayed answer', () => {
+    const wf = defaultWorkflow();
+    const runs = [
+      ...Object.values(wf.jobs).flatMap((j) => [j.onSuccess.run, j.onBlocking?.run]),
+      ...Object.values(wf.on).flatMap((rules) => rules!.map((r) => r.run)),
+      wf.relayJob,
+    ].filter((r): r is string => r !== undefined);
+    for (const run of runs) expect(wf.jobs, run).toHaveProperty([run]);
+    const moves = [...Object.values(wf.jobs).flatMap((j) => [j.onStart.move, j.onSuccess.move]), ...Object.values(wf.on).flatMap((rules) => rules!.flatMap((r) => [r.move, r.from, r.to]))];
+    for (const move of moves.filter((m) => m !== undefined)) expect(wf.states, move).toHaveProperty([move]);
+    for (const j of Object.values(wf.jobs)) if (j.onBlocking) expect(wf.jobs[j.onBlocking.run]!.input).toBe('findings');
+    expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback' });
+    expect(wf.jobs[wf.relayJob!]!.counter).toBeUndefined();
+  });
+
+  it('gives each workflow rules and limits of its own', () => {
+    const [a, b] = [defaultWorkflow(), defaultWorkflow()];
+    expect(a.on).not.toBe(b.on);
+    expect(a.limits.perRun).not.toBe(b.limits.perRun);
+  });
+
   it("refuses factory.yml's settings for a step the preset does not have, as the loader does", () => {
     expect(() => defaultWorkflow({ effort: { perStep: { nope: 'low' } } })).toThrow('claude.effort.per_step.nope: not an agent step of factory/default');
   });

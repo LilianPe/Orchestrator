@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { REPO_CONFIG_DIR } from '../config/repo-config.js';
 import type { JobSpec, RunLimits, Workflow } from '../config/workflow-schema.js';
 import type { Condition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
@@ -13,6 +16,14 @@ import { perStepToolViolations, READ_TOOLS, stepTools } from './tools.js';
 
 export class WorkflowError extends Error {}
 
+/** The workflow files an older factory read in a repository: ignored now, they are named by their presence and never read. */
+const IGNORED_WORKFLOW_FILES = [`${REPO_CONFIG_DIR}/workflow.yml`, '.relais/workflow.yml'];
+
+/** The ignored workflow files present in a repository's working copy (ORC-388), for `factory doctor` and the daemon's start. */
+export const ignoredWorkflowFiles = (repoPath: string): string[] => IGNORED_WORKFLOW_FILES.filter((file) => existsSync(join(repoPath, file)));
+
+export const ignoredWorkflowWarning = (file: string): string => `Warning: ${file} is ignored: the workflow is the factory/default preset. Delete it.`;
+
 /** What `factory.yml` says of the agent steps (ORC-136), by step name. */
 export interface StepSettings {
   effort?: { default?: Effort; perStep?: Record<string, Effort> | undefined } | undefined;
@@ -22,7 +33,7 @@ export interface StepSettings {
 }
 
 // Compiled once, at load: a preset that breaks an invariant of the core never reaches the engine.
-const preset = compilePreset(factoryDefault).preset;
+export const preset = compilePreset(factoryDefault).preset;
 
 /** The limit of a counter of the preset, which the engine still reads through `limits` (ORC-187). */
 export function presetBound(p: Preset, counter: string): number {
@@ -65,7 +76,7 @@ export function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimi
 }
 
 /** The ceiling of a run with no limits of its own: the turns before the preset's, and its duration. */
-const PER_RUN: RunLimits = { turns: 150, durationMs: 90 * 60_000 };
+export const PER_RUN: Readonly<RunLimits> = { turns: 150, durationMs: 90 * 60_000 };
 
 /** A job of an agent step, before what it takes from that step. */
 type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'pickup' | 'onStart' | 'onSuccess' | 'effort' | 'limits' | 'network' | 'tools'> &
@@ -77,38 +88,43 @@ function stepJob(name: string, job: StepJob, settings: StepSettings): JobSpec {
   return { name, verify: [], pickup: false, onStart: {}, onSuccess: {}, ...job, ...fromStep(step, PER_RUN, settings) };
 }
 
-const BLOCKED: Condition = [{ kind: 'blocked', negate: false }];
-const NOT_BLOCKED = { kind: 'blocked', negate: true } as const;
 const REGROUPED_MS = 3 * 60_000;
 
-/** The rules: what starts a job, and what a human's event does. `whenSrc` is the condition as the pack wrote it, traced and hashed. */
-const RULES: Workflow['on'] = {
-  'ticket.delegated': [{ when: [{ kind: 'state_in', values: ['todo', 'dev'] }, NOT_BLOCKED], whenSrc: 'state in [todo, dev] && !blocked', run: 'dev' }],
-  // The review starts once `dev`, `fix-ci`, `fix-review` or `fix-human` is published (their `onSuccess`). A human's move to
-  // AI Review reviews the published commit again: how a commit `dev-feedback` publishes gets one.
-  'status.changed': [{ to: 'ai_review', run: 'review' }],
-  // A reply in the ticket's session; a review written on the PR (`pr.reviewed`) goes through these rules too (ORC-190).
-  // In Human Review, it is a round of human feedback: `fix-human`, on its own counter (`limits.humanReviewRounds`).
-  'session.prompted': [
-    { when: BLOCKED, whenSrc: 'blocked', run: 'dev-feedback', debounceMs: 0 },
-    { when: [{ kind: 'state_in', values: ['human_review'] }], whenSrc: 'state in [human_review]', run: 'fix-human', debounceMs: REGROUPED_MS },
-    { when: [{ kind: 'state_in', values: ['dev'] }], whenSrc: 'state in [dev]', run: 'dev-feedback', debounceMs: REGROUPED_MS },
-  ],
-  // A reply to the blocking comment, written on the ticket. `dev-feedback` stands for a block with no step of its own (ORC-196).
-  'ticket.commented': [{ when: BLOCKED, whenSrc: 'blocked', run: 'dev-feedback' }],
-  // A mention asks a question. The memory in writing sleeps (ORC-193): a `retiens` is a message as any other.
-  'session.mentioned': [{ run: 'ask' }],
-  'label.changed': [{ label: 'agent:stop', do: 'stop' }],
-  'session.stopped': [{ do: 'stop' }],
-  // Red CI, merge gate included: `fix-ci`, one round of the review and CI loop (`limits.ciFixAttempts`, ORC-184).
-  'pr.checks_failed': [{ when: [{ kind: 'state_in', values: ['human_review', 'ai_review'] }, NOT_BLOCKED], whenSrc: 'state in [human_review, ai_review] && !blocked', run: 'fix-ci' }],
-  // A conflict of the PR with the default branch (ORC-146): the rebase step, on the counter of red CI. During another step,
-  // the rebase waits for that work to end: the agent at work never resolves the conflict.
-  'pr.conflicted': [{ when: [{ kind: 'state_in', values: ['dev', 'human_review', 'ai_review'] }, NOT_BLOCKED], whenSrc: 'state in [dev, human_review, ai_review] && !blocked', run: 'rebase' }],
-  // The `after_merge` step (ORC-197): the requester mentioned with the merged PR's link, the changelog entry, then the cleanup.
-  // It starts no run: the memory in writing sleeps (ORC-193).
-  'pr.merged': [{ move: 'done', do: 'after_merge' }],
-};
+/**
+ * The rules: what starts a job, and what a human's event does. `whenSrc` is the condition as the pack wrote it, traced and
+ * hashed. Made anew for each workflow, as the loader did: no project shares a rule with another.
+ */
+function rules(): Workflow['on'] {
+  const blocked: Condition = [{ kind: 'blocked', negate: false }];
+  const notBlocked = { kind: 'blocked', negate: true } as const;
+  return {
+    'ticket.delegated': [{ when: [{ kind: 'state_in', values: ['todo', 'dev'] }, notBlocked], whenSrc: 'state in [todo, dev] && !blocked', run: 'dev' }],
+    // The review starts once `dev`, `fix-ci`, `fix-review` or `fix-human` is published (their `onSuccess`). A human's move to
+    // AI Review reviews the published commit again: how a commit `dev-feedback` publishes gets one.
+    'status.changed': [{ to: 'ai_review', run: 'review' }],
+    // A reply in the ticket's session; a review written on the PR (`pr.reviewed`) goes through these rules too (ORC-190).
+    // In Human Review, it is a round of human feedback: `fix-human`, on its own counter (`limits.humanReviewRounds`).
+    'session.prompted': [
+      { when: blocked, whenSrc: 'blocked', run: 'dev-feedback', debounceMs: 0 },
+      { when: [{ kind: 'state_in', values: ['human_review'] }], whenSrc: 'state in [human_review]', run: 'fix-human', debounceMs: REGROUPED_MS },
+      { when: [{ kind: 'state_in', values: ['dev'] }], whenSrc: 'state in [dev]', run: 'dev-feedback', debounceMs: REGROUPED_MS },
+    ],
+    // A reply to the blocking comment, written on the ticket. `dev-feedback` stands for a block with no step of its own (ORC-196).
+    'ticket.commented': [{ when: blocked, whenSrc: 'blocked', run: 'dev-feedback' }],
+    // A mention asks a question. The memory in writing sleeps (ORC-193): a `retiens` is a message as any other.
+    'session.mentioned': [{ run: 'ask' }],
+    'label.changed': [{ label: 'agent:stop', do: 'stop' }],
+    'session.stopped': [{ do: 'stop' }],
+    // Red CI, merge gate included: `fix-ci`, one round of the review and CI loop (`limits.ciFixAttempts`, ORC-184).
+    'pr.checks_failed': [{ when: [{ kind: 'state_in', values: ['human_review', 'ai_review'] }, notBlocked], whenSrc: 'state in [human_review, ai_review] && !blocked', run: 'fix-ci' }],
+    // A conflict of the PR with the default branch (ORC-146): the rebase step, on the counter of red CI. During another step,
+    // the rebase waits for that work to end: the agent at work never resolves the conflict.
+    'pr.conflicted': [{ when: [{ kind: 'state_in', values: ['dev', 'human_review', 'ai_review'] }, notBlocked], whenSrc: 'state in [dev, human_review, ai_review] && !blocked', run: 'rebase' }],
+    // The `after_merge` step (ORC-197): the requester mentioned with the merged PR's link, the changelog entry, then the cleanup.
+    // It starts no run: the memory in writing sleeps (ORC-193).
+    'pr.merged': [{ move: 'done', do: 'after_merge' }],
+  };
+}
 
 /** The jobs and the rules of `factory/default`, with `factory.yml`'s settings of its agent steps (ORC-136, ORC-383). */
 export function defaultWorkflow(settings: StepSettings = {}): Workflow {
@@ -165,7 +181,7 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
     limits: {
       parallelSessions: 3,
       questionSessions: 2,
-      perRun: PER_RUN,
+      perRun: { ...PER_RUN },
       // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
       verifyAttempts: presetBound(preset, 'verify') + 1,
       ciFixAttempts: presetBound(preset, 'review_ci'),
@@ -177,7 +193,7 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
     },
     workspace: { setup: [], portBase: 4200 },
     commands: [],
-    on: RULES,
+    on: rules(),
     jobs: {
       ...Object.fromEntries(Object.entries(jobs).map(([name, job]) => [name, stepJob(name, job, settings)])),
       // The answer agent (ORC-182), out of the preset's steps: a question starts it at once in the questions queue. It reads,

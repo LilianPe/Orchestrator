@@ -646,6 +646,8 @@ jobs:
     it('lists them in the JSON report', async () => {
       const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml']), json: true });
       expect(JSON.parse(result.text)).toMatchObject({ accepted: true, ignored: ['.factory/workflow.yml'] });
+      const failed = await doctor([], [], { repoPath: repoWith(['.relais/workflow.yml']), json: true, fake: { failWorkflows: true } });
+      expect(JSON.parse(failed.text)).toMatchObject({ accepted: false, ignored: ['.relais/workflow.yml'] });
     });
 
     it('says nothing of a repository without one', async () => {

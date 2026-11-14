@@ -1,6 +1,6 @@
 # The `factory/default` preset
 
-The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules of [`workflow.yml`](workflow.md) (ORC-187). The `on` rules and the jobs still drive the runs, but the engine already takes its bounds from the preset, compiled each time the workflow is built (see "What the engine already reads"). Since ORC-388 they are built in TypeScript, `defaultWorkflow()` in `src/presets/workflow.ts`, the same as the standard pack's `workflow.yml` (a test checks it, hash included); a repository's `.factory/workflow.yml` is ignored, and `factory doctor` says so.
+The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules of [`workflow.yml`](workflow.md) (ORC-187). The `on` rules and the jobs still drive the runs, but the engine already takes its bounds from the preset, compiled each time the workflow is built (see "What the engine already reads"). Since ORC-388 they are built in TypeScript, `defaultWorkflow()` in `src/presets/workflow.ts`, the same as the standard pack's `workflow.yml` (a test checks it, hash included); a repository's `.factory/workflow.yml` is ignored: `factory doctor` says so, and the daemon logs it at each start.
 
 Code: `src/presets/preset.ts` (types and compiler), `src/presets/factory-default.ts` (the definition), `src/presets/workflow.ts` (the workflow the engine runs).
 

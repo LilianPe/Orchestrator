@@ -36,7 +36,7 @@ import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveL
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { defaultWorkflow, ignoredWorkflowFiles, ignoredWorkflowWarning } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { EventBus } from '../core/bus.js';
@@ -111,6 +111,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     workflow: isFantome(p) ? asFantome(workflow) : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
   }));
+  // Said at each start, not only by `factory doctor`: what the file set (setup, checks) now belongs in `.factory/config.yml`.
+  for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)} Its setup and checks go in .factory/config.yml.`);
   const limits = projects[0]?.workflow.limits;
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.

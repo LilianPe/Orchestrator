@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import {
@@ -12,6 +10,7 @@ import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../presets/workflow.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -460,28 +459,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * The workflow files an older factory read in the repository (ORC-388): the workflow is the `factory/default` preset now, and
- * these are ignored. Doctor names the ones it finds, only by their presence: it never reads them.
- */
-const IGNORED_WORKFLOW_FILES = ['.factory/workflow.yml', '.relais/workflow.yml'];
-
 export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { repoPath, api, out } = options;
-  const ignored = IGNORED_WORKFLOW_FILES.filter((file) => existsSync(join(repoPath, file)));
-  if (!options.json) for (const file of ignored) out(`Warning: ${file} is ignored: the workflow is the factory/default preset. Delete it.`);
+  // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
+  const ignored = ignoredWorkflowFiles(repoPath);
+  if (!options.json) for (const file of ignored) out(ignoredWorkflowWarning(file));
+  const failure = (message: string) => doctorFailure(options, message, ignored);
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
   } catch (error) {
-    return doctorFailure(options, `Cannot read the workflows: ${errorMessage(error)}`);
+    return failure(`Cannot read the workflows: ${errorMessage(error)}`);
   }
   let environments: EnvironmentProtection[] = [];
   if (workflows.length > 0) {
     try {
       environments = await api.listEnvironments(repoPath);
     } catch (error) {
-      return doctorFailure(options, `Cannot read the environments: ${errorMessage(error)}`);
+      return failure(`Cannot read the environments: ${errorMessage(error)}`);
     }
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
@@ -526,9 +521,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'>, message: string): number {
+function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'>, message: string, ignored: string[] = []): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}) }, null, 2));
   } else {
     options.out(message);
   }
