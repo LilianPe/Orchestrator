@@ -114,6 +114,7 @@ import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
 import { READ_TOOLS } from '../presets/tools.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
+import { DECLARED_READS, declaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
@@ -982,7 +983,11 @@ export class Orchestrator {
     try {
       const log = readSecurityLog(
         { runId, projectId: owner.projectId, ticketId: owner.ticketId, at: this.d.clock.now() },
-        { ...(this.d.egressJournal ? { egress: this.d.egressJournal(runId) } : {}), refusals: join(this.d.runsDir!, runId, 'refusals', 'refusals.jsonl') },
+        {
+          ...(this.d.egressJournal ? { egress: this.d.egressJournal(runId) } : {}),
+          refusals: join(this.d.runsDir!, runId, 'refusals', 'refusals.jsonl'),
+          declared: join(this.d.runsDir!, runId, DECLARED_READS),
+        },
       );
       if (!(await this.d.store.putSecurityLog(log))) return;
       const { egress, refusals } = log.skipped;
@@ -1011,6 +1016,8 @@ export class Orchestrator {
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
     const refusalsDir = join(runDir, 'refusals');
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
+    // What the repository's lockfiles declare before the agent touches them, out of its mounts: its security log judges its reads by it (ORC-370).
+    await writeFile(join(runDir, DECLARED_READS), JSON.stringify(declaredReads(ws.path)));
     return sandboxes.create({
       runId,
       ticketId,

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { NETWORK_RANK, type EgressPolicy } from './levels.js';
 import { egressJournalPath, PIPE, type EgressProxy } from './proxy.js';
+import type { ReadCaps } from './reads.js';
 
 /** What the daemon asks of the egress proxy, in its own process or in the `proxy` service. */
 export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' | 'caCertPath' | 'caCertPem' | 'journalPath'>;
@@ -18,6 +19,8 @@ const OPEN = CLOSE.extend({
   policy: z.object({ level: z.enum(Object.keys(NETWORK_RANK) as [NetworkLevel, ...NetworkLevel[]]), allow: z.array(z.string()) }),
   /** The run's Claude token, which the proxy sets on its model calls (ORC-337); held in memory only. */
   claudeToken: z.string().optional(),
+  /** The caps of its counted reads, factory.yml's (ORC-370): the proxy's own when absent. */
+  reads: z.strictObject({ versionsPerPackage: z.number().int().positive(), assetsPerRepo: z.number().int().positive() }).optional(),
 });
 
 export interface EgressControl {
@@ -32,8 +35,8 @@ export interface EgressControl {
 export async function serveEgressControl(proxy: EgressProxy, path: string): Promise<EgressControl> {
   const routes = new Map<string, (input: unknown) => Promise<object>>([
     ['/open', async (input) => {
-      const { runId, policy, claudeToken } = OPEN.parse(input);
-      const socket = await proxy.openRun(runId, policy, claudeToken);
+      const { runId, policy, claudeToken, reads } = OPEN.parse(input);
+      const socket = await proxy.openRun(runId, policy, claudeToken, reads);
       return { socket, ca: proxy.caCertPath, caPem: proxy.caCertPem };
     }],
     ['/close', async (input) => {
@@ -79,6 +82,8 @@ export interface EgressClientOptions {
   timeoutMs?: number;
   /** Handed to the proxy with each run it opens (ORC-337): the `proxy` service reads no secret of its own. */
   claudeToken?: () => string | undefined;
+  /** Handed to the proxy with each run it opens (ORC-370): factory.yml is the daemon's, the `proxy` service reads none. */
+  reads?: ReadCaps;
 }
 
 /**
@@ -122,7 +127,7 @@ export class EgressClient implements Egress {
   async open(runId: string, policy: EgressPolicy): Promise<string> {
     await this.watching();
     const claudeToken = this.o.claudeToken?.();
-    const { socket, ca, caPem } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}) })) as { socket: string; ca: string; caPem: string };
+    const { socket, ca, caPem } = (await this.call('/open', { runId, policy, ...(claudeToken ? { claudeToken } : {}), ...(this.o.reads ? { reads: this.o.reads } : {}) })) as { socket: string; ca: string; caPem: string };
     this.ca = { path: ca, pem: caPem };
     this.opened.add(runId);
     return socket;

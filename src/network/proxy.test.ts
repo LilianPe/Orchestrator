@@ -11,6 +11,7 @@ import { httpsUpstream } from '../../test/helpers/egress-upstream.js';
 import { CLAUDE_BODY_DEPTH, CLAUDE_BODY_MAX, CLAUDE_BODY_VALUES, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN } from './levels.js';
 import { readSecurityLog, refusalSummary } from './security-log.js';
 import { EgressProxy, isPrivate, type EgressEntry, type EgressProxyOptions } from './proxy.js';
+import { READ_CAPS } from './reads.js';
 
 let dir = '';
 let proxy: EgressProxy;
@@ -563,6 +564,60 @@ describe('EgressProxy', () => {
     it('leaves the credentials and the body of other hosts alone', async () => {
       const sock = await proxy.open('run-1', docs);
       expect((await viaTls(sock, 'docs.test', 'GET', '/', { authorization: 'Bearer docs', 'anthropic-beta': 'x' })).body).toBe('up GET docs.test / authorization=Bearer docs anthropic-beta=x');
+    });
+  });
+
+  describe('reads that move a public counter (ORC-370)', () => {
+    const LIMITED_ONLY = { level: 'limited' as const, allow: [] };
+    const tarball = (v: string) => `/lodash/-/lodash-${v}.tgz?leak=c2VjcmV0`;
+
+    it("refuses a version of an npm package past the run's cap, journaled as suspicious with its package and version, never its query", async () => {
+      const sock = await proxy.openRun('run-1', LIMITED_ONLY, undefined, { versionsPerPackage: 2, assetsPerRepo: 1 });
+      for (const v of ['1.0.0', '2.0.0', '1.0.0']) expect((await viaTls(sock, 'registry.npmjs.org', 'GET', tarball(v))).status, v).toBe(200);
+      const past = await viaTls(sock, 'registry.npmjs.org', 'GET', tarball('3.0.0'));
+      expect(past.status).toBe(403);
+      expect(past.body).toMatch(/suspicious: more than 2 distinct versions of npm package lodash/);
+      // A plain http:// request is counted the same.
+      expect((await viaProxy(sock, 'GET', `http://registry.yarnpkg.com${tarball('4.0.0')}`)).status).toBe(403);
+      const entries = await journal('run-1');
+      expect(entries).toEqual([
+        expect.objectContaining({ host: 'registry.npmjs.org', path: '/lodash/-/lodash-1.0.0.tgz', ok: true, read: { kind: 'npm', name: 'lodash', item: '1.0.0' } }),
+        expect.objectContaining({ ok: true, read: { kind: 'npm', name: 'lodash', item: '2.0.0' } }),
+        expect.objectContaining({ ok: true, read: { kind: 'npm', name: 'lodash', item: '1.0.0' } }),
+        expect.objectContaining({ ok: false, suspicious: true, read: { kind: 'npm', name: 'lodash', item: '3.0.0' } }),
+        expect.objectContaining({ host: 'registry.yarnpkg.com', ok: false, suspicious: true, read: { kind: 'npm', name: 'lodash', item: '4.0.0' } }),
+      ]);
+      expect(JSON.stringify(entries)).not.toContain('c2VjcmV0');
+      // Another run counts on its own.
+      const other = await proxy.openRun('run-2', LIMITED_ONLY, undefined, { versionsPerPackage: 2, assetsPerRepo: 1 });
+      expect((await viaTls(other, 'registry.npmjs.org', 'GET', tarball('3.0.0'))).status).toBe(200);
+    });
+
+    it('caps the release assets of a repository at the default for a run opened without caps of its own', async () => {
+      const sock = await proxy.open('run-1', LIMITED_ONLY);
+      for (let i = 0; i < READ_CAPS.assetsPerRepo; i++) expect((await viaTls(sock, 'github.com', 'GET', `/owner/repo/releases/download/v${i}/a.zip`)).status).toBe(200);
+      expect((await viaTls(sock, 'api.github.com', 'GET', '/repos/owner/repo/releases/assets/42')).status).toBe(403);
+      expect(await journal('run-1')).toContainEqual(expect.objectContaining({ host: 'api.github.com', ok: false, suspicious: true, read: { kind: 'release', name: 'owner/repo', item: 'asset 42' } }));
+    });
+
+    it("takes the proxy's caps for the runs it opens, and a security log keeps the read and its flag", async () => {
+      const capped = new EgressProxy({ dir: join(dir, 'capped'), caDir: join(dir, 'ca'), reads: { versionsPerPackage: 1, assetsPerRepo: 1 }, upstream });
+      try {
+        const sock = await capped.open('run-1', LIMITED_ONLY);
+        // `viaTls` trusts the CA of `proxy`, the same folder: loaded once it opens a run.
+        await proxy.open('run-0', LIMITED_ONLY);
+        expect((await viaTls(sock, 'files.pythonhosted.org', 'GET', '/packages/aa/bb/requests-1.0-py3-none-any.whl')).status).toBe(200);
+        expect((await viaTls(sock, 'files.pythonhosted.org', 'GET', '/packages/aa/bb/requests-2.0.tar.gz')).status).toBe(403);
+        await capped.close('run-1');
+        const log = readSecurityLog({ runId: 'run-1', projectId: 'p', ticketId: 't', at: 0 }, { egress: capped.journalPath('run-1'), refusals: join(dir, 'none.jsonl') });
+        expect(log.egress).toEqual([
+          expect.objectContaining({ ok: true, read: { kind: 'pypi', name: 'requests', item: '1.0' } }),
+          expect.objectContaining({ ok: false, flag: 'suspicious', read: { kind: 'pypi', name: 'requests', item: '2.0' } }),
+        ]);
+        expect(refusalSummary(log)).toMatch(/1 read refused as suspicious/);
+      } finally {
+        await capped.closeAll();
+      }
     });
   });
 

@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, stepSettings, ticketCapOf } from './factory-yml.js';
+import { activeClaudeToken, claudeAccountReader, claudeToken, disabledControls, FactoryYmlError, loadFactoryLimits, loadFactoryYml, parseFactoryYml, readCapsOf, stepSettings, ticketCapOf } from './factory-yml.js';
+import { READ_CAPS } from '../network/reads.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\\nabc\\n-----END RSA PRIVATE KEY-----';
 const ENV = {
@@ -119,6 +120,20 @@ describe('factory.yml (ORC-209, part B)', () => {
     for (const bad of ['0', '-1', '1.5', 'beaucoup']) expect(violations(`read_guard: { max_lines: ${bad} }`).join()).toContain('read_guard.max_lines');
     expect(violations('read_guard: { lines: 500 }')).toContain('read_guard.lines: unknown key');
     expect(violations('read_guard: 500')).toContain('read_guard: an object is expected');
+  });
+
+  it('reads the caps of the reads that move a public counter, each defaulted on its own (ORC-370)', () => {
+    expect(readCapsOf(parseFactoryYml('egress: { max_versions_per_package: 4, max_assets_per_repo: 2 }', ENV))).toEqual({ versionsPerPackage: 4, assetsPerRepo: 2 });
+    expect(readCapsOf(parseFactoryYml('egress: { max_assets_per_repo: 2 }', ENV))).toEqual({ ...READ_CAPS, assetsPerRepo: 2 });
+    expect(readCapsOf(undefined)).toEqual(READ_CAPS);
+  });
+
+  it('never turns the caps of the counted reads off: a positive integer, nothing else', () => {
+    for (const bad of ['0', '-1', '1.5', 'off']) {
+      expect(violations(`egress: { max_versions_per_package: ${bad} }`).join(), bad).toContain('egress.max_versions_per_package: a positive integer is expected; the cap cannot be turned off');
+    }
+    expect(violations('egress: off')).toContain('egress: an object is expected');
+    expect(violations('egress: { versions: 3 }')).toContain('egress.versions: unknown key');
   });
 
   it('reads the definition of a serious defect the audit sheets count by, none by default (ORC-229)', () => {

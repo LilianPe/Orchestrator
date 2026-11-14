@@ -406,6 +406,24 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.latestBaseline()).toEqual(other);
   });
 
+  it("keeps the package and version of a run's counted reads, and their flag, nothing else handed with them (ORC-370)", async () => {
+    const s = await store();
+    const read = { kind: 'npm' as const, name: '@types/node', item: '24.0.1' };
+    const log: SecurityLog = {
+      runId: 'r1', projectId: 'p', ticketId: 'REL-1', at: 500,
+      egress: [
+        { at: 100, method: 'GET', host: 'registry.npmjs.org', ok: true, up: 0, down: 9, read },
+        { at: 110, method: 'GET', host: 'registry.npmjs.org', ok: true, up: 0, down: 9, read: { ...read, item: '9.9.9' }, flag: 'unusual' },
+        { at: 120, method: 'GET', host: 'github.com', ok: false, up: 0, down: 0, read: { kind: 'release', name: 'o/r', item: 'v1/a.zip' }, flag: 'suspicious' },
+      ],
+      refusals: [],
+      skipped: { egress: 0, refusals: 0 },
+    };
+    expect(await s.putSecurityLog({ ...log, egress: log.egress.map((e) => ({ ...e, path: '/s3cret', read: e.read && { ...e.read, path: '/s3cret' } })) } as SecurityLog)).toBe(true);
+    expect(await s.securityLog('r1')).toEqual(log);
+    expect(JSON.stringify(await s.securityLog('r1'))).not.toContain('s3cret');
+  });
+
   it("keeps a run's security log once, and counts hosts and rules over a period (ORC-296)", async () => {
     const s = await store();
     const egress = (at: number, host: string, ok = true) => ({ at, method: 'GET', host, ok, up: 1, down: 2 });

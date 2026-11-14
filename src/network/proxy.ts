@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { pipeline, type Duplex } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { LeafIssuer, loadOrCreateCa, type FactoryCa } from './ca.js';
+import { countedRead, READ_CAPS, ReadCounter, type CountedRead, type ReadCaps } from './reads.js';
 import { allowConnect, allowRequest, CLAUDE_API, CLAUDE_BETAS, CLAUDE_BODY_MAX, CLAUDE_READ_MS, CLAUDE_READS_MAX, CLAUDE_READS_PER_RUN, claudeBody, norm, type EgressPolicy, type Verdict } from './levels.js';
 
 /** One line of a run's egress journal: every request, allowed or refused (ORC-213). */
@@ -24,6 +25,10 @@ export interface EgressEntry {
   /** Bytes of the bodies sent and received; of the whole stream for a plain TCP tunnel. */
   up: number;
   down: number;
+  /** A read that moves a public counter (ORC-370): its package and version, or its release asset. */
+  read?: CountedRead;
+  /** Refused past the run's cap of such reads (ORC-370). */
+  suspicious?: true;
 }
 
 /**
@@ -54,6 +59,8 @@ export interface EgressProxyOptions {
   upstream?: { ca: string; lookup: LookupFunction; port: number };
   /** Tests only: how long a model call's body may take, `CLAUDE_READ_MS` otherwise. */
   claudeReadMs?: number;
+  /** The caps of the counted reads of a run opened without its own (ORC-370): `READ_CAPS` when unset. */
+  reads?: ReadCaps;
 }
 
 interface Run {
@@ -66,6 +73,8 @@ interface Run {
   droppedBetas: Set<string>;
   /** Past that bound, noted once. */
   betasUnlisted: boolean;
+  /** Its reads that move a public counter, capped (ORC-370). */
+  reads: ReadCounter;
   /** Listening once it resolves; a concurrent open waits on it. */
   ready: Promise<void>;
   /** The run's socket: HTTP proxy protocol. */
@@ -197,8 +206,11 @@ export class EgressProxy {
     return this.openRun(runId, policy, this.o.claudeToken?.());
   }
 
-  /** `open`, the run's model calls getting `claudeToken`, none when undefined (ORC-337): the run's own, as the daemon hands it to the `proxy` service. */
-  async openRun(runId: string, policy: EgressPolicy, claudeToken: string | undefined): Promise<string> {
+  /**
+   * `open`, the run's model calls getting `claudeToken`, none when undefined (ORC-337): the run's own, as the daemon hands it to the `proxy` service.
+   * `reads`, the caps of its counted reads, factory.yml's (ORC-370); the `reads` option's when undefined. A run already open keeps its own.
+   */
+  async openRun(runId: string, policy: EgressPolicy, claudeToken: string | undefined, reads?: ReadCaps): Promise<string> {
     const path = this.socketPath(runId);
     const journalPath = this.journalPath(runId);
     const existing = this.runs.get(runId);
@@ -214,7 +226,7 @@ export class EgressProxy {
     mkdirSync(this.o.dir, { recursive: true, mode: 0o700 });
     const journal = createWriteStream(journalPath, { flags: 'a' });
     journal.on('error', (err) => this.o.log?.(`egress: journal of ${runId} not written: ${err.message}`));
-    const run: Run = { policy, claudeToken, reading: 0, droppedBetas: new Set(), betasUnlisted: false, ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
+    const run: Run = { policy, claudeToken, reading: 0, droppedBetas: new Set(), betasUnlisted: false, reads: new ReadCounter(reads ?? this.o.reads ?? READ_CAPS), ready: Promise.resolve(), server: createServer(), mitm: createServer(), sockets: new Set(), journal, inflight: 0, closed: false };
     this.runs.set(runId, run);
     run.ready = this.listen(run, path).catch((err: unknown) => {
       this.runs.delete(runId);
@@ -396,10 +408,12 @@ export class EgressProxy {
     if (!path.startsWith('/')) return this.refuse(run, res, method, t.host, path, 'request target refused: not a path');
     const v = check(t.host, allowRequest(run.policy, t.host, method, path));
     if (!v.ok) return this.refuse(run, res, method, t.host, path, v.reason);
+    const read = this.counted(run, res, method, t.host, path);
+    if (read === false) return;
     this.readClaudeBody(run, req, res, method, t.host, path, (body, sent) =>
       this.guarded(run, res, method, t.host, path, sent, () => {
         const out = httpsRequest({ ...this.tlsTo(t.host, t.port), method, path, headers: { ...this.upstreamHeaders(run, t.host, req, method, path, body), host: authority(t.host, t.port, 443) } });
-        this.relay(run, req, res, out, method, t.host, path, body, sent);
+        this.relay(run, req, res, out, method, t.host, path, body, sent, read);
       }),
     );
   }
@@ -423,6 +437,8 @@ export class EgressProxy {
       ? agentVerdict(run.policy)
       : check(host, port === 80 || run.policy.level === 'full' ? allowRequest(run.policy, host, method, path) : { ok: false, reason: `port ${port} refused` });
     if (!v.ok) return this.refuse(run, res, method, host, path, v.reason);
+    const read = this.counted(run, res, method, host, path);
+    if (read === false) return;
     this.readClaudeBody(run, req, res, method, host, path, (body, sent) =>
       this.guarded(run, res, method, host, path, sent, () => {
         // Below full the port is 80 (checked above), so the Host is the bare host either way.
@@ -431,7 +447,7 @@ export class EgressProxy {
         if (agent) out = httpRequest({ ...opts, ...agent });
         else if (run.policy.level === 'full') out = httpRequest({ ...opts, host, port, lookup: publicLookup });
         else out = httpsRequest({ ...opts, ...this.tlsTo(host, 443) });
-        this.relay(run, req, res, out, method, host, path, body, sent);
+        this.relay(run, req, res, out, method, host, path, body, sent, read);
       }),
     );
   }
@@ -595,9 +611,21 @@ export class EgressProxy {
     return { ...h, ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}), ...(run.claudeToken ? { authorization: `Bearer ${run.claudeToken}` } : {}) };
   }
 
-  private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string, status = 403): void {
-    this.journal(run, { method, host, path: pathOf(path), ok: false, reason });
+  private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string, status = 403, extra: Pick<EgressEntry, 'read' | 'suspicious'> = {}): void {
+    this.journal(run, { method, host, path: pathOf(path), ok: false, reason, ...extra });
     res.writeHead(status, { 'content-type': 'text/plain' }).end(`egress proxy: ${reason}\n`);
+  }
+
+  /**
+   * The read that moves a public counter a checked request is, counted below `full` (ORC-370); `false` once refused past
+   * the run's cap, journaled as suspicious. At `full`, a setup, no agent runs: nothing is counted.
+   */
+  private counted(run: Run, res: ServerResponse, method: string, host: string, path: string): CountedRead | undefined | false {
+    const read = run.policy.level === 'full' ? undefined : countedRead(host, path);
+    const v = read && run.reads.admit(read);
+    if (!v || v.ok) return read;
+    this.refuse(run, res, method, host, path, v.reason, 403, { read, suspicious: true });
+    return false;
   }
 
   /**
@@ -605,11 +633,11 @@ export class EgressProxy {
    * cut mid-body ends the client's response and is a failure), by the request's errors before. The
    * upstream request dies with the client's.
    */
-  private relay(run: Run, req: IncomingMessage, res: ServerResponse, out: ClientRequest, method: string, host: string, path: string, body?: Buffer, sent?: () => void): void {
+  private relay(run: Run, req: IncomingMessage, res: ServerResponse, out: ClientRequest, method: string, host: string, path: string, body?: Buffer, sent?: () => void, read?: CountedRead): void {
     let up = body?.length ?? 0;
     let down = 0;
     let responded = false;
-    const finished = this.track(run, (failure) => ({ method, host, path: pathOf(path), ok: !failure, ...(failure ? { reason: failure } : {}), up, down }));
+    const finished = this.track(run, (failure) => ({ method, host, path: pathOf(path), ok: !failure, ...(failure ? { reason: failure } : {}), up, down, ...(read ? { read } : {}) }));
     const done = (failure?: string) => {
       sent?.();
       finished(failure);
