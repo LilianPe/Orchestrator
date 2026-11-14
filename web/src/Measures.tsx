@@ -19,10 +19,11 @@ export function runDuration(run: RunMeasureView, now: number): string {
   return run.status === 'running' ? `${formatDuration(now - run.startedAt)}, running` : '—';
 }
 
-/** Delegation to merge once merged, the time so far before; nothing for a ticket finished without a merge. */
+/** Delegation to merge once merged, the time so far before; nothing for a ticket finished without a merge, or cancelled (ORC-170). */
 export function ticketDuration(m: TicketMeasuresView, now: number, logical?: string): { text: string; title: string } {
   if (m.leadTimeMs !== null) return { text: formatDuration(m.leadTimeMs), title: 'From the delegation (or the first attempt) to the merge.' };
   if (logical === 'done') return { text: '—', title: 'Done without a merge.' };
+  if (logical === 'cancelled') return { text: '—', title: 'Cancelled without a merge.' };
   if (m.startedAt !== null) return { text: `${formatDuration(now - m.startedAt)} so far`, title: 'Not merged: since the delegation (or the first attempt).' };
   return { text: '—', title: 'No delegation nor attempt yet.' };
 }

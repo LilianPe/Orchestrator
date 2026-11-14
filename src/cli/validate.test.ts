@@ -58,6 +58,11 @@ describe('factory validate (ORC-209)', () => {
     ]);
   });
 
+  it('accepts a preview command, and refuses an empty one (ORC-397)', () => {
+    expect(run(repo('preview: npm run dev\n')).code).toBe(0);
+    expect(run(repo('preview: ""\n'))).toEqual({ code: 1, out: ['.factory/config.yml refused:', '- preview: a command is expected'] });
+  });
+
   it('refuses a config.yaml, which the factory would never read', () => {
     const dir = repo();
     mkdirSync(join(dir, '.factory'));

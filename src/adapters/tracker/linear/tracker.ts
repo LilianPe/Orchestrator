@@ -55,6 +55,7 @@ const STATE_TYPES: Record<LogicalState, string> = {
   ai_review: 'started',
   ready: 'started',
   done: 'completed',
+  cancelled: 'canceled',
 };
 
 export { teamOf };
