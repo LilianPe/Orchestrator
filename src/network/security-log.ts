@@ -158,7 +158,8 @@ function counts(keys: string[]): [string, number][] {
 
 /**
  * What the factory posts in the ticket's session after a run with refusals (ORC-296): refusals per rule,
- * hosts the proxy refused. Never a command nor a path: they can hold a secret. Undefined without a refusal.
+ * hosts the proxy refused, the reads refused as suspicious and those let through as unusual (ORC-396). Never a command nor
+ * a path: they can hold a secret. Undefined without a refusal.
  */
 export function refusalSummary(log: SecurityLog): string | undefined {
   const refused = log.egress.filter((e) => !e.ok);
@@ -173,6 +174,8 @@ export function refusalSummary(log: SecurityLog): string | undefined {
   }
   const suspicious = refused.filter((e) => e.flag === 'suspicious').length;
   if (suspicious) out.push(`- ${suspicious} read${suspicious > 1 ? 's' : ''} refused as suspicious (past the per-run cap of distinct versions or release assets)`);
+  const unusual = log.egress.filter((e) => e.flag === 'unusual').length;
+  if (unusual) out.push(`- ${unusual} read${unusual > 1 ? 's' : ''} let through that the lockfiles of the base commit do not declare (unusual)`);
   const skipped = log.skipped.egress + log.skipped.refusals;
   if (skipped) out.push(`\n${skipped} log line${skipped > 1 ? 's' : ''} ignored (malformed or forged).`);
   return out.join('\n');

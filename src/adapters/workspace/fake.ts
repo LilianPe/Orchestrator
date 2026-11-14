@@ -103,6 +103,14 @@ export class FakeWorkspaces implements WorkspaceManager {
     };
   }
 
+  /** Each worktree's files at its base commit, by path then file, as a test sets it (ORC-396); none by default. */
+  bases = new Map<string, Record<string, string>>();
+
+  async baseReader(_repoPath: string, path: string): Promise<BranchReader['showAtFork'] | undefined> {
+    if (this.gone.has(path)) return undefined;
+    return async (file) => this.bases.get(path)?.[file];
+  }
+
   async uncommitted(path: string): Promise<string[]> {
     return this.steps.get(path)?.uncommitted ?? [];
   }
