@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +8,7 @@ import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
 import { loadWorkflow } from '../config/load-workflow.js';
-import { runInit, type InitIO } from './init.js';
+import { detectPreview, PREVIEW_HEADER, runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   const printed: string[] = [];
@@ -133,5 +133,40 @@ describe('factory init', () => {
     const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret', '']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
     expect(loadInstance(home).projects).toEqual([{ id: expect.any(String), repoPath: repo, linearTeamKey: 'REL' }]);
+  });
+});
+
+describe('factory init: the command that starts the application (ORC-397)', () => {
+  const pkg = (scripts: Record<string, string>) => JSON.stringify({ scripts });
+  const repoOf = (files: Record<string, string>) => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
+    return repo;
+  };
+
+  it('takes the first of dev, start and preview the package.json has, with its package manager', () => {
+    expect(detectPreview(repoOf({ 'package.json': pkg({ preview: 'vite preview', start: 'node .', dev: 'vite' }), 'package-lock.json': '{}' }))).toBe('npm run dev');
+    expect(detectPreview(repoOf({ 'package.json': pkg({ preview: 'vite preview', start: 'node .' }) }))).toBe('npm run start');
+    expect(detectPreview(repoOf({ 'package.json': pkg({ preview: 'vite preview' }), ...PNPM_LOCK }))).toBe('pnpm run preview');
+  });
+
+  it('proposes none without such a script, nor for a Python repository, which has no start script by convention', () => {
+    expect(detectPreview(repoOf({ 'package.json': pkg({ test: 'vitest run', build: 'tsc' }) }))).toBeUndefined();
+    const python = repoOf({});
+    copyPythonRepo(python);
+    expect(detectPreview(python)).toBeUndefined();
+  });
+
+  it('prints it as the `preview` of .factory/config.yml, and nothing over a .factory/config.yml the repository has', async () => {
+    const init = async (repo: string) => {
+      const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
+      await runInit({ io, home: mkdtempSync(join(tmpdir(), 'factory-init-home-')), cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
+      return io.printed.join('\n');
+    };
+    const repo = repoOf({ 'package.json': pkg({ dev: 'vite' }) });
+    expect(await init(repo)).toContain(`${PREVIEW_HEADER}preview: npm run dev\n`);
+    mkdirSync(join(repo, '.factory'), { recursive: true });
+    writeFileSync(join(repo, '.factory/config.yml'), 'commands: { test: npm test }\n');
+    expect(await init(repo)).not.toContain(PREVIEW_HEADER);
   });
 });

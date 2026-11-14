@@ -5,6 +5,7 @@ import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
+import { REPO_CONFIG_PATH } from '../config/repo-config.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
@@ -70,6 +71,24 @@ function detect(repo: string): Detected & { note?: string } {
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
   return norm(a) === norm(b);
+}
+
+/** What `init` prints before the `preview` it proposes (ORC-397). */
+export const PREVIEW_HEADER = `Proposed for ${REPO_CONFIG_PATH}, the command that starts the application on PORT for the visual proof:\n`;
+
+/**
+ * The `preview` of `.factory/config.yml` (ORC-397): the first of the scripts `dev`, `start` and `preview` the package.json has,
+ * by its package manager as `detectNode` picks it. None for Python: no convention names a start script there (a
+ * `[project.scripts]` entry is a console command, not a server).
+ */
+export function detectPreview(repo: string): string | undefined {
+  const pkgFile = join(repo, 'package.json');
+  if (!existsSync(pkgFile)) return undefined;
+  const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+  const script = ['dev', 'start', 'preview'].find((s) => scripts[s]);
+  if (!script) return undefined;
+  const pnpm = !existsSync(join(repo, 'package-lock.json')) && existsSync(join(repo, 'pnpm-lock.yaml'));
+  return `${pnpm ? 'pnpm' : 'npm'} run ${script}`;
 }
 
 export async function runInit(d: InitDeps): Promise<void> {
@@ -140,6 +159,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   }
 
   saveInstance(d.home, cfg);
+  // The visual proof reads it on the default branch (ORC-397): proposed, never written, and not over a file the repository has.
+  const preview = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : detectPreview(repoPath);
+  if (preview) io.print(`${PREVIEW_HEADER}preview: ${preview}\n`);
   io.print(
     [
       '',

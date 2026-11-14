@@ -130,7 +130,7 @@ There is no budget in dollars (ORC-216): a `usd` key left in `per_run` or a job'
 |---|---|---|---|
 | `setup` | list of commands | `[]` | Run (via `bash -c`, in order) when a worktree is **created**, not on later runs that reuse it. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »). |
 | `ports.base` | integer > 0 | 4200 | First port assigned to runs in the `dev` queue (`PORT` in the run's environment). |
-| `preview` | command | — | Starts the application for the visual proof (ORC-176), in the background, on `PORT` = `ports.base`, in the sandbox of the capture. Absent: a required visual proof is not taken, and its check stays indicative. |
+| `preview` | command | — | Starts the application for the visual proof (ORC-176), in the background, on `PORT` = `ports.base`, in the sandbox of the capture. Absent: a required visual proof is not taken, and its check stays indicative. A repository's `preview` in `.factory/config.yml`, read on the base branch, comes first ([repository-configuration.md](repository-configuration.md#keys), ORC-397). |
 
 ### `on`
 The event rules, detailed in section 3.

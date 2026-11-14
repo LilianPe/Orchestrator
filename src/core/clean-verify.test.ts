@@ -1144,6 +1144,22 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     }
   });
 
+  it("ORC-397 criterion 1: the base's `preview` in .factory/config.yml starts the application, before workspace.preview", async () => {
+    for (const start of [null, 'npm start'] as const) {
+      const { req, shooter } = visual({ page: 'new page\n', config: `${VISUAL}preview: npm run dev\n`, start });
+      const res = await runCleanVerify(req);
+      expect(res.visual?.proof.captures).toHaveLength(6);
+      expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
+    }
+  });
+
+  it('ORC-397 criterion 2: without `preview` nor workspace.preview, the proof is unavailable, saying where to declare one', async () => {
+    const { req, shooter } = visual({ page: 'new page\n', start: null });
+    const res = await runCleanVerify(req);
+    expect(res.visual?.proof).toMatchObject({ decision: 'required', unavailable: expect.stringContaining('`preview` in .factory/config.yml') });
+    expect(shooter.calls).toEqual([]);
+  });
+
   it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {
     const { req, sandboxes } = setup({ commands: ['true'] }, 'services: [redis]\n');
     await expect(runCleanVerify(req)).rejects.toThrow('The service redis is not available');
