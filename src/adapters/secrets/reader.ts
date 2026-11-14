@@ -26,9 +26,13 @@ export class SecretReader {
     const at = `the secret ${name} (${refText(ref)})`;
     const source = Object.hasOwn(this.sources, ref.source) ? this.sources[ref.source] : undefined;
     if (!source) throw new Error(`${at} could not be read: no source ${ref.source}`);
-    const value = await source.read(ref.path).catch((err: Error) => {
-      throw new Error(`${at} could not be read: ${err.message}`, { cause: err });
-    });
+    let value: unknown;
+    try {
+      value = await source.read(ref.path);
+    } catch (err) {
+      throw new Error(`${at} could not be read: ${err instanceof Error ? err.message : 'the source failed'}`, { cause: err });
+    }
+    if (typeof value !== 'string') throw new Error(`${at} could not be read: the source answered no text`);
     if (value.length < MIN_REPO_SECRET_LENGTH) throw new Error(`${at}: at least ${MIN_REPO_SECRET_LENGTH} characters expected`);
     this.seen.add(value);
     return value;

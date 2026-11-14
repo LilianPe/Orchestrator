@@ -31,6 +31,13 @@ describe('SecretReader', () => {
     await expect(reader().read({ X: { source: 'constructor', path: 'p' } })).rejects.toThrow('the secret X (constructor:p) could not be read: no source constructor');
   });
 
+  it.each([
+    ['throws before its promise', { read: (): Promise<string> => { throw new Error('bad path'); } }, 'bad path'],
+    ['answers no text', { read: async () => undefined as unknown as string }, 'the source answered no text'],
+  ])('a source that %s is a failed read naming the secret', async (_, source, why) => {
+    await expect(new SecretReader({ odd: source }).read({ K: { source: 'odd', path: 'p' } })).rejects.toThrow(`the secret K (odd:p) could not be read: ${why}`);
+  });
+
   it('keeps every value it read, for the masking', async () => {
     const r = reader();
     expect(r.values()).toEqual([]);
