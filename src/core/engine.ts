@@ -1756,7 +1756,9 @@ function messageAck(out: Decision, state: TicketState | undefined): string {
   if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noted, resuming.';
   if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noted, I am looking into it and will answer here.';
   const settled = state && settledTicket(state);
-  if (settled === 'delivered' || settled === 'cancelled') return `Noted, but this ticket is ${settled}: no step will pick it up again.`;
+  if (settled === 'delivered') return 'Noted, but this ticket is delivered: no step will pick it up again.';
+  // Kept all the same: a human move out of Canceled resumes the ticket, and its next step reads the message.
+  if (settled === 'cancelled') return 'Noted, but this ticket is cancelled: no step will pick it up unless a human moves it out of Canceled.';
   return 'Noted, taken into account at the next step.';
 }
 

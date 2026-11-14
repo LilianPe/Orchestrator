@@ -42,7 +42,7 @@ describe('decide — a classified message (ORC-180)', () => {
 
   it('a message on a cancelled ticket is acked as settled: no step will pick it up (ORC-170)', () => {
     const out = decide(ticket({ logical: 'cancelled' }), reply('instruction', 'corrige le tri'), workflow);
-    expect(acked(out.effects)).toMatchObject({ body: 'Noted, but this ticket is cancelled: no step will pick it up again.' });
+    expect(acked(out.effects)).toMatchObject({ body: 'Noted, but this ticket is cancelled: no step will pick it up unless a human moves it out of Canceled.' });
   });
 
   it('a question in the dev session starts the answer at once, and is kept for the agent as well', () => {
