@@ -30,7 +30,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { claudeAccountReader, disabledControls, loadFactoryYml, stepSettings, ticketCapOf } from '../config/factory-yml.js';
+import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
@@ -171,11 +171,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
-    const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf }) : new EgressProxy({
+    // The caps of the reads that move a public counter (ORC-370), factory.yml's: handed to the proxy with each run.
+    const reads = readCapsOf(yml);
+    const egress: Egress = egressControl ? new EgressClient(egressControl, { log, claudeToken: claudeTokenOf, reads }) : new EgressProxy({
       dir: paths.network,
       caDir: paths.egressCa,
       log,
       claudeToken: claudeTokenOf,
+      reads,
       agentApi: { host: agentHostInSandbox, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
     });
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);

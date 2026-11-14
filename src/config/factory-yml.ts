@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { MAX_DIFF } from '../checks/diff-size.js';
+import { READ_CAPS, type ReadCaps } from '../network/reads.js';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from './load-workflow.js';
 
@@ -49,6 +50,13 @@ export interface FactoryYml {
   audit?: { seriousDefect: string };
   /** How a human message is acknowledged (ORC-380, decision ORC-140): `comment` when absent, or a reaction on its comment. */
   acknowledge?: AckMode;
+  /** The caps of a run's reads that move a public counter (ORC-370), each `READ_CAPS`' when unset; never off, and no repository's to change. */
+  egress?: Partial<ReadCaps>;
+}
+
+/** The caps the egress proxy applies to each run's counted reads (ORC-370): factory.yml's, the defaults for those it leaves unset. */
+export function readCapsOf(yml: Pick<FactoryYml, 'egress'> | undefined): ReadCaps {
+  return { ...READ_CAPS, ...yml?.egress };
 }
 
 /** The ack of a human message (ORC-380): the comment « Got it. », or a reaction on the comment the message was written in. */
@@ -185,6 +193,7 @@ const SECTIONS: Record<string, string[]> = {
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
   acknowledge: [],
+  egress: ['max_versions_per_package', 'max_assets_per_repo'],
 };
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
@@ -360,6 +369,13 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (seriousDefect !== undefined) out.audit = { seriousDefect };
   const acknowledge = leaf('acknowledge', r['acknowledge'], z.enum(['comment', 'reaction']), '`comment` or `reaction` expected');
   if (acknowledge !== undefined) out.acknowledge = acknowledge;
+  const egress = section('egress');
+  if (egress) {
+    const cap = (key: string) => leaf(`egress.${key}`, egress[key], z.number().int().positive(), 'a positive integer is expected; the cap cannot be turned off');
+    const versionsPerPackage = cap('max_versions_per_package');
+    const assetsPerRepo = cap('max_assets_per_repo');
+    out.egress = { ...(versionsPerPackage ? { versionsPerPackage } : {}), ...(assetsPerRepo ? { assetsPerRepo } : {}) };
+  }
 
   if (violations.length > 0) throw new FactoryYmlError(violations);
   return out;

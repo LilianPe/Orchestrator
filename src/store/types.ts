@@ -10,6 +10,7 @@ import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
 import type { OutboxEffect } from '../core/decision.js';
 import type { ReviewFinding } from '../core/review.js';
+import type { CountedRead } from '../network/reads.js';
 import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type OverBudget, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import { upcastTicket, type StoredEvent } from '../core/upcast.js';
 import { factoryDefault } from '../presets/factory-default.js';
@@ -330,7 +331,11 @@ export interface MeasureFacts {
   acks: Record<string, number>;
 }
 
-/** One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms; never its path nor the proxy's reason, which names it: it can hold a secret. */
+/**
+ * One request the egress proxy journaled (`EgressEntry`, ORC-213), as stored (ORC-296): `at` in ms; never its path nor the proxy's reason,
+ * which names it: it can hold a secret. A read that moves a public counter keeps its package and version, or its asset (ORC-370), flagged
+ * `suspicious` when refused past the run's cap, `unusual` when the repository's lockfiles did not declare it.
+ */
 export interface EgressRecord {
   at: number;
   method: string;
@@ -339,6 +344,8 @@ export interface EgressRecord {
   ok: boolean;
   up: number;
   down: number;
+  read?: CountedRead;
+  flag?: 'suspicious' | 'unusual';
 }
 
 /** One refusal of the pack's PreToolUse hook (ORC-285), as stored (ORC-296): a known rule; never the command nor the path refused, which can hold a secret. */
@@ -370,7 +377,10 @@ export function keptSecurityLog(log: SecurityLog): SecurityLog {
     projectId: log.projectId,
     ticketId: log.ticketId,
     at: log.at,
-    egress: log.egress.map(({ at, method, host, port, ok, up, down }) => ({ at, method, host, ...(port === undefined ? {} : { port }), ok, up, down })),
+    egress: log.egress.map(({ at, method, host, port, ok, up, down, read, flag }) => ({
+      at, method, host, ...(port === undefined ? {} : { port }), ok, up, down,
+      ...(read ? { read: { kind: read.kind, name: read.name, item: read.item } } : {}), ...(flag ? { flag } : {}),
+    })),
     refusals: log.refusals.map(({ at, tool, rule }) => ({ at, tool, rule })),
     skipped: { egress: log.skipped.egress, refusals: log.skipped.refusals },
   };

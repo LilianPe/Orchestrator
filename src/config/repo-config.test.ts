@@ -206,6 +206,11 @@ describe('parseRepoConfig (.factory/config.yml, ORC-209)', () => {
       expect(violations('network: { level: full }\n')).toEqual(['network.level: `full` is reserved for `setup`, never for the agent']);
     });
 
+    it('takes no cap of the counted reads: a repository can neither lift nor turn off what factory.yml sets (ORC-370)', () => {
+      expect(violations('network: { level: limited, reads: off }\n')).toEqual(['network: `{ level, allow }` expected']);
+      expect(violations('egress: { max_versions_per_package: 1000 }\n')).toEqual([expect.stringMatching(/^egress: unknown key/)]);
+    });
+
     it('refuses a host wildcard or a network range, which would be full in disguise', () => {
       expect(violations('network: { level: custom, allow: ["docs.exemple.com", "*", "*.com", "0.0.0.0/0"] }\n')).toEqual([
         'network.allow[1]: "*" is not a host name; wildcards and ranges are refused',
