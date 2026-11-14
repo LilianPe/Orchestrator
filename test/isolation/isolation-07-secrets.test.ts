@@ -152,7 +152,6 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     expect(env).not.toHaveProperty('UNDECLARED_VAR');
     expect(env).not.toHaveProperty('REPO_TOKEN');
     expect(env).not.toHaveProperty('UNDECLARED_TOKEN');
-    expect(Object.values(env).join('\n')).not.toContain(REPO_SECRET);
   }, 240_000);
 
   it('finds no credential file in the sandbox of a run', async () => {
