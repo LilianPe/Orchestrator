@@ -24,7 +24,7 @@ import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { Q } from '../adapters/tracker/linear/queries.js';
-import { knownLabels, recordLabels, serial } from '../adapters/tracker/linear/labels.js';
+import { knownLabels, recordLabels, recordWrite, serial } from '../adapters/tracker/linear/labels.js';
 import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
@@ -253,7 +253,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const labelsTurn = serial();
     const orchestrator = new Orchestrator({
       replays,
-      labelsTurn,
+      labelsWritten: (projectId, ticketId, written) => labelsTurn(() => recordWrite(store, projectId, ticketId, written)),
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,

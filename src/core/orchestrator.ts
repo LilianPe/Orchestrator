@@ -21,8 +21,7 @@ import {
 } from '../adapters/sandbox/types.js';
 import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
-import { IssueNotFoundError, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
-import { recordWrite, type Serial } from '../adapters/tracker/linear/labels.js';
+import { IssueNotFoundError, type ActivityInput, type LabelsWritten, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
@@ -228,8 +227,8 @@ export interface OrchestratorDeps {
   forge: Forge;
   /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
   reconcile?: (project: ProjectRuntime) => Promise<void>;
-  /** The turn of the Linear webhook and the reconciliation around the labels known (ORC-185), the factory's own writes recorded in it (ORC-346). */
-  labelsTurn?: Serial;
+  /** Records the factory's own label write in the labels the reconciliation compares Linear with (ORC-346). */
+  labelsWritten?: (projectId: string, ticketId: string, written: LabelsWritten) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
   /**
@@ -2179,13 +2178,11 @@ export class Orchestrator {
   }
 
   /**
-   * Labels written by the factory (ORC-346): what the write changed goes into the labels known, in the webhook's turn, so a
-   * pass that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
+   * Labels written by the factory (ORC-346): what the write set goes into the labels known (`labelsWritten`), so a pass
+   * that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
    */
   private async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
-    const written = await this.d.tracker.setLabels(ticketId, add, remove);
-    const inTurn = this.d.labelsTurn ?? ((task) => task());
-    await inTurn(() => recordWrite(this.d.store, projectId, ticketId, written));
+    await this.d.labelsWritten?.(projectId, ticketId, await this.d.tracker.setLabels(ticketId, add, remove));
   }
 
   /**

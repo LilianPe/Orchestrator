@@ -1,6 +1,6 @@
 import type { PlanStep } from '../../core/session-plan.js';
 import type { TeamDirectory } from '../roles/types.js';
-import { IssueNotFoundError, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
+import { IssueNotFoundError, labelsWritten, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
 /** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
 export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done'] as const;
@@ -203,7 +203,7 @@ export class FakeTracker implements Tracker, TeamDirectory {
       return remove.includes(l) || (group !== undefined && groups.has(group));
     };
     const next = [...new Set([...i.labels.filter((l) => add.includes(l) || !off(l)), ...add])];
-    const written = { added: [...new Set(add)], removed: [...new Set([...remove, ...i.labels.filter((l) => !next.includes(l))])].filter((l) => !add.includes(l)), at: i.updatedAt ?? 0 };
+    const written = labelsWritten(add, remove, i.labels.filter((l) => !next.includes(l)), i.updatedAt ?? 0);
     if (next.length === i.labels.length && next.every((l) => i.labels.includes(l))) return written;
     this.record('setLabels', identifier, add, remove);
     i.labels = next;

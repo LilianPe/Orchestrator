@@ -3,7 +3,7 @@ import type { PlanStep } from '../../../core/session-plan.js';
 import type { LogicalState } from '../../../core/types.js';
 import type { TeamDirectory } from '../../roles/types.js';
 import type { CompletedIssue } from '../../../core/baseline.js';
-import { effectMarker, IssueNotFoundError, teamOf, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
+import { effectMarker, IssueNotFoundError, labelsWritten, teamOf, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from '../types.js';
 import { LinearApiError, type LinearApi, type LinearGqlError } from './api.js';
 import { allNodes, type Connection } from '../../graphql-pages.js';
 import { Q } from './queries.js';
@@ -66,14 +66,15 @@ export { teamOf };
  */
 const isNotFound = (e: LinearGqlError) => e.extensions?.type === 'invalid input' && e.path?.length === 1 && e.path[0] === 'issue';
 
+/** An issue's `updatedAt` as a number; 0 when Linear gives none readable. */
+const version = (updatedAt: string | undefined): number => (updatedAt && Number.isFinite(Date.parse(updatedAt)) ? Date.parse(updatedAt) : 0);
+
 /**
  * The id a comment or an activity of an outbox effect is created with (ORC-162): Linear takes a
  * client id in UUID v4 format on `commentCreate` and `agentActivityCreate`, so a replay finds the
  * object by it. A sha256 of the effect id with the version and variant bits of a v4: the same effect
  * always gets the same id.
  */
-/** An issue's `updatedAt` as a number; 0 when Linear gives none readable. */
-const version = (updatedAt: string | undefined): number => (updatedAt && Number.isFinite(Date.parse(updatedAt)) ? Date.parse(updatedAt) : 0);
 
 export function effectUuid(kind: 'comment' | 'activity' | 'reaction', effectId: string): string {
   const h = createHash('sha256').update(`factory:${kind}:${effectId}`).digest();
@@ -101,7 +102,7 @@ function toIssue(n: IssueNode): TrackerIssue {
     teamKey: n.team.key,
     priority: n.priority,
     createdAt: Date.parse(n.createdAt),
-    ...(n.updatedAt && Number.isFinite(Date.parse(n.updatedAt)) ? { updatedAt: Date.parse(n.updatedAt) } : {}),
+    ...(version(n.updatedAt) ? { updatedAt: version(n.updatedAt) } : {}),
   };
 }
 
@@ -345,11 +346,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
       groups.set(group, name);
     }
     const removed = issue.labels.nodes.filter((l) => !add.includes(l.name) && (remove.includes(l.name) || (l.parent?.id !== undefined && groups.has(l.parent.id))));
-    const written = (updatedAt: string | undefined): LabelsWritten => ({
-      added: [...new Set(add)],
-      removed: [...new Set([...remove, ...removed.map((l) => l.name)])].filter((name) => !add.includes(name)),
-      at: version(updatedAt),
-    });
+    const written = (updatedAt: string | undefined) => labelsWritten(add, remove, removed.map((l) => l.name), version(updatedAt));
     if (addedLabelIds.length === 0 && removed.length === 0) return written(issue.updatedAt);
     const { issueUpdate } = await this.api.gql<{ issueUpdate: { issue?: { updatedAt?: string } | null } }>(Q.issueUpdate, {
       id: issue.id,

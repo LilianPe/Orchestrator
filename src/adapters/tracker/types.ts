@@ -70,6 +70,13 @@ export interface LabelsWritten {
   at: number;
 }
 
+/** What a label write tells: the labels asked on, and those asked off or taken off with a group's (`takenOff`) less those asked on. */
+export const labelsWritten = (add: readonly string[], remove: readonly string[], takenOff: readonly string[], at: number): LabelsWritten => ({
+  added: [...new Set(add)],
+  removed: [...new Set([...remove, ...takenOff])].filter((l) => !add.includes(l)),
+  at,
+});
+
 /** The tracker has no such issue (deleted, or never existed): an answer about the issue, unlike a read error. */
 export class IssueNotFoundError extends Error {}
 

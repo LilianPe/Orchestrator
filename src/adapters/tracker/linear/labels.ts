@@ -42,8 +42,16 @@ export async function recordLabels(store: Pick<Store, 'getMeta' | 'setMeta'>, pr
 export async function recordWrite(store: Pick<Store, 'getMeta' | 'setMeta'>, projectId: string, ticketId: string, written: LabelsWritten): Promise<void> {
   const known = await knownLabels(store, projectId, ticketId);
   if (!known) return;
-  const labels = [...known.labels.filter((l) => !written.removed.includes(l)), ...written.added];
-  await recordLabels(store, projectId, ticketId, labels, Math.max(written.at, known.at));
+  const next = applyWrite(known, written);
+  await store.setMeta(key(projectId, ticketId), JSON.stringify({ labels: [...new Set(next.labels)].sort(), at: next.at }));
+}
+
+/**
+ * `known` with a write's labels applied, the factory's or an issue webhook's, at the newer date: a reading come late
+ * still adds what it reported, or its change would be reported again.
+ */
+export function applyWrite(known: KnownLabels, written: LabelsWritten): KnownLabels {
+  return { labels: [...known.labels.filter((l) => !written.removed.includes(l)), ...written.added], at: Math.max(written.at, known.at) };
 }
 
 /** What `known` lacks or has too, as label changes: what a webhook would have reported. */

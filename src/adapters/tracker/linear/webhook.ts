@@ -5,7 +5,7 @@ import { SPEC_COMMANDS } from '../../../core/spec.js';
 import type { MessageClassifier } from '../../runner/message-classifier.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
 import { isEffectComment, IssueNotFoundError } from '../types.js';
-import { labelChanges, type KnownLabels } from './labels.js';
+import { applyWrite, labelChanges, type KnownLabels } from './labels.js';
 import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
@@ -293,15 +293,13 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   // Never read yet: the reconciliation's first pass records them.
   const known = await ctx.knownLabels(projectId, identifier);
   if (!known) return;
-  const next = new Set(known.labels);
-  for (const { label: id, change } of labelChanges(from as string[], body.data.labelIds as string[])) {
+  const named = labelChanges(from as string[], body.data.labelIds as string[]).flatMap(({ label: id, change }) => {
     const name = ctx.labelNameById(teamKey, id);
-    if (!name) continue;
-    if (change === 'added') next.add(name);
-    else next.delete(name);
-  }
-  // A webhook come late still adds what it reported, at the newer date: dropped, its change would be reported again.
-  await ctx.recordLabels(projectId, identifier, [...next], Math.max(at, known.at));
+    return name ? [{ name, change }] : [];
+  });
+  const of = (change: 'added' | 'removed') => named.filter((c) => c.change === change).map((c) => c.name);
+  const next = applyWrite(known, { added: of('added'), removed: of('removed'), at });
+  await ctx.recordLabels(projectId, identifier, next.labels, next.at);
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.
