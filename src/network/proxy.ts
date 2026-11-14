@@ -611,8 +611,8 @@ export class EgressProxy {
     return { ...h, ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {}), ...(run.claudeToken ? { authorization: `Bearer ${run.claudeToken}` } : {}) };
   }
 
-  private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string, status = 403, extra: Pick<EgressEntry, 'read' | 'suspicious'> = {}): void {
-    this.journal(run, { method, host, path: pathOf(path), ok: false, reason, ...extra });
+  private refuse(run: Run, res: ServerResponse, method: string, host: string, path: string, reason: string, status = 403): void {
+    this.journal(run, { method, host, path: pathOf(path), ok: false, reason });
     res.writeHead(status, { 'content-type': 'text/plain' }).end(`egress proxy: ${reason}\n`);
   }
 
@@ -624,7 +624,8 @@ export class EgressProxy {
     const read = run.policy.level === 'full' || method !== 'GET' ? undefined : countedRead(host, path);
     const v = read && run.reads.admit(read);
     if (!v || v.ok) return read;
-    this.refuse(run, res, method, host, path, v.reason, 403, { read, suspicious: true });
+    this.journal(run, { method, host, path: pathOf(path), ok: false, reason: v.reason, read, suspicious: true });
+    res.writeHead(403, { 'content-type': 'text/plain' }).end(`egress proxy: ${v.reason}\n`);
     return false;
   }
 

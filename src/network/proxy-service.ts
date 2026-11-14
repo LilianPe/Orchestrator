@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import { NETWORK_RANK, type EgressPolicy } from './levels.js';
 import { egressJournalPath, PIPE, type EgressProxy } from './proxy.js';
-import type { ReadCaps } from './reads.js';
+import { readCapsSchema, type ReadCaps } from './reads.js';
 
 /** What the daemon asks of the egress proxy, in its own process or in the `proxy` service. */
 export type Egress = Pick<EgressProxy, 'open' | 'close' | 'closeAll' | 'isOpen' | 'caCertPath' | 'caCertPem' | 'journalPath'>;
@@ -20,7 +20,7 @@ const OPEN = CLOSE.extend({
   /** The run's Claude token, which the proxy sets on its model calls (ORC-337); held in memory only. */
   claudeToken: z.string().optional(),
   /** The caps of its counted reads, factory.yml's (ORC-370): the proxy's own when absent. */
-  reads: z.strictObject({ versionsPerPackage: z.number().int().positive(), assetsPerRepo: z.number().int().positive() }).optional(),
+  reads: readCapsSchema.optional(),
 });
 
 export interface EgressControl {

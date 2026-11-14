@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { readCapped } from '../adapters/read-capped.js';
 import { BUILT_IN_TOOLS } from '../presets/tools.js';
 import type { SecurityLog, SecurityStats } from '../store/types.js';
-import { unusualReads, type CountedRead } from './reads.js';
+import { READ_KINDS, unusualReads, type CountedRead } from './reads.js';
 
 /** The rules of the pack's PreToolUse hook (`packs/standard/hooks/pre-tool-use.mjs`): a refusal naming another is forged. */
 export const REFUSAL_RULES = [
@@ -39,7 +39,7 @@ const at = z.iso.datetime().transform((s) => Date.parse(s));
 const bytes = z.number().int().nonnegative();
 
 /** A read that moves a public counter (ORC-370): what of its path is kept, to audit what a run read of a registry or a forge. */
-const countedRead = z.object({ kind: z.enum(['npm', 'pypi', 'release']), name: text(300).min(1), item: text(300).min(1) });
+const countedRead = z.object({ kind: z.enum(READ_KINDS), name: text(300).min(1), item: text(300).min(1) });
 
 const egressLine = z.object({
   at,
@@ -56,7 +56,7 @@ const egressLine = z.object({
 });
 
 /** What the lockfiles of a run's repository declared when it started (`DeclaredReads`, written by the orchestrator). */
-const declaredFile = z.object({ judged: z.array(z.enum(['npm', 'pypi', 'release'])), reads: z.array(z.string()) });
+const declaredFile = z.object({ judged: z.array(z.enum(READ_KINDS)), reads: z.array(z.string()) });
 const DECLARED_MAX_BYTES = 16 * 1024 * 1024;
 
 /** The run's declaration, undefined when there is none or it cannot be read: no read is then judged unusual. */

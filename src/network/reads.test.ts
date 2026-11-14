@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { countedRead, declaredReads, READ_CAPS, READ_NAMES_MAX, READ_REPEATS_MAX, ReadCounter, unusualReads } from './reads.js';
+import { LIMITED } from './levels.js';
+import { COUNTED_HOSTS, countedRead,declaredReads, READ_CAPS, READ_NAMES_MAX, READ_REPEATS_MAX, ReadCounter, unusualReads } from './reads.js';
 
 describe('countedRead (ORC-370)', () => {
   it('names an npm tarball by its package and version, scoped or not, on either registry host', () => {
@@ -24,6 +25,10 @@ describe('countedRead (ORC-370)', () => {
 
   it('names an asset read through the API by the id of its repository too', () => {
     expect(countedRead('api.github.com', '/repositories/123/releases/assets/789')).toEqual({ kind: 'release', name: 'repository 123', item: 'asset 789' });
+  });
+
+  it('counts reads of hosts the limited level reaches: a host counted off that list would be dead code, a registry on it uncounted a hole to look at', () => {
+    for (const host of COUNTED_HOSTS) expect(LIMITED, host).toContain(host);
   });
 
   it('leaves out what moves no public counter: a packument, a version manifest, a search', () => {

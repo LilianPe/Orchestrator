@@ -1,6 +1,11 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { z } from 'zod';
+import { readCapped } from '../adapters/read-capped.js';
+import { normalizePypiName } from '../checks/deps.js';
 import type { Verdict } from './levels.js';
+
+/** The kinds of counted reads, as the proxy journals them and the stores keep them. */
+export const READ_KINDS = ['npm', 'pypi', 'release'] as const;
 
 /**
  * A read that moves a counter anyone can read (ORC-370): an npm tarball (the version's downloads), a PyPI file (its
@@ -9,16 +14,14 @@ import type { Verdict } from './levels.js';
  * `name`: the package, or `owner/repo`; `item`: the version, or the asset (`tag/name`, `asset <id>` through the API).
  */
 export interface CountedRead {
-  kind: 'npm' | 'pypi' | 'release';
+  kind: (typeof READ_KINDS)[number];
   name: string;
   item: string;
 }
 
 /** The caps of a run's counted reads, from `egress` in factory.yml (ORC-370): a repository cannot lift them. */
-export interface ReadCaps {
-  versionsPerPackage: number;
-  assetsPerRepo: number;
-}
+export const readCapsSchema = z.strictObject({ versionsPerPackage: z.number().int().positive(), assetsPerRepo: z.number().int().positive() });
+export type ReadCaps = z.infer<typeof readCapsSchema>;
 
 /**
  * ponytail: a lockfile installs a few versions of one package at most (3 in the factory's own, measured; large
@@ -36,6 +39,8 @@ export const READ_REPEATS_MAX = 5;
 export const READ_NAMES_MAX = 20_000;
 
 const NPM_HOSTS = ['registry.npmjs.org', 'registry.yarnpkg.com'];
+/** The hosts whose reads can be counted: any other request is not looked at. */
+export const COUNTED_HOSTS: ReadonlySet<string> = new Set([...NPM_HOSTS, 'files.pythonhosted.org', 'github.com', 'api.github.com']);
 /** A downloaded distribution: its `.metadata` alone (PEP 658), which pip reads of many versions while it resolves, is no download. */
 const PYPI_FILE = /^(.+?)(\.whl|\.tar\.gz|\.tar\.bz2|\.tgz|\.zip|\.egg)$/;
 
@@ -52,11 +57,9 @@ const resolved = (path: string): string => {
   }
 };
 
-/** PEP 503: the one spelling of a project's name. */
-const pypiName = (name: string) => name.toLowerCase().replace(/[-_.]+/g, '-');
-
 /** The counted read a request of a listed host is, if it is one; its query never counts (the counters do not see it). */
 export function countedRead(host: string, path: string): CountedRead | undefined {
+  if (!COUNTED_HOSTS.has(host)) return undefined;
   const p = resolved(path);
   if (NPM_HOSTS.includes(host)) {
     const m = /^\/((?:@[^/]+\/)?[^/@][^/]*)\/-\/([^/]+\.tgz)$/.exec(p);
@@ -71,7 +74,7 @@ export function countedRead(host: string, path: string): CountedRead | undefined
     if (!file || !p.startsWith('/packages/')) return undefined;
     // A wheel or an egg: name-version-…; an sdist: name-version, the name maybe with dashes of its own.
     const [name, version] = file[2] === '.whl' || file[2] === '.egg' ? file[1]!.split('-') : [file[1]!.replace(/-[^-]*$/, ''), file[1]!.split('-').pop()];
-    return name && version ? { kind: 'pypi', name: pypiName(name), item: version } : undefined;
+    return name && version ? { kind: 'pypi', name: normalizePypiName(name), item: version } : undefined;
   }
   if (host === 'github.com') {
     const m = /^\/([^/]+)\/([^/]+)\/releases\/(?:download\/(.+)|(latest)\/download)\/([^/]+)$/.exec(p);
@@ -141,13 +144,18 @@ const LOCKFILES: [file: string, kind: CountedRead['kind'], read: (text: string) 
   ['requirements.txt', 'pypi', requirements, false],
 ];
 
+/** A lockfile is the repository's: read as `readCapped` reads what it does not trust, neither a link nor a FIFO, and bounded. */
+const LOCKFILE_MAX_BYTES = 64 * 1024 * 1024;
+
 export function declaredReads(workspace: string): DeclaredReads {
   const judged = new Set<CountedRead['kind']>();
   const reads = new Set<string>();
   for (const [file, kind, read, whole] of LOCKFILES) {
+    const text = readCapped(join(workspace, file), LOCKFILE_MAX_BYTES);
+    if (text === undefined || text === 'not a file' || text.cut) continue;
     let found: CountedRead[];
     try {
-      found = read(readFileSync(join(workspace, file), 'utf8'));
+      found = read(text.text);
     } catch {
       continue;
     }
@@ -183,10 +191,10 @@ function yarnLock(text: string): CountedRead[] {
 const entry = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {});
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
-/** package-lock.json, v1 to v3: each installed package's version, under its real name (an alias's `name`), and its URL. */
+/** package-lock.json, v1 to v3: each installed package's version, under its real name (an alias's `name`); v1's tree only without v2's `packages`. */
 function npmLock(text: string): CountedRead[] {
   const lock = entry(JSON.parse(text));
-  const out = urls(text);
+  const out: CountedRead[] = [];
   for (const [path, v] of Object.entries(entry(lock['packages']))) {
     const p = entry(v);
     const name = str(p['name']) ?? (path.includes('node_modules/') ? path.split('node_modules/').pop() : undefined);
@@ -195,21 +203,22 @@ function npmLock(text: string): CountedRead[] {
   }
   const v1 = (deps: unknown) => {
     for (const [name, d] of Object.entries(entry(deps))) {
-      const version = str(entry(d)['version']);
+      const dep = entry(d);
+      const version = str(dep['version']);
       if (version) out.push({ kind: 'npm', name, item: version });
-      v1(entry(d)['dependencies']);
+      v1(dep['dependencies']);
     }
   };
-  v1(lock['dependencies']);
+  if (!out.length) v1(lock['dependencies']);
   return out;
 }
 
 /** Each `[[package]]`'s name and version. */
 function poetryLock(text: string): CountedRead[] {
-  return [...text.matchAll(/^name = "([^"]+)"\s*\nversion = "([^"]+)"/gm)].map((m) => ({ kind: 'pypi' as const, name: pypiName(m[1]!), item: m[2]! }));
+  return [...text.matchAll(/^name = "([^"]+)"\s*\nversion = "([^"]+)"/gm)].map((m) => ({ kind: 'pypi' as const, name: normalizePypiName(m[1]!), item: m[2]! }));
 }
 
 /** The pins (`name==version`), any marker after them aside. */
 function requirements(text: string): CountedRead[] {
-  return [...text.matchAll(/^\s*([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*===?\s*([\w.!+-]+)/gm)].map((m) => ({ kind: 'pypi' as const, name: pypiName(m[1]!), item: m[2]! }));
+  return [...text.matchAll(/^\s*([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?\s*===?\s*([\w.!+-]+)/gm)].map((m) => ({ kind: 'pypi' as const, name: normalizePypiName(m[1]!), item: m[2]! }));
 }
