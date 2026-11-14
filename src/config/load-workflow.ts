@@ -16,8 +16,8 @@ import {
   type Workflow,
 } from './workflow-schema.js';
 
-// Shared with the workflow built in TypeScript (ORC-388), until this loader goes (ORC-389).
-export { presetBound, WorkflowError, type StepSettings };
+// Its tests still import these from here, until this loader goes (ORC-389).
+export { presetBound, WorkflowError };
 
 const EVENT_TYPES: readonly string[] = [
   'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',

@@ -4,8 +4,7 @@ import type { Exec } from '../adapters/exec.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { stringify } from 'yaml';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
-import { REPO_CONFIG_PATH } from '../config/repo-config.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../presets/workflow.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -115,7 +114,7 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
   // default branch, which `init` proposes and leaves to commit.
-  for (const file of ignoredWorkflowFiles(repoPath)) io.print(`${ignoredWorkflowWarning(file)} Its setup and checks go in ${REPO_CONFIG_PATH}.`);
+  for (const file of ignoredWorkflowFiles(repoPath)) io.print(ignoredWorkflowWarning(file));
   const proposed = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : proposal(detect(repoPath));
   if (proposed) io.print(proposed);
 

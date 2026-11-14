@@ -10,7 +10,7 @@ import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../presets/workflow.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**

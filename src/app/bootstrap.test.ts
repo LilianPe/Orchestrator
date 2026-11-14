@@ -135,7 +135,7 @@ describe('bootstrap', () => {
       recover.mockRestore();
     }
     expect(deps!.projects[0]!.workflow).toEqual(defaultWorkflow({ budgets: { maxTurns: { build: 40 } } }));
-    expect(logs).toContain('p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it. Its setup and checks go in .factory/config.yml.');
+    expect(logs).toContain('p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
   });
 
   it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {

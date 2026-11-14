@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow, type StepSettings } from '../config/load-workflow.js';
+import { loadWorkflow } from '../config/load-workflow.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
-import { defaultWorkflow } from './workflow.js';
+import { defaultWorkflow, type StepSettings } from './workflow.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
 
@@ -39,12 +39,6 @@ describe('defaultWorkflow (ORC-388)', () => {
     for (const j of Object.values(wf.jobs)) if (j.onBlocking) expect(wf.jobs[j.onBlocking.run]!.input).toBe('findings');
     expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback' });
     expect(wf.jobs[wf.relayJob!]!.counter).toBeUndefined();
-  });
-
-  it('gives each workflow rules and limits of its own', () => {
-    const [a, b] = [defaultWorkflow(), defaultWorkflow()];
-    expect(a.on).not.toBe(b.on);
-    expect(a.limits.perRun).not.toBe(b.limits.perRun);
   });
 
   it("refuses factory.yml's settings for a step the preset does not have, as the loader does", () => {

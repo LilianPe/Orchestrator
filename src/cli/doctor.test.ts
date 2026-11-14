@@ -639,8 +639,8 @@ jobs:
     it('warns about .factory/workflow.yml and .relais/workflow.yml, ignored, to delete, without reading them or changing the verdict', async () => {
       const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml', '.relais/workflow.yml']) });
       expect(result.code).toBe(0);
-      expect(result.lines).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it.');
-      expect(result.lines).toContain('Warning: .relais/workflow.yml is ignored: the workflow is the factory/default preset. Delete it.');
+      expect(result.lines).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+      expect(result.lines).toContain('Warning: .relais/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
     });
 
     it('lists them in the JSON report', async () => {

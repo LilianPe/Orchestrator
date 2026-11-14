@@ -110,7 +110,7 @@ describe('factory init', () => {
     const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
     expect(io.printed.some((p) => p.startsWith(PROPOSAL_HEADER))).toBe(false);
-    expect(io.printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it. Its setup and checks go in .factory/config.yml.');
+    expect(io.printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {
