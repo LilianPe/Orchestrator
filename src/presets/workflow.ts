@@ -88,8 +88,8 @@ const notBlocked = { kind: 'blocked', negate: true } as const;
  */
 const RULES: Workflow['on'] = {
   'ticket.delegated': [{ when: [{ kind: 'state_in', values: ['todo', 'dev'] }, notBlocked], whenSrc: 'state in [todo, dev] && !blocked', run: 'dev' }],
-  // The review starts once `dev`, `fix-ci`, `fix-review` or `fix-human` is published (their `onSuccess`). A human's move to
-  // AI Review reviews the published commit again: how a commit `dev-feedback` publishes gets one.
+  // The review starts once a job that writes is published (its `onSuccess`). This rule reviews the published commit again:
+  // a merge refused for a push since the review starts its job (ORC-148), and so does a human's move to AI Review.
   'status.changed': [{ to: 'ai_review', run: 'review' }],
   // A reply in the ticket's session; a review written on the PR (`pr.reviewed`) goes through these rules too (ORC-190).
   // In Human Review, it is a round of human feedback: `fix-human`, on its own counter (`limits.humanReviewRounds`).
@@ -124,13 +124,12 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
     pickup: true, structuredOutput: true, repoChecks: true,
     onStart: { move: 'dev' }, onSuccess: { move: 'ai_review', post: 'summary', run: 'review' },
   };
-  // A reply that resumes the ticket's session in its worktree.
+  // A reply that resumes the ticket's session in its worktree. Its commit goes back through `verify`, `publish` and the AI
+  // review, as every fix of the loop (ORC-184, ORC-190): no work of the factory waits for a human move (ORC-170).
   const feedback: StepJob = {
     ...dev, step: 'fix', structuredOutput: false, session: 'resume', skill: 'factory:feedback', input: 'feedback',
-    pickup: false, onStart: {}, onSuccess: { post: 'reply' },
+    pickup: false, onStart: {}, onSuccess: { move: 'ai_review', post: 'reply', run: 'review' },
   };
-  // Every fix of the loop goes back through `verify`, `publish` and the AI review (ORC-184, ORC-190).
-  const backToReview = { move: 'ai_review', post: 'reply', run: 'review' } as const;
   const { repoChecks: _checks, ...answer } = feedback;
   const review: StepJob = {
     step: 'review', queue: 'dev', model: 'opus', workspace: 'published', session: 'new', skill: 'factory:review',
@@ -148,11 +147,11 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
       red: { command: 'npm test --', mode: 'measure', attempts: presetBound(preset, 'red') + 1 }, onSuccess: { run: 'dev' },
     },
     'dev-feedback': feedback,
-    'fix-ci': { ...feedback, skill: 'factory:fix-ci', input: 'ci_failures', onSuccess: backToReview },
+    'fix-ci': { ...feedback, skill: 'factory:fix-ci', input: 'ci_failures' },
     // The blocking findings of the last review, each fixed or contested (`submit_result`'s `fixed` and `contested`).
-    'fix-review': { ...feedback, input: 'findings', structuredOutput: true, onSuccess: backToReview },
+    'fix-review': { ...feedback, input: 'findings', structuredOutput: true },
     // Human review feedback: each start is a round of the preset's `human_review` (ORC-190).
-    'fix-human': { ...feedback, counter: 'human_review', onSuccess: backToReview },
+    'fix-human': { ...feedback, counter: 'human_review' },
     // The answer to questions relayed to the agent that implements (ORC-375): no round, no check, nothing moved or posted.
     'answer-relayed': { ...answer, onSuccess: {} },
     // The rebase (ORC-146): its commit goes through `verify`, then over the head the factory published. It moves and posts nothing.
