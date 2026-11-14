@@ -116,10 +116,12 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
     expect(daemonSecretValues(h, loadFactoryYml(h, env))).toEqual(expect.arrayContaining(['yml-secret', 'yml-webhook-secret-1']));
   });
 
-  it("holds neither a repository's plain variables nor its secrets, which its setups read (ORC-211, ORC-308)", () => {
-    const h = home('repos: [{ linear_team: REL, github: org/app, env: { NODE_ENV: test-value }, secrets: { NPM_TOKEN: env:ORG_NPM_TOKEN } }]\n');
-    const values = daemonSecretValues(h, loadFactoryYml(h, { ...env, ORG_NPM_TOKEN: 'npm-secret-value' }));
-    expect(values).not.toContain('npm-secret-value');
+  it("masks a repository's env secrets from the start, a restart included, never its plain variables (ORC-211, ORC-308)", () => {
+    const h = home('repos: [{ linear_team: REL, github: org/app, env: { NODE_ENV: test-value }, secrets: { NPM_TOKEN: env:ORG_NPM_TOKEN, UNSET: env:ORG_UNSET, SEED: alias:ORG_SEED } }]\nsecret_sources: { alias: { kind: env } }\n');
+    const daemonEnv = { ...env, ORG_NPM_TOKEN: 'npm-secret-value', ORG_SEED: 'seed-secret-value' };
+    const values = daemonSecretValues(h, loadFactoryYml(h, daemonEnv), daemonEnv);
+    expect(values).toEqual(expect.arrayContaining(['npm-secret-value', 'seed-secret-value']));
     expect(values).not.toContain('test-value');
+    expect(values).not.toContain(undefined);
   });
 });

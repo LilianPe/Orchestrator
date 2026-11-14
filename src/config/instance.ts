@@ -159,9 +159,15 @@ export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets
   saveSecrets(home, { ...s, linear: { clientId: '', clientSecret: '', webhookSecret: '', ...s.linear, ...patch } });
 }
 
-/** Every secret the daemon holds, from `secrets.json` and `factory.yml`: masked in run transcripts. A repository's are read at its setup (ORC-308). */
-export function daemonSecretValues(home: string, yml: FactoryYml | undefined): string[] {
-  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, ...(yml?.claude?.accounts.map((a) => a.token) ?? [])];
+/**
+ * Every secret the daemon holds, from `secrets.json` and `factory.yml`: masked in run transcripts. A repository's `env:` secrets
+ * are the daemon's own variables, masked from the start so a run reattached after a restart stays covered; those of another
+ * source are masked once a setup read them (ORC-308).
+ */
+export function daemonSecretValues(home: string, yml: FactoryYml | undefined, env: NodeJS.ProcessEnv = process.env): string[] {
+  const fromEnv = (source: string) => source === 'env' || yml?.secretSources?.[source]?.kind === 'env';
+  const repoEnv = yml?.repos?.flatMap((r) => Object.values(r.secrets ?? {}).filter((ref) => fromEnv(ref.source)).map((ref) => env[ref.path])) ?? [];
+  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, ...(yml?.claude?.accounts.map((a) => a.token) ?? []), ...repoEnv];
   return [...new Set([...secretValues({ linear: linearSettings(home, yml) }), ...fromYml.filter((v): v is string => !!v)])];
 }
 
