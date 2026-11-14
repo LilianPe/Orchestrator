@@ -72,6 +72,10 @@ export default defineConfig({
           globalSetup: ['test/isolation/global-setup.ts'],
           environment: 'node',
           testTimeout: 120000,
+          // Stated rather than Vitest's 10 s: a hook with no bound of its own creates a container (isolation no. 1, 2) on an
+          // engine three workers share, and gets the minute rootless.test.ts gives `podman info` (ORC-377). Hooks that set
+          // their own keep it; a wedged engine is stopped by the job's timeout-minutes, not by this.
+          hookTimeout: 60_000,
         },
       },
     ],
