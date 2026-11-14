@@ -40,6 +40,11 @@ describe('decide — a classified message (ORC-180)', () => {
     expect(out.timers).toEqual([{ kind: 'debounce', slot: 'dev-feedback', ms: 180_000, payload: { job: 'dev-feedback', inbox: true } }]);
   });
 
+  it('a message on a cancelled ticket is acked as settled: no step will pick it up (ORC-170)', () => {
+    const out = decide(ticket({ logical: 'cancelled' }), reply('instruction', 'corrige le tri'), workflow);
+    expect(acked(out.effects)).toMatchObject({ body: 'Noted, but this ticket is cancelled: no step will pick it up again.' });
+  });
+
   it('a question in the dev session starts the answer at once, and is kept for the agent as well', () => {
     const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev' }), reply('question', 'et pour mobile ?'), workflow);
     expect(appended(out)).toEqual([expect.objectContaining({ body: 'et pour mobile ?', kind: 'question', source: 'session' })]);
@@ -390,8 +395,8 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     }
   });
 
-  it('relays nothing for a ticket no agent implements: not delegated, or delivered', () => {
-    for (const t of [ticket({ delegated: false }), ticket({ prState: 'MERGED', logical: 'done' })]) {
+  it('relays nothing for a ticket no agent implements: not delegated, delivered, or cancelled though still delegated (ORC-170)', () => {
+    for (const t of [ticket({ delegated: false }), ticket({ prState: 'MERGED', logical: 'done' }), ticket({ logical: 'cancelled' })]) {
       const out = decide(t, asked(), workflow);
       expect(relays(out)).toEqual([]);
       expect(activities(out)).toEqual([expect.objectContaining({ type: 'response', body: expect.stringContaining('No agent implements this ticket') })]);

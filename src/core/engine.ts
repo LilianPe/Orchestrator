@@ -1124,7 +1124,9 @@ function stopQuestion(out: Decision, sessionId: string): Decision {
 function relayQuestion(out: Decision, event: FactoryEvent<'run.finished'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { runId } = event.payload;
   const tell = (body: string) => out.effects.push({ kind: 'activity', type: 'response', body, runId });
-  if (!ticket?.delegated || settledTicket(ticket) === 'delivered') {
+  // Delivered or cancelled by a human (ORC-170): no agent implements it any longer, delegated or not.
+  const settled = ticket && settledTicket(ticket);
+  if (!ticket?.delegated || settled === 'delivered' || settled === 'cancelled') {
     tell(RELAY_NOBODY);
     return out;
   }
@@ -1749,7 +1751,8 @@ function noticeMasked(out: Decision, event: FactoryEvent): void {
 function messageAck(out: Decision, state: TicketState | undefined): string {
   if (out.events.some((e) => e.type === 'ticket.unblocked')) return 'Noted, resuming.';
   if (out.effects.some((e) => e.kind === 'start_run' && e.input === 'thread')) return 'Noted, I am looking into it and will answer here.';
-  if (state && settledTicket(state) === 'delivered') return 'Noted, but this ticket is delivered: no step will pick it up again.';
+  const settled = state && settledTicket(state);
+  if (settled === 'delivered' || settled === 'cancelled') return `Noted, but this ticket is ${settled}: no step will pick it up again.`;
   return 'Noted, taken into account at the next step.';
 }
 
