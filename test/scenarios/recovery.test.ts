@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS, RUN_BEAT_MS, RUN_LEASE_MS } from '../../src/store/types.js';
 import type { Store } from '../../src/store/types.js';
+import { DEV_CAPACITY } from '../../src/runtime/capacity.js';
 import { checkChain, Faults, settled } from '../helpers/faults.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 import { testPreset } from '../helpers/test-preset.js';
@@ -506,7 +507,7 @@ describe('the lease of an attempt', () => {
     const second = (await h.ticket()).activeRunId!;
     await h.orch.drained();
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Autre' });
-    const capacity = h.project.workflow.limits.parallelSessions;
+    const capacity = DEV_CAPACITY;
     h.runner.enqueue(...Array.from({ length: capacity }, () => ({ hold: true })));
     for (let i = 2; i <= capacity + 1; i++) {
       h.tracker.addIssue({ identifier: `REL-${i}`, title: `T${i}` });

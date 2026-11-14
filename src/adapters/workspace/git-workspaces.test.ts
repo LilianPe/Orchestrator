@@ -6,6 +6,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { BASE, checkBranchPaths, cloneGit, forkPoint, gitAt, gitReader, type HumanPush } from '../../core/clean-verify.js';
 import { readConventions } from '../../core/prompt.js';
 import { parseRepoConfig } from '../../config/repo-config.js';
+import { declaredReads } from '../../network/reads.js';
 import { execCmd } from '../exec.js';
 import { GitWorkspaces, withoutUserinfo } from './git-workspaces.js';
 
@@ -69,6 +70,30 @@ describe('GitWorkspaces', () => {
     expect(await ws.prepare(req(repo))).toEqual({ ...w, fresh: undefined });
     await ws.cleanup('p', 'REL-1');
     expect(existsSync(w.path)).toBe(false);
+  });
+
+  it("reads the lockfiles a run's reads are judged by at the ticket's base commit, not as an earlier attempt left them (ORC-396)", async () => {
+    const { repo, root } = fixtureRepo();
+    const lock = (version: string) => JSON.stringify({ packages: { 'node_modules/lodash': { version } } });
+    writeFileSync(join(repo, 'package-lock.json'), lock('1.0.0'));
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'lock');
+    git(repo, 'push', '-q', 'origin', 'main');
+    const ws = new GitWorkspaces({ root });
+    const w = await ws.prepare(req(repo));
+    // An earlier attempt declared what it means to read: committed in the lockfile, then in a lockfile left uncommitted.
+    git(w.path, 'config', 'user.email', 't@t');
+    git(w.path, 'config', 'user.name', 't');
+    writeFileSync(join(w.path, 'package-lock.json'), lock('9.9.9'));
+    git(w.path, 'commit', '-q', '-am', 'the agent');
+    writeFileSync(join(w.path, 'yarn.lock'), 'lodash@^8:\n  resolved "https://registry.yarnpkg.com/lodash/-/lodash-8.0.0.tgz"\n');
+    const declared = { judged: ['npm'], reads: ['npm:lodash@1.0.0'] };
+    expect(await declaredReads((await ws.baseReader(repo, w.path))!)).toEqual(declared);
+    // Its head pointed at a commit of its own that shares nothing with the default branch: that branch is read instead.
+    git(w.path, 'checkout', '-q', '--orphan', 'own');
+    git(w.path, 'commit', '-q', '-m', 'orphan');
+    expect(await declaredReads((await ws.baseReader(repo, w.path))!)).toEqual(declared);
+    expect(await ws.baseReader(repo, join(root, 'nowhere'))).toBeUndefined();
   });
 
   it('checks out an existing remote branch', async () => {

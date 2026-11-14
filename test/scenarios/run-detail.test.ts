@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { purgeTranscripts } from '../../src/adapters/runner/transcript.js';
-import { EventBus } from '../../src/core/bus.js';
+import { EventBus } from '../../src/server/live-feed.js';
 import { createApp } from '../../src/server/app.js';
 import { createHarness } from '../helpers/harness.js';
 import { DEV_TOKENS, firstRun, REVIEW_TOKENS } from '../helpers/measures-scenario.js';

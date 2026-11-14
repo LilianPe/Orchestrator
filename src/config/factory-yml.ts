@@ -25,7 +25,7 @@ export interface FactoryYml {
     perStep?: Record<string, string>;
     effort?: { default: Effort; perStep?: Record<string, Effort> };
   };
-  /** Tickets worked at once: the dev queue's capacity, over `parallel_sessions` of the workflow (ORC-203). */
+  /** Tickets worked at once: the dev queue's capacity (ORC-203), the only one since the workflow's `parallel_sessions` went (ORC-390). */
   concurrency?: number;
   /**
    * `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340).

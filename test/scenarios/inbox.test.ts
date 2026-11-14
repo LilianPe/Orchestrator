@@ -2,7 +2,6 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { stringify } from 'yaml';
 import { TRUSTED } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
@@ -135,7 +134,7 @@ describe('inbox: written before the answer, processed from the inbox', () => {
   it('frees the slot of a run whose result is left behind a failed event of its ticket', async () => {
     // Its one attempt failed, and it cannot be set aside: the failed event and those behind it wait.
     const wrapStore = failingDecide((id) => id === 't-2');
-    const h = createHarness({ wrapStore, projectYaml: stringify({ version: 1, limits: { parallel_sessions: 1 } }), processRetry: { attempts: 1, baseMs: 60_000 } });
+    const h = createHarness({ wrapStore, concurrency: 1, processRetry: { attempts: 1, baseMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     h.runner.enqueue({ hold: true });

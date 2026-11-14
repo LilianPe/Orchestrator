@@ -1,7 +1,7 @@
 import type { RunStreamEvent } from '../adapters/runner/types.js';
 import type { ActivityInput } from '../adapters/tracker/types.js';
-import type { Effect } from './decision.js';
-import type { FactoryEvent, TicketState } from './types.js';
+import type { Effect } from '../core/decision.js';
+import type { FactoryEvent, TicketState } from '../core/types.js';
 
 export type BusMessage =
   | { kind: 'event'; event: FactoryEvent }

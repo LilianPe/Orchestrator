@@ -39,17 +39,17 @@ import { loadWorkflow } from '../config/load-workflow.js';
 import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
-import { EventBus } from '../core/bus.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
-import { devCapacity, Scheduler } from '../core/scheduler.js';
+import { queueCapacity, Scheduler } from '../runtime/capacity.js';
 import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
 import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, isLoopbackHost } from '../server/app.js';
+import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
@@ -113,7 +113,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ...(projectEffects(p) ? { effects: 'none' as const } : {}),
     };
   });
-  const limits = projects[0]?.workflow.limits;
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
@@ -155,8 +154,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       return true;
     };
 
-    const devSessions = devCapacity(yml?.concurrency, limits?.parallelSessions);
-    const scheduler = new Scheduler(store, { dev: devSessions, questions: limits?.questionSessions ?? 2 });
+    const capacity = queueCapacity(yml?.concurrency);
+    const scheduler = new Scheduler(store, capacity);
     // The chosen account replaces a host run's login (ORC-211). The sandboxes' token goes to the proxy alone (ORC-337):
     // it sets it on their model calls, which hold a placeholder; the runner only asks whether there is one. factory.yml's `claude`
     // section is read again at each launch: a change of `active` counts from the next run, without a restart (ORC-215).
@@ -412,8 +411,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       linearConnected: () => !!trackerSwitch.current,
       tracker: trackerSwitch,
       capacity: () => ({
-        dev: { used: scheduler.inUse('dev'), total: devSessions },
-        questions: { used: scheduler.inUse('questions'), total: limits?.questionSessions ?? 2 },
+        dev: { used: scheduler.inUse('dev'), total: capacity.dev },
+        questions: { used: scheduler.inUse('questions'), total: capacity.questions },
       }),
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,

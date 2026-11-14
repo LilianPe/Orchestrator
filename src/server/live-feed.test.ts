@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EventBus, type BusMessage } from './bus.js';
+import { EventBus, type BusMessage } from './live-feed.js';
 
 describe('EventBus', () => {
   it('fans out and unsubscribes', () => {
