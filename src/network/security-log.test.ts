@@ -91,6 +91,14 @@ describe('the security log of a run (ORC-296)', () => {
       const log = readSecurityLog(RUN, files([egressLine({ ok: false, suspicious: true, read: read('2') }), egressLine({ ok: false, suspicious: true, read: read('3') })], []));
       expect(refusalSummary(log)).toContain('- 2 reads refused as suspicious (past the per-run cap of distinct versions or release assets)');
     });
+
+    it('counts the unusual reads in the summary too, beside the suspicious (ORC-396)', () => {
+      const lines = [egressLine({ read: read('9.9.9') }), egressLine({ read: read('v1/a.zip', 'release', 'owner/repo') }), egressLine({ read: read('1.0.0') }), egressLine({ ok: false, suspicious: true, read: read('8.0.0') })];
+      const paths = files(lines, []);
+      const log = readSecurityLog(RUN, { ...paths, declared: declared(paths, { judged: ['npm'], reads: ['npm:lodash@1.0.0'] }) });
+      expect(refusalSummary(log)).toContain('- 1 read refused as suspicious');
+      expect(refusalSummary(log)).toContain('- 2 reads let through that the lockfiles of the base commit do not declare (unusual)');
+    });
   });
 
   it('is empty when a journal is missing', () => {

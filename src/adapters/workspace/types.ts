@@ -71,6 +71,13 @@ export interface WorkspaceManager {
    * where `verify` reads no clone.
    */
   branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined>;
+  /**
+   * A worktree's files at the ticket's base commit (ORC-396), read on the factory's repository as `stepDiff`: the head's fork
+   * point from the repository's default branch, or that branch itself when the head shares no commit with it (an agent can
+   * point its head at a commit of its own). Never the worktree's files. A file past its cap reads `\0too large: …`. None for a
+   * path that is no worktree.
+   */
+  baseReader(repoPath: string, path: string): Promise<BranchReader['showAtFork'] | undefined>;
   /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */
   uncommitted(path: string): Promise<string[]>;
   /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */
