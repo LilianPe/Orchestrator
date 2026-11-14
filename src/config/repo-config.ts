@@ -89,7 +89,7 @@ export class RepoConfigError extends Error {
   }
 }
 
-const KEYS = ['extends', 'setup', 'commands', 'preview','env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
+const KEYS = ['extends', 'setup', 'commands', 'preview', 'env', 'setup_secrets', 'services', 'sensitive_paths', 'budgets', 'max_diff', 'feature_flags', 'visual_paths', 'network', 'dependencies', 'branches', 'tools'];
 const strings = z.array(z.string().min(1));
 
 const VARIABLE = /^[A-Z][A-Z0-9_]*$/;

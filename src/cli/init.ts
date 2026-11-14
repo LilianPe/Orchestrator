@@ -84,7 +84,7 @@ export const PREVIEW_HEADER = `Proposed for ${REPO_CONFIG_PATH}, the command tha
 export function detectPreview(repo: string): string | undefined {
   const pkgFile = join(repo, 'package.json');
   if (!existsSync(pkgFile)) return undefined;
-  const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+  const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> } | null)?.scripts ?? {};
   const script = ['dev', 'start', 'preview'].find((s) => scripts[s]);
   if (!script) return undefined;
   const pnpm = !existsSync(join(repo, 'package-lock.json')) && existsSync(join(repo, 'pnpm-lock.yaml'));
