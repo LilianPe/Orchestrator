@@ -107,9 +107,9 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
     const { rows } = await queryOn(PG_URL, (c) =>
       c.query<{ kind: string; name: string }>(
         // pg_class rather than information_schema.sequences, which leaves out those of identity columns.
-        `select 'sequence' as kind, relname as name from pg_class where relkind = 'S' and relnamespace = $1::regnamespace
+        `select 'sequence' as kind, relname as name from pg_class where relkind = 'S' and relnamespace = $1::text::regnamespace
          union all
-         select 'foreign key', constraint_name from information_schema.table_constraints where table_schema = $1 and constraint_type = 'FOREIGN KEY'`,
+         select 'foreign key', constraint_name from information_schema.table_constraints where table_schema = $1::text and constraint_type = 'FOREIGN KEY'`,
         [a.name],
       ),
     );
