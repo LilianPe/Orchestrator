@@ -29,6 +29,8 @@ describe('the cells of the measures (ORC-223)', () => {
     expect(ticketDuration(measures({ startedAt: null }), 43_000).text).toBe('—');
     // Finished without a merge: nothing goes on.
     expect(ticketDuration(measures({ startedAt: 1_000 }), 43_000, 'done')).toEqual({ text: '—', title: expect.stringContaining('without a merge') });
+    // Cancelled by a human (ORC-170): settled, its time does not grow.
+    expect(ticketDuration(measures({ startedAt: 1_000 }), 43_000, 'cancelled')).toEqual({ text: '—', title: expect.stringContaining('Cancelled') });
   });
 
   it('reviewRoundsCell: AI and human rounds apart', () => {
