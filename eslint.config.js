@@ -17,6 +17,16 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
       ],
+      // The old orchestrator's pieces left core/ (ORC-390): the live feed is the server's, the queue capacity the runtime's.
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { group: ['**/core/bus', '**/core/bus.js', './bus.js', './bus'], message: 'core/bus is now src/server/live-feed.ts (ORC-390).' },
+            { group: ['**/core/scheduler', '**/core/scheduler.js', './scheduler.js', './scheduler'], message: 'core/scheduler is now src/runtime/capacity.ts (ORC-390).' },
+          ],
+        },
+      ],
     },
   },
 );

@@ -14,10 +14,10 @@ import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
 import type { Workflow } from '../../src/config/workflow-schema.js';
 import { saveAgentOutput } from '../../src/core/agent-output.js';
-import { EventBus } from '../../src/core/bus.js';
+import { EventBus } from '../../src/server/live-feed.js';
 import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../src/core/orchestrator.js';
-import { devCapacity, Scheduler } from '../../src/core/scheduler.js';
+import { queueCapacity, Scheduler } from '../../src/runtime/capacity.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import { asFantome } from '../../src/presets/fantome.js';
 import { Replays } from '../../src/ghost/delegate.js';
@@ -351,7 +351,7 @@ export function createHarness(
       bus.subscribe((m) => void (m.kind === 'log' && logs.push({ level: m.level, message: m.message })));
       return bus;
     })(),
-    scheduler: new Scheduler(store, { dev: devCapacity(opts.concurrency, workflow.limits.parallelSessions), questions: workflow.limits.questionSessions }),
+    scheduler: new Scheduler(store, queueCapacity(opts.concurrency)),
     ...outside,
     projects: [project, ...(opts.extraProjects ?? []).map((id) => ({ ...project, id, repoPath: `/${id}` }))],
     packDir: pack,

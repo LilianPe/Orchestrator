@@ -51,7 +51,7 @@ import {
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
 import { describePr, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
-import type { EventBus } from './bus.js';
+import type { EventBus } from '../server/live-feed.js';
 import type { Clock } from './clock.js';
 import type { Effect } from './decision.js';
 import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
@@ -73,7 +73,7 @@ import { branchAnew, heldByOther, pendingOf, reduce, samePending } from './reduc
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
-import type { Scheduler } from './scheduler.js';
+import type { Scheduler } from '../runtime/capacity.js';
 import {
   CREATES_TICKET,
   type Blocker,

@@ -161,15 +161,23 @@ describe('standard workflow', () => {
     expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });
 
-  it('a merge keeps a question waiting in the queue: only the dev work stops (ORC-268)', async () => {
-    const h = createHarness();
+  it('a merge keeps a question waiting for an answer slot: only the dev work stops (ORC-268)', async () => {
+    // Two answers at once, whatever the workflow says (ORC-390): the third question waits for a slot, and the merge leaves it there.
+    const h = createHarness({ projectYaml: 'version: 1\nlimits: { question_sessions: 1 }\n' });
     await delegatedAndInReview(h);
-    await h.send('control.pause', {});
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
+    h.tracker.addIssue({ identifier: 'REL-3', title: 'Trois' });
+    h.runner.enqueue({ hold: true }, { hold: true });
+    await h.send('session.mentioned', { linearSessionId: 'ls-2', body: 'où est le score ?', author: 'L' }, 'REL-2');
+    await h.send('session.mentioned', { linearSessionId: 'ls-3', body: 'qui appelle ça ?', author: 'L' }, 'REL-3');
+    expect(h.runner.requests).toHaveLength(3);
     await h.send('session.mentioned', { linearSessionId: 'ls-q', body: 'pourquoi ce choix ?', author: 'L' });
     await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv' });
     expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['ask']);
-    await h.send('control.resume', {});
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask']);
+    h.runner.release(h.runner.requests[1]!.runId);
+    await h.orch.drained();
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:ask', '/factory:ask', '/factory:ask']);
+    expect(h.runner.requests[3]!.prompt).toContain('pourquoi ce choix ?');
   });
 
   it('verification failures resume the session, then pass', async () => {
@@ -387,22 +395,25 @@ describe('standard workflow', () => {
   });
 
   it('respects the parallel cap and drains the queue', async () => {
-    const h = createHarness({ projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
+    // The dev slots are factory.yml's `concurrency` alone: the workflow's `parallel_sessions` is read no more (ORC-390).
+    const h = createHarness({ concurrency: 2, projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
-    h.runner.enqueue({ hold: true }, {});
+    h.tracker.addIssue({ identifier: 'REL-3', title: 'Trois' });
+    h.runner.enqueue({ hold: true }, { hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'a' }, 'REL-1');
     await h.send('ticket.delegated', { linearSessionId: 'b' }, 'REL-2');
-    expect(h.runner.requests).toHaveLength(1);
+    await h.send('ticket.delegated', { linearSessionId: 'c' }, 'REL-3');
+    expect(h.runner.requests).toHaveLength(2);
     expect(await h.store.listQueue()).toHaveLength(1);
     h.runner.release((await h.ticket('REL-1')).activeRunId!);
     await h.orch.drained();
-    expect(h.runner.requests).toHaveLength(2);
-    expect(h.runner.requests[1]!.cwd).toBe('/tmp/factory-fake/p/REL-2');
+    expect(h.runner.requests).toHaveLength(3);
+    expect(h.runner.requests[2]!.cwd).toBe('/tmp/factory-fake/p/REL-3');
   });
 
-  it('concurrency: 1 in factory.yml runs one ticket at a time, whatever the workflow allows (ORC-203)', async () => {
-    const h = createHarness({ concurrency: 1, projectYaml: 'version: 1\nlimits: { parallel_sessions: 3 }\n' });
+  it('concurrency: 1 in factory.yml runs one ticket at a time (ORC-203)', async () => {
+    const h = createHarness({ concurrency: 1 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
     h.runner.enqueue({ hold: true }, {});

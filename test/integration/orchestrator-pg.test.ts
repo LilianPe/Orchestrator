@@ -80,7 +80,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   });
 
   it('respects the parallel cap and drains the queue through the outbox', async () => {
-    const h = harness({ projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
+    const h = harness({ concurrency: 1 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
     h.runner.enqueue({ hold: true }, {});

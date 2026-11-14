@@ -6,8 +6,8 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 
 | Limit | Where | Default | When it is reached |
 |---|---|---|---|
-| Concurrent code runs | `concurrency` (`factory.yml`), otherwise `limits.parallel_sessions` (workflow) | 3 | Further runs wait in the `dev` queue (persistent), by ticket priority. A check's sandbox (`verify`, `red`) takes a slot too, served before the next launch (ORC-353). |
-| Concurrent question runs | `limits.question_sessions` (workflow) | 2 | Same, `questions` queue. |
+| Concurrent code runs | `concurrency` (`factory.yml`) | 3 | Further runs wait in the `dev` queue (persistent), by ticket priority. A check's sandbox (`verify`, `red`) takes a slot too, served before the next launch (ORC-353). |
+| Concurrent question runs | fixed (ORC-390) | 2 | Same, `questions` queue. |
 | Turns per run | `limits.per_run.turns` / `jobs.*.limits.turns`, the step's `maxTurns` and `budgets.max_turns` | 150 | Run interrupted, ticket blocked, kind `budget` (ORC-216). |
 | Run duration | `limits.per_run.duration` | `90m` | Run interrupted, result `limit`. |
 | Tokens per attempt | `budgets.per_step_tokens` (`factory.yml`; `off` disables it, ORC-381) | none (to calibrate) | Run interrupted, ticket blocked, kind `budget` (ORC-216). |

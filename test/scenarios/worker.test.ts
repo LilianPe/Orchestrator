@@ -886,7 +886,7 @@ on:
           return inner.getTicket(projectId, ticketId);
         },
       });
-    const h = createHarness({ wrapStore, projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
+    const h = createHarness({ wrapStore, concurrency: 1 });
     for (const id of ['REL-1', 'REL-2', 'REL-3']) h.tracker.addIssue({ identifier: id, title: `Ticket ${id}` });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -1306,7 +1306,7 @@ describe('a start that must not run (ORC-150 review)', () => {
   });
 
   it('drops a queued dev start of a ticket blocked meanwhile, without a run', async () => {
-    const h = createHarness({ projectYaml: 'version: 1\nlimits:\n  parallel_sessions: 1\n' });
+    const h = createHarness({ concurrency: 1 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     h.runner.enqueue({ hold: true });
