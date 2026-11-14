@@ -6,6 +6,12 @@ import { journalSchemaOf, migratePgStore } from '../../src/store/pg/migrate.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
 import { createTestSchema, PG_URL, queryOn, type TestSchema } from '../helpers/pg-database.js';
 
+function withSearchPath(url: string, path: string): string {
+  const u = new URL(url);
+  u.searchParams.set('options', `-c search_path=${path}`);
+  return u.toString();
+}
+
 describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)', () => {
   let a: TestSchema;
   let b: TestSchema;
@@ -49,6 +55,46 @@ describe.skipIf(!PG_URL)('migrations in the schema of the search_path (ORC-334)'
       await migratePgStore(pool);
       expect(await tablesOf(legacy.name)).toEqual([...PG_TABLE_NAMES].sort());
       expect(await tablesOf(journalSchemaOf(legacy.name))).toEqual([]);
+
+      // An empty schema placed before the migrated one (a schema named after the role, `"$user", public`):
+      // the engine's tables still resolve to the migrated one, so nothing is applied to it, as before ORC-334.
+      const before = await createTestSchema('factory_mig_user');
+      const behind = new Pool({ connectionString: withSearchPath(before.url, `${before.name},${legacy.name}`), max: 1 });
+      try {
+        await migratePgStore(behind);
+        expect(await tablesOf(before.name)).toEqual([]);
+        expect(await tablesOf(journalSchemaOf(before.name))).toEqual([]);
+      } finally {
+        await behind.end();
+        await before.drop();
+      }
+
+      // A schema that holds a table of its own but not the engine's: a schema to migrate, journal beside it.
+      const foreign = await createTestSchema('factory_mig_foreign');
+      const fresh = new Pool({ connectionString: foreign.url, max: 1 });
+      try {
+        await fresh.query('create table unrelated (id int)');
+        await migratePgStore(fresh);
+        expect(await tablesOf(foreign.name)).toEqual([...PG_TABLE_NAMES, 'unrelated'].sort());
+        expect(await tablesOf(journalSchemaOf(foreign.name))).toEqual(['__drizzle_migrations']);
+      } finally {
+        await fresh.end();
+        await foreign.drop();
+      }
+
+      // A name too long for a journal beside it: migrated before ORC-334, it keeps the journal in drizzle.
+      const long = `factory_mig_long_${'x'.repeat(40)}`;
+      await queryOn(PG_URL, (c) => c.query(`create schema "${long}"`));
+      const longPool = new Pool({ connectionString: withSearchPath(PG_URL, long), max: 1 });
+      try {
+        // drizzle already holds a full journal: its tables come through a journal dropped right after.
+        await migrate(drizzle(longPool), { migrationsFolder: 'drizzle', migrationsSchema: `${long}_tmp` });
+        await queryOn(PG_URL, (c) => c.query(`drop schema "${long}_tmp" cascade`));
+        await expect(migratePgStore(longPool)).resolves.toBeUndefined();
+      } finally {
+        await longPool.end();
+        await queryOn(PG_URL, (c) => c.query(`drop schema if exists "${long}", "${long}_tmp" cascade`));
+      }
     } finally {
       await pool.end();
       await legacy.drop();

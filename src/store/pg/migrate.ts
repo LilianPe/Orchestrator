@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import type { Pool } from 'pg';
+import { PG_TABLE_NAMES } from './schema.js';
 
 const DEFAULT_MIGRATIONS_FOLDER = resolve(process.cwd(), 'drizzle');
 const JOURNAL = '__drizzle_migrations';
@@ -20,19 +21,21 @@ export function journalSchemaOf(schema: string): string {
 }
 
 /**
- * The journal of `schema` as found in the database: before ORC-334 it was in `drizzle` whatever the
- * search_path, so a schema already migrated with no journal beside it keeps that one.
+ * The journal of `schema` as found in the database. Before ORC-334 it was in `drizzle` whatever the
+ * search_path: with no journal beside `schema`, `drizzle` is kept wherever the code before ORC-334
+ * found the engine's tables through the search_path, so such an instance is migrated as it was.
  */
 async function journalSchema(pool: Pool, schema: string): Promise<string> {
-  const own = journalSchemaOf(schema);
-  if (own === 'drizzle') return own;
-  const { rows } = await pool.query<{ own: string | null; legacy: string | null; tables: number }>(
-    `select to_regclass(format('%I.%I', $1::text, $3::text)) as own, to_regclass(format('%I.%I', 'drizzle', $3::text)) as legacy,
-            (select count(*)::int from information_schema.tables where table_schema = $2) as tables`,
-    [own, schema, JOURNAL],
+  if (schema === 'public') return 'drizzle';
+  const own = `${schema}_drizzle`;
+  const { rows } = await pool.query<{ own: string | null; legacy: string | null; installed: boolean }>(
+    `select case when $1::text is not null then to_regclass(format('%I.%I', $1::text, $2::text)) end as own, to_regclass(format('%I.%I', 'drizzle', $2::text)) as legacy,
+            coalesce((select bool_or(to_regclass(quote_ident(t)) is not null) from unnest($3::text[]) as t), false) as installed`,
+    // A name past the bound has no journal beside it: none to look for.
+    [Buffer.byteLength(own) > MAX_IDENTIFIER ? null : own, JOURNAL, [...PG_TABLE_NAMES]],
   );
   const found = rows[0];
-  return !found?.own && found?.legacy && found.tables > 0 ? 'drizzle' : own;
+  return !found?.own && found?.legacy && found.installed ? 'drizzle' : journalSchemaOf(schema);
 }
 
 /** Applies `drizzle/` to an empty schema, the first of the search_path (or brings it to the latest migration). */
