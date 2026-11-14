@@ -1,8 +1,8 @@
-import { presetBound } from '../config/load-workflow.js';
 import type { Workflow } from '../config/workflow-schema.js';
 import { parseCondition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, type Preset, type Step } from './preset.js';
+import { presetBound } from './workflow.js';
 
 /** Who approves a spec at the Rapide level (ORC-231): the preset itself, as its approval records it. */
 export const FANTOME_APPROVER = 'factory/fantome';

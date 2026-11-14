@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,12 +44,12 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
   const code = await runDoctor({
-    repoPath: '/repo',
+    repoPath: options.repoPath ?? '/repo',
     api,
     out: (line) => lines.push(line),
     ...(options.json ? { json: true } : {}),
@@ -621,6 +621,38 @@ jobs:
       const result = await doctor([workflow('on: pull_request\npermissions:\n  contents: maybe\njobs:\n  test:\n    steps:\n      - run: npm test\n')]);
       expect(result.code).toBe(1);
       expect(result.text).toContain('ambiguous `permissions`');
+    });
+  });
+
+  describe('a workflow file of the repository, ignored since the workflow is the preset (ORC-388)', () => {
+    /** A repository holding `files`, none of them readable: doctor names them, it never opens them. */
+    function repoWith(files: string[]): string {
+      const repo = tempHome();
+      for (const file of files) {
+        mkdirSync(join(repo, file, '..'), { recursive: true });
+        writeFileSync(join(repo, file), 'not: [a workflow');
+        chmodSync(join(repo, file), 0o000);
+      }
+      return repo;
+    }
+
+    it('warns about .factory/workflow.yml and .relais/workflow.yml, ignored, to delete, without reading them or changing the verdict', async () => { // transition, à retirer
+      const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml', '.relais/workflow.yml']) }); // transition, à retirer
+      expect(result.code).toBe(0);
+      expect(result.lines).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+      expect(result.lines).toContain('Warning: .relais/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.'); // transition, à retirer
+    });
+
+    it('lists them in the JSON report', async () => {
+      const result = await doctor([], [], { repoPath: repoWith(['.factory/workflow.yml']), json: true });
+      expect(JSON.parse(result.text)).toMatchObject({ accepted: true, ignored: ['.factory/workflow.yml'] });
+      const failed = await doctor([], [], { repoPath: repoWith(['.relais/workflow.yml']), json: true, fake: { failWorkflows: true } }); // transition, à retirer
+      expect(JSON.parse(failed.text)).toMatchObject({ accepted: false, ignored: ['.relais/workflow.yml'] }); // transition, à retirer
+    });
+
+    it('says nothing of a repository without one', async () => {
+      const result = await doctor([], [], { repoPath: repoWith([]) });
+      expect(result.text).not.toContain('workflow.yml');
     });
   });
 });

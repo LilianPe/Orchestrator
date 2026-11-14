@@ -31,12 +31,13 @@ import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
-import { loadWorkflow } from '../config/load-workflow.js';
 import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
@@ -98,18 +99,18 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const githubApp = resolveGithubApp(instance, env);
   const githubSecret = githubWebhookSecret(instance, env);
 
-  const projects: ProjectRuntime[] = instance.projects.map((p) => {
-    const projectFile = join(p.repoPath, '.factory/workflow.yml');
-    const workflow = loadWorkflow({ packDir, projectFile: existsSync(projectFile) ? projectFile : undefined, settings: stepSettings(yml) });
-    return {
-      id: p.id,
-      repoPath: p.repoPath,
-      teamKey: p.linearTeamKey,
-      // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
-      workflow: isFantome(p) ? asFantome(workflow) : workflow,
-      ...(projectEffects(p) ? { effects: 'none' as const } : {}),
-    };
-  });
+  // The workflow of factory/default for every project: a repository's `.factory/workflow.yml` is ignored (ORC-388).
+  const workflow = defaultWorkflow(stepSettings(yml));
+  const projects: ProjectRuntime[] = instance.projects.map((p) => ({
+    id: p.id,
+    repoPath: p.repoPath,
+    teamKey: p.linearTeamKey,
+    // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
+    workflow: isFantome(p) ? asFantome(workflow) : workflow,
+    ...(projectEffects(p) ? { effects: 'none' as const } : {}),
+  }));
+  // Said at each start, not only by `factory doctor`.
+  for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);

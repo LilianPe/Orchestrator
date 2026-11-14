@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
 import { SECRET_NAME } from '../adapters/runner/transcript.js';
@@ -73,6 +75,15 @@ const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0
 /** The one name the factory reads, at the repository's root: a file in a directory, neither a link. */
 export const REPO_CONFIG_DIR = '.factory';
 export const REPO_CONFIG_PATH = `${REPO_CONFIG_DIR}/config.yml`;
+
+/** The workflow files an older factory read in a repository (ORC-388): ignored now, named by their presence and never read. */
+const IGNORED_WORKFLOW_FILES = [`${REPO_CONFIG_DIR}/workflow.yml`, '.relais/workflow.yml']; // transition, à retirer
+
+/** The ignored workflow files present in a repository's working copy, for `factory doctor`, `factory init` and the daemon's start. */
+export const ignoredWorkflowFiles = (repoPath: string): string[] => IGNORED_WORKFLOW_FILES.filter((file) => existsSync(join(repoPath, file)));
+
+export const ignoredWorkflowWarning = (file: string): string =>
+  `Warning: ${file} is ignored: the workflow is the ${factoryDefault.name} preset. Delete it; its setup and checks go in ${REPO_CONFIG_PATH}.`;
 
 /** How the daemon reads it on the default branch. `fetch: false`: the forge was just fetched, or the read follows the launch's. */
 export interface RepoConfigRead {

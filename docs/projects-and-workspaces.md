@@ -14,7 +14,7 @@ projects:
 Rules:
 
 - tickets are routed by team key; a delegation on a team without a project is blocked, the rest ignored ([`linear.md`](linear.md#4-using-the-agent-day-to-day)). A team can have several projects: see [One team, several repositories](#one-team-several-repositories);
-- each project's behavior comes from its `.relais/workflow.yml` ([`workflow.md`](workflow.md)), read from the `repoPath` working copy at startup;
+- every project runs the `factory/default` workflow ([`preset.md`](preset.md)); its own part is its `.factory/config.yml`, read on its default branch ([`repository-configuration.md`](repository-configuration.md)). A `.factory/workflow.yml` is ignored since ORC-388;
 - `repoPath` must be a clone with `origin`: Relais runs `git fetch origin` there and copies its objects for each workspace. You can keep working in it. The agents' commits only reach it through the forge.
 
 ### Adding a project
@@ -24,7 +24,7 @@ cd <other repository>
 relais init        # same Linear application key: answer with the same credentials
 ```
 
-`init` adds the project (or replaces the one with the same `repoPath`) and creates its `.relais/workflow.yml`. Then restart `relais up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
+`init` adds the project (or replaces the one with the same `repoPath`) and proposes its `.factory/config.yml`, which it does not write. Then restart `relais up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
 
 > The queue capacities are global to the instance: `concurrency` of `factory.yml` for the `dev` queue, a fixed 2 for the `questions` queue (ORC-390). The other settings are specific to each project.
 

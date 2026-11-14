@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
+import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
-import { REPO_CONFIG_PATH } from '../config/repo-config.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -20,80 +22,84 @@ export interface InitDeps {
   exec: Exec;
 }
 
-/** What `init` proposes for a repository: its install, its checks, and the test command the red check appends the new tests to. */
+/** What `init` proposes for a repository's `.factory/config.yml`: its install, its checks by name, and what starts the application. */
 interface Detected {
   setup: string[];
-  verify: string[];
-  red?: string;
+  commands: Record<string, string>;
+  preview?: string;
 }
 
 /**
- * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has. pnpm
- * hands a `--` to the script as it is (`vitest run -- x.test.ts` filters nothing, measured on pnpm 10.20): its red
- * command has none.
+ * The scripts of the repository's package.json, those that are a command: none without one, or with one that does not parse
+ * or is not an object (npm would refuse it too; a proposal never fails init).
+ */
+function nodeScripts(repo: string): Record<string, string> | undefined {
+  const pkgFile = join(repo, 'package.json');
+  if (!existsSync(pkgFile)) return undefined;
+  let pkg: unknown;
+  try {
+    pkg = JSON.parse(readFileSync(pkgFile, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(pkg)) return undefined;
+  const scripts = isRecord(pkg['scripts']) ? pkg['scripts'] : {};
+  return Object.fromEntries(Object.entries(scripts).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''));
+}
+
+/**
+ * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has, and as its
+ * `preview` (ORC-397) the first of `dev`, `start` and `preview`.
  */
 function detectNode(repo: string): Detected {
-  const pkgFile = join(repo, 'package.json');
-  if (!existsSync(pkgFile)) return { setup: [], verify: [] };
-  const scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+  const scripts = nodeScripts(repo);
+  if (!scripts) return { setup: [], commands: {} };
   const npmLock = existsSync(join(repo, 'package-lock.json'));
   const pnpm = !npmLock && existsSync(join(repo, 'pnpm-lock.yaml'));
   const pm = pnpm ? 'pnpm' : 'npm';
   const setup = pnpm ? ['pnpm install --frozen-lockfile'] : npmLock ? ['npm ci'] : [];
-  const verify = ['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => `${pm} ${s === 'test' ? 'test' : `run ${s}`}`);
-  return { setup, verify, red: scripts.test ? (pnpm ? 'pnpm test' : 'npm test --') : undefined };
+  const commands = Object.fromEntries(['lint', 'typecheck', 'test'].filter((s) => scripts[s]).map((s) => [s, `${pm} ${s === 'test' ? 'test' : `run ${s}`}`]));
+  const start = ['dev', 'start', 'preview'].find((s) => scripts[s]);
+  return { setup, commands, ...(start ? { preview: `${pm} run ${start}` } : {}) };
 }
 
 /**
  * uv (ORC-172), on its lockfile only, and every command `--frozen`: `uv run` alone locks again first, and drops a lockfile
  * made under `exclude-newer` (the setup's age cap, which verify does not set) or one the agent's `pyproject.toml` no
  * longer matches; without the network, it fails (measured on uv 0.13.7). A plain `uv sync` rewrites it too
- * (docs/repository-configuration.md).
+ * (docs/repository-configuration.md). Named after their tool, beside Node's.
  */
 function detectPython(repo: string): Detected {
-  if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], verify: [] };
-  return { setup: ['uv sync --frozen'], verify: ['uv run --frozen ruff check', 'uv run --frozen mypy .', 'uv run --frozen pytest'], red: 'uv run --frozen pytest' };
+  if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], commands: {} };
+  return { setup: ['uv sync --frozen'], commands: { ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' } };
 }
 
-/** Both when the repository has both: the red check runs one command, Node's, and `init` says what it leaves out. */
-function detect(repo: string): Detected & { note?: string } {
+/**
+ * Both when the repository has both. A `preview` from Node's scripts only: no convention names a start script for Python (a
+ * `[project.scripts]` entry is a console command, not a server).
+ */
+function detect(repo: string): Detected {
   const node = detectNode(repo);
   const python = detectPython(repo);
-  return {
-    setup: [...node.setup, ...python.setup],
-    verify: [...node.verify, ...python.verify],
-    red: node.red ?? python.red,
-    note: node.red && python.red ? `The red check runs "${node.red}": the Python tests a tests step adds are not checked red (jobs.tests.red takes one command).` : undefined,
-  };
+  return { ...node, setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands } };
+}
+
+/** What `init` prints before the `.factory/config.yml` it proposes (ORC-388): it writes nothing in the repository. */
+export const PROPOSAL_HEADER = `Proposed ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing in the repository):\n`;
+
+/** The repository's `.factory/config.yml`, as `init` detects it: none when it detects nothing. */
+function proposal({ setup, commands, preview }: Detected): string | undefined {
+  const checks = { ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
+  const text =
+    (Object.keys(checks).length ? stringify(checks) : '') +
+    (preview ? `# What starts the application for the visual proof: it must listen on PORT.\n${stringify({ preview })}` : '');
+  return text ? PROPOSAL_HEADER + text : undefined;
 }
 
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
   return norm(a) === norm(b);
-}
-
-/** What `init` prints before the `preview` it proposes (ORC-397). */
-export const PREVIEW_HEADER = `Proposed for ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing there), the command that starts the application for the visual proof; it must listen on PORT:\n`;
-
-/**
- * The `preview` of `.factory/config.yml` (ORC-397): the first of the scripts `dev`, `start` and `preview` the package.json has,
- * by its package manager as `detectNode` picks it. None for Python: no convention names a start script there (a
- * `[project.scripts]` entry is a console command, not a server).
- */
-export function detectPreview(repo: string): string | undefined {
-  const pkgFile = join(repo, 'package.json');
-  if (!existsSync(pkgFile)) return undefined;
-  let scripts: Record<string, string>;
-  try {
-    scripts = (JSON.parse(readFileSync(pkgFile, 'utf8')) as { scripts?: Record<string, string> } | null)?.scripts ?? {};
-  } catch {
-    return undefined; // a proposal, never worth failing init over
-  }
-  const script = ['dev', 'start', 'preview'].find((s) => scripts[s]);
-  if (!script) return undefined;
-  const pnpm = !existsSync(join(repo, 'package-lock.json')) && existsSync(join(repo, 'pnpm-lock.yaml'));
-  return `${pnpm ? 'pnpm' : 'npm'} run ${script}`;
 }
 
 export async function runInit(d: InitDeps): Promise<void> {
@@ -135,38 +141,13 @@ export async function runInit(d: InitDeps): Promise<void> {
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
 
-  const wfFile = join(repoPath, '.factory/workflow.yml');
-  if (!existsSync(wfFile)) {
-    const { setup, verify: detected, red, note } = detect(repoPath);
-    if (note) io.print(note);
-    const verify = (await io.ask('Verification commands after each run (separated by ;)', detected.join('; ')))
-      .split(';')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    mkdirSync(join(repoPath, '.factory'), { recursive: true });
-    writeFileSync(
-      wfFile,
-      [
-        'version: 1',
-        'extends: standard',
-        'tracker:',
-        '  kind: linear',
-        `  team: ${teamKey}`,
-        'workspace:',
-        `  setup: ${JSON.stringify(setup)}`,
-        'jobs:',
-        '  dev:',
-        `    verify: ${JSON.stringify(verify)}`,
-        ...(red ? ['  tests:', `    red: ${JSON.stringify({ command: red })}`] : []),
-        '',
-      ].join('\n'),
-    );
-  }
+  // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
+  // default branch, which `init` proposes and leaves to commit.
+  for (const file of ignoredWorkflowFiles(repoPath)) io.print(ignoredWorkflowWarning(file));
+  const proposed = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : proposal(detect(repoPath));
+  if (proposed) io.print(proposed);
 
   saveInstance(d.home, cfg);
-  // The visual proof reads it on the default branch (ORC-397): proposed, never written, and not over a file the repository has.
-  const preview = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : detectPreview(repoPath);
-  if (preview) io.print(`${PREVIEW_HEADER}preview: ${preview}\n`);
   io.print(
     [
       '',
