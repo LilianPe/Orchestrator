@@ -42,7 +42,9 @@ function testSchemaName(prefix: string): string {
 
 function testSchemaUrl(name: string): string {
   const u = new URL(PG_URL);
-  u.searchParams.set('options', `-c search_path=${name}`);
+  // Beside the options PG_URL may already carry (a statement_timeout, a provider's endpoint), not in their place.
+  const options = u.searchParams.get('options');
+  u.searchParams.set('options', [options, `-c search_path=${name}`].filter(Boolean).join(' '));
   u.searchParams.set('application_name', name);
   return u.toString();
 }
