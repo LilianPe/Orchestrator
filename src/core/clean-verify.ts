@@ -81,11 +81,6 @@ export interface VisualRequest {
   intake: boolean;
   /** The browser; absent (no sandbox with one), a required proof is unavailable. */
   shooter?: VisualShooter;
-  /**
-   * What starts the application by the workflow's `workspace.preview`, until it goes (ORC-388): the base's `preview` in
-   * `.factory/config.yml` comes first (ORC-397). Neither, a required proof is unavailable.
-   */
-  start?: string;
   port: number;
   /** The page shot: `visual_scenario.url` of `submit_result`, `/` without one. */
   path: string;
@@ -323,7 +318,7 @@ async function testRunners(git: CloneGit, sha: string, commands: readonly string
   return runners;
 }
 
-type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>>;
+type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter'>> & { start: string };
 
 /**
  * The decision on the diff (ORC-176), and what takes a required proof, or why it cannot be taken: then indicative (ORC-152), no
@@ -337,7 +332,8 @@ async function planVisual(
   const changed = zFields(await at.git.raw('diff', '--name-only', '-z', '--no-renames', at.from, at.sha));
   const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
   if (proof.decision !== 'required' || at.refused) return { proof };
-  const start = at.config.preview ?? v.start;
+  // What starts the application: the base's `preview` in `.factory/config.yml` (ORC-397), the only place it is declared.
+  const start = at.config.preview;
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
   else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH})`;
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';

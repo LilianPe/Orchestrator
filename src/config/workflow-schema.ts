@@ -99,7 +99,8 @@ export const rawWorkflowSchema = z
       .partial()
       .optional(),
     workspace: z
-      .object({ setup: z.array(z.string()), ports: z.object({ base: z.number().int().positive() }), preview: z.string().min(1) })
+      // `preview` went to `.factory/config.yml` (ORC-397, ORC-388): a project file that still sets it loads, the key dropped.
+      .object({ setup: z.array(z.string()), ports: z.object({ base: z.number().int().positive() }) })
       .partial()
       .optional(),
     on: z.record(z.string(), z.array(rawRuleSchema)).optional(),
@@ -249,8 +250,8 @@ export interface Workflow {
    */
   states: Record<Exclude<LogicalState, 'ready' | 'cancelled'>, string> & { ready?: string; cancelled?: never };
   limits: Limits;
-  /** `preview`: the command that starts the application for the visual proof (ORC-176), on `PORT`; absent, the proof is unavailable. */
-  workspace: { setup: string[]; portBase: number; preview?: string };
+  /** `portBase`: the `PORT` the visual proof's application listens on (ORC-176); what starts it is `.factory/config.yml`'s `preview`. */
+  workspace: { setup: string[]; portBase: number };
   commands: string[];
   on: Partial<Record<EventType, Rule[]>>;
   jobs: Record<string, JobSpec>;

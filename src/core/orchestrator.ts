@@ -1232,12 +1232,10 @@ export class Orchestrator {
 
   /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
   private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined): VisualRequest {
-    const { preview, portBase } = project.workflow.workspace;
     return {
       intake: t.visualProof === 'required',
       ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
-      ...(preview ? { start: preview } : {}),
-      port: portBase,
+      port: project.workflow.workspace.portBase,
       path: scenarioPath(output?.visual_scenario?.url),
       gate: (c) => this.policy.capture(c),
     };
