@@ -580,11 +580,6 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ok: true });
   });
 
-  // In the inbox, in order behind the events before it: the agent waits for no decision, and hears of a failed write.
-  const ask = async (run: RunRecord, question: string) => {
-    const at = d.clock.now();
-    await d.submit({ ...TRUSTED, id: `ask:${run.id}:${at}`, type: 'agent.asked', at, projectId: run.projectId, ticketId: run.ticketId, payload: { question, job: run.job, ...(run.linearSessionId ? { linearSessionId: run.linearSessionId } : {}) } });
-  };
   // The factory MCP alone under /agent (ORC-192): factory-agent's routes are gone, every other path is a 404, token or not.
   app.post(AGENT_MCP_PATH, async (c) => {
     const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
@@ -604,7 +599,7 @@ export function createApp(d: ServerDeps): Hono {
       if (!replayed) return search(q);
       return replayed.knowledge ? search(q, replayed.knowledge) : [];
     });
-    const res = await handleMcp(msg, run, { store: d.store, ask, ...(kbSearch ? { kbSearch } : {}) });
+    const res = await handleMcp(msg, run, { store: d.store, ...(kbSearch ? { kbSearch } : {}) });
     return res ? c.json(res) : c.body(null, 202);
   });
   // No SSE stream to GET: the MCP transport's answer for a server that offers none.

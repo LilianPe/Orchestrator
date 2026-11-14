@@ -127,11 +127,12 @@ On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk
 
 ## Factory MCP
 
-`POST /agent/mcp` is an MCP server ("Streamable" HTTP, JSON responses only, one message per request; any other method receives `405` with `Allow: POST`, no SSE stream), behind the run token, also served by the server dedicated to sandboxes. Three tools (ORC-288, ORC-232):
+`POST /agent/mcp` is an MCP server ("Streamable" HTTP, JSON responses only, one message per request; any other method receives `405` with `Allow: POST`, no SSE stream), behind the run token, also served by the server dedicated to sandboxes. Two tools (ORC-288, ORC-232):
 
 - **`submit_result`**: the agent returns its result there, in the `agentOutputSchema` format (`src/core/agent-output.ts`), whose JSON schema is the tool's `inputSchema`. A valid result is stored for **the token's run** (meta `agent-output:<run>`), the last submission wins; an invalid result is refused (`isError`) with the offending fields, so the agent can fix it during its run. Its texts are capped (`OUTPUT_LIMITS` of `src/publish/output-limits.ts`): what Linear and GitHub show is composed from them by the factory and goes through its `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)).
-- **`ask`**: a question in Linear, the ticket blocked, told by the standard block comment (ORC-196). The skills ask instead by ending the run with `submit_result`, `status: "blocked"` and the `question` (`needs_input`), which blocks the same way.
 - **`kb_search`**: searches the knowledge base's `notes/*.md` on the server's clone (words of 3 letters or more, ignoring accents and case) and answers `file:line: text` (ORC-232).
+
+There is no `ask` tool (ORC-400): an agent asks by ending its run with `submit_result`, `status: "blocked"` and a `question` that stands on its own (`needs_input`). The ticket is blocked and the question told by the standard block comment (ORC-196). A question asked mid-run blocked the ticket while the agent kept working, and a `done` result submitted after it was lost.
 
 `claude -p` receives it via `--mcp-config '{"mcpServers":{"factory":{"type":"http","url":"${FACTORY_API}/mcp","headers":{"Authorization":"Bearer ${FACTORY_RUN_TOKEN}"}}}}'`: Claude Code replaces the `${…}` with the variables from its environment (verified on 2.1.316). The token is therefore never on the command line, which the host's process list shows; it arrives through the run's environment, as before.
 

@@ -1,6 +1,6 @@
 # Command line
 
-Relais provides one executable, `relais`, for you, the operator (installed by `npm link`, see [`installation.md`](installation.md)). The agents have none: during a run they reach Relais through its MCP alone (`submit_result`, `ask`, `kb_search`, see [`interface-and-security.md`](interface-and-security.md#factory-mcp)); `relais-agent` is gone (ORC-192).
+Relais provides one executable, `relais`, for you, the operator (installed by `npm link`, see [`installation.md`](installation.md)). The agents have none: during a run they reach Relais through its MCP alone (`submit_result`, `kb_search`, see [`interface-and-security.md`](interface-and-security.md#factory-mcp)); `relais-agent` is gone (ORC-192).
 
 All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`. An unknown or incomplete command prints the help and exits with code 1.
 

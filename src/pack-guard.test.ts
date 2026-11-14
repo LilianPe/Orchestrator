@@ -193,8 +193,11 @@ describe("a tool off the step's list (ORC-383)", () => {
   it("lets through the step's tools and the factory's MCP tools, and judges them as before", () => {
     expect(guard({ pattern: 'x' }, tools, 'Grep').denied).toBe(false);
     expect(guard({ status: 'done' }, tools, 'mcp__factory__submit_result')).toMatchObject({ denied: false, lines: [] });
+    expect(guard({ query: 'x' }, tools, 'mcp__factory__kb_search').denied).toBe(false);
     // Another MCP server's tool is not the factory's.
     expect(guard({}, tools, 'mcp__other__submit_result').denied).toBe(true);
+    // Nor is a tool the factory's MCP no longer has (ORC-400): a question is a blocked submit_result.
+    expect(guard({ text: 'Laquelle ?' }, tools, 'mcp__factory__ask')).toMatchObject({ denied: true, lines: [expect.objectContaining({ tool: 'mcp__factory__ask', rule: 'tool-not-allowed' })] });
     // Its own rules still apply to a tool it has.
     expect(bash('rm -rf /', { FACTORY_TOOLS: 'Bash' }).lines).toEqual([expect.objectContaining({ rule: 'rm-root' })]);
   });

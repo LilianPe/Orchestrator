@@ -252,7 +252,8 @@ export interface EventPayloads {
   /**
    * The agent's question through the factory MCP's `ask` (ORC-196, ORC-288), journaled when it asks: told once the block is committed, by
    * the same comment as any block, so that a reply always finds it. `job`: the job of the run that asks;
-   * `linearSessionId`: its session, where a question thread hears it.
+   * `linearSessionId`: its session, where a question thread hears it. Nothing submits it since the MCP lost `ask` (ORC-400): still
+   * decided for the journals that hold it.
    */
   'agent.asked': { question: string; job: string; linearSessionId?: string };
   /**

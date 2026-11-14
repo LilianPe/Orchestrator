@@ -102,9 +102,18 @@ describe('standard pack', () => {
     }
   });
 
-  it("allows the factory MCP's tools, that a headless run would refuse otherwise (ORC-188)", () => {
+  it("allows the factory MCP's tools, that a headless run would refuse otherwise (ORC-188), and no ask (ORC-400)", () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.allow).toEqual(expect.arrayContaining(['mcp__factory__submit_result', 'mcp__factory__ask', 'mcp__factory__kb_search']));
+    expect(s.permissions.allow.filter((rule: string) => rule.startsWith('mcp__'))).toEqual(['mcp__factory__submit_result', 'mcp__factory__kb_search']);
+  });
+
+  it("cites the MCP's ask in no skill nor hook: a question is a blocked submit_result (ORC-400)", () => {
+    for (const name of readdirSync(join(pack, 'skills'))) {
+      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).not.toContain('mcp__factory__ask');
+    }
+    for (const name of readdirSync(join(pack, 'hooks'))) {
+      expect(readFileSync(join(pack, 'hooks', name), 'utf8'), name).not.toContain('mcp__factory__ask');
+    }
   });
 
   it('tells no skill to push or to open a PR: the factory does (ORC-125)', () => {
