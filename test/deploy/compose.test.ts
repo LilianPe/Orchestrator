@@ -169,3 +169,29 @@ describe('the gitleaks archive of the isolation job (ORC-369)', () => {
     expect(install).toContain(`echo "${sha256}  /tmp/gitleaks.tgz"`);
   });
 });
+
+/** ORC-377: with no timeout-minutes, a wedged engine or a hung test holds the runner for GitHub's 6 h. */
+describe('the time limits of the CI jobs (ORC-377)', () => {
+  type Step = { if?: string; run?: string };
+  const jobs = (parse(read('.github/workflows/ci.yml')) as { jobs: Record<string, { 'timeout-minutes'?: number; steps: Step[] }> }).jobs;
+
+  it("bounds every job, well below GitHub's default of 360 min", () => {
+    for (const [name, job] of Object.entries(jobs)) {
+      expect(job['timeout-minutes'], name).toBeGreaterThan(0);
+      expect(job['timeout-minutes'], name).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("stops chaos after its test's own timeout, which names the seed that replays it", () => {
+    const testMinutes = Number(/\{ timeout: (\d+) \* 60_000 \}/.exec(read('test/chaos/chaos.test.ts'))?.[1]);
+    expect(jobs['chaos']!['timeout-minutes']).toBeGreaterThan(testMinutes);
+  });
+
+  it("prints the engine's state, each command bounded, when the isolation job fails or is cancelled", () => {
+    const steps = jobs['isolation']!.steps;
+    const state = steps.findIndex((s) => s.if === 'failure() || cancelled()');
+    expect(state).toBeGreaterThan(steps.findIndex((s) => s.run === 'npm run test:isolation'));
+    expect(steps[state]!.run).toMatch(/^timeout -k \d+ \d+ podman ps -a /m);
+    expect(steps[state]!.run).toMatch(/^timeout -k \d+ \d+ podman info /m);
+  });
+});

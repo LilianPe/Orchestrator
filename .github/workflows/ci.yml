@@ -27,6 +27,9 @@ jobs:
   properties:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # 1 to 2 min (ORC-377, runs of 11 and 12/11); 15 hold a stalled setup-node (ORC-290) and a first property past its
+    # 200 s, which prints the seed that replays it (ORC-368).
+    timeout-minutes: 15
     env:
       NUM_RUNS: "10000"
     steps:
@@ -39,6 +42,8 @@ jobs:
   integration:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # 2 to 4.5 min (ORC-377); a frozen Postgres would otherwise hold it 60 s a hook for up to 6 h.
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -66,6 +71,8 @@ jobs:
   chaos:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # 2.5 to 4.5 min (ORC-377), but its test has 30 min, and only its failure names the seed that replays it.
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:16
@@ -91,6 +98,9 @@ jobs:
 
   isolation:
     runs-on: ubuntu-latest
+    # 8.5 to 13 min, 9 most often (ORC-377). A wedged engine held it until someone cancelled it after 55 min, and runs
+    # stuck in a `find /` went to GitHub's 6 h (ORC-372): 25 min is about twice the slowest run seen.
+    timeout-minutes: 25
     env:
       FACTORY_ISOLATION: "1"
       # Whether the secret is set, not the secret: only the step that runs the tests gets it.
@@ -153,6 +163,16 @@ jobs:
       - run: npm run test:isolation
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      # The engine's state when the job fails or times out, so a wedge comes with its evidence (ORC-377). A wedged
+      # engine does not answer either: each command is bounded, and the processes are listed without asking it. A
+      # cancel has killed the tests' own podman clients by then: what is left is the engine's side.
+      - name: Container engine state
+        if: failure() || cancelled()
+        timeout-minutes: 4
+        run: |
+          ps -o pid,ppid,etime,stat,args -p "$(pgrep -d, -f 'podman|conmon|crun|runc|catatonit|fuse-overlayfs|slirp4netns|pasta|rootlessport|netavark|aardvark')" || true
+          timeout -k 10 60 podman ps -a || echo "::warning::podman ps -a failed or did not answer within 60 s"
+          timeout -k 10 60 podman info || echo "::warning::podman info failed or did not answer within 60 s"
 
   # Isolation n° 12 and 13 (ORC-219) on the real GitHub, with a test App and its test repositories: no engine, so a job of
   # its own, skipped by `isolation`, and not started while the App's id is unset. The App's key is a secret of the environment
