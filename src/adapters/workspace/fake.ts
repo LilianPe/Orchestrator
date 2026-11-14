@@ -77,10 +77,10 @@ export class FakeWorkspaces implements WorkspaceManager {
 
   /**
    * Each worktree's branch as the path rules read it (ORC-338), as a test sets it: what it changed since the fork point,
-   * what it changed since each of its ancestors, the default branch's config, and its files at the fork point and at its
-   * head by content (ORC-396). A worktree not set changed nothing; one in `gone` is no worktree at all.
+   * what it changed since each of its ancestors, and the default branch's config. A worktree not set changed nothing;
+   * one in `gone` is no worktree at all.
    */
-  branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string; fork?: Record<string, string>; head?: Record<string, string> }>();
+  branches = new Map<string, { changed: StepDiff['changed']; since?: Record<string, string[]>; baseConfig?: string }>();
   gone = new Set<string>();
   /** What each `changedSince` was asked: the mark, and the human heads left out. */
   sinceAsked: { rev: string; humanPushes: readonly HumanPush[] }[] = [];
@@ -97,10 +97,18 @@ export class FakeWorkspaces implements WorkspaceManager {
         this.sinceAsked.push({ rev, humanPushes });
         return b.since?.[rev] ?? b.changed.map((f) => f.path);
       },
-      showAtFork: async (p) => b.fork?.[p],
-      showAtHead: async (p) => b.head?.[p],
+      showAtFork: async () => undefined,
+      showAtHead: async () => undefined,
       baseConfig: async () => b.baseConfig,
     };
+  }
+
+  /** Each worktree's files at its base commit, by path then file, as a test sets it (ORC-396); none by default. */
+  bases = new Map<string, Record<string, string>>();
+
+  async baseReader(_repoPath: string, path: string): Promise<((file: string) => Promise<string | undefined>) | undefined> {
+    if (this.gone.has(path)) return undefined;
+    return async (file) => this.bases.get(path)?.[file];
   }
 
   async uncommitted(path: string): Promise<string[]> {

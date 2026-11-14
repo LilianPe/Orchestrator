@@ -79,7 +79,9 @@ export function countedRead(host: string, path: string): CountedRead | undefined
     return m ? { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `${m[3] ?? m[4]}/${m[5]}` } : undefined;
   }
   if (host === 'api.github.com') {
-    // By its repository's name, or its id: `ReadCounter` counts an asset under the first of the two it was read by (ORC-396).
+    // By its repository's name, or its id: `ReadCounter` counts one asset under the first of the two it was read by (ORC-396).
+    // ponytail: the repository's id is not resolved, so its other assets have a cap under each spelling, and an asset read by
+    // its `github.com` URL (tag and name) is another item than by the API (its id): telling them apart takes a read of GitHub.
     const m = /^\/repos\/([^/]+)\/([^/]+)\/releases\/assets\/(\d+)$/.exec(p);
     if (m) return { kind: 'release', name: `${m[1]}/${m[2]}`.toLowerCase(), item: `asset ${m[3]}` };
     const id = /^\/repositories\/(\d+)\/releases\/assets\/(\d+)$/.exec(p);
@@ -158,10 +160,10 @@ export async function declaredReads(show: (file: string) => Promise<string | und
   const judged = new Set<CountedRead['kind']>();
   const reads = new Set<string>();
   for (const [file, kind, read, whole] of LOCKFILES) {
-    const text = await show(file);
-    if (text === undefined || text.startsWith('\0')) continue;
     let found: CountedRead[];
     try {
+      const text = await show(file);
+      if (text === undefined || text.startsWith('\0')) continue;
       found = read(text);
     } catch {
       continue;

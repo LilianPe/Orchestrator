@@ -842,13 +842,15 @@ describe("a run's security log", () => {
   it("judges a run's reads by the lockfiles of the ticket's base commit, never by those an earlier attempt left in its worktree (ORC-396)", async () => {
     const lock = (version: string) => JSON.stringify({ packages: { 'node_modules/lodash': { version } } });
     const read = (version: string) => JSON.stringify({ at, method: 'GET', host: 'registry.npmjs.org', path: '/x', ok: true, up: 0, down: 0, read: { kind: 'npm', name: 'lodash', item: version } });
-    const { h, runId } = await runWith([read('1.0.0'), read('9.9.9')], [], (h) =>
-      // An earlier attempt declared 9.9.9 in the worktree's lockfile, committed: the base commit declares 1.0.0.
-      h.workspaces.branches.set('/tmp/factory-fake/p/REL-1', { changed: [{ path: 'package-lock.json', deleted: false }], fork: { 'package-lock.json': lock('1.0.0') }, head: { 'package-lock.json': lock('9.9.9') } }),
-    );
+    // Whatever an earlier attempt wrote in the worktree's lockfile, the base commit declares 1.0.0.
+    const { h, runId } = await runWith([read('1.0.0'), read('9.9.9')], [], (h) => h.workspaces.bases.set('/tmp/factory-fake/p/REL-1', { 'package-lock.json': lock('1.0.0') }));
     expect(JSON.parse(readFileSync(join(h.runsDir!, runId, 'declared-reads.json'), 'utf8'))).toEqual({ judged: ['npm'], reads: ['npm:lodash@1.0.0'] });
     const log = await h.store.securityLog(runId);
     expect(log!.egress.map((e) => [e.read?.item, e.flag])).toEqual([['1.0.0', undefined], ['9.9.9', 'unusual']]);
+    // A worktree whose base cannot be read gets no declaration: none of its reads is judged.
+    const unread = await runWith([read('9.9.9')], [], (h) => h.workspaces.gone.add('/tmp/factory-fake/p/REL-1'));
+    expect(existsSync(join(unread.h.runsDir!, unread.runId, 'declared-reads.json'))).toBe(false);
+    expect((await unread.h.store.securityLog(unread.runId))!.egress.map((e) => e.flag)).toEqual([undefined]);
   });
 
   it('skips and counts the forged lines, posts nothing for a run without a refusal, and the run ends as it would', async () => {

@@ -158,6 +158,12 @@ describe('declaredReads and unusualReads (ORC-370)', () => {
     expect(await declaredReads(show)).toEqual({ judged: [], reads: [] });
   });
 
+  it('keeps what the other lockfiles declare when the read of one fails (ORC-396)', async () => {
+    files['package-lock.json'] = JSON.stringify({ packages: { 'node_modules/lodash': { version: '1.0.0' } } });
+    const failing = async (file: string) => (file === 'yarn.lock' ? Promise.reject(new Error('git show')) : files[file]);
+    expect(await declaredReads(failing)).toEqual({ judged: ['npm'], reads: ['npm:lodash@1.0.0'] });
+  });
+
   it('reads the resolutions of a Yarn 2+ lockfile, and keeps what a package-lock declares around a malformed entry', async () => {
     files['yarn.lock'] = '"lodash@npm:^4":\n  version: 4.17.21\n  resolution: "lodash@npm:4.17.21"\n\n"@types/node@npm:^24":\n  resolution: "@types/node@npm:24.0.1"\n';
     files['package-lock.json'] = JSON.stringify({ packages: { 'node_modules/x': null, 'node_modules/debug': { version: '4.0.0' } }, dependencies: { y: 'not an object' } });

@@ -367,6 +367,17 @@ export class GitWorkspaces implements WorkspaceManager {
     return gitReader(at.git, base, await forkPoint(at.git, at.head, base), at.head);
   }
 
+  async baseReader(repoPath: string, path: string): Promise<((file: string) => Promise<string | undefined>) | undefined> {
+    const at = await this.worktreeGit(repoPath, path);
+    if (!at) return undefined;
+    const trunk = await originHead(this.exec, repoPath);
+    // A head with no commit in common with the default branch, an orphan the agent wrote, would declare nothing: the branch instead.
+    // Any other failure (the branch missing) throws: no base is not the same as an empty one.
+    const fork = await at.git.status('merge-base', trunk, at.head);
+    if (fork.code > 1) throw new Error(`git merge-base: ${fork.stderr.trim() || `exit ${fork.code}`}`);
+    return gitReader(at.git, trunk, fork.code === 0 ? fork.stdout.trim() : trunk, at.head).showAtFork;
+  }
+
   /** The commit of the forge's `HEAD`, fetched to a ref of its own, read, then removed: two reads at once never share one. */
   private async forgeHead(repo: string): Promise<string> {
     const ref = `refs/factory/forge-head/${randomUUID()}`;

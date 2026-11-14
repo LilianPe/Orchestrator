@@ -67,11 +67,17 @@ export interface WorkspaceManager {
   /**
    * A worktree's branch as the path rules read it (ORC-338), on the factory's repository against its default branch: the
    * same `gitReader` as the clone's. With `fetch`, the forge's default branch, its `HEAD` fetched as the clone fetches it
-   * (ORC-358); without, the repository's own, no forge read. None for a path that is no worktree. The path rules read it
-   * without sandboxes only, where `verify` reads no clone; the lockfiles a run's reads are judged by are read at its fork
-   * point, sandboxes or not (ORC-396).
+   * (ORC-358); without, the repository's own, no forge read. None for a path that is no worktree. Without sandboxes only,
+   * where `verify` reads no clone.
    */
   branchReader(repoPath: string, path: string, o: { fetch: boolean }): Promise<BranchReader | undefined>;
+  /**
+   * A worktree's files at the ticket's base commit (ORC-396), read on the factory's repository as `stepDiff`: the head's fork
+   * point from the repository's default branch, or that branch itself when the head shares no commit with it (an agent can
+   * point its head at a commit of its own). Never the worktree's files. A file past its cap reads `\0too large: …`. None for a
+   * path that is no worktree.
+   */
+  baseReader(repoPath: string, path: string): Promise<((file: string) => Promise<string | undefined>) | undefined>;
   /** The worktree's changes that are not committed, untracked files included, read on the host (ORC-123). Without sandboxes only. */
   uncommitted(path: string): Promise<string[]>;
   /** Hides the repository's `.claude/` from a worktree before each session (ORC-284), without its PR deleting it. */

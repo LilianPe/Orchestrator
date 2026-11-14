@@ -87,8 +87,13 @@ describe('GitWorkspaces', () => {
     writeFileSync(join(w.path, 'package-lock.json'), lock('9.9.9'));
     git(w.path, 'commit', '-q', '-am', 'the agent');
     writeFileSync(join(w.path, 'yarn.lock'), 'lodash@^8:\n  resolved "https://registry.yarnpkg.com/lodash/-/lodash-8.0.0.tgz"\n');
-    const reader = (await ws.branchReader(repo, w.path, { fetch: false }))!;
-    expect(await declaredReads((file) => reader.showAtFork(file))).toEqual({ judged: ['npm'], reads: ['npm:lodash@1.0.0'] });
+    const declared = { judged: ['npm'], reads: ['npm:lodash@1.0.0'] };
+    expect(await declaredReads((await ws.baseReader(repo, w.path))!)).toEqual(declared);
+    // Its head pointed at a commit of its own that shares nothing with the default branch: that branch is read instead.
+    git(w.path, 'checkout', '-q', '--orphan', 'own');
+    git(w.path, 'commit', '-q', '-m', 'orphan');
+    expect(await declaredReads((await ws.baseReader(repo, w.path))!)).toEqual(declared);
+    expect(await ws.baseReader(repo, join(root, 'nowhere'))).toBeUndefined();
   });
 
   it('checks out an existing remote branch', async () => {

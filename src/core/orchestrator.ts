@@ -1000,19 +1000,19 @@ export class Orchestrator {
   }
 
   /**
-   * The reads the lockfiles declare at the ticket's base commit (ORC-396): the worktree's fork point from the default branch,
-   * read on the factory's repository, never the worktree, where an earlier attempt may have declared what it means to read.
-   * A worktree that cannot be read so declares nothing: its release assets are unusual, no package is judged.
+   * The reads the lockfiles declare at the ticket's base commit (ORC-396), read on the factory's repository, never in the
+   * worktree, where an earlier attempt may have declared what it means to read (`baseReader`). A worktree whose base cannot
+   * be read gets no declaration: none of its reads is judged unusual, and the daemon's log says why.
    */
-  private async declaredAtBase(project: ProjectRuntime, ws: Workspace): Promise<DeclaredReads> {
+  private async declaredAtBase(project: ProjectRuntime, ws: Workspace): Promise<DeclaredReads | undefined> {
     try {
-      const reader = await this.d.workspaces.branchReader(project.repoPath, ws.path, { fetch: false });
-      if (reader) return await declaredReads((file) => reader.showAtFork(file));
+      const show = await this.d.workspaces.baseReader(project.repoPath, ws.path);
+      if (show) return await declaredReads(show);
       this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: no worktree with a commit`);
     } catch (err) {
       this.log('warn', `the lockfiles of ${ws.path} at its base commit are not read: ${(err as Error).message}`);
     }
-    return { judged: [], reads: [] };
+    return undefined;
   }
 
   /**
@@ -1034,7 +1034,8 @@ export class Orchestrator {
     for (const dir of [claudeDir, refusalsDir]) mkdirSync(dir, { recursive: true });
     // What the repository's lockfiles declare, out of its mounts: its security log judges its reads by it (ORC-370). Below
     // `limited`, the run reaches no registry nor forge.
-    if (policy.level === 'limited') await writeFile(join(runDir, DECLARED_READS), JSON.stringify(await this.declaredAtBase(project, ws)));
+    const declared = policy.level === 'limited' ? await this.declaredAtBase(project, ws) : undefined;
+    if (declared) await writeFile(join(runDir, DECLARED_READS), JSON.stringify(declared));
     return sandboxes.create({
       runId,
       ticketId,
