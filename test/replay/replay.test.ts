@@ -169,22 +169,7 @@ describe('recorded journals (test/replay/journals)', () => {
 
   it('has journals to replay, one in schema version 1', () => {
     expect(files.length).toBeGreaterThanOrEqual(4);
-    expect(files.some((f) => f.includes('.v1.') && !f.includes('.pre-orc-'))).toBe(true);
-  });
-
-  // Kept as the engine before ORC-161 recorded it; `npm run replay:record` does not write it again.
-  it('replays a journal of schema version 2: its debounce.fired and job-bound timers read as the generic timer (ORC-161)', () => {
-    const journal = readJournal(readFileSync(join(dir, 'check-failed-then-feedback.v2.json'), 'utf8'));
-    const fired = journal.entries.filter((e) => e.event.type === 'debounce.fired');
-    expect(fired).toHaveLength(1);
-    expect(journal.entries.flatMap((e) => e.decision?.timers ?? []).every((t) => 'job' in t && !('kind' in t))).toBe(true);
-    const report = replayJournal(journal);
-    expect(report).toMatchObject({ upcast: journal.entries.length, divergences: [] });
-    expect(report.replayed).toBe(journal.entries.length);
-    // As the journal recorded today has it.
-    const today = readJournal(readFileSync(join(dir, 'check-failed-then-feedback.json'), 'utf8'));
-    // In Human Review, a round of human feedback since ORC-190.
-    expect(today.entries.filter((e) => e.event.type === 'timer.fired').map((e) => e.event.payload)).toEqual([{ kind: 'debounce', payload: { job: 'fix-human' } }]);
+    expect(files.some((f) => f.includes('.v1.'))).toBe(true);
   });
 
   it("keeps a signed actor and an untrusted event's taint through the journal, and their decisions (ORC-160)", () => {
@@ -218,19 +203,6 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(new Set(replayJournal(journal).divergences.map((d) => d.eventId))).toEqual(new Set([delegations[0]!.event.id]));
   });
 
-  it('reads a decision recorded before ORC-180 through the ticket upcaster: its pendingFeedback is the human inbox', () => {
-    // The copy of the .v1 journal: its ticket.moved goes through the event upcaster on the same replay.
-    const journal = readJournal(readFileSync(join(dir, 'review-merge-done.v1.pre-orc-310.json'), 'utf8'));
-    expect(journal.entries.some((e) => e.event.type === 'ticket.moved')).toBe(true);
-    const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
-    expect(tickets.length).toBeGreaterThan(0);
-    expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
-    expect(replayJournal(journal)).toMatchObject({ upcast: 1, divergences: [] });
-    // Upcast, not ignored: a value that differs is still caught.
-    (journal.entries.find((e) => e.decision?.ticket)!.decision!.ticket as unknown as { pendingFeedback: unknown[] }).pendingFeedback = [{ body: 'x' }];
-    expect(replayJournal(journal).divergences.map((d) => d.field)).toContain('ticket');
-  });
-
   it('a message of today, classified and acked, replays bit for bit: instruction held at the regrouping, handed over at the end of the step (ORC-180)', () => {
     const journal = readJournal(readFileSync(join(dir, 'human-reply-during-run.json'), 'utf8'));
     const prompted = journal.entries.filter((e) => e.event.type === 'session.prompted');
@@ -250,27 +222,6 @@ describe('recorded journals (test/replay/journals)', () => {
       expect(e.decision).toMatchObject({ effects: [], timers: [], trace: [`${e.event.type}: recorded for the measures`] });
     }
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
-  });
-
-  // Nothing else reads most of the frozen copies by name: a deleted one would take its coverage away silently.
-  it('keeps the frozen copies of the 13 journals main held before the freshness check (ORC-310)', () => {
-    // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
-    const expected = [
-      'authz-refused-then-allowed', 'blocked-then-comment-resumes', 'build-loop-blocked', 'check-failed-then-feedback',
-      'crash-loop-bound', 'dead-letter-then-repair', 'human-reply-during-run', 'merge-revert-ci',
-      'publish-refused-then-published', 'red-ci-then-stop', 'review-merge-done', 'review-merge-done.v1', 'signed-actor-then-untrusted',
-    ].map((name) => `${name}.pre-orc-310.json`);
-    expect(files.filter((f) => f.endsWith('.pre-orc-310.json')).sort()).toEqual(expected.sort());
-  });
-
-  // Only build-loop-blocked is read by name; the other four are merely replayed, so a deleted one left the suite green.
-  it('keeps the frozen copies of the pre-ORC-196 journals main held (ORC-310)', () => {
-    // The journals main held then, not today's SCENARIOS: a scenario added later has no copy to keep.
-    const expected = [
-      'build-loop-blocked', 'crash-loop-bound', 'dead-letter-then-repair',
-      'publish-refused-then-published', 'red-ci-then-stop',
-    ].map((name) => `${name}.pre-orc-196.json`);
-    expect(files.filter((f) => f.endsWith('.pre-orc-196.json')).sort()).toEqual(expected.sort());
   });
 
   // The oracle replays a journal from its own recorded inputs, so a stale journal stays green there:
@@ -293,20 +244,10 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(report.replayed).toBeGreaterThan(0);
   });
 
-  it('a block of a version frozen before ORC-196 replays with its free text, a block of today with the comment', () => {
-    const entries = (file: string) => readJournal(readFileSync(join(dir, file), 'utf8'), file).entries;
-    const told = (file: string) => entries(file).flatMap((e) => e.decision?.effects ?? []).map((e) => e.kind);
-    expect(told('build-loop-blocked.pre-orc-196.json')).toContain('activity');
-    expect(told('build-loop-blocked.pre-orc-196.json')).not.toContain('block_comment');
-    expect(told('build-loop-blocked.json')).toContain('block_comment');
-  });
-
   // Regression replays each decision on the workflow version it was frozen on, kept in the journal: a
   // change of the pack or of a preset shows only against the workflow of today, hence this what-if pass.
-  // Journals kept as an older engine recorded them (before ORC-196, or as main held them before ORC-310, or the schema
-  // version 2 one, before ORC-161, whose reply in Human Review is a round of `fix-human` since ORC-190): they pin those
-  // versions, today's differ by design.
-  it.each(files.filter((f) => !/\.pre-orc-(196|310)\.|\.v2\.json$/.test(f)))('%s decides the same under the standard pack and its preset as they are today', (file) => {
+  // The journals an older engine recorded, pinned to versions with rules, went with the rules (ORC-392).
+  it.each(files)('%s decides the same under the standard pack and its preset as they are today', (file) => {
     const scenario = file.replace(/(\.v\d+)?\.json$/, '');
     expect(Object.keys(SCENARIOS)).toContain(scenario);
     const report = replayJournal(readJournal(readFileSync(join(dir, file), 'utf8'), file), { mode: 'what-if', workflow: scenarioWorkflow(scenario) });
