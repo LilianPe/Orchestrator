@@ -117,7 +117,9 @@ export class PrPoller {
     const published = heads.at(-1);
     // Nothing to compare with yet: judged again once the factory has published.
     if (!published) return;
-    if (!heads.includes(head))
+    // Its last publication, and the one before, which the forge may still read just after a push. A branch put back on an older one
+    // is a human's push, as the webhook reports it.
+    if (!heads.slice(-2).includes(head))
       await this.d.submit({
         ...TRUSTED,
         // What the push brought was verified by no one in the factory (I12).
