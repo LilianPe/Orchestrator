@@ -19,6 +19,11 @@ export interface Preset {
   /** The longest an attempt of an agent step may run, whatever it writes (`limits.per_run.duration` of the former pack): past it, a limit. */
   attempt: { minutes: number };
   /**
+   * How long the human messages for the agent at work are regrouped before the run they start (ORC-180, ORC-392): an
+   * instruction In Progress, a round of feedback in Human Review. A reply to a block resumes at once.
+   */
+  regroup: { minutes: number };
+  /**
    * The guard's deterministic inputs (ORC-206): what the launch checks of the ticket before its first step that writes, or
    * hands to `intake`'s end when intake runs first. A failed check asks the ticket's author to complete it.
    */
@@ -130,6 +135,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   if (!isPositiveInt(preset.sameFailure.limit)) violations.push('sameFailure: limit must be a positive integer');
   if (!isPositiveInt(preset.silentRun.minutes)) violations.push('silentRun: minutes must be a positive integer');
   if (!isPositiveInt(preset.attempt.minutes)) violations.push('attempt: minutes must be a positive integer');
+  if (!isPositiveInt(preset.regroup.minutes)) violations.push('regroup: minutes must be a positive integer');
   checkEdge('redCi', preset.redCi);
   checkEdge('conflict', preset.conflict);
   for (const [cls, actions] of Object.entries(preset.approvers)) {

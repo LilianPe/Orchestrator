@@ -107,6 +107,11 @@ describe('factory/default', () => {
     ]));
   });
 
+  it('regroups the human messages of a round over 3 minutes, the debounce of the former rules, and refuses a regrouping of no duration (ORC-392)', () => {
+    expect(factoryDefault.regroup).toEqual({ minutes: 3 });
+    expect(violations({ ...factoryDefault, regroup: { minutes: 0 } })).toContain('regroup: minutes must be a positive integer');
+  });
+
   it('refuses a conflict edge to an unknown step or on an undeclared counter', () => {
     expect(violations({ ...factoryDefault, conflict: { goto: 'nowhere', counter: 'review_ci' } })).toContain('conflict: goto nowhere is not a step');
     expect(violations({ ...factoryDefault, conflict: { goto: 'rebase', counter: 'rebases' } })).toContain('conflict: counter rebases is not declared');

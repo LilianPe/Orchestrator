@@ -23,6 +23,8 @@ export const factoryDefault: Preset = {
   silentRun: { minutes: 30 },
   // The former `limits.per_run.duration` of the standard pack.
   attempt: { minutes: 90 },
+  // The debounce of the former pack's reply rules: messages written within 3 minutes start one run.
+  regroup: { minutes: 3 },
   // The checks of the former `tracker.pickup.checks`: a ticket with no description, or already started by a human, is not taken.
   guard: { checks: ['has_description', 'not_started'] },
   redCi: { goto: 'fix', counter: 'review_ci' },
