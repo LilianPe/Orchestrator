@@ -68,7 +68,7 @@ usine.exemple.fr {
 }
 ```
 
-Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers 401 `{"error":"sign in with GitHub first"}` (from `factoryd`, not the proxy), and `docker compose exec factoryd wget -qO- http://127.0.0.1:4100/health` would too: the health check is the operators', behind the sign-in, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
+Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers `{"ok":…,"store":…,"takingTickets":…}` (from `factoryd`, not the proxy: open, the state alone, ORC-405) and `curl -sS https://usine.exemple.fr/api/state` 401 `{"error":"sign in with GitHub first"}`, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
 
 **Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
 
@@ -173,7 +173,7 @@ On the server, with the user's rootless engine running:
 
 `factoryd` refuses to start on an engine that is not rootless: holding its socket would give root on the host.
 
-Operations commands are run in the container:
+Operations commands are run in the container, on the server (over SSH from elsewhere): they go through the daemon's socket `factory.sock` in `FACTORY_DIR/data`, as `node`, with no GitHub sign-in (ORC-405):
 
 ```bash
 docker compose exec factoryd node dist/src/cli/factory.js status

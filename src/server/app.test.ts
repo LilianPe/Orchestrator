@@ -10,7 +10,7 @@ import { SqliteStore } from '../store/sqlite-store.js';
 import type { ChangelogEntry, SecurityLog } from '../store/types.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
-import { AGENT_MCP_PATH, agentOnly, createApp, isAgentPath, type ServerDeps, type TakeOverDesk } from './app.js';
+import { AGENT_MCP_PATH, agentOnly, cliOnly, createApp, isAgentPath, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
 /** GitHub as the dashboard's sign-in sees it (ORC-399): the code names who signs in, and `armand` alone is let in. */
@@ -882,9 +882,9 @@ describe('server', () => {
   // ORC-399: off the loopback, one account per person, through the factory's GitHub App; the shared password is gone.
   describe('GitHub sign-in (non-loopback host)', () => {
     // Criterion 1 (ORC-222's criterion 2): a visitor not signed in is refused.
-    it('refuses a visitor not signed in: 401 on the API, the health check and /oauth/start; a page sends them to GitHub', async () => {
+    it('refuses a visitor not signed in: 401 on the API, the diagnosis and /oauth/start; a page sends them to GitHub', async () => {
       const { app, submitted } = await setup({ githubLogin: GITHUB });
-      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript', '/api/runs/r1', '/health', '/tickets/REL-1/diagnosis']) {
+      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript', '/api/runs/r1', '/tickets/REL-1/diagnosis']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(401);
         expect(res.headers.get('www-authenticate'), path).toBeNull();
@@ -987,7 +987,57 @@ describe('server', () => {
         const guarded = agent ? !refused && res.status === expected : refused;
         if (!guarded) open.push(`${m} ${path}`);
       }
-      expect([...new Set(open)].sort()).toEqual(['GET /auth/github/callback', 'GET /oauth/callback', 'POST /webhooks/github', 'POST /webhooks/linear']);
+      // The CLI's routes are walked here too: over HTTP they ask for the sign-in like any other. Only the socket's listener
+      // (`cliOnly`, below) lets them in without one, and it is no route of this app: nothing from the Internet reaches it.
+      expect([...new Set(open)].sort()).toEqual(['GET /auth/github/callback', 'GET /health', 'GET /oauth/callback', 'POST /webhooks/github', 'POST /webhooks/linear']);
+    });
+
+    // ORC-405, criterion 3: open, so that a monitor reaches it without a session; the state alone, nothing of a ticket or the configuration.
+    it('answers /health without a session, with the state alone: no ticket, no configuration problem', async () => {
+      const { app } = await setup({ githubLogin: GITHUB, configProblems: ['factory.yml: project api, repo acme/secret-api: no workflow'] });
+      const res = await app.request('/health');
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ ok: false, store: 'ok', takingTickets: false });
+    });
+  });
+
+  // ORC-405: `factory status|stop|pause|resume` on the server of an exposed daemon, through the Unix socket in FACTORY_HOME,
+  // which its file mode guards; the actor is `cli:<host>`, checked on the ORC-186 matrix as an operator.
+  describe("the CLI's socket listener", () => {
+    // Criterion 1: the CLI's commands, without a GitHub session.
+    it("serves the CLI's commands without a session, journaled as cli:<host>, an operator; nothing else", async () => {
+      const { app, submitted } = await setup({ githubLogin: GITHUB });
+      const viaSocket = cliOnly(app, 'srv-1');
+      const ask = (path: string, method = 'GET') => viaSocket(new Request(`http://localhost${path}`, { method }));
+      expect((await ask('/api/state')).status).toBe(200);
+      expect((await (await ask('/health')).json())).toEqual({ ok: true, store: 'ok', takingTickets: true });
+      for (const path of ['/api/control/pause', '/api/control/resume', '/api/tickets/p/REL-1/stop']) expect((await ask(path, 'POST')).status, path).toBe(200);
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
+        ['control.pause', 'cli:srv-1', ['operator']],
+        ['control.resume', 'cli:srv-1', ['operator']],
+        ['control.stop', 'cli:srv-1', ['operator']],
+      ]);
+      // The CLI's routes alone: the dashboard, a run's controls, the diagnosis and the rest are not reached this way.
+      for (const [path, method] of [['/', 'GET'], ['/api/runs/r1', 'GET'], ['/api/runs/r1/stop', 'POST'], ['/api/runs/r1/take-over', 'POST'], ['/tickets/REL-1/diagnosis', 'GET'], ['/api/state', 'POST'], ['/api/control/pause', 'GET']]) {
+        expect((await ask(path!, method)).status, `${method} ${path}`).toBe(404);
+      }
+      expect(submitted).toHaveLength(3);
+    });
+
+    // Criterion 2: the same routes over HTTP still ask for the sign-in, whatever a request claims.
+    it('leaves the same routes behind the sign-in over HTTP, whatever header a request carries', async () => {
+      const { app, submitted } = await setup({ githubLogin: GITHUB });
+      const claims = { 'x-forwarded-for': '127.0.0.1', host: 'localhost', 'user-agent': 'factory-cli', cookie: 'cli=1' };
+      expect((await app.request('/api/state', { headers: claims })).status).toBe(401);
+      for (const path of ['/api/control/pause', '/api/control/resume', '/api/tickets/p/REL-1/stop']) expect((await app.request(path, { method: 'POST', headers: claims })).status, path).toBe(401);
+      expect(submitted).toEqual([]);
+    });
+
+    it('answers on the loopback daemon too, under any Host the client sends, with the same actor', async () => {
+      const { app, submitted } = await setup();
+      const res = await cliOnly(app, 'srv-1')(new Request('http://factory.sock/api/control/pause', { method: 'POST' }));
+      expect(res.status).toBe(200);
+      expect(submitted.map((e) => e.actor)).toEqual(['cli:srv-1']);
     });
   });
 
@@ -1078,16 +1128,17 @@ describe('server', () => {
 });
 
 describe('the health check and the diagnosis of a ticket (ORC-350)', () => {
-  it('serves /health: 200 while it takes tickets, 503 with the reasons when the configuration is invalid or the store does not answer', async () => {
+  it('serves /health: 200 while it takes tickets, 503 when the configuration is invalid or the store does not answer, the state alone (ORC-405)', async () => {
     const ok = await setup();
     const res = await ok.app.request('/health');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, store: 'ok', takingTickets: true, configProblems: [], linearConnected: true });
+    expect(await res.json()).toEqual({ ok: true, store: 'ok', takingTickets: true });
 
+    // The reasons are the diagnosis' and the start's log, behind the sign-in: /health is open (ORC-405).
     const invalid = await setup({ configProblems: ['publication impossible: it needs the sandboxes and the GitHub App'] });
     const refused = await invalid.app.request('/health');
     expect(refused.status).toBe(503);
-    expect(await refused.json()).toMatchObject({ ok: false, takingTickets: false, configProblems: ['publication impossible: it needs the sandboxes and the GitHub App'] });
+    expect(await refused.json()).toEqual({ ok: false, store: 'ok', takingTickets: false });
 
     const down = await setup();
     down.store.getMeta = async () => {

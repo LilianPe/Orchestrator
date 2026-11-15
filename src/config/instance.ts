@@ -81,6 +81,8 @@ export function homePaths(home: string) {
     secrets: join(home, 'secrets.json'),
     runSettings: join(home, 'run-settings.json'),
     db: join(home, 'factory.db'),
+    /** The daemon's Unix socket for the CLI on its server (ORC-405), mode 0600: no GitHub sign-in through it. */
+    socket: join(home, 'factory.sock'),
     transcripts: join(home, 'transcripts'),
     workspaces: join(home, 'workspaces'),
     logs: join(home, 'logs'),

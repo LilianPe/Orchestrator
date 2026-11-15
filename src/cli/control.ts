@@ -1,14 +1,35 @@
+import { existsSync } from 'node:fs';
+import { request } from 'node:http';
 import { PRODUCT_NAME } from '../product.js';
 import type { RunRecord } from '../store/types.js';
 import { holds } from '../core/routing.js';
 import type { TicketState } from '../core/types.js';
 
-/** The daemon's HTTP API, as `factory status` and `factory stop` reach it. */
+/** The daemon's API, as `factory status`, `stop`, `pause` and `resume` reach it. */
 export interface ControlDeps {
   api: string;
+  /**
+   * The daemon's Unix socket in FACTORY_HOME (ORC-405), taken first when it is there: on the server, the CLI needs no GitHub
+   * sign-in. Absent, or nothing listening on it: HTTP on `api`.
+   */
+  socket?: string;
   out: (line: string) => void;
-  /** The global `fetch`; a test hands the server's own. */
+  /** The global `fetch`, for `api`; a test hands the server's own. */
   fetch?: (url: string, init?: RequestInit) => Promise<Response> | Response;
+}
+
+/** A request to the daemon through its Unix socket; rejected when nothing listens there. */
+function viaSocket(socket: string, path: string, init: RequestInit): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath: socket, path, method: init.method ?? 'GET', headers: { host: 'localhost' } }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode ?? 500, headers: { 'content-type': res.headers['content-type'] ?? 'text/plain' } })));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
 /** What `/api/state` answers and these commands read. */
@@ -42,10 +63,16 @@ function formatStatus(s: State, now: number): string[] {
 }
 
 /**
- * The daemon's answer to `path`; or undefined, the reason told: a daemon that does not answer, or one that asks for a
- * GitHub sign-in (ORC-399), which the CLI cannot give: it sends no credential.
+ * The daemon's answer to `path`, through its socket when it listens there (ORC-405), else over HTTP; or undefined, the
+ * reason told: a daemon that does not answer, or one that asks over HTTP for a GitHub sign-in (ORC-399), which the CLI
+ * cannot give: it sends no credential.
  */
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promise<Response | undefined> {
+  if (d.socket && existsSync(d.socket)) {
+    // A socket a daemon killed left, or one this user may not open: HTTP, as without one.
+    const res = await viaSocket(d.socket, path, init).catch(() => undefined);
+    if (res) return res;
+  }
   let res: Response;
   try {
     res = await (d.fetch ?? fetch)(`${d.api}${path}`, init);
@@ -54,7 +81,8 @@ async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promis
     return undefined;
   }
   if (res.status !== 401) return res;
-  d.out('Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.');
+  const onServer = d.socket ? ` On the server, the CLI goes through ${d.socket}: run it there as the factory's user (over SSH from elsewhere).` : '';
+  d.out(`Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.${onServer}`);
   return undefined;
 }
 

@@ -54,6 +54,7 @@ import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, GITHUB_CALLBACK_PATH, isLoopbackHost, type ServerDeps } from '../server/app.js';
+import { listenCliSocket } from '../server/cli-socket.js';
 import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
@@ -231,7 +232,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
     const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
     if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
-    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health and the diagnosis tell why.
+    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health says so, the log and the diagnosis why.
     const hostChecks = !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1';
     const problems = configProblems({
       fakeRunner: !!o.fakeRunner,
@@ -458,6 +459,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       (e: unknown) => log(`webhooks kept before the stop not read: ${(e as Error).message}`),
     );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
+    // The CLI on this server (ORC-405): its socket in FACTORY_HOME, the factory user's alone, without the GitHub sign-in.
+    // Not on Windows, whose sockets are named pipes: the CLI keeps HTTP on the loopback there.
+    const cliServer = process.platform === 'win32' ? undefined : listenCliSocket(app, paths.socket, { log });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
     if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);
@@ -487,7 +491,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
           (s as unknown as { closeAllConnections(): void }).closeAllConnections();
         });
-      await Promise.all([close(server), ...(agentServer ? [close(agentServer)] : [])]);
+      await Promise.all([close(server), ...(agentServer ? [close(agentServer)] : []), ...(cliServer ? [close(cliServer)] : [])]);
     };
     try {
       timers.start();

@@ -1,11 +1,13 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import { EventBus } from '../../src/server/live-feed.js';
-import { newTicketState } from '../../src/core/types.js';
-import { createApp } from '../../src/server/app.js';
+import { newTicketState, type FactoryEvent } from '../../src/core/types.js';
+import { createApp, type ServerDeps } from '../../src/server/app.js';
+import { listenCliSocket } from '../../src/server/cli-socket.js';
 import { RUN_LEASE_MS } from '../../src/store/types.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 
@@ -113,5 +115,105 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(await runQueueCommand({ ...deps, fetch: down }, 'resume')).toBe(1);
     expect(lines.at(-1)).toContain('factory up');
     expect(lines.join('\n')).not.toMatch(/Queue (paused|resumed)\./);
+  });
+});
+
+// ORC-405: an exposed daemon asks every HTTP request for a GitHub sign-in (ORC-399); on its server, the CLI goes through the
+// Unix socket in FACTORY_HOME instead, which the file's mode guards.
+describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix socket (ORC-405)", () => {
+  /** An exposed daemon's app, with its socket in a fresh FACTORY_HOME; every HTTP request refused as the sign-in refuses it. */
+  async function exposed(extra: Partial<ServerDeps> = {}) {
+    const h = createHarness();
+    const submitted: FactoryEvent[] = [];
+    const app = createApp({
+      store: h.store,
+      bus: new EventBus(),
+      clock: h.clock,
+      submit: (e) => {
+        submitted.push(e);
+        return h.orch.accept(e);
+      },
+      isPaused: () => h.orch.isPaused(),
+      linearWebhook: () => ({ status: 200 }),
+      githubWebhook: async () => ({ status: 200 }),
+      linearConnected: () => true,
+      capacity: () => ({ dev: { used: 0, total: 3 }, questions: { used: 0, total: 2 } }),
+      transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-cli-')),
+      githubLogin: { authorizeUrl: () => 'https://github.test/authorize', signIn: async (login) => ({ login, allowed: false }) },
+      ...extra,
+    });
+    const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
+    const server = listenCliSocket(app, socket, { host: 'srv-1', log: () => {} });
+    await new Promise((r) => server!.once('listening', r));
+    const lines: string[] = [];
+    const deps: ControlDeps = { api: 'http://127.0.0.1:4100', socket, out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init) };
+    return { h, app, server: server!, socket, submitted, lines, deps };
+  }
+  const close = (s: Server) => new Promise((r) => s.close(r));
+
+  // Criterion 1: status, stop and pause work on the server of an exposed daemon, without a GitHub sign-in.
+  it('runs status, pause, resume and stop on an exposed daemon, without a GitHub sign-in, as cli:<host>', async () => {
+    const { h, server, submitted, lines, deps } = await exposed();
+    try {
+      await heldRun(h);
+      expect(await runStatusCommand(deps, h.clock.now())).toBe(0);
+      expect(lines).toContain('  REL-1  dev  Export CSV');
+      expect(await runQueueCommand(deps, 'pause')).toBe(0);
+      expect(await runQueueCommand(deps, 'resume')).toBe(0);
+      expect(await runStopCommand(deps, 'REL-1')).toBe(0);
+      expect(lines.slice(-3)).toEqual(['Queue paused.', 'Queue resumed.', 'Stop requested for REL-1.']);
+      await h.orch.drained();
+      // Checked on the matrix as an operator (ORC-186), and decided: the ticket is stopped.
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
+        ['control.pause', 'cli:srv-1', ['operator']],
+        ['control.resume', 'cli:srv-1', ['operator']],
+        ['control.stop', 'cli:srv-1', ['operator']],
+      ]);
+      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("is the factory user's alone: mode 0600, and gone once the daemon closes it", async () => {
+    const { server, socket } = await exposed();
+    const st = statSync(socket);
+    expect(st.isSocket()).toBe(true);
+    expect(st.mode & 0o777).toBe(0o600);
+    expect(st.uid).toBe(process.getuid!());
+    await close(server);
+    expect(() => statSync(socket)).toThrow(/ENOENT/);
+  });
+
+  it('binds anew over a socket file left at its path (a daemon killed), never over a file that is not a socket', async () => {
+    const first = await exposed();
+    const again = listenCliSocket(first.app, first.socket, { host: 'srv-2', log: () => {} })!;
+    await new Promise((r) => again.once('listening', r));
+    expect(await runQueueCommand(first.deps, 'pause')).toBe(0);
+    expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-2']);
+    await close(again);
+    await close(first.server);
+    const notASocket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
+    writeFileSync(notASocket, 'kept');
+    const logs: string[] = [];
+    expect(listenCliSocket(first.app, notASocket, { host: 'srv-1', log: (l) => void logs.push(l) })).toBeUndefined();
+    expect(logs).toEqual([`CLI socket: ${notASocket} is not a socket, left as it is: the CLI goes through HTTP on the loopback`]);
+  });
+
+  // Without the socket (a client machine, a daemon not started), today's HTTP on the loopback.
+  it('falls back to HTTP on the loopback when there is no socket, or nothing listens on it', async () => {
+    const { server, socket, lines, deps } = await exposed();
+    await close(server);
+    const asked: string[] = [];
+    const http = async (url: string) => {
+      asked.push(url);
+      return new Response('{"error":"sign in with GitHub first"}', { status: 401 });
+    };
+    expect(await runStatusCommand({ ...deps, fetch: http })).toBe(1);
+    expect(asked).toEqual(['http://127.0.0.1:4100/api/state']);
+    expect(lines.at(-1)).toBe(`Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives. On the server, the CLI goes through ${socket}: run it there as the factory's user (over SSH from elsewhere).`);
+    writeFileSync(socket, '');
+    expect(await runStatusCommand({ ...deps, fetch: http })).toBe(1);
+    expect(asked).toHaveLength(2);
   });
 });
