@@ -83,7 +83,12 @@ const isEnvironment = (v: unknown): v is EnvironmentDto =>
   (v.protection_rules === undefined || (Array.isArray(v.protection_rules) && v.protection_rules.every(isProtectionRule)));
 
 const isRepository = (v: unknown): v is { default_branch: string } => isRecord(v) && typeof v.default_branch === 'string' && v.default_branch !== '';
-const isBranch = (v: unknown): v is { protected: boolean } => isRecord(v) && typeof v.protected === 'boolean';
+/**
+ * A branch with its classic protection's flag, `protection.enabled`. Not the branch's `protected`: GitHub sets it for
+ * an active ruleset too, whatever its rules, so a ruleset that only blocks deletion would read as a classic protection.
+ */
+const isBranch = (v: unknown): v is { protection: { enabled: boolean } } =>
+  isRecord(v) && isRecord(v.protection) && typeof v.protection.enabled === 'boolean';
 const isRuleList = (v: unknown): v is { type: string; ruleset_id: number }[] =>
   Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number');
 const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
@@ -138,8 +143,8 @@ export class GitHubAppApi extends GitHubAppAuth {
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
     const { default_branch: branch } = await this.read('GET', base, token, isRepository, 'a repository with its default branch');
-    const [{ protected: classic }, rules] = await Promise.all([
-      this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its protection flag'),
+    const [{ protection: { enabled: classic } }, rules] = await Promise.all([
+      this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its classic protection flag'),
       this.read('GET', `${base}/rules/branches/${segment(branch)}?per_page=100`, token, isRuleList, 'a list of branch rules'),
     ]);
     const ids = [...new Set(rules.filter((rule) => rule.type === 'pull_request').map((rule) => rule.ruleset_id))].sort((a, b) => a - b);

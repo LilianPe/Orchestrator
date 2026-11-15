@@ -422,7 +422,7 @@ jobs:
           : undefined,
       (url) => (url.pathname === '/repos/acme/app/environments' ? { body: { total_count: 0, environments: [] } } : undefined),
       (url) => (url.pathname === '/repos/acme/app' ? { body: { default_branch: 'main' } } : undefined),
-      (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: { name: 'main', protected: false } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: { name: 'main', protected: true, protection: { enabled: false } } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request', ruleset_id: 9 }] } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rulesets/9' ? { body: { id: 9, current_user_can_bypass: 'never' } } : undefined),
     ];
