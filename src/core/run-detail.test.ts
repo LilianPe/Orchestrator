@@ -47,6 +47,17 @@ describe('runDetail (ORC-298)', () => {
     ]);
   });
 
+  it('a publication that pushed nothing is not said published (ORC-402)', () => {
+    const d = runDetail(run({ id: 'r1' }), facts({
+      events: [
+        ev('p1', 'publish.done', 10, { runId: 'r1', job: 'dev', sha: 'abcdef1234' }),
+        ev('p2', 'publish.done', 20, { runId: 'r1', job: 'dev', sha: 'fedcba4321', empty: true }),
+      ],
+      runs: [run({ id: 'r1' })],
+    }));
+    expect(d.timeline.map((e) => e.what)).toEqual(['Published abcdef1', 'Nothing to publish: fedcba4 brings no change']);
+  });
+
   it('never carries the agent text nor the run token: lastText is left out of the run and of the timeline', () => {
     const claim = 'Mergeable at the first try, 0 tokens spent.';
     const d = runDetail(run({ lastText: claim }), facts({

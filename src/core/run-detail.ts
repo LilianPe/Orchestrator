@@ -174,7 +174,7 @@ function describe(e: FactoryEvent): string {
     case 'pr.merge_refused':
       return `Merge of PR #${e.payload.number} refused`;
     case 'publish.done':
-      return `Published ${e.payload.sha.slice(0, 7)}`;
+      return e.payload.empty ? `Nothing to publish: ${e.payload.sha.slice(0, 7)} brings no change` : `Published ${e.payload.sha.slice(0, 7)}`;
     case 'publish.refused':
       return 'Publication refused';
     case 'run.finished':

@@ -51,7 +51,7 @@ The budgets are not checked under `--fake-runner`. Fix the cause, then restart. 
 
 **`GET /tickets/<ID>/diagnosis`** (`?project=<id>` when two projects track the identifier, 409 otherwise) tells why a ticket is stuck: its state and block, its active run, the inbox event the worker holds it behind (error, attempts, next try: held in the daemon's memory alone), its last failed effect, its open dead letters, its place in the queues, and what holds every ticket (invalid configuration, pause, usage limit). `reasons` sums them up in sentences, the factory's first. 404 for a ticket neither the store nor the worker knows.
 
-Both are behind the interface's password, as every route but the webhooks, the OAuth callback and `/agent`. No secret in the answers: the daemon's secret values and secret shapes (tokens, keys, a URL's password) are masked in every error and block reason.
+Both are behind the interface's GitHub sign-in off the loopback (ORC-399), as every route but the webhooks, the OAuth callbacks and `/agent`. No secret in the answers: the daemon's secret values and secret shapes (tokens, keys, a URL's password) are masked in every error and block reason.
 
 ## Linear's rate limit (ORC-350)
 
@@ -228,7 +228,8 @@ Each repair is **journaled**: the command writes directly to the database (the d
 
 | Symptom | Likely cause | Solution |
 |---|---|---|
-| `relais up` refuses to start: « exposes the interface and the API of Relais outside this machine » | Non-loopback `host` without `RELAIS_UI_PASSWORD`. | Set `RELAIS_UI_PASSWORD`, or `host: 127.0.0.1`. |
+| `relais up` refuses to start: « exposes the interface and the API of Relais outside this machine, behind a GitHub sign-in » | Non-loopback `host` without the App's OAuth client, `dashboard` in `factory.yml`, or an `https://` `publicUrl` (the message names which). | Set what it names ([interface and security](interface-and-security.md#network-exposure-and-github-sign-in)), or `host: 127.0.0.1`. |
+| The GitHub sign-in answers « … is not allowed on this … » (403) | The login is not in `dashboard.logins`, nor an active member of `dashboard.org` or `dashboard.team`; an org or team without the App's *Members: read* permission answers no membership. | Add the login, or the permission and the App's installation on the org; the refusal is in the daemon's log. |
 | `invalid config.yaml: <field>: …` | Value refused in `config.yaml`. | Fix the indicated field ([`configuration.md`](configuration.md#configyaml)). |
 | `http://localhost:4100` does not respond, Relais is running | `localhost` resolves to `::1` while Relais listens on `127.0.0.1`. | Open `http://127.0.0.1:4100`. |
 | UI shows "Not Found", API OK | UI not built. | `npm run build`. |
@@ -261,6 +262,6 @@ Each repair is **journaled**: the command writes directly to the database (the d
 | A `verify` command passes by hand but not under Relais | Different environment: `bash -c` without a login profile, the daemon's `PATH`, `PORT`. | Rerun it with the daemon's environment, not your shell's: `env -i PATH="<daemon PATH>" HOME="$HOME" bash -c '<command>'` in the ticket's worktree (`<RELAIS_HOME>/workspaces/<projet>/<ticket>`). The daemon's `PATH`: `tr '\0' '\n' < /proc/<pid>/environ \| grep ^PATH=`. |
 | `npm`, `node` or another tool not found in `setup` or `verify` since the upgrade (ORC-324) | Commands no longer load a login profile (`bash -c` instead of `bash -lc`): what `~/.bash_profile` or `~/.profile` added to `PATH` (nvm, asdf, volta, `~/.local/bin`) is no longer there. | Give that `PATH` to the daemon itself: `Environment=PATH=…` in the systemd unit, `environment:` in `docker compose`, or export it before `relais up`. Commands receive the daemon's `PATH` as is. |
 | `factory status`: « does not answer on … » | Daemon stopped or different `port`. | Start `relais up`; check `port` and `RELAIS_HOME`. |
-| `factory status`: « Access refused by the daemon » | Non-loopback daemon and `FACTORY_UI_PASSWORD` missing from the shell (401 response). | Export `RELAIS_UI_PASSWORD`. |
+| `factory status`: « Access refused by the daemon » | Non-loopback daemon: it asks for a GitHub sign-in (ORC-399), which the CLI cannot give (401 response). | Use the dashboard, or run the command against a daemon on the loopback. |
 
 For a complete end-to-end acceptance run (test Linear), follow [`acceptance.md`](acceptance.md).

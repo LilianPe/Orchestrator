@@ -1,11 +1,27 @@
 import type { AuditListView, AuditSheetView, BlockParetoView, BusMessage, DefectEntry, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
 
+let reloading = false;
+
+/**
+ * `fetch`, signing in again when the session is gone (ORC-399): off the loopback a 401 is the GitHub sign-in's, and a
+ * reload, once whatever else was in flight, sends the page through GitHub. On the loopback, no route the dashboard calls
+ * answers 401. The live stream's errors say not why: the state, polled every 10 s, does.
+ */
+async function call(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(path, init);
+  if (res.status === 401 && !reloading) {
+    reloading = true;
+    location.reload();
+  }
+  return res;
+}
+
 export async function fetchSnapshot(): Promise<Snapshot> {
-  return (await fetch('/api/state')).json();
+  return (await call('/api/state')).json();
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await call(path);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -24,7 +40,7 @@ export const fetchRunSecurity = (runId: string) => getJson<RunSecurityView>(`/ap
 
 /** What `path` serves; undefined when the server knows no such thing (404). */
 async function getJsonOrMissing<T>(path: string): Promise<T | undefined> {
-  const res = await fetch(path);
+  const res = await call(path);
   if (res.status === 404) return undefined;
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
@@ -38,14 +54,14 @@ export const fetchAuditList = () => getJson<AuditListView>('/api/audit');
 const auditPath = (projectId: string, ticketId: string) => `/api/audit/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}`;
 export const fetchAuditSheet = (projectId: string, ticketId: string) => getJsonOrMissing<AuditSheetView>(auditPath(projectId, ticketId));
 export const postDefect = (projectId: string, ticketId: string, entry: DefectEntry) =>
-  fetch(`${auditPath(projectId, ticketId)}/defects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(entry) });
+  call(`${auditPath(projectId, ticketId)}/defects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(entry) });
 
-export const post = (path: string) => fetch(path, { method: 'POST' });
+export const post = (path: string) => call(path, { method: 'POST' });
 
 /** A ticket taken over (ORC-234): `take-over` gives the command of a shell in its container, `take-over/bundle` takes a bundle. */
 const takeOverPath = (projectId: string, ticketId: string, rest = '') => `/api/tickets/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}/take-over${rest}`;
-export const fetchTakeOverShell = (projectId: string, ticketId: string) => fetch(takeOverPath(projectId, ticketId));
-export const postBundle = (projectId: string, ticketId: string, file: File) => fetch(takeOverPath(projectId, ticketId, '/bundle'), { method: 'POST', body: file });
+export const fetchTakeOverShell = (projectId: string, ticketId: string) => call(takeOverPath(projectId, ticketId));
+export const postBundle = (projectId: string, ticketId: string, file: File) => call(takeOverPath(projectId, ticketId, '/bundle'), { method: 'POST', body: file });
 
 /** What the server answers to a refused action: its `error`, or its status. */
 export async function refusal(res: Response, what: string): Promise<string> {
