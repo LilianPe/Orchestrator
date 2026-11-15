@@ -660,16 +660,20 @@ const CONFLICTS: Record<ConflictCase, string> = {
 const triedFailures = (failures: VerifyFailure[]): string[] => failures.map((f) => `\`${f.command}\` (code ${f.exitCode ?? 'timeout'})`);
 
 /**
- * The blocks that leave the `done` of a code run they caught in flight to be checked and published, the ticket still blocked
- * (ORC-403): none of them stopped the run. The others drop it. A stop, a pause, a take-over, a closed PR and a human's push
- * stopped the run: what it did after is not the factory's to publish, and a push's own check is under way. A question
- * journaled before ORC-400 (`asked`) is the run's own: its turn ended on it. A block from before kinds (ORC-345), or of a kind
- * this version does not know, keeps what it decided.
+ * Whether a block keeps the `done` of the code run it caught in flight, checked and published, the ticket still blocked
+ * (ORC-403): every kind says, a new one too. A stop, a pause, a take-over, a closed PR and a human's push stopped the run:
+ * what it did after is not the factory's to publish, and a push's own check is under way. A question journaled before ORC-400
+ * (`asked`) is the run's own: its turn ended on it. A block from before kinds (ORC-345), or of a kind this version does not
+ * know, keeps what it decided: dropped.
  */
-const KEEPS_DONE = new Set<BlockKind>(['question', 'contested', 'conflict', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'other', 'stuck', 'ci_bound', 'budget']);
+const KEEPS_DONE = {
+  question: true, contested: true, conflict: true, red: true, infra: true, limit: true, loop: true, failed: true, pickup: true, repo_config: true,
+  dead_letter: true, other: true, stuck: true, ci_bound: true, budget: true,
+  stopped: false, paused: false, taken_over: false, pr_closed: false, human_push: false, asked: false,
+} satisfies Record<BlockKind, boolean>;
 
-/** Whether the `done` of `job`'s run is dropped on `ticket`, blocked meanwhile: an intake, a spec or a lens publishes nothing, as before. */
-const dropsDone = (ticket: TicketState, job: JobSpec): boolean => !publishes(job) || !ticket.blockKind || !KEEPS_DONE.has(ticket.blockKind);
+/** Whether the `done` of `job`'s run is kept on `ticket`, blocked meanwhile: an intake, a spec or a lens publishes nothing, dropped as before. */
+const keepsDone = (ticket: TicketState, job: JobSpec): boolean => publishes(job) && !!ticket.blockKind && KEEPS_DONE[ticket.blockKind] === true;
 
 /**
  * A dev run's end read through its closed outcome (ORC-289): the `RunOutcome` it decides as, or the block
@@ -2042,7 +2046,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Already blocked (a human's stop, a question journaled before ORC-400…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, workflow, { ...outcome, job: jobName });
       // A run that ended well on a ticket blocked meanwhile is kept, its block shown still (ORC-403), unless that block dropped it.
-      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev' && dropsDone(ticket, job)) return out;
+      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev' && !keepsDone(ticket, job)) return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.step === 'spec_draft') return specEnd(out, { event, ticket, workflow }, job, event.payload);
@@ -2164,8 +2168,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
-      // The check of a done kept on a blocked ticket (ORC-403): its block keeps its reason, no second notice, and no fix starts
-      // on it. The reply that lifts it resumes its step, whose commit is checked again.
+      // A failed check on a blocked ticket (a done kept, ORC-403, or a block during the check): its block keeps its reason, no
+      // second notice, and no fix starts on it. The reply that lifts it resumes its step, whose commit is checked again.
       if (ticket?.blocked) {
         out.trace.push(`verify.failed: ticket already blocked (${ticket.blockReason ?? 'no reason'}), reason kept`);
         return out;
