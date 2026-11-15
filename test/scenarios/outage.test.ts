@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GitHubApiError } from '../../src/adapters/forge/github-app.js';
 import type { Exec } from '../../src/adapters/exec.js';
 import { fetchOrigin } from '../../src/adapters/workspace/git-workspaces.js';
-import { START_RETRY } from '../../src/core/orchestrator.js';
+import { START_RETRY } from '../../src/runtime/daemon.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { EFFECT_RETRY, effectBackoff } from '../../src/runtime/outbox.js';
 import { backoff, type RetryPolicy } from '../../src/runtime/transient.js';

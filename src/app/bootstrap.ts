@@ -45,7 +45,7 @@ import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { BLOCKED_LABEL, STOP_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
-import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
+import { logicalFromName, Daemon, type ProjectRuntime } from '../runtime/daemon.js';
 import { queueCapacity, Scheduler } from '../runtime/capacity.js';
 import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
@@ -290,7 +290,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     // One turn for the webhook, the reconciliation and the factory's own label writes around the known labels (ORC-185, ORC-346).
     const labelsTurn = serial();
-    const orchestrator = new Orchestrator({
+    const orchestrator = new Daemon({
       replays,
       labelsWritten: (projectId, ticketId, written) => labelsTurn(() => recordWrite(store, projectId, ticketId, written)),
       reconcile: (p) => reconcileProject(p),

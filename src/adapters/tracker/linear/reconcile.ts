@@ -1,5 +1,5 @@
 import type { Clock } from '../../../core/clock.js';
-import { logicalFromName, type ProjectRuntime } from '../../../core/orchestrator.js';
+import { logicalFromName, type ProjectRuntime } from '../../../runtime/daemon.js';
 import { openBlockers } from '../../../core/pickup.js';
 import { isNoRepo, isUnrouted, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, TRUSTED, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from '../../../core/types.js';

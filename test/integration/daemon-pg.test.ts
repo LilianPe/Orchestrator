@@ -10,10 +10,10 @@ import { createTestSchema, type TestSchema, PG_URL, EMPTY_ALL } from '../helpers
 import { expectFirstRunMeasures, firstRun } from '../helpers/measures-scenario.js';
 import { testPreset } from '../helpers/test-preset.js';
 
-// The orchestrator on PgStore, through the scenario harness: the daemon's path once
+// The daemon on PgStore, through the scenario harness: the daemon's path once
 // FACTORY_DATABASE_URL is set. Every scenario of test/scenarios also runs on Postgres (the
 // `scenarios-pg` project, ORC-228); these check the tables themselves.
-describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
+describe.skipIf(!PG_URL)('daemon on PgStore', () => {
   let db: TestSchema;
   let pool: Pool;
 

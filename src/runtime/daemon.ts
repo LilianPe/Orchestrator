@@ -26,12 +26,12 @@ import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
-import type { JobSpec, Workflow } from './workflow.js';
+import type { JobSpec, Workflow } from '../core/workflow.js';
 import type { AckMode } from '../config/factory-yml.js';
-import type { EffectRetry } from '../runtime/outbox.js';
-import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
-import { Worker } from '../runtime/worker.js';
-import { FrozenFormatError, frozenWorkflow, workflowVersion } from '../runtime/workflow-version.js';
+import type { EffectRetry } from './outbox.js';
+import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
+import { Worker } from './worker.js';
+import { FrozenFormatError, frozenWorkflow, workflowVersion } from './workflow-version.js';
 import {
   KEPT_PR,
   LEASE_MS,
@@ -47,34 +47,34 @@ import {
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
-import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from './agent-output.js';
+import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from '../core/agent-output.js';
 import { describePr, START_SAID, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from '../server/live-feed.js';
-import type { Clock } from './clock.js';
-import type { Effect } from './decision.js';
-import { deadLetteredEvent, repairedEvent } from './dead-letter.js';
-import type { HeldRow } from './diagnosis.js';
-import { NO_PLAN, planDecision } from './decision-plan.js';
-import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
-import { codeRunTokens, runMeasure } from './measures.js';
-import { attemptLabels, packFingerprints } from './attempt-labels.js';
-import { formatReuse, ownWork, ticketBranches } from './intake-checks.js';
-import { branchName, namesTicket } from './naming.js';
-import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
-import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
+import type { Clock } from '../core/clock.js';
+import type { Effect } from '../core/decision.js';
+import { deadLetteredEvent, repairedEvent } from '../core/dead-letter.js';
+import type { HeldRow } from '../core/diagnosis.js';
+import { NO_PLAN, planDecision } from '../core/decision-plan.js';
+import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from '../core/block-comment.js';
+import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from '../core/engine.js';
+import { codeRunTokens, runMeasure } from '../core/measures.js';
+import { attemptLabels, packFingerprints } from '../core/attempt-labels.js';
+import { formatReuse, ownWork, ticketBranches } from '../core/intake-checks.js';
+import { branchName, namesTicket } from '../core/naming.js';
+import { openBlockers, pickupFailures, searchDuplicates } from '../core/pickup.js';
+import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from '../core/prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
 import { isNote, noSearchReason, repoNameOf, searchAsked, searchCounted, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
-import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
+import { formatLinked, formatRunState, formatTranscript } from '../core/answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
-import { carriedAtLaunch, forAgent } from './human-message.js';
-import { branchAnew, heldByOther, pendingOf, reduce, samePending } from './reduce.js';
-import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
-import { startMove } from './chain.js';
-import { formatSpec } from './spec.js';
-import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
-import type { Scheduler } from '../runtime/capacity.js';
+import { carriedAtLaunch, forAgent } from '../core/human-message.js';
+import { branchAnew, heldByOther, pendingOf, reduce, samePending } from '../core/reduce.js';
+import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from '../core/session-plan.js';
+import { startMove } from '../core/chain.js';
+import { formatSpec } from '../core/spec.js';
+import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from '../core/upcast.js';
+import type { Scheduler } from './capacity.js';
 import {
   CREATES_TICKET,
   type Blocker,
@@ -93,14 +93,14 @@ import {
   type VerifyFailure,
   SCHEMA_VERSION,
   TRUSTED,
-} from './types.js';
-import { runSealedSetup } from './sealed-setup.js';
+} from '../core/types.js';
+import { runSealedSetup } from '../core/sealed-setup.js';
 import type { RegistryOpener } from '../checks/registry.js';
-import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
+import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from '../core/clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
-import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
-import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from './diff-class.js';
-import { blockingFindings, contestedInput, findingsInput, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from './review.js';
+import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from '../core/verify.js';
+import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from '../core/diff-class.js';
+import { blockingFindings, contestedInput, findingsInput, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from '../core/review.js';
 import { PRODUCT_NAME } from '../product.js';
 import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
 import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
@@ -108,12 +108,12 @@ import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
-import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from './changelog.js';
+import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from '../core/changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
+import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from '../core/block-cause.js';
 import { DECLARED_READS, declaredReads, type DeclaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
 
@@ -214,7 +214,7 @@ export interface ProjectRuntime {
   replayed?: Pick<ReplayedTicket, 'issue' | 'history' | 'knowledge'>;
 }
 
-export interface OrchestratorDeps {
+export interface DaemonDeps {
   store: Store;
   clock: Clock;
   bus: EventBus;
@@ -510,7 +510,7 @@ export interface TakeOverDesk {
   keepBundle(projectId: string, ticketId: string, bytes: Uint8Array): Promise<string>;
 }
 
-export class Orchestrator {
+export class Daemon {
   private background = new Map<Promise<void>, string | undefined>();
   /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
   private liveRuns = new Set<string>();
@@ -554,7 +554,7 @@ export class Orchestrator {
   /** Results this process could not write, the database down (ORC-343): written again at each beat (`supervise`), by id. */
   private unwritten = new Map<string, { what: string; write: () => Promise<void> }>();
 
-  constructor(private d: OrchestratorDeps) {
+  constructor(private d: DaemonDeps) {
     this.policy = d.outputPolicy ?? new OutputPolicy();
     this.relayTracker = d.tracker;
     this.d = { ...d, tracker: new PolicedTracker(d.tracker, this.policy, (m) => this.log('warn', m)) };

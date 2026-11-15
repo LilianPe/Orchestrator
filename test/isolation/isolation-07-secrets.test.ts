@@ -9,7 +9,7 @@ import { ClaudeCodeRunner, SANDBOX_CLAUDE_TOKEN } from '../../src/adapters/runne
 import { SANDBOX_HOME, WORKSPACE_TARGET, type Sandbox } from '../../src/adapters/sandbox/types.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { repoVariables } from '../../src/config/repo-variables.js';
-import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
+import { CLAUDE_RUN_ENV } from '../../src/runtime/daemon.js';
 import { runSealedSetup } from '../../src/core/sealed-setup.js';
 import { cli, enabled, image, useSandboxes } from './helpers.js';
 

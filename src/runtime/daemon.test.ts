@@ -3,26 +3,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { writeRunSettings } from '../config/run-settings.js';
-import { saveAgentOutput } from './agent-output.js';
+import { saveAgentOutput } from '../core/agent-output.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
 import type { Runner } from '../adapters/runner/types.js';
 import type { ReplaySource } from '../ghost/delegate.js';
-import type { Verifier } from './verify.js';
+import type { Verifier } from '../core/verify.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
-import type { Workflow } from './workflow.js';
+import type { Workflow } from '../core/workflow.js';
 import { loadTestWorkflow } from '../../test/helpers/harness.js';
 import { SqliteStore } from '../store/sqlite-store.js';
-import { hashText } from './attempt-labels.js';
+import { hashText } from '../core/attempt-labels.js';
 import { EventBus } from '../server/live-feed.js';
-import { FakeClock } from './clock.js';
-import { fullReadEnv, Orchestrator } from './orchestrator.js';
+import { FakeClock } from '../core/clock.js';
+import { fullReadEnv, Daemon } from './daemon.js';
 import { runRepair } from '../cli/repair.js';
-import type { StoredEvent } from './upcast.js';
-import type { EffectRetry } from '../runtime/outbox.js';
-import { Scheduler } from '../runtime/capacity.js';
-import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from './types.js';
+import type { StoredEvent } from '../core/upcast.js';
+import type { EffectRetry } from './outbox.js';
+import { Scheduler } from './capacity.js';
+import { newTicketState, SCHEMA_VERSION, TRUSTED, type FactoryEvent } from '../core/types.js';
 
 const packDir = join(import.meta.dirname, '../../packs/standard');
 
@@ -55,7 +55,7 @@ function setup(
   let n = 0;
   const bus = new EventBus();
   const clock = new FakeClock(1_000);
-  const orch = new Orchestrator({
+  const orch = new Daemon({
     store, clock, bus, scheduler,
     tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true,
     projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
@@ -77,7 +77,7 @@ const mentioned = (ticketId: string): FactoryEvent => ({
 });
 const delegated = (id = 'e1'): FactoryEvent => ({ ...TRUSTED, id, type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
-describe('Orchestrator', () => {
+describe('Daemon', () => {
   it('starts no dev job on a merged ticket, even one it holds outside decide (ORC-268)', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'T', description: 'Exporter les audits en CSV depuis la liste des audits.' });

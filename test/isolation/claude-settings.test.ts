@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildClaudeArgs, childEnv } from '../../src/adapters/runner/claude-code.js';
-import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
+import { CLAUDE_RUN_ENV } from '../../src/runtime/daemon.js';
 import { packDir as pack } from '../helpers/harness.js';
 
 /**
