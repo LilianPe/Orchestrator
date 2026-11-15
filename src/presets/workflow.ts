@@ -68,7 +68,7 @@ export function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimi
 export const PER_RUN: Readonly<RunLimits> = { turns: 150, durationMs: 90 * 60_000 };
 
 /** A job of an agent step, before what it takes from that step. */
-type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'pickup' | 'onStart' | 'onSuccess' | 'effort' | 'limits' | 'network' | 'tools'> &
+type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'verifyFailure' | 'pickup' | 'onStart' | 'onSuccess' | 'effort' | 'limits' | 'network' | 'tools'> &
   Partial<Pick<JobSpec, 'pickup' | 'onStart' | 'onSuccess'>> & { step: string };
 
 function stepJob(name: string, job: StepJob, settings: StepSettings): JobSpec {
@@ -166,7 +166,8 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
     review,
     'review-security': { ...review, lens: 'security', onSuccess: { move: 'human_review', post: 'review' }, onBlocking: { run: 'fix-review' } },
   };
-  return {
+  // A copy of its own on each call, its rules, limits and jobs included: a test that changes one changes no other (ORC-389).
+  return structuredClone<Workflow>({
     version: 1,
     blockComment: true,
     tracker: { kind: 'linear', pickup: { checks: ['has_description', 'not_started'] } },
@@ -199,5 +200,5 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
       },
     },
     relayJob: 'answer-relayed',
-  };
+  });
 }

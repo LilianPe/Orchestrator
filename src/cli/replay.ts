@@ -4,15 +4,16 @@ import { parseArgs } from 'node:util';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
-import { asFantome } from '../presets/fantome.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { asFantome, fantome } from '../presets/fantome.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { exportJournal, formatReplay, readJournal, replayJournal, type ReplayOptions } from '../runtime/replay.js';
 import { DATABASE_URL_ENV, openStore } from '../store/open.js';
 
 /** The presets compiled in the binary (ORC-389): their workflow as the daemon builds it, without `factory.yml`'s step settings. */
 const PRESET_WORKFLOWS: Readonly<Record<string, () => Workflow>> = {
-  'factory/default': () => defaultWorkflow(),
-  'factory/fantome': () => asFantome(defaultWorkflow()),
+  [factoryDefault.name]: () => defaultWorkflow(),
+  [fantome.name]: () => asFantome(defaultWorkflow()),
 };
 
 export const REPLAY_USAGE = `Usage: factory replay <journal.json | directory>... [--what-if <preset>]
@@ -124,12 +125,11 @@ ${REPLAY_USAGE}`);
     return 2;
   }
   const preset = values['what-if'];
-  const workflow = preset === undefined ? undefined : Object.hasOwn(PRESET_WORKFLOWS, preset) ? PRESET_WORKFLOWS[preset] : undefined;
-  if (preset !== undefined && !workflow) {
+  if (preset !== undefined && !Object.hasOwn(PRESET_WORKFLOWS, preset)) {
     io.print(`--what-if: unknown preset ${preset}
 ${REPLAY_USAGE}`);
     return 2;
   }
-  const options: ReplayOptions = workflow ? { mode: 'what-if', workflow: workflow() } : { mode: 'regression' };
+  const options: ReplayOptions = preset !== undefined ? { mode: 'what-if', workflow: PRESET_WORKFLOWS[preset]!() } : { mode: 'regression' };
   return replayFiles(positionals, options, io);
 }

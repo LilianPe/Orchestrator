@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hashText } from '../core/attempt-labels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
-import { defaultWorkflow, type StepSettings } from './workflow.js';
+import { agentStep, defaultWorkflow, type StepSettings } from './workflow.js';
 
 /**
  * The hashes of the workflow the standard pack's YAML gave, before ORC-389 removed it: the canonical one, which each ticket's
@@ -51,12 +51,33 @@ describe('defaultWorkflow (ORC-388, ORC-389)', () => {
     expect(wf.jobs[wf.relayJob!]!.counter).toBeUndefined();
   });
 
-  it('gives each call a workflow of its own: a test that changes a job changes no other workflow', () => {
+  // What the loader refused in a job or a rule of the pack, checked on the table now that no file goes through it.
+  it('keeps the review to its jobs, read-only steps on a clone of their own, the session to the dev queue, after_merge to pr.merged', () => {
+    const wf = defaultWorkflow();
+    for (const j of Object.values(wf.jobs)) {
+      const review = j.step === 'review';
+      expect(!!j.lens, `${j.name}.lens`).toBe(review);
+      expect(j.workspace === 'published', `${j.name}.workspace`).toBe(review);
+      if (j.onSuccess.post === 'review') expect(j.step, `${j.name}.onSuccess.post`).toBe('review');
+      if (j.onBlocking) expect(j.onSuccess.post, `${j.name}.onBlocking`).toBe('review');
+      if (j.queue === 'questions') expect(j.session, `${j.name}.session`).toBe('new');
+      const step = j.step === undefined ? undefined : agentStep(j.step);
+      if (step?.type === 'agent_step' && step.readOnly && step.writes === 'nothing' && !review) expect(j.workspace, `${j.name}.workspace`).toBe('trunk-readonly');
+    }
+    for (const [type, rules] of Object.entries(wf.on)) for (const r of rules!) if (r.do === 'after_merge') expect(type).toBe('pr.merged');
+  });
+
+  it('gives each call a workflow of its own: a test that changes a job, a rule or a limit changes no other workflow', () => {
     const a = defaultWorkflow();
     a.jobs.dev!.onSuccess = {};
+    a.jobs['fix-ci']!.onSuccess.move = 'dev';
+    a.on['ticket.delegated']![0]!.run = 'intake';
     a.limits.verifyAttempts = 1;
+    a.limits.perRun.turns = 1;
     expect(defaultWorkflow().jobs.dev!.onSuccess).toEqual({ move: 'ai_review', post: 'summary', run: 'review' });
-    expect(defaultWorkflow().limits.verifyAttempts).toBe(4);
+    expect(defaultWorkflow().jobs['dev-feedback']!.onSuccess.move).toBe('ai_review');
+    expect(defaultWorkflow().on['ticket.delegated']![0]!.run).toBe('dev');
+    expect(defaultWorkflow().limits).toMatchObject({ verifyAttempts: 4, perRun: { turns: 150 } });
   });
 
   it("refuses factory.yml's settings for a step the preset does not have, as the loader did", () => {
