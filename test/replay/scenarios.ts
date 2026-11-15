@@ -2,7 +2,7 @@ import { runRepair } from '../../src/cli/repair.js';
 import { SCHEMA_VERSION, type TicketState } from '../../src/core/types.js';
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { CUT_RELAUNCHES } from '../../src/store/types.js';
-import type { Workflow } from '../../src/config/workflow-schema.js';
+import type { Workflow } from '../../src/core/workflow.js';
 import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
 import { defaultPushBody, githubDelivery, githubIngest, pullRequestBody, sha, workflowRunBody } from '../helpers/github-webhook.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
@@ -222,7 +222,7 @@ async function github(h: Harness, name: string, body: unknown): Promise<void> {
 export function scenarioWorkflow(name: string): Workflow {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
-  return loadTestWorkflow(scenario.preset?.yaml);
+  return loadTestWorkflow(scenario.preset?.workflow);
 }
 
 /** Runs a scenario and exports the journal of its ticket. */

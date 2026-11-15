@@ -1,13 +1,12 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import type { Role } from './authz.js';
 import { ACK_BODY, decide, mayCheck } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const WRITER: Role[] = ['team_member', 'repo_writer'];
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], roles: readonly Role[] | undefined = WRITER, actor: string | undefined = 'u-dev'): FactoryEvent {

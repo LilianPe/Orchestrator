@@ -2,7 +2,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { buildRunSettings, posixPath, runSettingsTemplate, type Settings } from '../config/run-settings.js';
 import { VERSION } from '../version.js';
 import { buildPrompt, type PromptInput } from './prompt.js';
@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('attempt labels', () => {
-  const workflow = loadWorkflow({ packDir });
+  const workflow = defaultWorkflow();
   const job = workflow.jobs['dev']!;
   let pack: PackFingerprints;
   beforeAll(async () => {
@@ -107,16 +107,16 @@ describe('attempt labels', () => {
   it('gives the same fingerprints for the same inputs', async () => {
     const a = attemptLabels({ job, ...prompted(P), workflow, pack, factoryCommit: null });
     const again = await packFingerprints(packDir);
-    const b = attemptLabels({ job, ...prompted(P), workflow: loadWorkflow({ packDir }), pack: again, factoryCommit: null });
+    const b = attemptLabels({ job, ...prompted(P), workflow: defaultWorkflow(), pack: again, factoryCommit: null });
     expect(b).toEqual(a);
   });
 
   it('gives two workflow versions two fingerprints', () => {
-    const v1 = loadWorkflow({ packDir });
-    const v2 = loadWorkflow({ packDir });
-    v2.limits.parallelSessions += 1;
+    const v1 = defaultWorkflow();
+    const v2 = defaultWorkflow();
+    v2.limits.verifyAttempts += 1;
     expect(workflowFingerprint(v2)).not.toBe(workflowFingerprint(v1));
-    expect(workflowFingerprint(loadWorkflow({ packDir }))).toBe(workflowFingerprint(v1));
+    expect(workflowFingerprint(defaultWorkflow())).toBe(workflowFingerprint(v1));
     const a = attemptLabels({ job, ...prompted(P), workflow: v1, pack, factoryCommit: null });
     const b = attemptLabels({ job, ...prompted(P), workflow: v2, pack, factoryCommit: null });
     expect(b.fingerprints.workflow).not.toBe(a.fingerprints.workflow);

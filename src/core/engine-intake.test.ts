@@ -1,7 +1,6 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
-import type { Workflow } from '../config/workflow-schema.js';
+import { defaultWorkflow } from '../presets/workflow.js';
+import type { Workflow } from './workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { causeOf } from './block-cause.js';
 import { decide } from './engine.js';
@@ -9,7 +8,7 @@ import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
 import { normalizeTicket } from './upcast.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 
 function finished(output: AgentOutput | undefined, extra: Partial<EventPayloads['run.finished']> = {}): FactoryEvent {
   const payload: EventPayloads['run.finished'] = { runId: 'r1', job: 'intake', outcome: 'success', costUsd: 0.1, turns: 3, lastText: 'ok', attempt: output ? 'succeeded' : 'failed', ...(output ? { output } : {}), ...extra };

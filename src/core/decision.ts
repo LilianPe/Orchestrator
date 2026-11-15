@@ -1,4 +1,4 @@
-import type { ReviewLens } from '../config/workflow-schema.js';
+import type { ReviewLens } from './workflow.js';
 import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
 import type { DecidedEvent, InputKind, LogicalState, TimerFired } from './types.js';

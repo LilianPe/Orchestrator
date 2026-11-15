@@ -61,8 +61,8 @@ describe('harness: new port fakes and the test preset', () => {
     expect(h.tracker.comments('REL-1').at(-1)).toContain('limit');
   });
 
-  it('refuses a projectYaml combined with a preset, even an empty one', () => {
-    expect(() => createHarness({ projectYaml: '', preset: testPreset() })).toThrow('not both');
+  it('refuses a workflow combined with a preset, even an empty one', () => {
+    expect(() => createHarness({ workflow: {}, preset: testPreset() })).toThrow('not both');
   });
 
   it('a held check keeps the ticket verifying until it is released', async () => {

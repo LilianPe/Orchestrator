@@ -1,7 +1,7 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { logExcerpt } from '../checks/log-excerpt.js';
-import type { ReviewLens } from '../config/workflow-schema.js';
+import type { ReviewLens } from './workflow.js';
 import type { ClarifyAnswer, FeedbackItem, InputKind, VerifyFailure } from './types.js';
 
 export interface PromptIssue {

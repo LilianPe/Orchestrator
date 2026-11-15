@@ -146,7 +146,7 @@ describe('standard workflow', () => {
 
   it('a merge drops the queued and debounced feedback runs, refuses a relaunch, and still cleans up (ORC-268)', async () => {
     // A project's own relaunch label: a run a human asks for out of a reply.
-    const h = createHarness({ projectYaml: 'version: 1\non:\n  label.changed:\n    - { label: relance, run: dev-feedback }\n' });
+    const h = createHarness({ workflow: { on: { 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } } });
     await delegatedAndInReview(h);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore un détail', author: 'L' });
     // Paused: the relaunch waits in the scheduler queue, out of decide's sight, when the PR is merged.
@@ -173,8 +173,8 @@ describe('standard workflow', () => {
   });
 
   it('a merge keeps a question waiting for an answer slot: only the dev work stops (ORC-268)', async () => {
-    // Two answers at once, whatever the workflow says (ORC-390): the third question waits for a slot, and the merge leaves it there.
-    const h = createHarness({ projectYaml: 'version: 1\nlimits: { question_sessions: 1 }\n' });
+    // Two answers at once, whatever the workflow's `questionSessions` (ORC-390): the third question waits for a slot, and the merge leaves it there.
+    const h = createHarness({ workflow: { limits: { questionSessions: 1 } } });
     await delegatedAndInReview(h);
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
     h.tracker.addIssue({ identifier: 'REL-3', title: 'Trois' });
@@ -196,7 +196,7 @@ describe('standard workflow', () => {
       .fn()
       .mockResolvedValueOnce({ ok: false, failures: [{ command: 'npm test', exitCode: 1, output: '1 failed' }] })
       .mockResolvedValue({ ok: true, failures: [] });
-    const h = createHarness({ projectYaml: 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n', verify });
+    const h = createHarness({ workflow: { verify: ['npm test'] }, verify });
     await delegatedAndInReview(h);
     expect(h.runner.requests).toHaveLength(2);
     expect(h.runner.requests[1]).toMatchObject({ resume: true });
@@ -206,7 +206,7 @@ describe('standard workflow', () => {
   });
 
   it('CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run; a green CI keeps the count (ORC-270, ORC-184 criterion 7)', async () => {
-    const h = createHarness({ projectYaml: 'version: 1\non:\n  label.changed:\n    - { label: relance, run: dev-feedback }\n' });
+    const h = createHarness({ workflow: { on: { 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } } });
     await delegatedAndInReview(h);
     const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
     const fixCi = () => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:fix-ci\n')).length;
@@ -406,8 +406,8 @@ describe('standard workflow', () => {
   });
 
   it('respects the parallel cap and drains the queue', async () => {
-    // The dev slots are factory.yml's `concurrency` alone: the workflow's `parallel_sessions` is read no more (ORC-390).
-    const h = createHarness({ concurrency: 2, projectYaml: 'version: 1\nlimits: { parallel_sessions: 1 }\n' });
+    // The dev slots are factory.yml's `concurrency` alone: the workflow's `parallelSessions` is read no more (ORC-390).
+    const h = createHarness({ concurrency: 2, workflow: { limits: { parallelSessions: 1 } } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
     h.tracker.addIssue({ identifier: 'REL-3', title: 'Trois' });
@@ -470,7 +470,7 @@ describe('I12: the taint of a run is what it reads at its launch (ORC-274)', () 
 
   it('the pending job settle starts carries the sensitive paths when an untrusted reply came in after it was set pending', async () => {
     // The minimal counterexample of decide.prop.test.ts, on the real orchestrator.
-    const h = createHarness({ projectYaml: withMoveBack() });
+    const h = createHarness({ workflow: withMoveBack() });
     await delegatedAndInReview(h);
     h.runner.enqueue({ hold: true });
     await h.send('status.changed', { from: 'human_review', to: 'dev' });
