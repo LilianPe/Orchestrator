@@ -193,7 +193,9 @@ const ASK: JobSpec = {
  * The workflow of preset `p`, with `factory.yml`'s settings of its agent steps (ORC-136, ORC-383), which name the steps of
  * `factory/default`, the instance's preset. `entry`: the step the chain starts at, the preset's own by default.
  */
-export function presetWorkflow(p: Preset, settings: StepSettings = {}, entry: string = p.entry): Workflow {
+export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry: string = given.entry): Workflow {
+  // Compiled here too: the walk of its steps relies on the invariants of the core (no cycle of `next`, every edge to a step).
+  const p = compilePreset(given).preset;
   checkStepSettings(settings);
   const perRun: RunLimits = { turns: PER_RUN_TURNS, durationMs: p.attempt.minutes * 60_000 };
   const jobs = Object.entries(BINDINGS).flatMap(([name, b]) => jobOf(p, name, b, perRun, settings) ?? []);
@@ -225,7 +227,8 @@ export function presetWorkflow(p: Preset, settings: StepSettings = {}, entry: st
     workspace: { setup: [], portBase: 4200 },
     commands: [],
     on: rapide ? rapideRules(entryJob.name) : RULES,
-    jobs: Object.fromEntries([...jobs, ...(rapide ? [] : [ASK])].map((j) => [j.name, j])),
+    // The answer agent at every level: a question in a ticket's thread starts it directly, with no rule (`askInThread`).
+    jobs: Object.fromEntries([...jobs, ASK].map((j) => [j.name, j])),
     ...(relay ? { relayJob: relay.name } : {}),
     preset: p,
     entry,

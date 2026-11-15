@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fantome } from '../presets/fantome.js';
-import { compilePreset, type Preset } from '../presets/preset.js';
+import { compilePreset, isAgentStep, type Preset } from '../presets/preset.js';
+import { BINDINGS } from '../presets/runtime-bindings.js';
 import { defaultWorkflow, preset, presetWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockingFix, humanRoundJob, nextOf, startMove } from './chain.js';
@@ -57,7 +58,24 @@ describe('the chain walks the preset (ORC-391)', () => {
       spec: { run: 'tests', at: 'tests' },
       tests: { run: 'dev', at: 'build' },
       dev: { at: null },
+      ask: { post: 'reply' },
     });
+  });
+});
+
+describe('the runtime bindings (ORC-391)', () => {
+  it("name only agent steps of factory/default, and lenses its review has: a typo would drop a job silently", () => {
+    for (const [name, b] of Object.entries(BINDINGS)) {
+      const step = preset.steps.find((s) => s.id === b.step);
+      expect(step && isAgentStep(step), name).toBe(true);
+      if (b.lens) expect(step?.type === 'review' && step.lenses.includes(b.lens), name).toBe(true);
+      expect(defaultWorkflow().jobs[name], name).toBeDefined();
+    }
+  });
+
+  it('the workflow of factory/default from its own entry walks past clarify, which has no job, to the spec', () => {
+    const wf = presetWorkflow(preset);
+    expect(nextOf(wf, wf.jobs['intake']!)).toMatchObject({ run: { name: 'spec' }, step: { id: 'spec_draft' } });
   });
 });
 

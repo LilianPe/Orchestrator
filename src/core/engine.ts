@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Rule, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { blockingFix, hasReviewLoop, humanRoundJob, nextOf } from './chain.js';
+import { blockingFix, hasReviewLoop, humanRoundJob, jobEntering, nextOf } from './chain.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
@@ -2142,7 +2142,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
       // What the owed move came with: `dev`'s AI review (ORC-183), started as that job's own end would have, or the ticket
       // would sit in AI Review with no review.
-      const next = owed && !end.run ? Object.values(workflow.jobs).map((j) => nextOf(workflow, j)).find((e) => e.move === owed && e.run)?.run : undefined;
+      const next = owed && !end.run ? jobEntering(workflow, owed) : undefined;
       if (next) startRun(out, event, ticket, next, { input: next.input });
       return out;
     }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import { causeOf } from '../../src/core/block-cause.js';
 import type { Spec } from '../../src/core/spec.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, withTestCommand } from '../helpers/harness.js';
 import { delegationStarts } from '../helpers/workflow-with.js';
 
 /**
@@ -33,7 +33,7 @@ type Harness = ReturnType<typeof createHarness>;
 
 /** A ticket delegated by the requester, a designated validator, the spec drafted as `specs` say, one run each. */
 async function delegated(...specs: Spec[]): Promise<Harness> {
-  const h = createHarness({ workflow: SPEC_FIRST, authz: { validators: [VALIDATOR], githubLogins: { [REQUESTER]: 'armand-gh', [VALIDATOR]: 'lilian-gh' } } });
+  const h = createHarness({ workflow: SPEC_FIRST, repoConfig: withTestCommand(), authz: { validators: [VALIDATOR], githubLogins: { [REQUESTER]: 'armand-gh', [VALIDATOR]: 'lilian-gh' } } });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from the audit list.' });
   h.tracker.setTeamMembers('REL', [REQUESTER, VALIDATOR]);
   h.forge.setRepoPermission('armand-gh', 'write');

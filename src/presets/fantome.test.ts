@@ -25,7 +25,7 @@ describe('the factory/fantome preset (ORC-231)', () => {
     expect(wf.on['ticket.delegated']).toEqual([expect.objectContaining({ run: 'intake', whenSrc: '!blocked' })]);
     // Nothing else starts a job: a closed ticket's state, or a human on the real one, never does.
     expect(Object.keys(wf.on)).toEqual(['ticket.delegated']);
-    expect(Object.keys(wf.jobs)).toEqual(['intake', 'dev', 'spec', 'tests']);
+    expect(Object.keys(wf.jobs)).toEqual(['intake', 'dev', 'spec', 'tests', 'ask']);
     const end = (job: string) => nextOf(wf, wf.jobs[job]!);
     expect(end('intake').run?.name).toBe('spec');
     // Its spec is approved by the preset (no gate): `spec_check` leads to the tests.

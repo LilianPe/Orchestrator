@@ -32,13 +32,16 @@ const stepById = (wf: Workflow, id: string | null | undefined): Step | undefined
 /** The step `job` runs, in the workflow's preset. */
 export const stepOfJob = (wf: Workflow, job: Pick<JobSpec, 'step'>): Step | undefined => stepById(wf, job.step);
 
+/** An optional step with no job of its own is passed: `clarify` asks the guard's questions with no run (ORC-210). */
+const passed = (wf: Workflow, s: Step): boolean => ranByEngine(s) || (s.type === 'agent_step' && !!s.optional && !jobStarting(wf, s));
+
 /**
  * The step after `from` that waits, past the engine's own. The preset's entry, run before the chain's entry (`intake`
  * before `build` until ORC-395, ORC-206), is that entry's guard: it hands over to it.
  */
 function reached(wf: Workflow, from: Step): Step | null {
   if (wf.preset && wf.entry && from.id === wf.preset.entry && wf.entry !== from.id) return stepById(wf, wf.entry) ?? null;
-  for (let s = stepById(wf, from.next); s; s = stepById(wf, s.next)) if (!ranByEngine(s)) return s;
+  for (let s = stepById(wf, from.next); s; s = stepById(wf, s.next)) if (!passed(wf, s)) return s;
   return null;
 }
 
@@ -83,6 +86,16 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
 export function startMove(wf: Workflow, job: JobSpec): LogicalState | undefined {
   if (!wf.preset) return job.onStart?.move;
   return wf.level !== 'rapide' && job.step !== undefined && job.step === wf.entry ? STEP_STATUS[job.step] : undefined;
+}
+
+/**
+ * The job a move owed by a refused publication came with (ORC-183): the job of the step whose status it is, the review's
+ * first lens for AI Review. A version frozen before reads it on the job whose end made that move and started a job.
+ */
+export function jobEntering(wf: Workflow, status: LogicalState): JobSpec | undefined {
+  if (!wf.preset) return Object.values(wf.jobs).map((j) => nextOf(wf, j)).find((e) => e.move === status && e.run)?.run;
+  const step = wf.preset.steps.find((s) => STEP_STATUS[s.id] === status && s.id !== wf.entry);
+  return step && jobStarting(wf, step);
 }
 
 /** The workflow has a review loop (ORC-184): a review whose blocking findings send the run back to `fix`. */

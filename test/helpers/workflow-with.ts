@@ -32,8 +32,7 @@ function rule({ when, ...r }: RuleOverride): Rule {
 }
 
 /** Over `base`, `factory/default`'s workflow by default. */
-export function workflowWith(o: WorkflowOverrides = {}, base: Workflow = defaultWorkflow()): Workflow {
-  const wf = base;
+export function workflowWith(o: WorkflowOverrides = {}, wf: Workflow = defaultWorkflow()): Workflow {
   for (const name of Object.keys(o.jobs ?? {})) if (!wf.jobs[name]) throw new Error(`workflowWith: jobs.${name}: unknown job`);
   const given = Object.entries(o.on ?? {}).filter((e): e is [string, RuleOverride[]] => e[1] !== undefined);
   const on: Workflow['on'] = { ...wf.on, ...Object.fromEntries(given.map(([type, rules]) => [type, rules.map(rule)])) };
