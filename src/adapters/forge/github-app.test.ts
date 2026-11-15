@@ -1,4 +1,4 @@
-import { NoCommitsBetween, ReviewLinesRefused } from './types.js';
+import { ArtifactsRefused, NoCommitsBetween, ReviewLinesRefused } from './types.js';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { describeForgeContract } from '../../../test/contracts/forge.contract.js';
@@ -1198,5 +1198,204 @@ describe('GitHubAppForge.repoPermission (ORC-186)', () => {
   it('throws, never answers none, when the app is not installed on the repo', async () => {
     const { forge } = makeForge([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 404, body: { message: 'Not Found' } } : undefined)]);
     await expect(forge.repoPermission('/repo', 'dev')).rejects.toThrow(/installation.*404/);
+  });
+});
+
+/**
+ * The Git Data API of one repository, in memory (ORC-407): trees as flat maps of path to blob, commits with their parents, and
+ * the refs a test reads after. A PATCH that is not a fast forward, or a ref created twice, answers as GitHub does (422).
+ */
+function gitData(opts: { refuse?: (url: URL, init: HttpRequest) => { status: number; body?: unknown; headers?: Record<string, string> } | undefined; beforeMove?: () => void } = {}) {
+  const trees = new Map<string, Map<string, string>>([['tree-empty', new Map()]]);
+  const commits = new Map<string, { tree: string; parents: string[] }>();
+  const refs = new Map<string, string>();
+  let n = 0;
+  const treeSha = (files: Map<string, string>) => {
+    const sha = `tree-${[...files].sort().map(([p, b]) => `${p}=${b}`).join(',')}`;
+    trees.set(sha, files);
+    return sha;
+  };
+  const api = '/repos/acme/app/git';
+  const route: Route = (url, init, body) => {
+    const refused = opts.refuse?.(url, init);
+    if (refused) return refused;
+    const p = url.pathname;
+    const b = body as Record<string, unknown>;
+    if (init.method === 'GET' && p.startsWith(`${api}/ref/`)) {
+      const sha = refs.get(p.slice(`${api}/ref/`.length));
+      return sha ? { body: { object: { sha } } } : { status: 404, body: { message: 'Not Found' } };
+    }
+    if (init.method === 'GET' && p.startsWith(`${api}/commits/`)) {
+      const sha = p.slice(`${api}/commits/`.length);
+      return { body: { sha, tree: { sha: commits.get(sha)!.tree } } };
+    }
+    if (init.method === 'GET' && p.startsWith(`${api}/trees/`)) {
+      const files = trees.get(decodeURIComponent(p.slice(`${api}/trees/`.length)))!;
+      const top = new Map([...files.keys()].map((f) => [f.split('/')[0]!, f.includes('/') ? 'tree' : 'blob']));
+      return { body: { tree: [...top].map(([path, type]) => ({ path, type })), truncated: false } };
+    }
+    if (init.method === 'POST' && p === `${api}/blobs`) return { status: 201, body: { sha: `blob-${Buffer.from(String(b.content), 'base64').toString()}` } };
+    if (init.method === 'POST' && p === `${api}/trees`) {
+      const files = new Map(b.base_tree ? trees.get(String(b.base_tree)) : []);
+      for (const e of b.tree as { path: string; sha?: string | null; content?: string }[]) {
+        if (e.sha === null) for (const f of [...files.keys()]) if (f === e.path || f.startsWith(`${e.path}/`)) files.delete(f);
+        if (e.sha) files.set(e.path, e.sha);
+        if (e.content !== undefined) files.set(e.path, `blob-${e.content}`);
+      }
+      return { status: 201, body: { sha: treeSha(files) } };
+    }
+    if (init.method === 'POST' && p === `${api}/commits`) {
+      const sha = `c${++n}`;
+      commits.set(sha, { tree: String(b.tree), parents: b.parents as string[] });
+      return { status: 201, body: { sha } };
+    }
+    if (init.method === 'POST' && p === `${api}/refs`) {
+      opts.beforeMove?.();
+      const name = String(b.ref).slice('refs/'.length);
+      if (refs.has(name)) return { status: 422, body: { message: 'Reference already exists' } };
+      refs.set(name, String(b.sha));
+      return { status: 201, body: { ref: b.ref } };
+    }
+    if (init.method === 'PATCH' && p.startsWith(`${api}/refs/`)) {
+      opts.beforeMove?.();
+      const name = p.slice(`${api}/refs/`.length);
+      if (!refs.has(name)) return { status: 422, body: { message: 'Reference does not exist' } };
+      if (b.force !== false || !commits.get(String(b.sha))!.parents.includes(refs.get(name)!)) return { status: 422, body: { message: 'Update is not a fast forward' } };
+      refs.set(name, String(b.sha));
+      return { body: { ref: `refs/${name}` } };
+    }
+    return undefined;
+  };
+  /** The files at the tip of `factory/artifacts`. */
+  const tip = () => trees.get(commits.get(refs.get('heads/factory/artifacts')!)!.tree)!;
+  /** A commit of another writer on the branch, by the API as the factory's. */
+  const otherWriter = (path: string) => {
+    const head = refs.get('heads/factory/artifacts')!;
+    const sha = `other-${++n}`;
+    commits.set(sha, { tree: treeSha(new Map([...tip(), [path, 'blob-other']])), parents: [head] });
+    refs.set('heads/factory/artifacts', sha);
+  };
+  return { route, refs, commits, tip, otherWriter };
+}
+
+describe('GitHubAppForge artifacts (ORC-407)', () => {
+  const png = (s: string) => ({ path: `ORC-1/${s}.png`, content: Buffer.from(s) });
+  const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET' && !c.url.endsWith('/access_tokens'));
+
+  it('creates factory/artifacts as an orphan with its README and the files, and links each one by the commit that holds it', async () => {
+    const git = gitData();
+    const { forge, calls } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
+    const urls = await forge.hostArtifacts('/repo', [png('before-375-aa'), png('after-375-bb')]);
+    const head = git.refs.get('heads/factory/artifacts')!;
+    expect(git.commits.get(head)!.parents).toEqual([]);
+    expect([...git.tip().keys()].sort()).toEqual(['ORC-1/after-375-bb.png', 'ORC-1/before-375-aa.png', 'README.md']);
+    expect(urls).toEqual([
+      `https://github.com/acme/app/blob/${head}/ORC-1/before-375-aa.png?raw=true`,
+      `https://github.com/acme/app/blob/${head}/ORC-1/after-375-bb.png?raw=true`,
+    ]);
+    // The Git Data API alone, and no ref but the branch's.
+    for (const c of writes(calls)) expect(new URL(c.url).pathname).toMatch(/^\/repos\/acme\/app\/git\/(blobs|trees|commits|refs)$/);
+    expect(writes(calls).filter((c) => c.url.endsWith('/git/refs')).map((c) => c.body)).toEqual([{ ref: 'refs/heads/factory/artifacts', sha: head }]);
+    // A push by an App's token starts the repository's workflows: not for a branch without code.
+    expect(writes(calls).find((c) => c.url.endsWith('/git/commits'))!.body).toMatchObject({ message: expect.stringContaining('[skip ci]') });
+  });
+
+  it('a branch deleted between its read and the move is made again as an orphan, not taken for a refusal', async () => {
+    let deleted = false;
+    const git = gitData({
+      beforeMove: () => {
+        if (deleted || !git.refs.has('heads/factory/artifacts')) return;
+        deleted = true;
+        git.refs.delete('heads/factory/artifacts');
+      },
+    });
+    const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
+    await forge.hostArtifacts('/repo', [png('a')]);
+    await forge.hostArtifacts('/repo', [png('b')]);
+    expect(deleted).toBe(true);
+    const head = git.refs.get('heads/factory/artifacts')!;
+    expect(git.commits.get(head)!.parents).toEqual([]);
+    expect([...git.tip().keys()].sort()).toEqual(['ORC-1/b.png', 'README.md']);
+  });
+
+  it('commits on the tip by a fast forward only, and a replay that finds its files writes nothing', async () => {
+    const git = gitData();
+    const calls: Call[] = [];
+    const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42, calls });
+    await forge.hostArtifacts('/repo', [png('after-375-aa')]);
+    const first = git.refs.get('heads/factory/artifacts')!;
+    await forge.hostArtifacts('/repo', [png('after-375-bb')]);
+    const second = git.refs.get('heads/factory/artifacts')!;
+    expect(git.commits.get(second)!.parents).toEqual([first]);
+    const patch = calls.filter((c) => c.method === 'PATCH');
+    expect(patch.map((c) => [new URL(c.url).pathname, c.body])).toEqual([['/repos/acme/app/git/refs/heads/factory/artifacts', { sha: second, force: false }]]);
+    calls.length = 0;
+    const again = await forge.hostArtifacts('/repo', [png('after-375-aa')]);
+    expect(again).toEqual([`https://github.com/acme/app/blob/${second}/ORC-1/after-375-aa.png?raw=true`]);
+    expect(calls.filter((c) => c.url.includes('/git/commits') && c.method === 'POST')).toEqual([]);
+    expect(calls.filter((c) => c.url.includes('/git/refs'))).toEqual([]);
+  });
+
+  it("reads the tip again when another writer moved it, and never writes over that writer's commit", async () => {
+    let raced = false;
+    const git = gitData({
+      beforeMove: () => {
+        if (raced || !git.refs.has('heads/factory/artifacts')) return;
+        raced = true;
+        git.otherWriter('ORC-2/after-375-cc.png');
+      },
+    });
+    const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
+    await forge.hostArtifacts('/repo', [png('after-375-aa')]);
+    await forge.hostArtifacts('/repo', [png('after-375-bb')]);
+    expect(raced).toBe(true);
+    expect([...git.tip().keys()].sort()).toEqual(['ORC-1/after-375-aa.png', 'ORC-1/after-375-bb.png', 'ORC-2/after-375-cc.png', 'README.md']);
+  });
+
+  it('takes a protection rule, a missing permission or an empty repository for an answer, and a rate limit or a 5xx for a failure to retry', async () => {
+    const refusing = (status: number, message: string, headers?: Record<string, string>) =>
+      makeForge([tokenRoute(42), gitData({ refuse: (url, init) => (init.method === 'POST' && url.pathname.endsWith('/git/refs') ? { status, body: { message }, ...(headers ? { headers } : {}) } : undefined) }).route], { installationId: 42 }).forge;
+    await expect(refusing(422, 'Repository rule violations found').hostArtifacts('/repo', [png('a')])).rejects.toBeInstanceOf(ArtifactsRefused);
+    await expect(refusing(403, 'Resource not accessible by integration').hostArtifacts('/repo', [png('a')])).rejects.toThrow(/GitHub refuses to write factory\/artifacts: .*Resource not accessible/);
+    await expect(refusing(409, 'Git Repository is empty.').hostArtifacts('/repo', [png('a')])).rejects.toBeInstanceOf(ArtifactsRefused);
+    const limited = refusing(403, 'API rate limit exceeded', { 'x-ratelimit-remaining': '0' }).hostArtifacts('/repo', [png('a')]);
+    await expect(limited).rejects.toMatchObject({ status: 403, rateLimited: true });
+    await expect(refusing(502, 'Bad Gateway').hostArtifacts('/repo', [png('a')])).rejects.not.toBeInstanceOf(ArtifactsRefused);
+  });
+
+  it('gives up after three writers in a row moved the branch, to be retried later, not answered', async () => {
+    const git = gitData({ beforeMove: () => git.refs.has('heads/factory/artifacts') && git.otherWriter(`ORC-9/x-${Math.random()}.png`) });
+    const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
+    await forge.hostArtifacts('/repo', [png('a')]).catch(() => {});
+    const err = await forge.hostArtifacts('/repo', [png('b')]).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ArtifactsRefused);
+    expect(String(err)).toMatch(/moved under each of 3 writes/);
+  });
+
+  it('refuses a path that is not a folder and a file, before any call: an answer, which no retry would change', async () => {
+    const { forge, calls } = makeForge([tokenRoute(42), gitData().route], { installationId: 42 });
+    for (const path of ['../x.png', 'x.png', 'ORC-1/../x.png', 'ORC-1/.x.png', '/ORC-1/x.png']) {
+      await expect(forge.hostArtifacts('/repo', [{ path, content: Buffer.from('x') }])).rejects.toThrow(ArtifactsRefused);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('removes the expired folders in one commit, by a fast forward, and writes nothing when none is', async () => {
+    const git = gitData();
+    const calls: Call[] = [];
+    const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42, calls });
+    expect(await forge.pruneArtifacts('/repo', async () => true)).toEqual([]);
+    await forge.hostArtifacts('/repo', [png('a'), { path: 'ORC-2/b.png', content: Buffer.from('b') }, { path: 'ORC-3/c.png', content: Buffer.from('c') }]);
+    const before = git.refs.get('heads/factory/artifacts')!;
+    calls.length = 0;
+    expect(await forge.pruneArtifacts('/repo', async (f) => f !== 'ORC-2')).toEqual(['ORC-1', 'ORC-3']);
+    expect([...git.tip().keys()].sort()).toEqual(['ORC-2/b.png', 'README.md']);
+    const after = git.refs.get('heads/factory/artifacts')!;
+    expect(git.commits.get(after)!.parents).toEqual([before]);
+    expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ sha: after, force: false }]);
+    calls.length = 0;
+    expect(await forge.pruneArtifacts('/repo', async () => false)).toEqual([]);
+    expect(writes(calls)).toEqual([]);
   });
 });

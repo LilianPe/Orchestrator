@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
+import { ArtifactsRefused, ReviewLinesRefused, type ArtifactHost, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
 import type { SecretRef } from '../adapters/secrets/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
@@ -48,7 +48,7 @@ import {
   type WorkflowVersion,
 } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from './agent-output.js';
-import { describePr, START_SAID, verifySummary } from '../publish/describe.js';
+import { describePr, START_SAID, verifySummary, type PrFacts } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from '../server/live-feed.js';
 import type { Clock } from './clock.js';
@@ -58,7 +58,8 @@ import type { HeldRow } from './diagnosis.js';
 import { NO_PLAN, planDecision } from './decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from './block-comment.js';
 import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from './engine.js';
-import { codeRunTokens, runMeasure } from './measures.js';
+import { codeRunTokens, mergeTime, runMeasure } from './measures.js';
+import { DAY_MS } from './baseline.js';
 import { attemptLabels, packFingerprints } from './attempt-labels.js';
 import { formatReuse, ownWork, ticketBranches } from './intake-checks.js';
 import { branchName, namesTicket } from './naming.js';
@@ -107,7 +108,7 @@ import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type Fr
 import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
-import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import { captureArtifactId, captureLabel, captureName, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
 import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from './changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
@@ -227,6 +228,11 @@ export interface OrchestratorDeps {
   labelsWritten?: (projectId: string, ticketId: string, written: LabelsWritten) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
+  /**
+   * Where the visual proof's captures are shown from in a PR (ORC-407): the repository's `factory/artifacts` branch, by the GitHub
+   * App. Absent: a PR says its captures were taken and not shown.
+   */
+  captureHost?: ArtifactHost;
   /**
    * The policy in front of every text the orchestrator publishes (ORC-214): its comments and activities, the PR's text. Absent: one
    * without gitleaks, for a test or the fake runner's daemon; the daemon's scans in its sandboxes.
@@ -413,6 +419,9 @@ const behindLaunch = (launch: NonNullable<TicketState['launching']>, start: Pend
 
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
+
+/** How long the captures of a merged or closed PR stay on `factory/artifacts` (ORC-407). */
+export const CAPTURES_KEPT_MS = 30 * DAY_MS;
 
 /** The `meta` key of the installation's id (`instanceId`). */
 const INSTANCE_KEY = 'instance-id';
@@ -1328,6 +1337,62 @@ export class Orchestrator {
   }
 
   /**
+   * The captures `verify` took on the published commit, hosted for its PR (ORC-407): each file `keepCaptures` kept, read back by its
+   * row in `artifacts`, committed on the repository's `factory/artifacts` branch under `<ticket>/`. What cannot be shown is said
+   * (`unhosted`): no host, a file gone from the disk, a refusal of the forge. Anything else throws, and the publication is retried.
+   */
+  private async hostCaptures(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'publish' }>): Promise<Pick<PrFacts, 'captures' | 'unhosted'>> {
+    const shots = c.visualProof?.captures;
+    if (!shots?.length) return {};
+    if (this.noEffect(project.id)) return { unhosted: 'the project has no effects: nothing goes out.' };
+    if (!this.d.captureHost) return { unhosted: 'this instance has no GitHub App to host them (docs/github.md).' };
+    const kept = new Map((await this.d.store.artifacts(t.ticketId)).map((a) => [a.id, a.path]));
+    const paths = shots.map((s) => kept.get(captureArtifactId(c.runId, s)));
+    // A file gone says nothing of where it was: its path is the server's, not for the PR.
+    const contents = paths.every((p) => p !== undefined) ? await Promise.all(paths.map((p) => readFile(p))).catch(() => undefined) : undefined;
+    if (!contents) return { unhosted: "a capture is no longer kept on the factory's disk." };
+    const files = shots.map((s, i) => ({ path: `${t.ticketId}/${s.side}-${s.width}-${s.sha256.slice(0, 16)}.png`, content: contents[i]! }));
+    try {
+      const urls = await this.d.captureHost.hostArtifacts(project.repoPath, files);
+      return { captures: shots.map((s, i) => ({ width: s.width, caption: captureName(s), url: urls[i]! })) };
+    } catch (err) {
+      if (err instanceof ArtifactsRefused) return { unhosted: err.message };
+      throw err;
+    }
+  }
+
+  /**
+   * The captures of PRs merged or closed 30 days ago or more, removed from each repository's `factory/artifacts` (ORC-407): a
+   * folder per ticket, removed when the ticket's last PR event is its merge or its closing, that long ago. A ticket the factory
+   * does not know, or whose PR is open, keeps its folder. Returns the folders removed, as `<repo>: <ticket>`.
+   */
+  async pruneCaptures(now: number): Promise<string[]> {
+    const host = this.d.captureHost;
+    if (!host) return [];
+    const byRepo = new Map<string, string[]>();
+    for (const p of this.d.projects) if (!this.noEffect(p.id)) byRepo.set(p.repoPath, [...(byRepo.get(p.repoPath) ?? []), p.id]);
+    const removed: string[] = [];
+    for (const [repoPath, projectIds] of byRepo) {
+      const expired = async (ticketId: string) => {
+        for (const projectId of projectIds) {
+          const t = await this.d.store.getTicket(projectId, ticketId);
+          if (!t) continue;
+          // Only a PR merged or closed has its time to read, in the journal.
+          if (t.prState !== 'MERGED' && t.prState !== 'CLOSED') return false;
+          const last = (await this.d.store.ticketJournal(projectId, ticketId)).map((j) => upcast(j.event)).findLast((e) => e.type === 'pr.opened' || e.type === 'pr.merged' || e.type === 'pr.closed');
+          if (!last || last.type === 'pr.opened') return false;
+          return now - (last.type === 'pr.merged' ? mergeTime(last) : last.at) >= CAPTURES_KEPT_MS;
+        }
+        return false;
+      };
+      // One repository the forge refuses keeps none of the others from their cleanup.
+      const folders = await host.pruneArtifacts(repoPath, expired).catch((err: Error) => (this.log('warn', `captures of ${repoPath} not pruned: ${err.message}`), []));
+      for (const folder of folders) removed.push(`${repoPath}: ${folder}`);
+    }
+    return removed;
+  }
+
+  /**
    * `verify` on a human's push (ORC-159): the pushed commit as the forge holds it, in a fresh clone, under the checks of the
    * job the factory publishes, the freeze included; never in the agent's worktree, and no run of it. Its verdict keeps the
    * check's id. Without sandboxes there is no clone to check it in, so no verdict: an infrastructure failure.
@@ -1866,7 +1931,7 @@ export class Orchestrator {
     if (diff === undefined || nothing) return done(nothing);
     let text;
     try {
-      text = await this.policy.pr(describePr(c.output, publishFacts(t, c)));
+      text = await this.policy.pr(describePr(c.output, { ...publishFacts(t, c), ...(await this.hostCaptures(project, t, c)) }));
     } catch (err) {
       if (!(err instanceof OutputRefused)) throw err;
       return refuse(`the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`);
@@ -2377,9 +2442,9 @@ export class Orchestrator {
         // A rebase may replace what the factory published last on the branch, and nothing else (ORC-146).
         const [untrustedMark, rewrites] = await Promise.all([this.untrustedMark(project, t), c.rewrite ? this.lastPublished(project.id, t.ticketId) : undefined]);
         const untrusted = untrustedMark ? { untrusted: untrustedMark } : {};
-        const described = describePr(c.output, publishFacts(t, c));
         // An open PR keeps its description (`ensurePr` finds it): a fixed body, the same for each fix (one scan), so a text never shown cannot hold one back.
         const open = t.prNumber !== undefined && t.prState === 'OPEN';
+        const described = describePr(c.output, { ...publishFacts(t, c), ...(open ? {} : await this.hostCaptures(project, t, c)) });
         const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });

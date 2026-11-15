@@ -4,6 +4,7 @@ import { relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FakeShooter, fakePng } from '../../src/adapters/browser/fake.js';
 import { VISUAL_PROOF_CHECK, type VisualProof } from '../../src/checks/visual-proof.js';
+import { CAPTURES_KEPT_MS } from '../../src/core/orchestrator.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean-verify.js';
 import { createHarness } from '../helpers/harness.js';
@@ -138,3 +139,60 @@ describe('the visual proof in the orchestrator (ORC-176)', () => {
     }
   });
 });
+
+describe('the captures in the PR (ORC-407)', () => {
+  const body = (h: Harness) => h.publisher.published.at(-1)!.body;
+
+  it("criterion 1: the PR's description shows the six captures, each linked to the commit of factory/artifacts that holds it", async () => {
+    const { h } = visual(() => ({ visual: taken() }));
+    await delegate(h);
+    const files = [...h.forge.artifacts.keys()];
+    expect(files).toHaveLength(6);
+    expect(files.every((f) => /^REL-1\/(before|after)-(1280|768|375)-[0-9a-f]{16}\.png$/.test(f))).toBe(true);
+    // The bytes kept by verify, as they are.
+    const kept = new Map((await h.store.artifacts('REL-1')).map((a) => [a.sha256.slice(0, 16), readFileSync(a.path)]));
+    for (const [path, content] of h.forge.artifacts) expect(Buffer.from(content)).toEqual(kept.get(path.slice(-20, -4)));
+    expect(body(h)).toContain(`![Before, ${BASE.slice(0, 12)} (375 px)](https://github.test/acme/app/blob/c1/REL-1/before-375-`);
+    expect(body(h)).toContain(`![After, ${SHA.slice(0, 12)} (1280 px)](https://github.test/acme/app/blob/c1/REL-1/after-1280-`);
+    expect(body(h).match(/!\[/g)).toHaveLength(6);
+  });
+
+  it('a forge that refuses to host them: the PR opens all the same, and says the captures were taken and why they are not shown', async () => {
+    const { h } = visual(() => ({ visual: taken() }));
+    h.forge.artifactsRefusal = 'GitHub refuses to write factory/artifacts: 422 Repository rule violations found';
+    await delegate(h);
+    expect(h.forge.artifacts.size).toBe(0);
+    expect(body(h)).toContain('**Screens**: taken by the factory, not shown here: GitHub refuses to write factory/artifacts: 422 Repository rule violations found');
+    expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
+  });
+
+  it('criterion 3: the captures of a PR merged 30 days ago are removed, those of a PR merged since stay', async () => {
+    const { h } = visual(() => ({ visual: taken() }));
+    await delegate(h);
+    const pr = h.forge.opened.at(-1)!;
+    h.forge.artifacts.set('REL-404/after-375-0000000000000000.png', fakePng('unknown'));
+    expect(await h.orch.pruneCaptures(h.clock.now() + CAPTURES_KEPT_MS)).toEqual([]);
+    const mergedAt = h.clock.now();
+    await h.send('pr.merged', { number: pr.number, url: 'https://github.test/pr/1', branch: pr.branch, mergedAt });
+    expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS - 1)).toEqual([]);
+    expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual(['/repo: REL-1']);
+    // A ticket the factory does not know keeps its folder.
+    expect([...h.forge.artifacts.keys()]).toEqual(['REL-404/after-375-0000000000000000.png']);
+    // A repository the forge refuses is logged, never a failure of the whole purge.
+    h.forge.artifactsRefusal = 'GitHub refuses to write factory/artifacts: 403';
+    expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual([]);
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('captures of /repo not pruned'))).toBe(true);
+  });
+
+  it("a capture gone from the factory's disk: the PR says so, without the server's path", async () => {
+    const { h } = visual(() => ({ visual: taken() }));
+    const keep = h.store.putArtifact.bind(h.store);
+    // Kept, then lost: the row names a file no longer there.
+    h.store.putArtifact = async (a) => keep({ ...a, path: `${a.path}.gone` });
+    await delegate(h);
+    expect(h.forge.artifacts.size).toBe(0);
+    expect(body(h)).toContain("**Screens**: taken by the factory, not shown here: a capture is no longer kept on the factory's disk.");
+    expect(body(h)).not.toContain('.gone');
+  });
+});
+

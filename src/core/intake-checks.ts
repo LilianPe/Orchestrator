@@ -1,4 +1,4 @@
-import type { Forge, ForgeBranch, OpenPr } from '../adapters/forge/types.js';
+import { ARTIFACTS_BRANCH, type Forge, type ForgeBranch, type OpenPr } from '../adapters/forge/types.js';
 import type { SearchHit } from '../adapters/tracker/types.js';
 import type { AgentOutput } from './agent-output.js';
 import { DEFAULT_BRANCH_NAMING, ownBranchMatcher, ownBranchPrefixes, type BranchNaming } from './naming.js';
@@ -46,7 +46,8 @@ export function formatActiveWork(identifier: string, work: ActiveWork, naming: B
   const own = ownBranchMatcher(identifier, naming);
   const prs = work.prs.filter((p) => p.fork || !own(p.branch));
   const withPr = new Set(work.prs.filter((p) => !p.fork).map((p) => p.branch));
-  const branches = work.branches.filter((b) => !withPr.has(b.name) && !own(b.name));
+  // The captures' branch (ORC-407) is the factory's, never a ticket's work.
+  const branches = work.branches.filter((b) => !withPr.has(b.name) && !own(b.name) && b.name !== ARTIFACTS_BRANCH);
   const tickets = work.tickets.filter((t) => t.identifier !== identifier);
   if (!prs.length && !branches.length && !tickets.length) return 'No open PR, no other branch, no close ticket.';
   const sections = [
