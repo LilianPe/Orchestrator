@@ -1363,7 +1363,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
   });
 
   it('a store error in the move of its start: retried, never a launch error', async () => {
-    const { w, wrap } = failing('putEcho', () => true);
+    const { w, wrap } = failing('updateTicket', updating((before, after) => before.recordedStatus !== after.recordedStatus));
     w.on = false;
     const h = createHarness({ effectRetry: { attempts: 3, baseMs: 1, capMs: 1 }, wrapStore: wrap });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

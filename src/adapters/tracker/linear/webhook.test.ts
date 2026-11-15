@@ -18,7 +18,7 @@ const fx = (name: string) => JSON.parse(readFileSync(join(import.meta.dirname, '
 const NAMES: Record<string, string> = { 's-hr': 'Human Review', 's-ai': 'AI Review' };
 const LOGICAL: Record<string, any> = { 'Human Review': 'human_review', 'AI Review': 'ai_review' };
 
-function ctx(echoes: string[] = []): MapContext {
+function ctx(): MapContext {
   return {
     projectsOfTeam: (k) => (k === 'REL' ? ['p'] : []),
     labelsOf: async () => [],
@@ -27,7 +27,7 @@ function ctx(echoes: string[] = []): MapContext {
     stateNameById: (_t, id) => NAMES[id],
     stateTypeById: (_t, id) => (id === 's-x' ? 'canceled' : 'started'),
     labelNameById: (_t, id) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre' })[id],
-    isEcho: (k) => echoes.includes(k),
+    factoryActor: () => 'app',
     commands: () => ['retiens', 'fais-le'],
     now: () => 5000,
   };
@@ -350,22 +350,18 @@ describe('mapLinearWebhook', () => {
       { id: 'linear:d6:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
     ]);
   });
-  it('keeps the label event id when the state change is an echo', async () => {
-    const out = await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', ctx(['state:REL-1:AI Review']));
-    expect(out.map((e) => e.id)).toEqual(['linear:d6:label:l-resume']);
-  });
   it('keeps the label event id when the label is renamed', async () => {
     const renamed = { ...ctx(), labelNameById: (_t: string, id: string) => ({ 'l-bug': 'bug', 'l-resume': 'agent:resume' })[id] };
     const ids = async (c: MapContext) => (await mapLinearWebhook(fx('issue-moved-labeled'), 'd6', c)).map((e) => e.id);
     expect(await ids(renamed)).toEqual(await ids(ctx()));
   });
-  it('drops echoes of our own writes', async () => {
-    expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd7', ctx(['state:REL-1:AI Review', 'label:REL-1:agent:reprendre']))).toEqual([]);
-  });
-  it('drops echoes found by an asynchronous lookup, as the store answers', async () => {
-    const echoes = ['state:REL-1:AI Review', 'label:REL-1:agent:reprendre'];
-    const c = { ...ctx(), isEcho: async (k: string) => echoes.includes(k) };
-    expect(await mapLinearWebhook(fx('issue-moved-labeled'), 'd9', c)).toEqual([]);
+  it("drops the moves and label writes of the factory's app, known by the webhook's actor whatever its type, for no time limit (ORC-346)", async () => {
+    for (const type of ['user', 'OauthClient', 'app']) {
+      expect(await mapLinearWebhook({ ...fx('issue-moved-labeled'), actor: { id: 'app', type, name: 'Factory' } }, 'd7', ctx())).toEqual([]);
+    }
+    // Not connected to Linear yet, the factory knows no app of its own: the change is mapped, unsigned.
+    const unknown = await mapLinearWebhook({ ...fx('issue-moved-labeled'), actor: { id: 'app', type: 'OauthClient', name: 'Factory' } }, 'd7', { ...ctx(), factoryActor: () => undefined });
+    expect(unknown.map((e) => [e.type, e.taint])).toEqual([['status.changed', 'untrusted'], ['label.changed', 'untrusted']]);
   });
   it('drops a label change the factory already knows, caught up by the reconciliation first (ORC-185)', async () => {
     const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
@@ -378,17 +374,11 @@ describe('mapLinearWebhook', () => {
     expect(await mapLinearWebhook(removed, 'd11', known(undefined))).toHaveLength(2);
   });
 
-  it('maps a removed label as label.changed, and drops the echo of a removal the factory made (ORC-160)', async () => {
+  it('maps a removed label as label.changed (ORC-160)', async () => {
     const removed = { ...fx('issue-moved-labeled'), data: { ...fx('issue-moved-labeled').data, labelIds: ['l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } };
     expect(await mapLinearWebhook(removed, 'd10', ctx())).toEqual([
       { id: 'linear:d10:label:l-resume', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'agent:reprendre', change: 'added' } },
       { id: 'linear:d10:label:l-bug', type: 'label.changed', at: 5000, schemaVersion: 3, taint: 'trusted', actor: 'user-lilian', projectId: 'p', ticketId: 'REL-1', payload: { label: 'bug', change: 'removed' } },
-    ]);
-    // An addition's echo does not hide a removal of the same label, nor the other way round.
-    expect((await mapLinearWebhook(removed, 'd10', ctx(['label-removed:REL-1:bug']))).map((e) => e.payload)).toEqual([{ label: 'agent:reprendre', change: 'added' }]);
-    expect((await mapLinearWebhook(removed, 'd10', ctx(['label:REL-1:bug']))).map((e) => e.payload)).toEqual([
-      { label: 'agent:reprendre', change: 'added' },
-      { label: 'bug', change: 'removed' },
     ]);
   });
 
@@ -1048,11 +1038,11 @@ describe('ingest', () => {
     expect(await ids()).toHaveLength(1);
   });
 
-  it('records the labels an issue webhook reads, echoes included, once its events are in the inbox (ORC-185)', async () => {
+  it("records the labels an issue webhook reads, the factory's own included, once its events are in the inbox (ORC-185)", async () => {
     const recorded: unknown[][] = [];
     const body = { ...fx('issue-moved-labeled'), webhookTimestamp: 2000 };
     // `lost` was added by a webhook that never came: this one only adds agent:reprendre, so `lost` stays unknown.
-    const c = { ...ctx(['label:REL-1:agent:reprendre']), now: () => 2000, knownLabels: async () => ({ labels: ['bug'], at: 0 }), recordLabels: async (...a: unknown[]) => void recorded.push(a) };
+    const c = { ...ctx(), now: () => 2000, knownLabels: async () => ({ labels: ['bug'], at: 0 }), recordLabels: async (...a: unknown[]) => void recorded.push(a) };
     const { raw, sig } = signed(body);
     const ok = createLinearIngest({ secret: () => 'sec', ctx: c, accept: async () => true, log: () => {} });
     expect(await ok(raw, { 'linear-signature': sig })).toEqual({ status: 200 });
@@ -1332,13 +1322,13 @@ describe('ingest', () => {
     ]);
   });
 
-  it('writes once when the same webhook arrives twice while the echo lookup is pending', async () => {
+  it('writes once when the same webhook arrives twice while the lookup of its labels known is pending', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { accept, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
-      ctx: { ...ctx(), now: () => 1000, isEcho: async () => (await gate, false) },
+      ctx: { ...ctx(), now: () => 1000, knownLabels: async () => (await gate, undefined) },
       accept,
       log: () => {},
     });
@@ -1349,19 +1339,19 @@ describe('ingest', () => {
     expect(await ids()).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:00.000Z:label:l-resume']);
   });
 
-  it('writes two webhooks in arrival order even when the echo lookup of the first is slower', async () => {
+  it('writes two webhooks in arrival order even when the store lookup of the first is slower', async () => {
     let release!: () => void;
     const slow = new Promise<void>((r) => (release = r));
     const { accept, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
-      // The first webhook moves the ticket to AI Review, the second to Human Review; only the first lookup waits.
-      ctx: { ...ctx(), now: () => 1000, isEcho: async (k: string) => (k === 'state:REL-1:AI Review' ? (await slow, false) : false) },
+      // The first webhook moves the ticket to AI Review and adds a label, the second moves it to Human Review; only the first looks its labels up.
+      ctx: { ...ctx(), now: () => 1000, knownLabels: async () => (await slow, undefined) },
       accept,
       log: () => {},
     });
     const moved = fx('issue-moved-labeled');
-    const first = { ...moved, updatedFrom: { stateId: 's-hr' } };
+    const first = moved;
     const second = {
       ...moved,
       data: { ...moved.data, updatedAt: '2026-10-15T10:00:01.000Z', stateId: 's-hr', state: { id: 's-hr', name: 'Human Review' } },
@@ -1374,15 +1364,15 @@ describe('ingest', () => {
     expect(await ids()).toEqual([]);
     release();
     await both;
-    expect(await ids()).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:01.000Z']);
+    expect(await ids()).toEqual(['linear:issue:u1:2026-10-15T10:00:00.000Z', 'linear:issue:u1:2026-10-15T10:00:00.000Z:label:l-resume', 'linear:issue:u1:2026-10-15T10:00:01.000Z']);
   });
 
-  it('answers 500 to a webhook whose echo lookup failed, and keeps ingesting', async () => {
+  it('answers 500 to a webhook whose lookup of its labels known failed, and keeps ingesting', async () => {
     let fail = true;
     const { accept, ids } = inbox();
     const ingest = createLinearIngest({
       secret: () => 'sec',
-      ctx: { ...ctx(), now: () => 1000, isEcho: async () => { if (fail) throw new Error('store down'); return false; } },
+      ctx: { ...ctx(), now: () => 1000, knownLabels: async () => { if (fail) throw new Error('store down'); return undefined; } },
       accept,
       log: () => {},
     });

@@ -100,7 +100,6 @@ const dateToMs = (value: Date | string | null): number => {
   return value instanceof Date ? value.getTime() : new Date(value).getTime();
 };
 
-const echoId = (key: string) => `echo:${key}`;
 
 /**
  * Queue order of the SQLite store: priority 1 (urgent) first, 0 (none) after 4 (low), then age, then
@@ -1467,39 +1466,6 @@ export class PgStore implements AsyncStore {
           and payload->>'queue' is not null ${ofQueue}
       `,
     );
-  }
-
-  /**
-   * An echo is a time-bounded marker. It lives in `timers` with `kind = 'echo'` and status `echo`,
-   * which keeps `dueTimers` from firing it. Only the existing echo API uses this row shape.
-   */
-  async putEcho(key: string, until: number): Promise<void> {
-    const ticketId = key.split(':')[1] ?? key;
-    const now = this.now();
-    await this.db.execute(sql`
-      insert into timers (id, ticket_id, kind, due_at, payload, status, created_at)
-      values (
-        ${echoId(key)}, ${ticketId}, 'echo', to_timestamp(${until / 1000}),
-        ${JSON.stringify({ key, until })}::jsonb, 'echo', to_timestamp(${now / 1000})
-      )
-      on conflict (id) do update set
-        ticket_id = excluded.ticket_id,
-        due_at = excluded.due_at,
-        payload = excluded.payload,
-        status = 'echo'
-    `);
-  }
-
-  async isEcho(key: string, now: number): Promise<boolean> {
-    const result = await this.db.execute<{ found: boolean }>(
-      sql`
-        select exists(
-          select 1 from timers
-          where id = ${echoId(key)} and status = 'echo' and due_at >= to_timestamp(${now / 1000})
-        ) as found
-      `,
-    );
-    return result.rows[0]?.found ?? false;
   }
 
   async getMeta(key: string): Promise<string | undefined> {

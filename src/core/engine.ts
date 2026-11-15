@@ -2024,9 +2024,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         if (usage) return usage;
       }
       const outcome = job.queue === 'dev' ? (stagnationBlock(event.payload, workflow) ?? attemptDecision(event.payload, job)) : event.payload.outcome;
-      // Already blocked (the agent asked through `ask`, a human's stop…): it keeps its reason and gets no second notice.
+      // Already blocked (a human's stop, a question journaled before ORC-400…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, workflow, { ...outcome, job: jobName });
-      // A run that ended well on a ticket already blocked (`ask`, then the end of its turn): no output is expected of it, its question stays.
+      // A run that ended well on a ticket already blocked (the MCP's `ask` before ORC-400, then the end of its turn): no output is
+      // expected of it, its question stays.
       if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);

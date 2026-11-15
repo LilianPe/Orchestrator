@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, toke
 CREATE INDEX IF NOT EXISTS runs_status ON runs (status);
 CREATE TABLE IF NOT EXISTS timers (key TEXT PRIMARY KEY, fire_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS queue (project_id TEXT, ticket_id TEXT, job TEXT, queue TEXT NOT NULL, rank INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, job));
-CREATE TABLE IF NOT EXISTS echoes (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT, event_id TEXT NOT NULL, seq INTEGER NOT NULL, i INTEGER NOT NULL, status TEXT NOT NULL, lease_until INTEGER, lease TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS outbox_open ON outbox (project_id, ticket_id, status, seq, i);
@@ -738,15 +737,6 @@ export class SqliteStore implements Store {
 
   async removeFromQueue(projectId: string, ticketId: string, queue?: QueueName): Promise<void> {
     this.db.prepare('DELETE FROM queue WHERE project_id = ? AND ticket_id = ? AND (? IS NULL OR queue = ?)').run(projectId, ticketId, queue ?? null, queue ?? null);
-  }
-
-  async putEcho(key: string, until: number): Promise<void> {
-    this.db.prepare('INSERT INTO echoes (key, until) VALUES (?, ?) ON CONFLICT DO UPDATE SET until = excluded.until').run(key, until);
-  }
-
-  async isEcho(key: string, now: number): Promise<boolean> {
-    const row = this.db.prepare('SELECT until FROM echoes WHERE key = ?').get(key) as { until: number } | undefined;
-    return !!row && row.until >= now;
   }
 
   async markAcked(eventId: string, at: number): Promise<void> {

@@ -64,8 +64,8 @@ function readDelivery(value: string): KeptDelivery {
  */
 export function createLinearIngest(d: IngestDeps) {
   const retry = d.retry ?? DELIVERY_RETRY;
-  // Webhooks are mapped and written one at a time, in arrival order: the echo lookup awaits the
-  // store, and a later webhook of the same ticket must not reach the inbox first.
+  // Webhooks are mapped and written one at a time, in arrival order: the lookup of the labels known awaits
+  // the store, and a later webhook of the same ticket must not reach the inbox first.
   const inTurn = d.serial ?? serial();
   // Per issue, by its stable id: webhooks are mapped in arrival order and written in arrival order, while their
   // messages are classified side by side; those of other issues wait for none of it.
@@ -192,7 +192,7 @@ export function createLinearIngest(d: IngestDeps) {
   /**
    * A kept delivery: mapped in the turn after the issue's earlier maps, classified out of any turn, written in the turn
    * after the issue's earlier writes, then let go. A webhook with no message waits for the earlier writes before it is
-   * mapped, as when it is written before its answer: what it reads (labels known, echoes) is theirs.
+   * mapped, as when it is written before its answer: what it reads (labels known) is theirs.
    */
   function deliver(key: string, { delivery: { at }, body }: KeptDelivery, o: { resumed?: boolean; kept?: Promise<boolean> } = {}): Promise<void> {
     const issue = issueKeyOf(body) ?? '';

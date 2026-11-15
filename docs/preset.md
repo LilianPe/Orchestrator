@@ -57,7 +57,7 @@ The network level is chosen per repository (Limited by default); a step can only
 
 ### The agent's tools per step (ORC-383)
 
-Each agent step has a list of built-in tools, passed to `claude --tools` and enforced a second time by the pack's `PreToolUse` hook, which refuses any other tool and journals it (rule `tool-not-allowed`, [pack](pack-and-skills.md#pretooluse-hook-and-refusal-log)). The factory's MCP tools (`submit_result`, `ask`, `kb_search`) are always beside them.
+Each agent step has a list of built-in tools, passed to `claude --tools` and enforced a second time by the pack's `PreToolUse` hook, which refuses any other tool and journals it (rule `tool-not-allowed`, [pack](pack-and-skills.md#pretooluse-hook-and-refusal-log)). The factory's MCP tools (`submit_result`, `kb_search`) are always beside them; the MCP has no `ask` (ORC-400).
 
 | Steps | Default tools |
 | -- | -- |
@@ -89,7 +89,7 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 | Blocked at | A reply relaunches |
 | -- | -- |
-| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including the MCP's `ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply. `fix-review` resumes itself on the reply, then goes back through the review (ORC-184) |
+| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply. `fix-review` resumes itself on the reply, then goes back through the review (ORC-184) |
 | pickup, launch | the job being launched, its checks included |
 | `verify`, `verify_fix`, `verify_rebase`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
 | `verify` of a job that does not fix (`verify_failure: block`, the review of a version frozen before ORC-183) | `dev-feedback`, which writes |

@@ -27,7 +27,7 @@ After a `limit` result or a failure, a code run **blocks** the ticket and Relais
 
 ## Blocked tickets
 
-A ticket is **blocked** after: a failure or a cap, failed verifications, a CI still red or an AI review still finding after the `limits.ci_fix_attempts` rounds of the review and CI loop, a refused pickup check, a question from the agent (a blocked `submit_result`, or the MCP's `ask`), a stop, a lease that expired twice in a row, too many relaunches after an outage, a launch error (worktree setup, `git fetch`, knowledge repository…), or an event whose decision failed (« Event <id> set aside », see [Dead-letter](#dead-letter-and-factory-run-repair-orc-175)). The reason is visible in the UI (Needs you, grouped by cause) and in the blocking comment on the Linear ticket, the only escalation channel ([template](linear.md#the-blocking-comment-orc-196)).
+A ticket is **blocked** after: a failure or a cap, failed verifications, a CI still red or an AI review still finding after the `limits.ci_fix_attempts` rounds of the review and CI loop, a refused pickup check, a question from the agent (a blocked `submit_result`), a stop, a lease that expired twice in a row, too many relaunches after an outage, a launch error (worktree setup, `git fetch`, knowledge repository…), or an event whose decision failed (« Event <id> set aside », see [Dead-letter](#dead-letter-and-factory-run-repair-orc-175)). The reason is visible in the UI (Needs you, grouped by cause) and in the blocking comment on the Linear ticket, the only escalation channel ([template](linear.md#the-blocking-comment-orc-196)).
 
 To unblock it: **reply in the ticket** (comment, or the agent's session): the blocked step restarts right away. A ticket blocked by a set-aside event is repaired with `factory run repair <ticket>`.
 
@@ -75,7 +75,7 @@ As soon as it is read, each line of the run's output is masked (`[masked]`), bef
 Examples of reading the database (with `sqlite3`, daemon stopped or read-only):
 
 ```bash
-sqlite3 ~/.relais/relais.db '.tables'      # tickets, events, runs, timers, queue, echoes, meta
+sqlite3 ~/.relais/relais.db '.tables'      # tickets, events, runs, timers, queue, meta
 sqlite3 ~/.relais/relais.db "select id, status, cost_usd, datetime(started_at/1000,'unixepoch') from runs order by started_at desc limit 10"
 ```
 

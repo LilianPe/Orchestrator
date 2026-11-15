@@ -4,8 +4,8 @@ import { classifyMessage } from '../../../core/human-message.js';
 import { SPEC_COMMANDS } from '../../../core/spec.js';
 import type { MessageClassifier } from '../../runner/message-classifier.js';
 import { maskTranscriptLine } from '../../runner/transcript.js';
-import { isEffectComment, IssueNotFoundError, labelEchoKey, stateEchoKey } from '../types.js';
-import { labelChanges, type KnownLabels } from './labels.js';
+import { isEffectComment, IssueNotFoundError } from '../types.js';
+import { applyWrite, labelChanges, type KnownLabels } from './labels.js';
 import { holds, isNoRepo, namesOtherRepo, resolveRoute, type Route } from '../../../core/routing.js';
 import { SCHEMA_VERSION, type LogicalState, type FactoryEvent, type Taint, type TicketState } from '../../../core/types.js';
 
@@ -40,8 +40,8 @@ export interface MapContext {
   /** Linear type of a state (`canceled`, `completed`…), from the team's cache. */
   stateTypeById(teamKey: string, stateId: string): string | undefined;
   labelNameById(teamKey: string, labelId: string): string | undefined;
-  /** May read the store, hence the promise. */
-  isEcho(key: string): boolean | Promise<boolean>;
+  /** The Linear id of the factory's app user (`appUserId`), unknown before Linear is connected: the actor of its own writes (ORC-346). */
+  factoryActor?(): string | undefined;
   commands(projectId: string): string[];
   now(): number;
   /** The ticket's labels as the factory last read them, and when (ORC-185); undefined when it never did. */
@@ -192,15 +192,21 @@ async function commentEvents(body: any, identifier: string, projectId: string, a
   return [{ type: 'ticket.commented', payload: { ...said, author, kind: classifyMessage(classifiedText('ticket.commented', said.body)) } }];
 }
 
+/** A change the factory's app made: its own move or label write, known by the webhook's actor whatever its type (ORC-346). */
+const byFactory = (body: any, ctx: MapContext): boolean => {
+  const app = ctx.factoryActor?.();
+  return app !== undefined && idOf(body.actor?.id) === app;
+};
+
 async function issueEvents(body: any, identifier: string, teamKey: string, projectId: string, ctx: MapContext): Promise<PartialEvent[]> {
-  if (body.action !== 'update') return [];
+  if (body.action !== 'update' || byFactory(body, ctx)) return [];
   const out: PartialEvent[] = [];
   const data = body.data ?? {};
   const from = body.updatedFrom ?? {};
   if (from.stateId !== undefined) {
     const toName: string | undefined = data.state?.name ?? ctx.stateNameById(teamKey, data.stateId);
     const fromName = ctx.stateNameById(teamKey, from.stateId);
-    if (toName && !(await ctx.isEcho(stateEchoKey(identifier, toName)))) {
+    if (toName) {
       out.push({
         type: 'status.changed',
         payload: {
@@ -217,11 +223,9 @@ async function issueEvents(body: any, identifier: string, teamKey: string, proje
     const known = changes.length ? await ctx.knownLabels?.(projectId, identifier) : undefined;
     for (const { id, change } of changes) {
       const name = ctx.labelNameById(teamKey, id);
-      if (name && known && known.labels.includes(name) === (change === 'added')) continue;
-      if (name && !(await ctx.isEcho(labelEchoKey(identifier, name, change)))) {
-        const otherRepo = namesOtherRepo(ctx.projectsOfTeam(teamKey), projectId, name);
-        out.push({ type: 'label.changed', payload: { label: name, change, ...(otherRepo ? { otherRepo } : {}) }, suffix: `:label:${id}` });
-      }
+      if (!name || (known && known.labels.includes(name) === (change === 'added'))) continue;
+      const otherRepo = namesOtherRepo(ctx.projectsOfTeam(teamKey), projectId, name);
+      out.push({ type: 'label.changed', payload: { label: name, change, ...(otherRepo ? { otherRepo } : {}) }, suffix: `:label:${id}` });
     }
   }
   return out;
@@ -271,7 +275,7 @@ function issueIdentifier(body: any): string | undefined {
 
 /**
  * Applies an issue webhook's own label changes to the labels the factory knows (ORC-185), the factory's
- * own echoes included: what the reconciliation compares Linear with. A label the team's cache cannot
+ * own writes included: what the reconciliation compares Linear with. A label the team's cache cannot
  * name is left out; nothing is recorded for a ticket never read yet.
  */
 export async function recordIssueLabels(body: any, ctx: MapContext): Promise<void> {
@@ -289,15 +293,13 @@ export async function recordIssueLabels(body: any, ctx: MapContext): Promise<voi
   // Never read yet: the reconciliation's first pass records them.
   const known = await ctx.knownLabels(projectId, identifier);
   if (!known) return;
-  const next = new Set(known.labels);
-  for (const { label: id, change } of labelChanges(from as string[], body.data.labelIds as string[])) {
+  const named = labelChanges(from as string[], body.data.labelIds as string[]).flatMap(({ label: id, change }) => {
     const name = ctx.labelNameById(teamKey, id);
-    if (!name) continue;
-    if (change === 'added') next.add(name);
-    else next.delete(name);
-  }
-  // A webhook come late still adds what it reported, at the newer date: dropped, its change would be reported again.
-  await ctx.recordLabels(projectId, identifier, [...next], Math.max(at, known.at));
+    return name ? [{ name, change }] : [];
+  });
+  const of = (change: 'added' | 'removed') => named.filter((c) => c.change === change).map((c) => c.name);
+  const next = applyWrite(known, { added: of('added'), removed: of('removed'), at });
+  await ctx.recordLabels(projectId, identifier, next.labels, next.at);
 }
 
 // Linear-Delivery is outside the HMAC: the dedup key must come from the signed body.

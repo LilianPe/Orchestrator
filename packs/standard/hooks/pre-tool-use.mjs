@@ -211,11 +211,12 @@ function fullRead(input) {
 
 /**
  * The run's built-in tools, comma-separated (`FACTORY_TOOLS`, ORC-383), the factory's MCP tools always beside them: any other
- * tool is refused. Unset: a run with every tool, nothing to check.
+ * tool is refused. Unset: a run with every tool, nothing to check. The MCP has no `ask` (ORC-400): a question is a blocked result.
  */
 const TOOLS = process.env.FACTORY_TOOLS?.split(',').filter(Boolean);
+const FACTORY_MCP = ['mcp__factory__submit_result', 'mcp__factory__kb_search'];
 function offList(tool) {
-  if (TOOLS && !tool.startsWith('mcp__factory__') && !TOOLS.includes(tool)) return 'tool-not-allowed';
+  if (TOOLS && !FACTORY_MCP.includes(tool) && !TOOLS.includes(tool)) return 'tool-not-allowed';
   return null;
 }
 

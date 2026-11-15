@@ -145,6 +145,7 @@ export const timers = pgTable(
     index('timers_ticket_id_idx').on(t.ticketId),
     index('timers_due_at_idx').on(t.dueAt),
     index('timers_status_idx').on(t.status),
+    // `echo`: the 60 s markers of the factory's own Linear writes before ORC-346, left inert in an older database.
     check('timers_status_check', sql`${t.status} in ('pending', 'fired', 'cancelled', 'echo')`),
   ],
 );
