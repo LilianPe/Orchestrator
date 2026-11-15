@@ -103,15 +103,18 @@ export class PrPoller {
   /**
    * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
    * (ORC-281), under the webhook's id. A head is judged when the PR comes to it: the head read last outside a take-over is
-   * kept, and the journal is read only for a new one.
+   * kept with the commit verified then, and the journal is read only for a new pair.
    */
   private async lostPush(pass: TicketState, pr: PrInfo, at: number): Promise<void> {
     const head = pr.headSha;
     if (!head) return;
-    const readKey = `lost-push:${pass.projectId}:${pass.ticketId}`;
-    if ((await this.d.store.getMeta(readKey)) === head) return;
     // The factory's push is on the forge before its event: the ticket as it is now, read after the PR, knows the commit it verified.
     const t = (await this.d.store.getTicket(pass.projectId, pass.ticketId)) ?? pass;
+    // A commit verified since moves the window: the head read last, out of it now, is judged again.
+    const readKey = `lost-push:${t.projectId}:${t.ticketId}`;
+    const read = `${head}@${t.verifiedSha ?? ""}`;
+    const last = await this.d.store.getMeta(readKey);
+    if (last === read) return;
     // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
     if (isTakenOver(t)) return;
     if (head !== t.verifiedSha && head !== t.humanHead) {
@@ -121,8 +124,10 @@ export class PrPoller {
         .filter((sha, i, all) => sha !== all[i - 1]);
       const published = heads.at(-1);
       // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
-      // an older one is a human's push, as the webhook reports it.
-      if (published && !heads.slice(-2).includes(head))
+      // an older one is a human's push, as the webhook reports it. With one publication, the head read last was read with that
+      // window or before it, with none to compare with: it is judged as it was.
+      const before = heads.length === 1 && last?.split("@")[0] === head;
+      if (published && !before && !heads.slice(-2).includes(head))
         await this.d.submit({
           ...TRUSTED,
           // What the push brought was verified by no one in the factory (I12).
@@ -136,7 +141,7 @@ export class PrPoller {
           payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
         });
     }
-    await this.d.store.setMeta(readKey, head);
+    await this.d.store.setMeta(readKey, read);
   }
 
   start(intervalMs = 30_000): void {
