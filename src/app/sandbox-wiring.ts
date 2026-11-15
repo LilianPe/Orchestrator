@@ -54,20 +54,37 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
 export const BROWSER_LABEL = 'factory.browser';
 
 /**
- * The capture image of the visual proof (ORC-404): `FACTORY_BROWSER_IMAGE`, when the engine has it and it carries the label
- * of docker/browser.Dockerfile, so that the runner's image named there by mistake is no browser. `detail` says why for
- * the start's log and `factory doctor`. Without it, a required proof stays unavailable, indicative.
+ * The capture image of the visual proof (ORC-404): `FACTORY_BROWSER_IMAGE`, when the engine has it, it carries the label of
+ * docker/browser.Dockerfile (the runner's image named there by mistake is no browser), and it was built on the runner image
+ * the commands run in (one left from before the runner's update would start the application with other tools). `detail`
+ * says why for the start's log and `factory doctor`; it never rejects. Without it, a required proof stays unavailable, indicative.
  */
 export async function browserImage(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<{ image?: string; detail: string }> {
   const cli = env['FACTORY_CONTAINER_CLI'];
-  if (!cli) return { detail: 'no sandboxes (FACTORY_CONTAINER_CLI is not set)' };
+  if (cli !== 'docker' && cli !== 'podman') return { detail: cli ? `FACTORY_CONTAINER_CLI=${cli}: docker or podman expected` : 'no sandboxes (FACTORY_CONTAINER_CLI is not set)' };
   const image = env['FACTORY_BROWSER_IMAGE'];
   if (!image) return { detail: 'FACTORY_BROWSER_IMAGE is not set (see docker/browser.Dockerfile)' };
-  const r = await run(cli, ['image', 'inspect', '--format', `{{index .Config.Labels "${BROWSER_LABEL}"}}`, image], { timeoutMs: 60_000 });
-  if (r.code !== 0) return { detail: `the engine has no image ${image}: ${r.stderr.trim().slice(-500)}` };
-  const label = r.stdout.trim();
-  // A label the image lacks prints as `<no value>` under Docker, empty under Podman.
+  const inspect = async (img: string, format: string): Promise<{ out: string } | { error: string }> => {
+    try {
+      const r = await run(cli, ['image', 'inspect', '--format', format, img], { timeoutMs: 60_000 });
+      return r.code === 0 ? { out: r.stdout.trimEnd() } : { error: `${cli} image inspect ${img} failed (code ${r.code}): ${r.stderr.trim().slice(-500)}` };
+    } catch (err) {
+      return { error: `${cli} could not run: ${(err as Error).message}` };
+    }
+  };
+  const own = await inspect(image, `{{index .Config.Labels "${BROWSER_LABEL}"}}\t{{json .RootFS.Layers}}`);
+  if ('error' in own) return { detail: own.error };
+  const [label = '', layers = '[]'] = own.out.split('\t');
+  // A label the image lacks prints as `<no value>` under Docker, empty under Podman: the line then starts with the tab, kept by `trimEnd`.
   if (!label || label === '<no value>') return { detail: `${image} is not a capture image: no label ${BROWSER_LABEL} (see docker/browser.Dockerfile)` };
+  const runner = env['FACTORY_RUNNER_IMAGE'];
+  if (runner) {
+    const base = await inspect(runner, '{{json .RootFS.Layers}}');
+    if ('error' in base) return { detail: base.error };
+    const ours = JSON.parse(layers) as string[];
+    const theirs = JSON.parse(base.out) as string[];
+    if (!theirs.every((l, i) => ours[i] === l)) return { detail: `${image} was not built on ${runner}: build it again on it (see docker/browser.Dockerfile)` };
+  }
   return { image, detail: `the captures run in ${image} (${label})` };
 }
 

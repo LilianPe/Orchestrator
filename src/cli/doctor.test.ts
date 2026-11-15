@@ -351,21 +351,25 @@ jobs:
     expect(result.text).not.toContain('ghp_SENTINEL_VALUE');
   });
 
-  it('says whether the visual proof can be taken on this instance, whatever the verdict (ORC-404)', async () => {
-    const lines: string[] = [];
-    const api = new FakeApi([]);
-    const unavailable = { detail: 'FACTORY_BROWSER_IMAGE is not set' };
-    expect(await runDoctor({ repoPath: '/repo', api, out: (l) => lines.push(l), visualProof: unavailable })).toBe(0);
-    expect(lines).toContain('Visual proof on this instance: unavailable — FACTORY_BROWSER_IMAGE is not set');
-    const json: string[] = [];
-    await runDoctor({ repoPath: '/repo', api, out: (l) => json.push(l), json: true, visualProof: { image: 'b:1', detail: 'the captures run in b:1' } });
-    expect(JSON.parse(json.join('\n'))).toMatchObject({ accepted: true, visualProof: { available: true, detail: 'the captures run in b:1' } });
+  it('puts whether the visual proof can be taken on this instance in the JSON report, whatever the verdict, a failure included (ORC-404)', async () => {
+    const report = async (api: FakeApi, visualProof: { image?: string; detail: string }) => {
+      const json: string[] = [];
+      const code = await runDoctor({ repoPath: '/repo', api, out: (l) => json.push(l), json: true, visualProof });
+      return { code, report: JSON.parse(json.join('\n')) as unknown };
+    };
+    expect(await report(new FakeApi([]), { image: 'b:1', detail: 'the captures run in b:1' })).toEqual({
+      code: 0, report: expect.objectContaining({ accepted: true, visualProof: { available: true, detail: 'the captures run in b:1' } }),
+    });
+    expect(await report(new FakeApi([], [], { failWorkflows: true }), { detail: 'FACTORY_BROWSER_IMAGE is not set' })).toEqual({
+      code: 1, report: expect.objectContaining({ accepted: false, error: expect.any(String), visualProof: { available: false, detail: 'FACTORY_BROWSER_IMAGE is not set' } }),
+    });
   });
 
-  it('says it from the CLI too, before it needs the GitHub App (ORC-404)', async () => {
+  it('says it first in text, from the CLI, once, before it needs the GitHub App (ORC-404)', async () => {
     const lines: string[] = [];
     await runDoctorCommand({ repoPath: '/repo', home: tempHome(), env: {}, out: (line) => lines.push(line) });
     expect(lines[0]).toMatch(/^Visual proof on this instance: unavailable — .*FACTORY_CONTAINER_CLI/);
+    expect(lines.filter((l) => l.startsWith('Visual proof'))).toHaveLength(1);
   });
 
   it('fails with a clear message when the GitHub App is not configured', async () => {

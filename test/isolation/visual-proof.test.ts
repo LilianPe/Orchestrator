@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PlaywrightShooter } from '../../src/adapters/browser/playwright.js';
 import { BROWSER_REQUIREMENTS, WIDTHS } from '../../src/adapters/browser/types.js';
 import { WORKSPACE_TARGET } from '../../src/adapters/sandbox/types.js';
@@ -30,7 +30,8 @@ describe.skipIf(!enabled || !capture)(`the capture image (${cli})`, () => {
   const inspect = (id: string, format: string) => execFileSync(cli, ['inspect', '--format', format, id], { encoding: 'utf8' }).trim();
 
   it('is the browser the daemon wires, and the runner\'s image is not', async () => {
-    const env = { FACTORY_CONTAINER_CLI: cli, FACTORY_BROWSER_IMAGE: capture };
+    // On the runner image the job built: its layers under the capture image's.
+    const env = { FACTORY_CONTAINER_CLI: cli, FACTORY_BROWSER_IMAGE: capture, FACTORY_RUNNER_IMAGE: image };
     expect(await browserImage(env)).toEqual({ image: capture, detail: expect.stringMatching(/playwright-\d/) });
     expect((await browserImage({ ...env, FACTORY_BROWSER_IMAGE: image })).image).toBeUndefined();
   });
@@ -66,7 +67,11 @@ describe.skipIf(!enabled || !capture)(`the capture image (${cli})`, () => {
 /** ORC-404, criterion 1 up to the PR: `verify` takes the six captures, before on the base and after on the commit, in the capture image. */
 describe.skipIf(!enabled || !capture)(`the visual proof in verify, on the capture image (${cli})`, () => {
   const { provider } = useSandboxes('visual-verify', { browserImage: capture });
-  const base = mkdtempSync(join(tmpdir(), 'factory-visual-'));
+  // In a hook: a skipped suite's body still runs at collection, its afterAll never.
+  let base = '';
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), 'factory-visual-'));
+  });
   const BRANCH = 'feat/iso-404';
   const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
   const commit = (cwd: string, files: Record<string, string>, message: string) => {

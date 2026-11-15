@@ -55,28 +55,44 @@ describe('browserImage (ORC-404)', () => {
     };
     return { calls, exec };
   };
-  const labelled = (label: string) => engine(() => ({ stdout: `${label}\n`, stderr: '', code: 0 }));
-  const ENV = { FACTORY_CONTAINER_CLI: 'podman', FACTORY_BROWSER_IMAGE: 'localhost/factory-browser:1' };
+  const ok = (stdout: string): ExecResult => ({ stdout: `${stdout}\n`, stderr: '', code: 0 });
+  const RUNNER = ['sha256:a', 'sha256:b'];
+  /** The capture image with `label`, on `layers`; the runner image, on its own. */
+  const images = (label: string, layers = [...RUNNER, 'sha256:c']) =>
+    engine((a) => (a.at(-1) === 'factory-runner:1' ? ok(JSON.stringify(RUNNER)) : ok(`${label}\t${JSON.stringify(layers)}`)));
+  const ENV = { FACTORY_CONTAINER_CLI: 'podman', FACTORY_BROWSER_IMAGE: 'localhost/factory-browser:1', FACTORY_RUNNER_IMAGE: 'factory-runner:1' };
 
-  it('is none without sandboxes, or without FACTORY_BROWSER_IMAGE, and asks no engine', async () => {
-    const e = labelled('playwright-1.64.1');
+  it('is none without sandboxes, with another engine CLI, or without FACTORY_BROWSER_IMAGE, and asks no engine', async () => {
+    const e = images('playwright-1.64.1');
     expect(await browserImage({ FACTORY_BROWSER_IMAGE: 'x' }, e.exec)).toEqual({ detail: expect.stringMatching(/FACTORY_CONTAINER_CLI/) });
+    expect(await browserImage({ FACTORY_CONTAINER_CLI: 'nerdctl', FACTORY_BROWSER_IMAGE: 'x' }, e.exec)).toEqual({ detail: expect.stringMatching(/nerdctl: docker or podman expected/) });
     expect(await browserImage({ FACTORY_CONTAINER_CLI: 'docker' }, e.exec)).toEqual({ detail: expect.stringMatching(/FACTORY_BROWSER_IMAGE is not set.*docker\/browser\.Dockerfile/) });
     expect(e.calls).toEqual([]);
   });
 
-  it('is the image when the engine has it with the label of docker/browser.Dockerfile', async () => {
-    const e = labelled('playwright-1.64.1');
+  it('is the image when the engine has it with the label of docker/browser.Dockerfile, on the runner image', async () => {
+    const e = images('playwright-1.64.1');
     expect(await browserImage(ENV, e.exec)).toEqual({ image: 'localhost/factory-browser:1', detail: expect.stringContaining('localhost/factory-browser:1 (playwright-1.64.1)') });
-    expect(e.calls).toEqual([{ cmd: 'podman', args: ['image', 'inspect', '--format', '{{index .Config.Labels "factory.browser"}}', 'localhost/factory-browser:1'] }]);
+    expect(e.calls).toEqual([
+      { cmd: 'podman', args: ['image', 'inspect', '--format', '{{index .Config.Labels "factory.browser"}}\t{{json .RootFS.Layers}}', 'localhost/factory-browser:1'] },
+      { cmd: 'podman', args: ['image', 'inspect', '--format', '{{json .RootFS.Layers}}', 'factory-runner:1'] },
+    ]);
   });
 
-  it('is none when the engine lacks the image, or the image is not a capture image (the runner\'s, say)', async () => {
-    const missing = engine(() => ({ stdout: '', stderr: 'Error: localhost/factory-browser:1: image not known', code: 125 }));
-    expect(await browserImage(ENV, missing.exec)).toEqual({ detail: expect.stringMatching(/no image localhost\/factory-browser:1.*image not known/) });
+  it('is none when the image is not a capture image (the runner\'s, say), or was built on another runner image', async () => {
     for (const label of ['', '<no value>']) {
-      expect(await browserImage(ENV, labelled(label).exec)).toEqual({ detail: expect.stringMatching(/not a capture image.*factory\.browser/) });
+      expect(await browserImage(ENV, images(label).exec)).toEqual({ detail: expect.stringMatching(/not a capture image.*factory\.browser/) });
     }
+    expect(await browserImage(ENV, images('playwright-1.64.1', ['sha256:a', 'sha256:old', 'sha256:c']).exec)).toEqual({ detail: expect.stringMatching(/localhost\/factory-browser:1 was not built on factory-runner:1/) });
+  });
+
+  it('is none, and never rejects, when the engine lacks the image, fails, or cannot be run', async () => {
+    const missing = engine(() => ({ stdout: '', stderr: 'Error: localhost/factory-browser:1: image not known', code: 125 }));
+    expect(await browserImage(ENV, missing.exec)).toEqual({ detail: expect.stringMatching(/inspect localhost\/factory-browser:1 failed \(code 125\).*image not known/) });
+    const hung = engine(() => ({ stdout: '', stderr: '', code: 124 }));
+    expect((await browserImage(ENV, hung.exec)).detail).toMatch(/failed \(code 124\)/);
+    const absent: Exec = () => Promise.reject(new Error('spawn podman ENOENT'));
+    expect(await browserImage(ENV, absent)).toEqual({ detail: 'podman could not run: spawn podman ENOENT' });
   });
 });
 

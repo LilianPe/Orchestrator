@@ -228,7 +228,9 @@ export class ContainerSandboxProvider implements SandboxProvider {
     // The router refuses these too, but a backend that accepted them would claim an isolation it does not give.
     const { minLevel, browser, services } = req.requirements;
     if (minLevel !== 'L3') throw new Error(`container sandbox: isolation ${minLevel} not available (L3 only)`);
-    if (browser && !this.opts.browserImage) throw new Error('container sandbox: no browser (no capture image)');
+    // A browser, the capture image's alone (ORC-404).
+    const image = browser ? this.opts.browserImage : this.opts.image;
+    if (!image) throw new Error('container sandbox: no browser (no capture image)');
     const unknown = this.unprovided(services);
     if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
     // Kept comma-separated on a label `inspect` prints in a tab-separated line: what would split it differently is refused.
@@ -251,7 +253,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     try {
       if (services.length) service = await this.service(req, key);
       egress = this.opts.egress && (await this.opts.egress.open(req.runId, { level: req.network, allow: req.allow ?? [] }));
-      const id = await this.start(this.runArgs(req, mounts, egress, service?.id), service ? { DATABASE_URL: databaseUrl(service.password) } : {});
+      const id = await this.start(this.runArgs(req, image, mounts, egress, service?.id), service ? { DATABASE_URL: databaseUrl(service.password) } : {});
       this.known.set(id, { runId: req.runId, joined: !!service });
       return withServices({ id, network: req.network, level: 'L3' }, service);
     } catch (err) {
@@ -348,7 +350,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     return r.stdout.trim();
   }
 
-  private runArgs(req: SandboxRequest, mounts: string[], egress: string | undefined, service?: string): string[] {
+  private runArgs(req: SandboxRequest, image: string, mounts: string[], egress: string | undefined, service?: string): string[] {
     return [
       'run', '-d',
       '--label', `${ATTEMPT}=${req.runId}`, '--label', `factory.ticket=${req.ticketId}`, '--label', `${NETWORK}=${req.network}`,
@@ -371,7 +373,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--workdir', WORKSPACE_TARGET,
       // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213). With services, their loopback (ORC-309), which has none either.
       '--network', service ? `container:${service}` : 'none',
-      req.requirements.browser ? this.opts.browserImage! : this.opts.image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
+      image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
     ];
   }
 

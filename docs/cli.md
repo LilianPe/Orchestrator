@@ -68,7 +68,7 @@ Check before entrusting a repository: refuses (exit code `1`) a CI that can expo
 - `--json`: machine report (workflows, triggers, secrets yes/no, environments, verdict).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
 - Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
-- Says first whether this instance can take the visual proof (ORC-404): `available` with the capture image of `FACTORY_BROWSER_IMAGE` and its Playwright version, or `unavailable` and why (no sandboxes, the variable unset, the image absent from the engine, or an image without the label of `docker/browser.Dockerfile`). Of the instance, not the repository: the verdict does not change; `--json` has it under `visualProof` (`available`, `detail`).
+- Says first whether this instance can take the visual proof (ORC-404): `available` with the capture image of `FACTORY_BROWSER_IMAGE` and its Playwright version, or `unavailable` and why (no sandboxes, the variable unset, the image absent from the engine or the engine not answering, an image without the label of `docker/browser.Dockerfile`, or one not built on `FACTORY_RUNNER_IMAGE`). Of the instance, not the repository: the verdict does not change; `--json` has it under `visualProof` (`available`, `detail`), a failed check included.
 
 Full rule, examples and limits: [`github.md`](github.md).
 
