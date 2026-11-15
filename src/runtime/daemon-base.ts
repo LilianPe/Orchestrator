@@ -20,6 +20,10 @@ import type { DaemonDeps, ProjectRuntime } from './daemon.js';
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 export const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
 
+/**
+ * The run's output, validated again: absent or invalid, the agent submitted none (ORC-289). A store
+ * that cannot be read rejects: that is the infrastructure's, not the agent's.
+ */
 export async function storedOutput(store: Store, runId: string): Promise<AgentOutput | undefined> {
   const raw = await store.getMeta(agentOutputKey(runId));
   if (raw === undefined) return undefined;
@@ -36,6 +40,10 @@ export function endFacts({ stagnation, infra, usageLimit, overBudget }: Pick<Run
   return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}), ...(overBudget ? { overBudget } : {}) };
 }
 
+/**
+ * What a run's stagnation is watched against (ORC-136, ORC-187). Only a dev job has its worktree read for a loop: `decide`
+ * blocks no ticket on a question, whose checkout stays out of it.
+ */
 export function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation: StagnationBounds & { silentMs: number } } {
   return { stagnation: { silentMs: wf.limits.silentAfterMs, ...(job.queue === 'dev' ? { repeats: wf.limits.repeatedFailures } : {}) } };
 }
@@ -125,13 +133,6 @@ export abstract class DaemonBase {
       now: () => d.clock.now(),
     });
   }
-
-  /**
-   * The one way in for an event (ORC-147): writes it to the inbox and resolves once the row is
-   * committed, then lets the worker process it from the inbox. Resolves `false` for an id the
-   * inbox already holds (a duplicate: nothing more happens). Rejects when the write fails: the
-   * event was not taken, and the producer must report it (a webhook answers 500).
-   */
 
   project(id: string): ProjectRuntime {
     const p = this.d.projects.find((x) => x.id === id);
@@ -246,13 +247,6 @@ export abstract class DaemonBase {
     return t;
   }
 
-  /**
-   * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
-   * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
-   * An issue the tracker no longer finds (deleted meanwhile, ORC-302) leaves it without one: its decision
-   * ignores it, journaled, instead of retrying a read that would fail again. Any other read error throws: retried.
-   */
-
   /** A project without effects (ORC-231): the outbox keeps its effects, and the orchestrator makes none of its writes outside it. */
   protected noEffect(projectId: string): boolean {
     return this.d.projects.find((p) => p.id === projectId)?.effects === 'none';
@@ -266,19 +260,12 @@ export abstract class DaemonBase {
   }
 
   /**
-   * An effect of a project without effects (ORC-231), kept instead of made: what it would have written, as a JSON file and its row in
-   * `artifacts`, once by the row's id. A `publish` keeps the PR it would have opened, its title, its body and the ticket's diff, then
-   * goes on as a publication does (`publish.done`), so the run ends as it would have; a `reconcile` reads nothing and keeps nothing.
+   * Labels written by the factory (ORC-346): what the write set goes into the labels known (`labelsWritten`), so a pass
+   * that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
    */
   protected async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
     await this.d.labelsWritten?.(projectId, ticketId, await this.d.tracker.setLabels(ticketId, add, remove));
   }
-
-  /**
-   * Plans each project's reconciliation in the store (ORC-185), in `RECONCILE_MS` (the connection to Linear passes
-   * at once), unless a timer already plans it (a restart): its firings then arm the next ones. The timer of a
-   * project gone from the configuration is deleted: it would fire for a project the factory no longer knows.
-   */
 
   // Provided by the classes above (ORC-394), each in its module.
   abstract accept(event: FactoryEvent | StoredEvent): Promise<boolean>;

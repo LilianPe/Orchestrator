@@ -53,7 +53,6 @@ const setupPendingKey = (path: string): string => `setup-pending:${path}`;
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
  * names, which one does it unmeasured; in a sandbox the egress proxy blocks it anyway (ORC-213).
  */
-
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 
 /** Half of what Linux takes for one environment string (128 KiB): past it, the launch itself would fail. */
@@ -66,11 +65,6 @@ export function fullReadEnv(cwd: string, paths: readonly string[]): Record<strin
   if (Buffer.byteLength(list) > FULL_READ_ENV_MAX_BYTES) throw new Error(`${paths.length} paths: too long for the environment`);
   return { FACTORY_FULL_READ_PATHS: list };
 }
-
-/**
- * The run's output, validated again: absent or invalid, the agent submitted none (ORC-289). A store
- * that cannot be read rejects: that is the infrastructure's, not the agent's.
- */
 
 /** A usage limit whose reset the CLI did not tell: tried again after this long (ORC-340). ponytail: a fixed probe, hourly. */
 const USAGE_RETRY_MS = 60 * 60_000;
@@ -92,7 +86,6 @@ class TicketBudgetError extends Error {}
  * stay in the daemon's log (ORC-364); the ticket gets the command's name, without its directory (a CLI configured by
  * its path), and its code.
  */
-
 const launchErrorTold = (err: unknown): string =>
   err instanceof ExecFailure ? `${basename(err.cmd)} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
 
@@ -102,11 +95,6 @@ const causeChain = (err: unknown): string => {
   for (let e: unknown = err; e instanceof Error && parts.length < 5; e = e.cause) parts.push(e.message);
   return parts.join(' ← ') || String(err);
 };
-
-/**
- * What a run's stagnation is watched against (ORC-136, ORC-187). Only a dev job has its worktree read for a loop: `decide`
- * blocks no ticket on a question, whose checkout stays out of it.
- */
 
 export interface StartOpts {
   job: string;
@@ -144,7 +132,6 @@ export interface StartFrom {
  * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads. Its message is what a launch
  * error tells the ticket (`launchErrorTold`): its retries spent, the effect's failure reaches it as such (ORC-364).
  */
-
 class RetryableStart extends Error {
   constructor(readonly failure: unknown) {
     super(failure instanceof Error ? launchErrorTold(failure) : String(failure), { cause: failure });
@@ -155,7 +142,6 @@ class RetryableStart extends Error {
  * Starts of a queue item that failed before their `run.started` (ORC-339): handed out again after 2 s, 4 s, 8 s, 16 s,
  * doubled up to 5 min; past 5 attempts, or 14 (about 33 min) when the failure is transient (ORC-343), the ticket is blocked.
  */
-
 export const START_RETRY = { attempts: 5, transientWindowMs: TRANSIENT_WINDOW_MS, baseMs: 2_000, capMs: 300_000 } satisfies RetryPolicy;
 
 /** A start behind another daemon's launch not started yet (ORC-359): that very start is that launch's, another goes back in line. */
@@ -164,6 +150,11 @@ const behindLaunch = (launch: NonNullable<TicketState['launching']>, start: Pend
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 export type StartOutcome = 'queued' | 'deferred' | 'done';
 
+/**
+ * The session role of an attempt (ORC-217): the ticket session is the implementer's, any other `dev`-queue
+ * session a reviewer's, a read-only question the answerer's.
+ * ponytail: read from the job's shape, not declared in the workflow; a `role:` per job if a pack needs another.
+ */
 function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (ticketSession) return 'implementer';
   if (job.queue === 'dev') return 'reviewer';
@@ -176,16 +167,16 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
   return existsSync(projects) && readdirSync(projects).some((dir) => existsSync(join(projects, dir, `${sessionId}.jsonl`)));
 }
 
-/**
- * `factory/preuve-visuelle` (ORC-176): the captures the factory took, or that there is none to take. A required proof the instance
- * could not take is neutral, indicative until the application starts reliably in the sandbox (ORC-152): it blocks nothing.
- */
-
 /** A block made out of a decision, its step to resume as the engine's `block` journals it (ORC-196). */
 const blockedOn = (kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, job });
 
 /** The daemon's launches (ORC-394): the queues, a start and its launch, the pickup guard, the sandbox and the setup, the run's stream and its end. */
 export abstract class DaemonLaunch extends DaemonEffects {
+  /**
+   * Logged, never thrown: a sandbox left behind is recover()'s at the next start. The run's own
+   * `~/.claude` goes with it (a dir left by a failed removal is purged with the run's dir, at 30 days).
+   * Then the security log of the attempt `owner` ran there, if any (ORC-296): its journals are complete.
+   */
   protected async destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void> {
     await this.d.sandboxes?.destroy(id).catch((err: Error) => this.log('error', `sandbox ${id} not destroyed: ${err.message}`));
     if (this.d.runsDir) rmSync(join(this.d.runsDir, runId, 'claude'), { recursive: true, force: true });
@@ -477,12 +468,6 @@ export abstract class DaemonLaunch extends DaemonEffects {
     }
   }
 
-  /**
-   * `key`: the idempotency key of the effect (ORC-162, docs/idempotency.md). Only a replay (a row
-   * claimed before) looks for what an earlier execution wrote: a first execution has nothing to find.
-   * A replay that finds the effect already made writes nothing and says so.
-   */
-
   /** What the lenses of a round read of the contested findings (ORC-184), resolved on the commit they were found on, kept for the round. */
   private async contestedText(projectId: string, ticketId: string, contested: NonNullable<TicketState['contested']>): Promise<string | undefined> {
     const { store } = this.d;
@@ -496,11 +481,10 @@ export abstract class DaemonLaunch extends DaemonEffects {
   }
 
   /**
-   * The `review` effect (ORC-183): a lens's findings kept on the commit it read, in place of what that lens kept there before.
-   * The publishing one then posts every lens's findings on that commit as one GitHub review, each on its line, or listed in its
-   * text when GitHub cannot place one, and `factory/review`, failed on a blocking finding. Every text through the
-   * `OutputPolicy`, a refused one replaced by its notice. Keyed: a replay finds its review by the effect's id, and the check by
-   * the commit's. Any failure throws, and the outbox retries it: its move to Human Review waits behind it, and a dead one blocks the ticket.
+   * `admitted` is called once the start took its slot, or will not take one (`drainNow`); `recorded`
+   * once the run is written. Resolves `queued` when the start went to the queue, `deferred` when it was set pending
+   * behind a run that holds the ticket, `done` otherwise (started, refused or blocked). Throws `RetryableStart` when
+   * its launch failed before its `run.started`.
    */
   protected async startRun(
     project: ProjectRuntime,

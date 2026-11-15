@@ -203,12 +203,6 @@ export function logicalFromName(states: Workflow['states'], name: string): Logic
   return (Object.entries(states) as [LogicalState, string][]).find(([, n]) => n === name)?.[0];
 }
 
-/**
- * The session role of an attempt (ORC-217): the ticket session is the implementer's, any other `dev`-queue
- * session a reviewer's, a read-only question the answerer's.
- * ponytail: read from the job's shape, not declared in the workflow; a `role:` per job if a pack needs another.
- */
-
 /** The event of an attempt gone without a result (ORC-220), once per attempt by its id. */
 function lostEvent(run: Pick<RunRecord, 'id' | 'projectId' | 'ticketId' | 'job'>, cause: EventPayloads['run.lost']['cause'], at: number): FactoryEvent<'run.lost'> {
   return { ...TRUSTED, id: `attempt:${run.id}:lost`, type: 'run.lost', at, projectId: run.projectId, ticketId: run.ticketId, payload: { runId: run.id, job: run.job, cause } };
@@ -223,6 +217,12 @@ export interface TakeOverDesk {
 }
 
 export class Daemon extends DaemonLaunch {
+  /**
+   * The one way in for an event (ORC-147): writes it to the inbox and resolves once the row is
+   * committed, then lets the worker process it from the inbox. Resolves `false` for an id the
+   * inbox already holds (a duplicate: nothing more happens). Rejects when the write fails: the
+   * event was not taken, and the producer must report it (a webhook answers 500).
+   */
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
       if (fresh) this.wake();
@@ -613,12 +613,6 @@ export class Daemon extends DaemonLaunch {
     );
   }
 
-  /**
-   * Logged, never thrown: a sandbox left behind is recover()'s at the next start. The run's own
-   * `~/.claude` goes with it (a dir left by a failed removal is purged with the run's dir, at 30 days).
-   * Then the security log of the attempt `owner` ran there, if any (ORC-296): its journals are complete.
-   */
-
   async tick(): Promise<void> {
     try {
       await this.drain('dev');
@@ -647,6 +641,13 @@ export class Daemon extends DaemonLaunch {
   heldRows(ticketId: string): HeldRow[] {
     return this.worker.held(ticketId);
   }
+
+  /**
+   * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
+   * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
+   * An issue the tracker no longer finds (deleted meanwhile, ORC-302) leaves it without one: its decision
+   * ignores it, journaled, instead of retrying a read that would fail again. Any other read error throws: retried.
+   */
   private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
     const payload = event.payload as { issue?: IssueSnapshot };
@@ -782,6 +783,12 @@ export class Daemon extends DaemonLaunch {
     if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
     return outcome;
   }
+
+  /**
+   * This installation's id, drawn once and kept in the store: it salts the keys of the effects
+   * written outside (ORC-162), so that another instance on the same Linear workspace, or this one
+   * after its journal restarted from zero, never takes an effect of its own for one of theirs.
+   */
   private instanceId(): Promise<string> {
     this.instance ??= (async () => {
       const known = await this.d.store.getMeta(INSTANCE_KEY);

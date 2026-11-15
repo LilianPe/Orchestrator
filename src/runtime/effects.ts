@@ -48,6 +48,10 @@ function checksPermission(err: { status?: number }): string {
   return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
 }
 
+/**
+ * `factory/preuve-visuelle` (ORC-176): the captures the factory took, or that there is none to take. A required proof the instance
+ * could not take is neutral, indicative until the application starts reliably in the sandbox (ORC-152): it blocks nothing.
+ */
 function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summary: string } {
   if (p.decision === 'not_applicable') return { conclusion: 'neutral', summary: 'No visual proof applicable.' };
   const why = [
@@ -86,6 +90,12 @@ export abstract class DaemonEffects extends DaemonChecks {
       durationMs: ended.length ? ended.reduce((n, r) => n + r.endedAt! - r.startedAt, 0) : undefined,
     };
   }
+
+  /**
+   * An effect of a project without effects (ORC-231), kept instead of made: what it would have written, as a JSON file and its row in
+   * `artifacts`, once by the row's id. A `publish` keeps the PR it would have opened, its title, its body and the ticket's diff, then
+   * goes on as a publication does (`publish.done`), so the run ends as it would have; a `reconcile` reads nothing and keeps nothing.
+   */
   protected async keep(row: OutboxRow, dir: string): Promise<void> {
     const effect = row.effect;
     if (effect.kind === 'reconcile' || !row.ticketId) return;
@@ -143,9 +153,9 @@ export abstract class DaemonEffects extends DaemonChecks {
   }
 
   /**
-   * This installation's id, drawn once and kept in the store: it salts the keys of the effects
-   * written outside (ORC-162), so that another instance on the same Linear workspace, or this one
-   * after its journal restarted from zero, never takes an effect of its own for one of theirs.
+   * `key`: the idempotency key of the effect (ORC-162, docs/idempotency.md). Only a replay (a row
+   * claimed before) looks for what an earlier execution wrote: a first execution has nothing to find.
+   * A replay that finds the effect already made writes nothing and says so.
    */
   protected async exec(project: ProjectRuntime, ticketId: string | undefined, c: Effect, key: EffectKey): Promise<EffectOutcome | void> {
     const { store, tracker, clock } = this.d;
@@ -384,8 +394,9 @@ export abstract class DaemonEffects extends DaemonChecks {
   }
 
   /**
-   * Labels written by the factory (ORC-346): what the write set goes into the labels known (`labelsWritten`), so a pass
-   * that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
+   * Plans each project's reconciliation in the store (ORC-185), in `RECONCILE_MS` (the connection to Linear passes
+   * at once), unless a timer already plans it (a restart): its firings then arm the next ones. The timer of a
+   * project gone from the configuration is deleted: it would fire for a project the factory no longer knows.
    */
   async armReconciliation(): Promise<void> {
     const timers = (await this.d.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile');
@@ -636,6 +647,14 @@ export abstract class DaemonEffects extends DaemonChecks {
       ),
     );
   }
+
+  /**
+   * The `review` effect (ORC-183): a lens's findings kept on the commit it read, in place of what that lens kept there before.
+   * The publishing one then posts every lens's findings on that commit as one GitHub review, each on its line, or listed in its
+   * text when GitHub cannot place one, and `factory/review`, failed on a blocking finding. Every text through the
+   * `OutputPolicy`, a refused one replaced by its notice. Keyed: a replay finds its review by the effect's id, and the check by
+   * the commit's. Any failure throws, and the outbox retries it: its move to Human Review waits behind it, and a dead one blocks the ticket.
+   */
   private async review(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'review' }>, key: EffectKey): Promise<EffectOutcome | void> {
     const { store, clock } = this.d;
     await store.putFindings({ projectId: project.id, ticketId: t.ticketId, sha: c.sha, lens: c.lens, runId: c.runId, at: clock.now(), findings: c.findings });
@@ -730,11 +749,4 @@ export abstract class DaemonEffects extends DaemonChecks {
       payload: { number: t.prNumber!, url: t.prUrl ?? '', branch: t.branch ?? '', reason, headMoved },
     });
   }
-
-  /**
-   * `admitted` is called once the start took its slot, or will not take one (`drainNow`); `recorded`
-   * once the run is written. Resolves `queued` when the start went to the queue, `deferred` when it was set pending
-   * behind a run that holds the ticket, `done` otherwise (started, refused or blocked). Throws `RetryableStart` when
-   * its launch failed before its `run.started`.
-   */
 }
