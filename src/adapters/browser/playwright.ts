@@ -62,8 +62,9 @@ NODE_PATH="$(npm root -g)" exec node -e "$3" "$1" "$4" "$5" ${APP_LOG}`;
 
 /**
  * The browser of the visual proof (ORC-176): Playwright's Chromium in the sandbox, beside the application it shoots, at network
- * `none`: the page reaches nothing but the application. The image must carry Playwright and its Chromium, and the backend must offer
- * a browser (`requirements.browser`): until one does (ORC-152), nothing wires this shooter and a required proof stays unavailable.
+ * `none`: the page reaches nothing but the application. It runs in the capture image (docker/browser.Dockerfile), which carries
+ * Playwright and its Chromium: the daemon wires it, and the container backend offers a browser (`requirements.browser`), only
+ * when that image is there (ORC-404, `browserImage`); without it, a required proof stays unavailable.
  */
 export class PlaywrightShooter implements VisualShooter {
   readonly requirements = BROWSER_REQUIREMENTS;

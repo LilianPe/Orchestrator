@@ -1,7 +1,10 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { Exec, ExecResult } from '../adapters/exec.js';
+import { BROWSER_REQUIREMENTS } from '../adapters/browser/types.js';
 import { defaultLimits } from '../adapters/sandbox/docker-rootless.js';
-import { checkHostRuns, instanceId, sandboxLimits } from './sandbox-wiring.js';
+import type { Egress } from '../network/proxy-service.js';
+import { browserImage, checkHostRuns, instanceId, makeSandboxes, sandboxLimits } from './sandbox-wiring.js';
 
 describe('checkHostRuns (ORC-349)', () => {
   it('refuses agents on the host without a container engine, naming both ways out', () => {
@@ -40,5 +43,67 @@ describe('sandboxLimits', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_PIDS', '-1'], ['FACTORY_SANDBOX_MEMORY', '4 GB'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two'], ['FACTORY_SANDBOX_CPUS', '1.']]) {
       expect(() => sandboxLimits({ [k!]: v })).toThrow(`${k}=${v}`);
     }
+  });
+});
+
+describe('browserImage (ORC-404)', () => {
+  const engine = (answer: (args: string[]) => ExecResult) => {
+    const calls: { cmd: string; args: string[] }[] = [];
+    const exec: Exec = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return answer(args);
+    };
+    return { calls, exec };
+  };
+  const labelled = (label: string) => engine(() => ({ stdout: `${label}\n`, stderr: '', code: 0 }));
+  const ENV = { FACTORY_CONTAINER_CLI: 'podman', FACTORY_BROWSER_IMAGE: 'localhost/factory-browser:1' };
+
+  it('is none without sandboxes, or without FACTORY_BROWSER_IMAGE, and asks no engine', async () => {
+    const e = labelled('playwright-1.64.1');
+    expect(await browserImage({ FACTORY_BROWSER_IMAGE: 'x' }, e.exec)).toEqual({ detail: expect.stringMatching(/FACTORY_CONTAINER_CLI/) });
+    expect(await browserImage({ FACTORY_CONTAINER_CLI: 'docker' }, e.exec)).toEqual({ detail: expect.stringMatching(/FACTORY_BROWSER_IMAGE is not set.*docker\/browser\.Dockerfile/) });
+    expect(e.calls).toEqual([]);
+  });
+
+  it('is the image when the engine has it with the label of docker/browser.Dockerfile', async () => {
+    const e = labelled('playwright-1.64.1');
+    expect(await browserImage(ENV, e.exec)).toEqual({ image: 'localhost/factory-browser:1', detail: expect.stringContaining('localhost/factory-browser:1 (playwright-1.64.1)') });
+    expect(e.calls).toEqual([{ cmd: 'podman', args: ['image', 'inspect', '--format', '{{index .Config.Labels "factory.browser"}}', 'localhost/factory-browser:1'] }]);
+  });
+
+  it('is none when the engine lacks the image, or the image is not a capture image (the runner\'s, say)', async () => {
+    const missing = engine(() => ({ stdout: '', stderr: 'Error: localhost/factory-browser:1: image not known', code: 125 }));
+    expect(await browserImage(ENV, missing.exec)).toEqual({ detail: expect.stringMatching(/no image localhost\/factory-browser:1.*image not known/) });
+    for (const label of ['', '<no value>']) {
+      expect(await browserImage(ENV, labelled(label).exec)).toEqual({ detail: expect.stringMatching(/not a capture image.*factory\.browser/) });
+    }
+  });
+});
+
+describe('makeSandboxes and the browser (ORC-404)', () => {
+  const egress = { open: async () => '/n/r1/egress.sock', close: async () => {}, isOpen: () => false, caCertPath: '/ca.crt' } as unknown as Egress;
+  const ENV = { FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: 'factory-runner:1' };
+  const request = { runId: 'r1', ticketId: 'T-1', workspacePath: '/w', network: 'none' as const, requirements: BROWSER_REQUIREMENTS, mounts: [] };
+  /** An engine with no container yet, Docker's: `run` prints the new id. */
+  const engine = () => {
+    const runs: string[][] = [];
+    const exec: Exec = async (_cmd, args) => {
+      if (args[0] === 'version') return { stdout: '{"Os":"linux","Arch":"amd64"}', stderr: '', code: 0 };
+      if (args[0] === 'run') runs.push(args);
+      return { stdout: args[0] === 'run' ? 'c1\n' : '', stderr: '', code: 0 };
+    };
+    return { runs, exec };
+  };
+
+  it('refuses a sandbox with a browser without the capture image', async () => {
+    const e = engine();
+    await expect(makeSandboxes(ENV, 'i', egress, { exec: e.exec })!.create(request)).rejects.toThrow(/container lacks browser/);
+    expect(e.runs).toEqual([]);
+  });
+
+  it('serves requirements.browser on the capture image once it is given', async () => {
+    const e = engine();
+    await makeSandboxes(ENV, 'i', egress, { browserImage: 'factory-browser:1', exec: e.exec })!.create(request);
+    expect(e.runs[0]).toContain('factory-browser:1');
   });
 });

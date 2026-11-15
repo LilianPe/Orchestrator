@@ -159,6 +159,15 @@ jobs:
           npx vitest run --project isolation test/isolation/runner-image.test.ts test/isolation/isolation-07-secrets.test.ts test/isolation/isolation-07-layers.test.ts test/isolation/claude-token.test.ts
         env:
           FACTORY_RUNNER_IMAGE: localhost/factory-runner:ci
+      # The capture image of the visual proof (ORC-404), on top of the runner's: its captures at network none, the checkout alone mounted.
+      - name: Check the capture image
+        run: |
+          podman build -f docker/browser.Dockerfile --build-arg RUNNER_IMAGE=localhost/factory-runner:ci -t localhost/factory-browser:ci docker
+          podman image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep -E 'factory-(runner|browser):ci'
+          npx vitest run --project isolation test/isolation/visual-proof.test.ts
+        env:
+          FACTORY_RUNNER_IMAGE: localhost/factory-runner:ci
+          FACTORY_BROWSER_IMAGE: localhost/factory-browser:ci
       # Isolation n° 11 runs a real claude -p when this secret is set, and is skipped without it (forks too).
       - run: npm run test:isolation
         env:

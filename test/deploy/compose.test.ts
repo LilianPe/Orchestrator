@@ -84,6 +84,11 @@ describe('compose.yaml (ORC-203)', () => {
     expect(factoryd.environment!['FACTORY_RUNNER_IMAGE']).toMatch(/^\$\{FACTORY_RUNNER_IMAGE:\?/);
   });
 
+  it('hands factoryd the capture image when the server has one, and asks for none (ORC-404)', () => {
+    // Unset here, unset in the container: the visual proof is then unavailable, said at the start and by `factory doctor`.
+    expect(factoryd.environment).toHaveProperty('FACTORY_BROWSER_IMAGE', null);
+  });
+
   it("leaves TLS to the host's reverse proxy: caddy only under the `tls` profile, off by default (ORC-221)", () => {
     expect(caddy.profiles).toEqual(['tls']);
     for (const s of [factoryd, proxy, postgres]) expect(s.profiles).toBeUndefined();
@@ -134,6 +139,27 @@ describe('the images (ORC-203)', () => {
     expect(daemon).not.toContain('claude-code');
     expect(daemon).toMatch(/install -y[^\n]* gh\b/);
     expect(daemon).toMatch(/docker-\$\{?DOCKER_CLI_VERSION\}?\.tgz/);
+  });
+
+  it('builds the capture image on the runner image, with a pinned Playwright, its headless Chromium alone, and the label the daemon checks (ORC-404)', () => {
+    const browser = read('docker/browser.Dockerfile');
+    expect(browser).toMatch(/^ARG RUNNER_IMAGE\nFROM \$\{RUNNER_IMAGE\}$/m);
+    expect(browser).toMatch(/^ARG PLAYWRIGHT_VERSION=\d+\.\d+\.\d+$/m);
+    expect(browser).toMatch(/npm install -g "playwright@\$\{PLAYWRIGHT_VERSION\}"/);
+    expect(browser).toMatch(/playwright install --with-deps --only-shell chromium/);
+    expect(browser).toMatch(/^LABEL factory\.browser="playwright-\$\{PLAYWRIGHT_VERSION\}"$/m);
+    // Out of the run's HOME, as the shooter finds it.
+    expect(browser).toMatch(/^ENV PLAYWRIGHT_BROWSERS_PATH=\/opt\//m);
+    expect(browser).not.toMatch(/^\s*(ARG|ENV)\s+\S*(TOKEN|SECRET|PASSWORD|API_KEY)/im);
+  });
+
+  it('builds and checks the capture image in the isolation job, on the runner image it built (ORC-404)', () => {
+    const job = (parse(read('.github/workflows/ci.yml')) as { jobs: Record<string, { steps: { name?: string; run?: string; env?: Record<string, string> }[] }> }).jobs['isolation']!;
+    const step = job.steps.find((x) => x.name === 'Check the capture image')!;
+    expect(step.run).toMatch(/podman build -f docker\/browser\.Dockerfile --build-arg RUNNER_IMAGE=localhost\/factory-runner:ci -t localhost\/factory-browser:ci docker/);
+    expect(step.run).toContain('test/isolation/visual-proof.test.ts');
+    expect(step.env).toMatchObject({ FACTORY_BROWSER_IMAGE: 'localhost/factory-browser:ci' });
+    expect(job.steps.indexOf(step)).toBeGreaterThan(job.steps.findIndex((x) => x.name === 'Check the runner image'));
   });
 
   it('labels each attempt with the commit of the build', () => {

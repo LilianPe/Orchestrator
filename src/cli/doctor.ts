@@ -10,6 +10,7 @@ import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
+import { browserImage } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -52,6 +53,13 @@ export interface DoctorOptions {
   json?: boolean;
   /** The repository's branch naming (`.factory/config.yml`, ORC-283): the team's convention without it. */
   naming?: BranchNaming;
+  /** Whether this instance can take the visual proof (ORC-404), `browserImage`'s answer: said, never part of the verdict. */
+  visualProof?: { image?: string; detail: string };
+}
+
+/** The line of the visual proof (ORC-404). */
+function visualProofLine(v: { image?: string; detail: string }): string {
+  return `Visual proof on this instance: ${v.image ? 'available' : 'unavailable'} — ${v.detail}`;
 }
 
 export interface WorkflowReport {
@@ -463,7 +471,10 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { repoPath, api, out } = options;
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
   const ignored = ignoredWorkflowFiles(repoPath);
-  if (!options.json) for (const file of ignored) out(ignoredWorkflowWarning(file));
+  if (!options.json) {
+    if (options.visualProof) out(visualProofLine(options.visualProof));
+    for (const file of ignored) out(ignoredWorkflowWarning(file));
+  }
   const failure = (message: string) => doctorFailure(options, message, ignored);
   let workflows: WorkflowSource[];
   try {
@@ -486,7 +497,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}) }, null, 2));
+    const visualProof = options.visualProof && { available: !!options.visualProof.image, detail: options.visualProof.detail };
+    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}), ...(visualProof ? { visualProof } : {}) }, null, 2));
   } else {
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
@@ -547,6 +559,9 @@ export interface DoctorCommandOptions {
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
+  // Of the instance, not of the repository: said first, whatever stops the check after.
+  const visualProof = await browserImage(options.env ?? process.env, options.exec);
+  if (!options.json) out(visualProofLine(visualProof));
   let githubApp;
   try {
     githubApp = resolveGithubApp(effectiveInstance(options.home, loadFactoryYml(options.home, options.env)), options.env);
@@ -578,6 +593,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     api,
     out,
     naming,
+    // Said once in text, above; in the JSON report.
+    ...(options.json ? { visualProof } : {}),
     ...(options.json ? { json: true } : {}),
   });
 }

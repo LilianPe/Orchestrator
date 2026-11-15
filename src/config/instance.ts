@@ -93,6 +93,8 @@ export function homePaths(home: string) {
     kept: join(home, 'kept'),
     /** The replays of closed tickets (ORC-231, ORC-376): each ticket's clone and its text as of its start, `<replay>/<ticket>/`. */
     ghost: join(home, 'ghost'),
+    /** The visual proof's captures (ORC-176, ORC-404), `<ticket>/<sha256>.png`: no run mounts it. */
+    artifacts: join(home, 'artifacts'),
   };
 }
 

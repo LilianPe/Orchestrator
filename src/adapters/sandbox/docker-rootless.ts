@@ -24,6 +24,11 @@ export interface ContainerSandboxOptions {
    */
   cli: string;
   image: string;
+  /**
+   * The capture image (ORC-404, docker/browser.Dockerfile): the runner's with Playwright's Chromium, for a sandbox that asks
+   * for a browser (`requirements.browser`), the visual proof's alone. Without it, such a sandbox is refused.
+   */
+  browserImage?: string;
   exec?: Exec;
   /** The daemon's: the agent's files stay the daemon's, which commits and pushes them after the run. */
   uid: number;
@@ -223,7 +228,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     // The router refuses these too, but a backend that accepted them would claim an isolation it does not give.
     const { minLevel, browser, services } = req.requirements;
     if (minLevel !== 'L3') throw new Error(`container sandbox: isolation ${minLevel} not available (L3 only)`);
-    if (browser) throw new Error('container sandbox: no browser');
+    if (browser && !this.opts.browserImage) throw new Error('container sandbox: no browser (no capture image)');
     const unknown = this.unprovided(services);
     if (unknown.length) throw new Error(`container sandbox: no services (${unknown.join(', ')})`);
     // Kept comma-separated on a label `inspect` prints in a tab-separated line: what would split it differently is refused.
@@ -366,7 +371,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       '--workdir', WORKSPACE_TARGET,
       // Always: no route, no DNS, no UDP. The level is the proxy's to apply (ORC-213). With services, their loopback (ORC-309), which has none either.
       '--network', service ? `container:${service}` : 'none',
-      this.opts.image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
+      req.requirements.browser ? this.opts.browserImage! : this.opts.image, ...(egress ? ['node', '-e', relay(`${EGRESS_DIR}/${basename(egress)}`)] : ['sleep', 'infinity']),
     ];
   }
 

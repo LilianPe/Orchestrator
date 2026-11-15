@@ -351,6 +351,23 @@ jobs:
     expect(result.text).not.toContain('ghp_SENTINEL_VALUE');
   });
 
+  it('says whether the visual proof can be taken on this instance, whatever the verdict (ORC-404)', async () => {
+    const lines: string[] = [];
+    const api = new FakeApi([]);
+    const unavailable = { detail: 'FACTORY_BROWSER_IMAGE is not set' };
+    expect(await runDoctor({ repoPath: '/repo', api, out: (l) => lines.push(l), visualProof: unavailable })).toBe(0);
+    expect(lines).toContain('Visual proof on this instance: unavailable — FACTORY_BROWSER_IMAGE is not set');
+    const json: string[] = [];
+    await runDoctor({ repoPath: '/repo', api, out: (l) => json.push(l), json: true, visualProof: { image: 'b:1', detail: 'the captures run in b:1' } });
+    expect(JSON.parse(json.join('\n'))).toMatchObject({ accepted: true, visualProof: { available: true, detail: 'the captures run in b:1' } });
+  });
+
+  it('says it from the CLI too, before it needs the GitHub App (ORC-404)', async () => {
+    const lines: string[] = [];
+    await runDoctorCommand({ repoPath: '/repo', home: tempHome(), env: {}, out: (line) => lines.push(line) });
+    expect(lines[0]).toMatch(/^Visual proof on this instance: unavailable — .*FACTORY_CONTAINER_CLI/);
+  });
+
   it('fails with a clear message when the GitHub App is not configured', async () => {
     const home = tempHome();
     const lines: string[] = [];

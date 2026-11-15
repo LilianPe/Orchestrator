@@ -45,6 +45,8 @@ services:
       FACTORY_DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:?définissez POSTGRES_PASSWORD}@postgres:5432/factory
       FACTORY_CONTAINER_CLI: docker
       FACTORY_RUNNER_IMAGE: ${FACTORY_RUNNER_IMAGE:?définissez FACTORY_RUNNER_IMAGE (voir docker/runner.Dockerfile)}
+      # The visual proof's capture image (ORC-404, docker/browser.Dockerfile): unset, a required proof stays unavailable, indicative.
+      FACTORY_BROWSER_IMAGE:
       FACTORY_EGRESS_CONTROL: ${FACTORY_DIR}/data/network/control.sock
       # For the proxy, on the default network; published nowhere, and every route of it asks for a run token.
       FACTORY_AGENT_HOST: 0.0.0.0
