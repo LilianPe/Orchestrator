@@ -4,6 +4,7 @@ import type { EventType, FactoryEvent, LogicalState } from '../../src/core/types
 import type { JobSpec, Limits, PickupCheck, Workflow } from '../../src/core/workflow.js';
 import { compilePreset, type Preset } from '../../src/presets/preset.js';
 import { defaultWorkflow, preset, presetWorkflow, workflowViolations } from '../../src/presets/workflow.js';
+import type { ExportedJournal } from '../../src/runtime/replay.js';
 import type { DecisionPlan, DecisionRequest, Store } from '../../src/store/types.js';
 
 /**
@@ -98,6 +99,26 @@ export function withTestEffects(inner: Store): Store {
         decide: (ticket, version) => withEffects(req.decide(ticket, version), effectsOf(req.event, version.definition)),
       }),
   });
+}
+
+/**
+ * `journal` without the test's added effects (`TestEffects`, not `only`), for the replay oracle, which decides with `decide`
+ * alone: each decision loses the effects its pinned workflow added to it, the rest as recorded.
+ */
+export function withoutTestEffects(journal: ExportedJournal): ExportedJournal {
+  const entries = journal.entries.map((entry) => {
+    const { decision } = entry;
+    // Recorded by the engine of today: its events need no upcast to be read here.
+    const given = decision ? effectsOf(entry.event as FactoryEvent, journal.workflows[decision.workflowHash]) : undefined;
+    if (!decision || !given || given.only) return entry;
+    const effects = [...decision.effects];
+    for (const added of given.effects) {
+      const at = effects.findIndex((e) => JSON.stringify(e) === JSON.stringify(added));
+      if (at >= 0) effects.splice(at, 1);
+    }
+    return { ...entry, decision: { ...decision, effects } };
+  });
+  return { ...journal, entries };
 }
 
 /**

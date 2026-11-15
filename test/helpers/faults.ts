@@ -12,6 +12,7 @@
 import type { Runner, RunRequest } from '../../src/adapters/runner/types.js';
 import type { Tracker } from '../../src/adapters/tracker/types.js';
 import { exportJournal, replayJournal } from '../../src/runtime/replay.js';
+import { withoutTestEffects } from './workflow-with.js';
 import type { FactoryEvent } from '../../src/core/types.js';
 import type { StoredEvent } from '../../src/core/upcast.js';
 import type { DecisionRequest, OutboxRow, RunRecord, Store, TimerRecord } from '../../src/store/types.js';
@@ -384,7 +385,8 @@ export async function checkChain(
   for (const ticketId of [...opts.tickets, undefined]) {
     const journal = await exportJournal(store, opts.projectId, ticketId);
     for (const e of journal.entries) journaled.set(e.event.id, (journaled.get(e.event.id) ?? 0) + 1);
-    const replay = replayJournal(journal);
+    // The effects a test's workflow added to its decisions are not `decide`'s (ORC-392): the oracle replays without them.
+    const replay = replayJournal(withoutTestEffects(journal));
     const who = ticketId ?? '*';
     if (replay.unrecorded > 0) violations.push(`journal ${who}: ${replay.unrecorded} row(s) without a recorded decision`);
     for (const d of replay.divergences) violations.push(`replay ${who}: ${d.eventId} (${d.eventType}) ${d.path} recorded ${d.recorded}, replayed ${d.replayed}`);
