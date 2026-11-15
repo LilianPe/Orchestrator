@@ -627,15 +627,6 @@ describe('decide — built-ins', () => {
       }
     });
 
-    it('a check of the done kept that fails leaves the block as it is: no second block, no notice, no fix started on it', () => {
-      const failed = ev('verify.failed', { runId: 'r1', job: 'dev', failures: [{ command: 'npm test', exitCode: 1, output: 'rouge' }] });
-      // Under the bound (a fix would start) and past it (a second block would replace the dead letter's, repair lifting nothing).
-      for (const verifyAttempts of [0, 9]) {
-        const blocked = blockedBy('dead_letter', { activeRunId: undefined, verifyingRunId: 'r1', blockedEvent: 'e-dead', verifyAttempts });
-        expect(decide(blocked, failed, workflow)).toEqual(decision());
-      }
-    });
-
     // Its move is made; the next step's start is refused by the launch on a blocked ticket, as for a block that comes during verify.
     it('the done kept goes out to the end: published and moved on, the ticket still blocked, its label untouched', () => {
       const passed = decide(blockedBy('infra', { activeRunId: undefined, verifyingRunId: 'r1' }), ev('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);

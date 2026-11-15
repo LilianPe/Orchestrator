@@ -2168,12 +2168,6 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
-      // A failed check on a blocked ticket (a done kept, ORC-403, or a block during the check): its block keeps its reason, no
-      // second notice, and no fix starts on it. The reply that lifts it resumes its step, whose commit is checked again.
-      if (ticket?.blocked) {
-        out.trace.push(`verify.failed: ticket already blocked (${ticket.blockReason ?? 'no reason'}), reason kept`);
-        return out;
-      }
       const checked = workflow.jobs[job];
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
       if (checked?.verifyFailure === 'block') {
