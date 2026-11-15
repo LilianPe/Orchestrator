@@ -785,7 +785,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(
       'duplicating events (same id) anywhere after their original changes neither the final state nor the effects, through the store’s inbox',
       async () => {
-        // Duplicates are dropped by what drops them in `Daemon.handle`: `Store.recordEvent`, here on SQLite.
+        // Duplicates are dropped by what drops them in the inbox: `Store.recordEvent`, here on SQLite.
         // One store for every sequence, each recording its ids under its own prefix. The store answers
         // asynchronously: its answers are taken first, in order, then the fold reads them.
         const store = new SqliteStore(':memory:');

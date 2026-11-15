@@ -88,7 +88,7 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
 /**
  * One step of the fold: an external event decided, an event for a ticket not tracked yet (dropped as
- * `Daemon.handle` drops it), a duplicate dropped by the inbox, a fact of the shell, or the start
+ * the inbox worker drops it), a duplicate dropped by the inbox, a fact of the shell, or the start
  * of the pending job by `Daemon.settle` once the run and its verification are over.
  *
  * `launches` (of a decided step) and `start` (of a settled one) are the runs launched, as
@@ -154,7 +154,7 @@ function launch(start: StartRun, state: TicketState, wf: Workflow): StartRun {
 
 /**
  * The step of ORC-138: a duplicate id is dropped by the inbox, otherwise `decide` runs and `reduce`
- * applies the event then the decided events, as `Daemon.handle` does. Facts of the shell go
+ * applies the event then the decided events, as the inbox worker does (`src/runtime/worker.ts`). Facts of the shell go
  * through `reduce` only, as `Daemon.apply` does. Every input is frozen first.
  *
  * Of what the orchestrator does around `decide`, the fold keeps what changes which run starts and
