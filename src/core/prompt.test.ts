@@ -13,6 +13,14 @@ describe('buildPrompt', () => {
     );
   });
 
+  it('asks the build agent for a start recipe only when the factory says none is known (ORC-386)', () => {
+    const out = buildPrompt({ skill: 'factory:dev', issue, previewSearch: true });
+    expect(out).toContain('## Find how to start the application');
+    expect(out).toContain("`submit_result`'s `preview`");
+    expect(out).toContain('at most 10 minutes and 3 tries');
+    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('start the application');
+  });
+
   it('adds context and input sections', () => {
     const out = buildPrompt({
       skill: 'factory:feedback',

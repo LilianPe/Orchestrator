@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { WIDTHS, type VisualShooter } from '../adapters/browser/types.js';
+import { WIDTHS, type Shots, type VisualShooter } from '../adapters/browser/types.js';
 import { execCmd, execFailure, mustExec, type Exec, type ExecResult } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxMount, type SandboxProvider, type SandboxRequirements } from '../adapters/sandbox/types.js';
 import { ANTI_CHEAT_CHECK, antiCheatCheck, justifiedRemovals } from '../checks/anti-cheat.js';
@@ -17,9 +17,11 @@ import { REPORT_FLAGS, runnerOfCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
-import { decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
+import { probeStart } from '../checks/preview-probe.js';
+import { brief, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
+import { recipeStart, type PreviewRecipe } from './agent-output.js';
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { VerifyFailure } from './types.js';
@@ -81,6 +83,13 @@ export interface VisualRequest {
   intake: boolean;
   /** The browser; absent (no sandbox with one), a required proof is unavailable. */
   shooter?: VisualShooter;
+  /** The recipe the knowledge base learned for the repository (ORC-386): it starts the application when nothing is declared. */
+  learned?: PreviewRecipe;
+  /**
+   * The recipe the `build` agent found this run (ORC-386), when nothing is declared nor learned: the factory probes it first, and
+   * only a recipe that answered on `port` starts anything. Never a guess of `verify`'s.
+   */
+  found?: PreviewRecipe;
   port: number;
   /** The page shot: `visual_scenario.url` of `submit_result`, `/` without one. */
   path: string;
@@ -93,7 +102,12 @@ export interface VisualRequest {
  * `flaky`: the failing tests the factory reran (ORC-164), with what each attempt found, those that do not count `indicative`.
  */
 /** `diffClass`: the class of the diff against the default branch (ORC-198), absent on a commit found green again. */
-export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff };
+/**
+ * `preview`: what became of a recipe that is not declared (ORC-386): the found one probed, answered or not; the learned one that no
+ * longer starts the application on the commit, `detail` what it printed. Absent: nothing to keep nor to invalidate.
+ */
+export type PreviewOutcome = { of: 'found'; answered: true } | { of: 'found' | 'learned'; answered: false; detail: string };
+export type CleanVerifyResult = VerifyResult & { sha: string; tree: string; commands?: readonly string[]; flaky?: FlakyTest[]; visual?: { proof: VisualProof; files: Judged['files'] }; diffClass?: ClassifiedDiff; preview?: PreviewOutcome };
 
 /** A verdict on the commit: rejecting means there is none, an infrastructure failure the agent is not sent. */
 export type CleanVerifier = (req: CleanVerifyRequest) => Promise<CleanVerifyResult>;
@@ -207,23 +221,24 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     // Refused already: not scanned, as nothing of it is installed or run. A breakdown of the scan would hide the verdict.
     const added = req.semgrep && diff && !failures.length ? await scanned(git, from, sha, diff) : new Map<string, Set<number>>();
     const rules = added.size ? await repoRules(git, rulesDir) : [];
-    const { proof, shooting } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
+    const { proof, shooting, probe } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
     const runners = await testRunners(git, sha, commands);
     const onBase = from !== EMPTY_TREE && runners.size > 0 && !failures.length;
     if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     let flaky: FlakyTest[] = [];
+    let preview: PreviewOutcome | undefined;
     // Every verdict goes out through here: the proof, decided, with it.
     const verdict = (files: Judged['files'] = []): CleanVerifyResult => ({
       ok: !failures.length, failures, sha, tree, commands, ...(diffClass ? { diffClass } : {}),
-      ...(flaky.length ? { flaky } : {}),
+      ...(flaky.length ? { flaky } : {}), ...(preview ? { preview } : {}),
       ...(proof ? { visual: { proof: files.length ? { ...proof, captures: files.map((f) => f.capture) } : proof, files } } : {}),
     });
     const setUp = async (suffix: string, workspacePath: string, services: readonly string[] = []) => {
       if (setup.length) await runSealedSetup(sandboxes, { runId: `${req.runId}-${suffix}`, ticketId: req.ticketId, workspacePath, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services, now: new Date() });
     };
-    // Something runs on the commit: its commands, or the application for its captures.
-    const runs = commands.length > 0 || !!shooting;
+    // Something runs on the commit: its commands, or the application for its captures or its probe.
+    const runs = commands.length > 0 || !!shooting || !!probe;
     // The checkout is needed: for what runs, or for Semgrep to read.
     const checkout = runs || added.size > 0;
     if (req.gitleaks || (checkout && !failures.length)) {
@@ -264,10 +279,20 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const settled = settle(ran, standing);
     failures.push(...settled.failures);
     flaky = settled.flaky;
-    if (!shooting || failures.length) return verdict();
+    if (failures.length) return verdict();
+    if (!shooting) {
+      // The recipe the agent found (ORC-386), with no capture to take it with: probed by the factory in a sandbox of its own at
+      // network `none`, nothing mounted, in the image the captures run in, so that the next ticket has it.
+      if (probe) {
+        const probed = await inBox('preview', cloneDir, [], (id) => probeStart(sandboxes, id, { start: recipeStart(probe), port: req.visual!.port, env }), req.visual!.shooter?.requirements);
+        preview = probed.answered ? { of: 'found', answered: true } : { of: 'found', answered: false, detail: probed.detail };
+      }
+      return verdict();
+    }
     const judged = await shootBoth(sandboxes, inBox, shooting, { from, sha, env, cloneDir, beforeDir, setUp });
     failures.push(...judged.failures);
     if (judged.unavailable) proof!.unavailable = judged.unavailable;
+    preview = judged.recipe;
     return verdict(judged.files);
   } finally {
     // Not synchronous: a clone holds a whole install, and the daemon serves meanwhile. Under a run dir, purged with it: what the attack left unremovable costs no verdict.
@@ -318,8 +343,11 @@ async function testRunners(git: CloneGit, sha: string, commands: readonly string
   return runners;
 }
 
-/** A request to shoot: a browser, and the base's `preview` as what starts the application. */
-type Shooting = VisualRequest & { shooter: VisualShooter; start: string };
+/**
+ * A request to shoot: a browser, and what starts the application. `recipe`: that start is a recipe, learned or found (ORC-386),
+ * not the base's `preview`: its shots are its probe.
+ */
+type Shooting = VisualRequest & { shooter: VisualShooter; start: string; recipe?: 'learned' | 'found' };
 
 /**
  * The decision on the diff (ORC-176), and what takes a required proof, or why it cannot be taken: then indicative (ORC-152), no
@@ -328,19 +356,29 @@ type Shooting = VisualRequest & { shooter: VisualShooter; start: string };
 async function planVisual(
   v: VisualRequest | undefined,
   at: { git: CloneGit; from: string; sha: string; config: RepoConfig; refused: boolean },
-): Promise<{ proof?: VisualProof; shooting?: Shooting }> {
+): Promise<{ proof?: VisualProof; shooting?: Shooting; probe?: PreviewRecipe }> {
   if (!v) return {};
   const changed = zFields(await at.git.raw('diff', '--name-only', '-z', '--no-renames', at.from, at.sha));
   const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
-  if (proof.decision !== 'required' || at.refused) return { proof };
-  const start = at.config.preview;
+  if (at.refused) return { proof };
+  // Declared first, then learned (ORC-386); the recipe the agent found only when neither, tried even with no proof to take.
+  const declared = at.config.preview;
+  const learned = declared ? undefined : v.learned;
+  // The shots run without the repository's services (ORC-282), and so would the probe: no recipe to find there.
+  const probe = declared || learned || at.config.services.length ? undefined : v.found;
+  const plan = probe ? { probe } : {};
+  if (proof.decision !== 'required') return { proof, ...plan };
+  const recipe: Shooting['recipe'] = learned ? 'learned' : probe ? 'found' : undefined;
+  const chosen = learned ?? probe;
+  const start = declared ?? (chosen && recipeStart(chosen));
+  proof.start = declared ? 'declared' : (recipe ?? 'none');
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
-  else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH})`;
+  else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH}), and the knowledge base has learned none`;
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
   // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
   else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;
-  else return { proof, shooting: { ...v, shooter: v.shooter, start } };
-  return { proof };
+  else return { proof, shooting: { ...v, shooter: v.shooter, start, ...(recipe ? { recipe } : {}) }, ...plan };
+  return { proof, ...plan };
 }
 
 /**
@@ -363,15 +401,25 @@ async function shootBoth(
   inBox: ReturnType<typeof boxOpener>,
   v: Shooting,
   at: { from: string; sha: string; env: Record<string, string>; cloneDir: string; beforeDir: string; setUp: (suffix: string, dir: string) => Promise<void> },
-): Promise<Judged> {
+): Promise<Judged & { recipe?: PreviewOutcome }> {
   const shot = (side: 'before' | 'after', dir: string, sha: string) =>
     inBox(`visual-${side}`, dir, [], (sandboxId) => v.shooter.shoot(sandboxes, { sandboxId, sha, start: v.start, port: v.port, path: v.path, widths: WIDTHS, env: at.env }), v.shooter.requirements);
   const after = await shot('after', at.cloneDir, at.sha);
-  const before = async () => {
-    await at.setUp('visual', at.beforeDir);
-    return shot('before', at.beforeDir, at.from);
-  };
-  return judgeShots(after, before, { before: at.from, after: at.sha }, v.gate);
+  let shotBefore: Promise<Shots> | undefined;
+  const before = () =>
+    (shotBefore ??= (async () => {
+      await at.setUp('visual', at.beforeDir);
+      return shot('before', at.beforeDir, at.from);
+    })());
+  // A recipe that starts the application neither on the commit nor on the base is a bad recipe (ORC-386), learned or found: no
+  // fault of the branch, the proof unavailable. One the base still starts with is the branch's to fix, as a declared start would be.
+  if (v.recipe && !after.started && !(await before()).started) {
+    const which = v.recipe === 'learned' ? 'the start recipe learned in the knowledge base' : 'the start command the agent found';
+    return { failures: [], files: [], recipe: { of: v.recipe, answered: false, detail: after.detail }, unavailable: `${which} started the application neither on ${at.sha.slice(0, 12)} nor on the base ${at.from.slice(0, 12)}: ${brief(after.detail)}` };
+  }
+  const judged = await judgeShots(after, before, { before: at.from, after: at.sha }, v.gate);
+  // The found recipe started the application on the commit: the shot was its probe.
+  return v.recipe === 'found' && after.started ? { ...judged, recipe: { of: 'found', answered: true } } : judged;
 }
 
 /** `.factory/config.yml` as the base branch holds it, in the clone: never as the agent's branch does. */

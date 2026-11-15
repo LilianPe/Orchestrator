@@ -14,6 +14,7 @@ import { FakePackageRegistry } from '../checks/fake-registry.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import { freezeTests } from '../checks/freeze.js';
 import { VISUAL_PROOF_CHECK } from '../checks/visual-proof.js';
+import type { PreviewRecipe } from '../knowledge/preview-recipe.js';
 import { BUNDLE_TARGET } from '../publish/extract.js';
 import { OutputPolicy, type Capture } from '../publish/output-policy.js';
 import { runCleanVerify, verifyCommand, type CleanVerifyRequest } from './clean-verify.js';
@@ -1048,7 +1049,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
 
   /** The base has a page; the agent's branch changes it (`page`), or touches only a file outside `visual_paths`. */
   /** `preview`: the base's in `.factory/config.yml`, `npm start` by default, none with `null`. */
-  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; preview?: string | null; commands?: string[] } = {}) {
+  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; preview?: string | null; commands?: string[]; learned?: PreviewRecipe; found?: PreviewRecipe } = {}) {
     const shooter = new ReadingShooter();
     const preview = opts.preview === null ? '' : `preview: ${opts.preview ?? 'npm start'}\n`;
     const s = setup({ commands: opts.commands ?? [] }, (opts.config ?? VISUAL) + preview);
@@ -1066,6 +1067,8 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       port: 4201,
       path: '/',
       gate,
+      ...(opts.learned ? { learned: opts.learned } : {}),
+      ...(opts.found ? { found: opts.found } : {}),
     };
     return { ...s, shooter };
   }
@@ -1150,6 +1153,117 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     const res = await runCleanVerify(req);
     expect(res.visual?.proof.captures).toHaveLength(6);
     expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
+  });
+
+  describe('the start recipe learned in the knowledge base, or found by the agent (ORC-386)', () => {
+    const LEARNED = { command: 'npm run dev', setup: ['npm run build'] };
+    const FOUND = { command: 'npx vite --port "$PORT"', setup: [] };
+    const answers = (sandboxes: { answer?: (command: string, box: string) => ExecResult | undefined }, code: number, stdout: string) => {
+      sandboxes.answer = (command, box) => (box.endsWith('-preview') && command === FOUND.command ? { code, stdout, stderr: '' } : undefined);
+    };
+
+    it('a learned recipe starts the application when none is declared, and the proof says so', async () => {
+      const { req, shooter } = visual({ page: 'new page\n', preview: null, learned: LEARNED });
+      const res = await runCleanVerify(req);
+      expect(res.visual?.proof).toMatchObject({ decision: 'required', start: 'learned' });
+      expect(res.visual?.proof.captures).toHaveLength(6);
+      expect(shooter.calls.map((c) => c.start)).toEqual(['npm run build && npm run dev', 'npm run build && npm run dev']);
+      expect(res.preview).toBeUndefined();
+    });
+
+    it('criterion 3: a declared start wins over the learned recipe and the found one, which is not even probed', async () => {
+      const { req, shooter, sandboxes } = visual({ page: 'new page\n', learned: LEARNED, found: FOUND });
+      const res = await runCleanVerify(req);
+      expect(res.visual?.proof).toMatchObject({ start: 'declared' });
+      expect(shooter.calls.map((c) => c.start)).toEqual(['npm start', 'npm start']);
+      expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
+      expect(res.preview).toBeUndefined();
+    });
+
+    it('criterion 1: a found recipe the proof needs is tried by the captures themselves: started on the commit, it answered', async () => {
+      const { req, shooter, sandboxes } = visual({ page: 'new page\n', preview: null, found: FOUND });
+      const res = await runCleanVerify(req);
+      expect(res.preview).toEqual({ of: 'found', answered: true });
+      expect(res.visual?.proof).toMatchObject({ start: 'found' });
+      expect(res.visual?.proof.captures).toHaveLength(6);
+      expect(shooter.calls.map((c) => c.start)).toEqual([FOUND.command, FOUND.command]);
+      // No second start of it: the shot after was its probe.
+      expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
+    });
+
+    it('a found recipe is probed even when this diff needs no proof, so the next ticket has it', async () => {
+      const { req, shooter, sandboxes } = visual({ preview: null, found: FOUND });
+      answers(sandboxes, 0, 'answered\n');
+      const res = await runCleanVerify(req);
+      expect(res.preview).toEqual({ of: 'found', answered: true });
+      expect(res.visual?.proof).toEqual({ decision: 'not_applicable', triggers: [] });
+      expect(shooter.calls).toEqual([]);
+      // Probed by the factory at network none with nothing mounted, in the image the captures run in.
+      expect(sandboxes.created.find((c) => c.runId === 'r1-preview')).toMatchObject({ network: 'none', mounts: [], requirements: { browser: true } });
+      expect(sandboxes.ran.find((r) => r.box === 'r1-preview')).toMatchObject({ command: FOUND.command });
+    });
+
+    it('a found recipe probed with no proof to take that does not answer: said, with what it printed', async () => {
+      const { req, sandboxes } = visual({ preview: null, found: FOUND });
+      answers(sandboxes, 1, 'nothing answers on port 4201 after 60 s\nError: Cannot find module vite\n');
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(true);
+      expect(res.preview).toEqual({ of: 'found', answered: false, detail: expect.stringContaining('Cannot find module vite') });
+    });
+
+    it('criterion 5: a found recipe that starts the application neither on the commit nor on the base: unavailable with why, the commit green', async () => {
+      const { req, shooter } = visual({ page: 'new page\n', preview: null, found: FOUND });
+      shooter.answer = () => ({ started: false, detail: 'Error: Cannot find module vite' });
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(true);
+      expect(res.preview).toEqual({ of: 'found', answered: false, detail: 'Error: Cannot find module vite' });
+      expect(res.visual?.proof).toMatchObject({ start: 'found', unavailable: expect.stringContaining('the start command the agent found started the application neither on') });
+      expect(shooter.calls).toHaveLength(2);
+    });
+
+    it('criterion 4: a learned recipe that starts the application neither on the commit nor on the base is stale, no failure of the branch', async () => {
+      const { req, shooter } = visual({ page: 'new page\n', preview: null, learned: LEARNED });
+      shooter.answer = () => ({ started: false, detail: 'nothing answers on port 4201' });
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(true);
+      expect(res.failures).toEqual([]);
+      expect(res.preview).toEqual({ of: 'learned', answered: false, detail: 'nothing answers on port 4201' });
+      expect(res.visual?.proof).toMatchObject({ start: 'learned', unavailable: expect.stringContaining('neither on') });
+      expect(shooter.calls).toHaveLength(2);
+    });
+
+    it('a learned recipe the base still starts with, which the commit does not: the branch broke the application, the check fails', async () => {
+      const { req, repo, shooter } = visual({ page: 'new page\n', preview: null, learned: LEARNED });
+      const head = git(repo, 'rev-parse', BRANCH);
+      shooter.answer = ({ sha }) => (sha === head ? { started: false, detail: 'TypeError at boot' } : undefined);
+      const res = await runCleanVerify(req);
+      expect(res.ok).toBe(false);
+      expect(res.failures).toEqual([expect.objectContaining({ command: VISUAL_PROOF_CHECK, output: expect.stringContaining('TypeError at boot') })]);
+      expect(res.preview).toBeUndefined();
+      // The base shot once, to tell, and not again.
+      expect(shooter.calls).toHaveLength(2);
+    });
+
+    it('a repository with services: the found recipe is not probed, as the captures could not run it either', async () => {
+      const { req, sandboxes } = visual({ page: 'new page\n', preview: null, found: FOUND, config: `${VISUAL}services: [postgres]\n` });
+      const res = await runCleanVerify(req);
+      expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
+      expect(res.preview).toBeUndefined();
+    });
+
+    it('a commit whose commands fail probes nothing', async () => {
+      const { req, sandboxes } = visual({ page: 'new page\n', preview: null, found: FOUND, commands: ['false'] });
+      const res = await runCleanVerify(req);
+      expect(res.failures.map((f) => f.command)).toEqual(['false']);
+      expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
+      expect(res.preview).toBeUndefined();
+    });
+
+    it('none declared, learned nor found: unavailable, saying where to declare one', async () => {
+      const { req } = visual({ page: 'new page\n', preview: null });
+      const res = await runCleanVerify(req);
+      expect(res.visual?.proof).toMatchObject({ start: 'none', unavailable: expect.stringContaining('`preview` in .factory/config.yml') });
+    });
   });
 
   it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {

@@ -270,6 +270,8 @@ export function createHarness(
     outputPolicy?: OrchestratorDeps['outputPolicy'];
     /** The browser of the visual proof (ORC-176), with sandboxes; its captures kept in a temporary dir. */
     visualShooter?: VisualShooter;
+    /** The start recipes of the knowledge base (ORC-386). */
+    previewRecipes?: OrchestratorDeps['previewRecipes'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
@@ -336,6 +338,7 @@ export function createHarness(
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(visualProof ? { visualProof } : {}),
+      ...(opts.previewRecipes ? { previewRecipes: opts.previewRecipes } : {}),
       ...(keptEffectsDir ? { keptEffectsDir } : {}),
       ...(opts.transcriptsDir ? { transcriptsDir: opts.transcriptsDir } : {}),
     };
