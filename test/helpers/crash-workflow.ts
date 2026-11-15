@@ -2,11 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DELEGATED, type WorkflowOverrides } from './workflow-with.js';
+import type { WorkflowOverrides } from './workflow-with.js';
 
 /** A delegation decides three effects, in this order: labels, comment, start_run (ORC-149 crash tests). */
 export const CRASH_WORKFLOW: WorkflowOverrides = {
-  on: { 'ticket.delegated': [{ when: DELEGATED, labels: { add: ['agent:pris'], remove: [] }, comment: 'Pris en charge.', run: 'dev' }] },
+  effects: { 'ticket.delegated': { effects: [{ kind: 'labels', add: ['agent:pris'], remove: [] }, { kind: 'comment', body: 'Pris en charge.' }] } },
 };
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextOf, startMove } from '../core/chain.js';
+import { delegatedJob, nextOf, startMove } from '../core/chain.js';
 import { presetWorkflow } from './workflow.js';
 import { fantome, projectEffects } from './fantome.js';
 import { compilePreset, PresetError, type Preset } from './preset.js';
@@ -22,9 +22,8 @@ describe('the factory/fantome preset (ORC-231)', () => {
   it('the workflow it drives, by its own steps: delegation runs intake, intake the spec, the spec the tests, and dev ends at its publication', () => {
     const wf = presetWorkflow(fantome);
     expect(wf).toMatchObject({ level: 'rapide', entry: 'intake', preset: fantome });
-    expect(wf.on['ticket.delegated']).toEqual([expect.objectContaining({ run: 'intake', whenSrc: '!blocked' })]);
-    // Nothing else starts a job: a closed ticket's state, or a human on the real one, never does.
-    expect(Object.keys(wf.on)).toEqual(['ticket.delegated']);
+    // Its delegation starts its entry; nothing else starts a job (`engine-fantome.test.ts`).
+    expect(delegatedJob(wf)).toBe('intake');
     expect(Object.keys(wf.jobs)).toEqual(['intake', 'dev', 'spec', 'tests', 'ask']);
     const end = (job: string) => nextOf(wf, wf.jobs[job]!);
     expect(end('intake').run?.name).toBe('spec');

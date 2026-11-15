@@ -118,7 +118,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
   });
 
   it('keeps a ticket on the workflow version it started with when the workflow changes (criterion 4)', async () => {
-    const version = (comment: string): WorkflowOverrides => ({ on: { 'label.changed': [{ label: 'agent:x', comment }] } });
+    const version = (comment: string): WorkflowOverrides => ({ effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'comment', body: comment }] } } });
     const h = createHarness({ workflow: version('ancienne version') });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
@@ -1172,7 +1172,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
 });
 
 describe('a stop and an effect held back by its backoff (ORC-150, ORC-138)', () => {
-  const RUN_THEN_COMMENT: WorkflowOverrides = { on: { 'ticket.delegated': [{ run: 'dev' }], 'label.changed': [{ label: 'agent:x', comment: 'reçu' }] } };
+  const RUN_THEN_COMMENT: WorkflowOverrides = { effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'comment', body: 'reçu' }] } } };
 
   it.each([
     { type: 'control.stop' as const, payload: {} },
@@ -1206,7 +1206,7 @@ describe('a stop and an effect held back by its backoff (ORC-150, ORC-138)', () 
 
   it('lets a stop pass the result of an effect of the same decision done before the one in backoff', async () => {
     const LABEL_THEN_COMMENT: WorkflowOverrides = {
-      on: { 'ticket.delegated': [{ run: 'dev' }], 'label.changed': [{ label: 'agent:x', labels: { add: ['vu'], remove: [] }, comment: 'reçu' }] },
+      effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'labels', add: ['vu'], remove: [] }, { kind: 'comment', body: 'reçu' }] } },
     };
     const h = createHarness({ workflow: LABEL_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -1245,7 +1245,7 @@ describe('a stop and an effect held back by its backoff (ORC-150, ORC-138)', () 
 
 describe('an effect that throws something other than an Error (ORC-150 review)', () => {
   it('records its message and lets it die like any failed effect', async () => {
-    const h = createHarness({ workflow: { on: { 'label.changed': [{ label: 'agent:x', comment: 'reçu' }] } }, effectRetry: { attempts: 1, baseMs: 1, capMs: 1 } });
+    const h = createHarness({ workflow: { effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'comment', body: 'reçu' }] } } }, effectRetry: { attempts: 1, baseMs: 1, capMs: 1 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     h.tracker.comment = async () => {

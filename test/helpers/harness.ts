@@ -34,7 +34,7 @@ import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
 import type { Faults } from './faults.js';
 import type { TestPreset } from './test-preset.js';
-import { workflowWith, workflowWithoutAiReview, type WorkflowOverrides } from './workflow-with.js';
+import { withTestEffects, workflowWith, workflowWithoutAiReview, type WorkflowOverrides } from './workflow-with.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
@@ -59,10 +59,10 @@ export const withTestCommand =
 
 /**
  * A move from Human Review back to In Progress starts `dev-feedback`, as the pack did before ORC-190: a start a human makes at
- * will, for the scenarios about what such a start reads or waits behind. Over `o` (a test preset's), if given.
+ * will, for the scenarios about what such a start reads or waits behind (a test effect since ORC-392). Over `o` (a test preset's), if given.
  */
 export function withMoveBack(o: WorkflowOverrides = {}): WorkflowOverrides {
-  return { ...o, on: { ...o.on, 'status.changed': [{ from: 'human_review', to: 'dev', run: 'dev-feedback' }, { to: 'ai_review', run: 'review' }] } };
+  return { ...o, effects: { ...o.effects, 'status.changed': { to: 'dev', effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }] } } };
 }
 
 /** REL-1 delegated, its dev run held by the runner: it stays `running` until released. */
@@ -306,7 +306,8 @@ export function createHarness(
   const authz = opts.authz && { teamKey: 'REL', repoPath: '/repo', maintainers: [], validators: [], githubLogins: {}, ...opts.authz };
   /** One life of the process: its store and its adapters, all of them silent once it is killed. */
   const connect = () => {
-    let store = database(() => clock.now());
+    // The effects a test's workflow adds to its decisions (ORC-392): none without them.
+    let store = withTestEffects(database(() => clock.now()));
     if (opts.wrapStore) store = opts.wrapStore(store);
     let kill = () => {};
     const view = opts.faults?.life(() => kill());

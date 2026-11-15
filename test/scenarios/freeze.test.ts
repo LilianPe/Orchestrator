@@ -37,7 +37,9 @@ function ticketWithBranch(workflow?: WorkflowOverrides): Harness {
 
 /** The tests step (red measured) then dev, held so that a test can change the branch before its verification. */
 async function frozenThenDev(): Promise<Harness> {
-  const h = ticketWithBranch(delegationStarts('tests', { on: { command: [{ say: 'retester', run: 'tests' }] } }));
+  // A command of the test's own that starts the tests step again (no command starts a step since ORC-392).
+  const retest = { kind: 'start_run' as const, job: 'tests', inputText: '', linearSessionId: 'as-t' };
+  const h = ticketWithBranch(delegationStarts('tests', { effects: { command: { unblocks: true, effects: [retest] } } }));
   h.checks.failNext('AssertionError: expected 1 to be 2');
   h.runner.enqueue({}, { hold: true });
   await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });

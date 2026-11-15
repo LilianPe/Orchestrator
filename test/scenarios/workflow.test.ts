@@ -145,8 +145,8 @@ describe('standard workflow', () => {
   });
 
   it('a merge drops the queued and debounced feedback runs, refuses a relaunch, and still cleans up (ORC-268)', async () => {
-    // A project's own relaunch label: a run a human asks for out of a reply.
-    const h = createHarness({ workflow: { on: { 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } } });
+    // A run a human asks for out of a reply, by a label of the test's own (no label relaunches since ORC-196).
+    const h = createHarness({ workflow: { effects: { 'label.changed': { label: 'relance', effects: [{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }] } } } });
     await delegatedAndInReview(h);
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'encore un détail', author: 'L' });
     // Paused: the relaunch waits in the scheduler queue, out of decide's sight, when the PR is merged.
@@ -206,7 +206,7 @@ describe('standard workflow', () => {
   });
 
   it('CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run; a green CI keeps the count (ORC-270, ORC-184 criterion 7)', async () => {
-    const h = createHarness({ workflow: { on: { 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } } });
+    const h = createHarness();
     await delegatedAndInReview(h);
     const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
     const fixCi = () => h.runner.requests.filter((r) => r.prompt.startsWith('/factory:fix-ci\n')).length;
@@ -220,8 +220,8 @@ describe('standard workflow', () => {
     expect(h.tracker.comments('REL-1').at(-1)).toContain('- `test`');
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(2);
-    // The human relaunches: a new budget; a green CI keeps it, one count per run (ORC-184).
-    await h.send('label.changed', { label: 'relance', change: 'added' });
+    // The human relaunches by a reply: a new budget; a green CI keeps it, one count per run (ORC-184).
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'relance', author: 'L' });
     expect(await h.ticket()).toMatchObject({ blocked: false, ciFixAttempts: 0 });
     await h.send('pr.checks_failed', red);
     expect(fixCi()).toBe(3);

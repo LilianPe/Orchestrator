@@ -128,7 +128,9 @@ describe('a block posts the standard comment (ORC-196)', () => {
   });
 
   it('the pack no longer knows `agent:reprendre`', () => {
-    expect((workflow.on['label.changed'] ?? []).map((r) => r.label)).toEqual(['agent:stop']);
+    const out = decide(ticket({ blocked: true }), ev('label.changed', { label: 'agent:reprendre', change: 'added' }), workflow);
+    expect(out).toMatchObject({ events: [], effects: [], timers: [] });
+    expect(out.trace).toContain('no rule for label.changed');
   });
 });
 

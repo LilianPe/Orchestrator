@@ -192,7 +192,7 @@ export interface EffectResultPayload {
  * What each kind of timer carries (ORC-161). `decide` arms a timer (`Decision.timers`), the decision
  * transaction writes it to `timers`, and its firing comes back through the inbox as `timer.fired`.
  *
- * - `debounce`: a rule with `debounce` regroups the messages that come in before it fires, then starts `job`.
+ * - `debounce`: a reply's regrouping (`humanFeedback`, `instruction`, the preset's `regroup`) gathers the messages that come in before it fires, then starts `job`.
  *   `inbox`: armed by a classified message (ORC-180): it starts nothing while work is in flight, the messages wait for its end.
  * - `clarify.remind` / `clarify.expire`: the reminder of the `clarify` questions still open at 24 h, then the block at
  *   72 h (ORC-210), armed when intake's guard asks them; one of a round answered or left since does nothing.
