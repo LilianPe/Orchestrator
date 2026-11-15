@@ -102,38 +102,41 @@ export class PrPoller {
 
   /**
    * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
-   * (ORC-281), under the webhook's id. Each head is judged once: the journal is read again only for a new one.
+   * (ORC-281), under the webhook's id. A head is judged when the PR comes to it: the head read last is kept, and the journal
+   * is read only for a new one.
    */
   private async lostPush(pass: TicketState, pr: PrInfo, at: number): Promise<void> {
     const head = pr.headSha;
     if (!head) return;
+    const readKey = `lost-push:${pass.projectId}:${pass.ticketId}`;
+    if ((await this.d.store.getMeta(readKey)) === head) return;
     // The factory's push is on the forge before its event: the ticket as it is now, read after the PR, knows the commit it verified.
     const t = (await this.d.store.getTicket(pass.projectId, pass.ticketId)) ?? pass;
-    // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234).
-    if (head === t.verifiedSha || head === t.humanHead || isTakenOver(t)) return;
-    const seenKey = `lost-push:${t.projectId}:${t.ticketId}`;
-    if ((await this.d.store.getMeta(seenKey)) === head) return;
-    // One head per commit: a commit published twice in a row is pushed once.
-    const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
-      .map((p) => p.sha)
-      .filter((sha, i, all) => sha !== all[i - 1]);
-    const published = heads.at(-1);
-    // Its last publication, and the one before, which the forge may still read just after a push. A branch put back on an older one
-    // is a human's push, as the webhook reports it.
-    if (published && !heads.slice(-2).includes(head))
-      await this.d.submit({
-        ...TRUSTED,
-        // What the push brought was verified by no one in the factory (I12).
-        taint: "untrusted",
-        at,
-        projectId: t.projectId,
-        ticketId: t.ticketId,
-        id: pushEventId(t.ticketId, head),
-        type: "push.human",
-        // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
-        payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
-      });
-    await this.d.store.setMeta(seenKey, head);
+    // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
+    if (isTakenOver(t)) return;
+    if (head !== t.verifiedSha && head !== t.humanHead) {
+      // One head per commit: a commit published twice in a row is pushed once.
+      const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
+        .map((p) => p.sha)
+        .filter((sha, i, all) => sha !== all[i - 1]);
+      const published = heads.at(-1);
+      // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
+      // an older one is a human's push, as the webhook reports it.
+      if (published && !heads.slice(-2).includes(head))
+        await this.d.submit({
+          ...TRUSTED,
+          // What the push brought was verified by no one in the factory (I12).
+          taint: "untrusted",
+          at,
+          projectId: t.projectId,
+          ticketId: t.ticketId,
+          id: pushEventId(t.ticketId, head),
+          type: "push.human",
+          // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
+          payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
+        });
+    }
+    await this.d.store.setMeta(readKey, head);
   }
 
   start(intervalMs = 30_000): void {
