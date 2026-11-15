@@ -230,8 +230,9 @@ function repaired(state: TicketState | undefined, e: FactoryEvent<'dead_letter.r
 }
 
 /**
- * The Linear webhook of the factory's own move, come after its echo expired (ORC-148): a move to the status the
- * factory put the ticket in, while it is still there and no human moved it since. It records nothing (`reduce`) and
+ * The factory's own move come back as a change, its actor not told (ORC-148, ORC-346: Linear not connected yet, a pass
+ * between the write and its record): a move to the status the factory put the ticket in, while it is still there and no
+ * human moved it since. It records nothing (`reduce`) and
  * decides nothing (`decide`). Only a status the factory recorded: `logical` alone may be a fallback (an unmapped
  * Linear status reads as todo), and a human move to it is a move.
  */

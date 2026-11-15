@@ -1047,9 +1047,11 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   }
 
   /** The base has a page; the agent's branch changes it (`page`), or touches only a file outside `visual_paths`. */
-  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; start?: string | null; commands?: string[] } = {}) {
+  /** `preview`: the base's in `.factory/config.yml`, `npm start` by default, none with `null`. */
+  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; preview?: string | null; commands?: string[] } = {}) {
     const shooter = new ReadingShooter();
-    const s = setup({ commands: opts.commands ?? [] }, opts.config ?? VISUAL);
+    const preview = opts.preview === null ? '' : `preview: ${opts.preview ?? 'npm start'}\n`;
+    const s = setup({ commands: opts.commands ?? [] }, (opts.config ?? VISUAL) + preview);
     write(s.origin, 'app/page.txt', 'old page\n');
     commit(s.origin, 'page');
     git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
@@ -1061,7 +1063,6 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     s.req.visual = {
       intake: opts.intake ?? false,
       ...(opts.shooter === null ? {} : { shooter: opts.shooter ?? shooter }),
-      ...(opts.start === null ? {} : { start: opts.start ?? 'npm start' }),
       port: 4201,
       path: '/',
       gate,
@@ -1135,7 +1136,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   });
 
   it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green (ORC-397 criterion 2)', async () => {
-    for (const [opts, why] of [[{ shooter: null }, 'browser'], [{ start: null }, '`preview` in .factory/config.yml']] as const) {
+    for (const [opts, why] of [[{ shooter: null }, 'browser'], [{ preview: null }, '`preview` in .factory/config.yml']] as const) {
       const { req } = visual({ page: 'new page\n', ...opts });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
@@ -1144,13 +1145,11 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     }
   });
 
-  it("ORC-397 criterion 1: the base's `preview` in .factory/config.yml starts the application, before workspace.preview", async () => {
-    for (const start of [null, 'npm start'] as const) {
-      const { req, shooter } = visual({ page: 'new page\n', config: `${VISUAL}preview: npm run dev\n`, start });
-      const res = await runCleanVerify(req);
-      expect(res.visual?.proof.captures).toHaveLength(6);
-      expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
-    }
+  it("ORC-397 criterion 1: the base's `preview` in .factory/config.yml starts the application, the only place it is declared (ORC-388)", async () => {
+    const { req, shooter } = visual({ page: 'new page\n', preview: 'npm run dev' });
+    const res = await runCleanVerify(req);
+    expect(res.visual?.proof.captures).toHaveLength(6);
+    expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
   });
 
   it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {

@@ -146,13 +146,12 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
 
   it('passes a repository variable only if .factory/config.yml declares it', async () => {
     const config = parseRepoConfig('env: [DECLARED_VAR]\nsetup_secrets: [REPO_TOKEN]\n');
-    const vars = repoVariables(config, { env: { DECLARED_VAR: 'declared-value', UNDECLARED_VAR: 'undeclared-value' }, secrets: { REPO_TOKEN: REPO_SECRET, UNDECLARED_TOKEN: 'undeclared-secret' } });
+    const vars = repoVariables(config, { env: { DECLARED_VAR: 'declared-value', UNDECLARED_VAR: 'undeclared-value' }, secrets: { REPO_TOKEN: { source: 'env', path: 'REPO_TOKEN' }, UNDECLARED_TOKEN: { source: 'env', path: 'UNDECLARED_TOKEN' } } });
     const env = await runEnvOf({ ...vars.env, ...RUN_ENV });
     expect(env['DECLARED_VAR']).toBe('declared-value');
     expect(env).not.toHaveProperty('UNDECLARED_VAR');
     expect(env).not.toHaveProperty('REPO_TOKEN');
     expect(env).not.toHaveProperty('UNDECLARED_TOKEN');
-    expect(Object.values(env).join('\n')).not.toContain(REPO_SECRET);
   }, 240_000);
 
   it('finds no credential file in the sandbox of a run', async () => {

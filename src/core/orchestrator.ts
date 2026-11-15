@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { ReviewLinesRefused, type Forge, type ForgeWriter, type MergeResult } from '../adapters/forge/types.js';
+import type { SecretRef } from '../adapters/secrets/types.js';
 import { prEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused, type Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -20,7 +21,7 @@ import {
 } from '../adapters/sandbox/types.js';
 import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
-import { IssueNotFoundError, labelEchoKey, stateEchoKey, type ActivityInput, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
+import { IssueNotFoundError, type ActivityInput, type LabelsWritten, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
@@ -226,6 +227,8 @@ export interface OrchestratorDeps {
   forge: Forge;
   /** One reconciliation of a project (ORC-185): Linear and GitHub compared to the factory's state, into the inbox. */
   reconcile?: (project: ProjectRuntime) => Promise<void>;
+  /** Records the factory's own label write in the labels the reconciliation compares Linear with (ORC-346). */
+  labelsWritten?: (projectId: string, ticketId: string, written: LabelsWritten) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
   /**
@@ -289,6 +292,11 @@ export interface OrchestratorDeps {
   fullReadPaths?: (ticket: TicketState) => readonly string[];
   /** What the runner gets of the repository, from its config (ORC-211). Absent: nothing. */
   repoVariables?: (project: ProjectRuntime, config: RepoConfig) => Promise<RepoVariables>;
+  /**
+   * The values of a setup's secrets, from their sources (ORC-308): read at each setup that gets them, never before. It rejects,
+   * naming the secret and its reference, never a value. Absent: a setup that needs a secret fails.
+   */
+  readSecrets?: (refs: Readonly<Record<string, SecretRef>>) => Promise<Record<string, string>>;
   /**
    * `.factory/config.yml` on the repository's default branch, read once at each launch (ORC-209 C); it rejects on an
    * invalid file. Absent: the socle, as for a repository without the file.
@@ -400,7 +408,6 @@ const behindLaunch = (launch: NonNullable<TicketState['launching']>, start: Pend
 /** What a start came to: queued, set pending behind a run that holds the ticket (`deferred`), or anything else. */
 type StartOutcome = 'queued' | 'deferred' | 'done';
 
-const ECHO_MS = 60_000;
 /** The `meta` key of the installation's id (`instanceId`). */
 const INSTANCE_KEY = 'instance-id';
 
@@ -1069,10 +1076,12 @@ export class Orchestrator {
     // On commits a previous agent wrote, or in a worktree an earlier attempt worked in (its services new, ORC-309), `setup`
     // runs code nobody reviewed: no secret for it. A setup that needs one fails.
     const unreviewed = ws.ahead || !ws.fresh;
-    const secrets = unreviewed ? {} : vars.setupSecrets;
-    if (unreviewed && Object.keys(vars.setupSecrets).length) {
+    const declared = Object.keys(vars.setupSecrets).length > 0;
+    if (unreviewed && declared) {
       this.log('warn', `setup of ${ticketId}: ${ws.ahead ? 'its branch has commits beyond the default branch' : "its worktree holds an earlier attempt's work"}, the repository's secrets are withheld`);
     }
+    // Read before its container exists: a source that fails leaves nothing to destroy, and no silent fallback.
+    const secrets = unreviewed || !declared ? {} : await this.readSetupSecrets(vars.setupSecrets);
     const { purged } = await runSealedSetup(sandboxes, {
       runId,
       ticketId,
@@ -1085,6 +1094,13 @@ export class Orchestrator {
       now: new Date(this.d.clock.now()),
     });
     if (purged.length) this.log('warn', `setup of ${ticketId}: secret found and purged in ${purged.join(', ')}`);
+  }
+
+  private async readSetupSecrets(refs: Readonly<Record<string, SecretRef>>): Promise<Record<string, string>> {
+    if (!this.d.readSecrets) throw new Error('The worktree setup failed: no secret source is configured');
+    return this.d.readSecrets(refs).catch((err: Error) => {
+      throw new Error(`The worktree setup failed: ${err.message}`, { cause: err });
+    });
   }
 
   /** `.factory/config.yml` on the default branch (ORC-209 C): it rejects on an invalid file. */
@@ -1228,12 +1244,10 @@ export class Orchestrator {
 
   /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
   private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined): VisualRequest {
-    const { preview, portBase } = project.workflow.workspace;
     return {
       intake: t.visualProof === 'required',
       ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
-      ...(preview ? { start: preview } : {}),
-      port: portBase,
+      port: project.workflow.workspace.portBase,
       path: scenarioPath(output?.visual_scenario?.url),
       gate: (c) => this.policy.capture(c),
     };
@@ -1536,7 +1550,7 @@ export class Orchestrator {
     // `decide` keeps in step with its own changes follows here (ORC-170). A failed write does not undo the change.
     const label = blockedLabelChange(before, next.blocked);
     if (label) {
-      await this.setLabels(t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
+      await this.setLabels(t.projectId, t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
     }
     return next;
   }
@@ -2014,7 +2028,7 @@ export class Orchestrator {
       case 'merge':
         return this.merge(project, t, c.sha, key);
       case 'labels':
-        return this.setLabels(ticketId, c.add, c.remove);
+        return this.setLabels(project.id, ticketId, c.add, c.remove);
       case 'comment':
         return this.commentOnce(ticketId, c.body, key);
       case 'block_comment':
@@ -2172,11 +2186,12 @@ export class Orchestrator {
     return s;
   }
 
-  /** Labels written by the factory, echoed so that their webhook is not read as a human's change. */
-  private async setLabels(ticketId: string, add: string[], remove: string[]): Promise<void> {
-    for (const l of add) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'added'), this.d.clock.now() + ECHO_MS);
-    for (const l of remove) await this.d.store.putEcho(labelEchoKey(ticketId, l, 'removed'), this.d.clock.now() + ECHO_MS);
-    await this.d.tracker.setLabels(ticketId, add, remove);
+  /**
+   * Labels written by the factory (ORC-346): what the write set goes into the labels known (`labelsWritten`), so a pass
+   * that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
+   */
+  private async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
+    await this.d.labelsWritten?.(projectId, ticketId, await this.d.tracker.setLabels(ticketId, add, remove));
   }
 
   /**
@@ -2201,10 +2216,10 @@ export class Orchestrator {
     // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     if (this.silenced(project.id, `the move of ${t.ticketId} to ${to}`)) return;
-    await state(this.d.store.putEcho(stateEchoKey(t.ticketId, stateName), this.d.clock.now() + ECHO_MS));
-    await this.d.tracker.moveTo(t.ticketId, stateName);
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
+    // Read before the move: the status is recorded right after its write, which is how a pass knows it (ORC-346).
     const reviewSha = to !== 'human_review' ? undefined : keepReviewSha ? t.reviewSha : await this.headShown(project, t);
+    await this.d.tracker.moveTo(t.ticketId, stateName);
     await state(this.apply(await state(this.ticket(project.id, t.ticketId)), { type: 'status.recorded', to, ...(reviewSha ? { reviewSha } : {}) }));
   }
 

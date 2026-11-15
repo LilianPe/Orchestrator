@@ -41,10 +41,10 @@ describe('loadWorkflow', () => {
     expect(() => loadWorkflow({ packDir, projectFile: projectFile('version: 1\non:\n  command:\n    - { say: "fais-le", do: propose_delegate }\n') })).toThrow(/do/);
   });
 
-  it('reads the command that starts the application for the visual proof, absent by default (ORC-176)', () => {
-    expect(loadWorkflow({ packDir }).workspace).not.toHaveProperty('preview');
+  it("no longer reads a workspace's preview: what starts the application is .factory/config.yml's (ORC-397, ORC-388)", () => {
     const wf = loadWorkflow({ packDir, projectFile: projectFile('version: 1\nworkspace:\n  preview: npm run preview\n') });
-    expect(wf.workspace.preview).toBe('npm run preview');
+    expect(wf.workspace).toEqual(loadWorkflow({ packDir }).workspace);
+    expect(wf.workspace).not.toHaveProperty('preview');
   });
 
   it('accepts the former event names of a project file as aliases', () => {

@@ -4,16 +4,16 @@ import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import { BRANCH, crashAfterGithubAck, githubDelivery, githubIngest, pullRequestBody } from '../helpers/github-webhook.js';
 import { createHarness } from '../helpers/harness.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, PG_URL } from '../helpers/pg-database.js';
 
 // ORC-134 on Postgres: a GitHub webhook answered 200 is in the inbox, and a daemon killed with
 // SIGKILL right after the answer loses nothing.
 describe.skipIf(!PG_URL)('GitHub webhook inbox on PgStore', () => {
-  let db: Awaited<ReturnType<typeof createTestDatabase>>;
+  let db: TestSchema;
   let pool: Pool;
 
   beforeAll(async () => {
-    db = await createTestDatabase('factory_gh_inbox');
+    db = await createTestSchema('factory_gh_inbox');
     pool = new Pool({ connectionString: db.url, max: 4 });
     await migratePgStore(pool);
   });
