@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
-import { parseRepoConfig } from '../config/repo-config.js';
+import { MISSING_TEST_COMMAND, parseRepoConfig } from '../config/repo-config.js';
 import { PROPOSAL_HEADER, runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
@@ -111,6 +111,15 @@ describe('factory init', () => {
     const { proposal, printed } = await initProposal({ ...NPM, '.factory/config.yml': 'commands: { test: npm test }\n', '.factory/workflow.yml': 'version: 1\n' });
     expect(proposal).toBeUndefined();
     expect(printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+  });
+
+  it('warns when the repository will have no `commands.test`, proposed or committed (ORC-412)', async () => {
+    expect((await initProposal({}, { python: true })).printed).toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal({ '.factory/config.yml': 'commands: { lint: npm run lint }\n' })).printed).toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal(NPM)).printed).not.toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal({ '.factory/config.yml': 'commands: { test: npm test }\n' })).printed).not.toContain(MISSING_TEST_COMMAND);
+    // An invalid file is `factory validate`'s to name.
+    expect((await initProposal({ '.factory/config.yml': 'commands: [\n' })).printed).not.toContain(MISSING_TEST_COMMAND);
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {

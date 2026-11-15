@@ -288,8 +288,17 @@ export interface RedResult {
 
 export const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/**
+ * The repository's test command with the `--` npm, pnpm or yarn need before the test files appended to it (ORC-412): added
+ * when the command starts with one of them and has none. Any other command is left as it is.
+ */
+export function withScriptArgs(command: string): string {
+  return /^(?:npm|pnpm|yarn)(?:\s|$)/.test(command) && !/(?:^|\s)--(?:\s|$)/.test(command) ? `${command.trimEnd()} --` : command;
+}
+
 /** Runs the tests the step added with the repository's test command, and says whether they are red for the right reason. */
-export async function checkRed(command: string, deps: RedDeps): Promise<RedResult> {
+export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedResult> {
+  const command = withScriptArgs(repoCommand);
   const verdict = (cause: RedCause, detail: string, ran = '', exitCode: number | null = null): RedResult => ({
     verified: RED_VERIFIED.has(cause),
     cause,
