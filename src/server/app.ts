@@ -25,6 +25,7 @@ import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import { cliActor, githubActor } from '../core/authz.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
+import { isLoopbackHost } from '../config/instance.js';
 import type { KbHit } from '../knowledge/kb.js';
 import { runSecurityView, shownHosts } from '../network/security-log.js';
 import { buildFlow, flowKey, flowTicket } from './flow.js';
@@ -92,16 +93,6 @@ const MAX_BUNDLE_BYTES = 100 * 2 ** 20;
 
 /** What each control of a run adds to its stop (ORC-301, ORC-234). */
 const RUN_CONTROL = { pause: { pause: true }, stop: {}, 'take-over': { takeOver: true } } as const;
-
-/**
- * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
- * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
- * under any name, the interface does not. A rebound name is never one of these.
- */
-export function isLoopbackHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
-  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
-}
 
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;

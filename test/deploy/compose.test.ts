@@ -75,6 +75,8 @@ describe('compose.yaml (ORC-203)', () => {
     expect(factoryd.environment!['FACTORY_EGRESS_CONTROL']).toMatch(/\/data\/network\/control\.sock$/);
     expect(proxy.environment!['FACTORY_EGRESS_CONTROL']).toBe(factoryd.environment!['FACTORY_EGRESS_CONTROL']);
     expect(factoryd.environment!['FACTORY_AGENT_HOST']).toBe('0.0.0.0');
+    // Exposed, factoryd refuses to start without secrets_key (ORC-398): its env: reference gets a slot.
+    expect(factoryd.environment!).toHaveProperty('FACTORY_SECRETS_KEY');
     expect(proxy.environment!['FACTORY_AGENT_UPSTREAM']).toBe('factoryd');
     expect(proxy.environment!['FACTORY_AGENT_PORT']).toBe(factoryd.environment!['FACTORY_AGENT_PORT']);
   });

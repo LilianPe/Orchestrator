@@ -13,6 +13,8 @@ export interface SecretSourceSubject {
   down?: SecretSource;
   /** The adapter's kind, and a path it refuses at startup; absent, the case is skipped. */
   syntax?: { kind: SecretSourceKind; valid: string; invalid: string };
+  /** A path whose rotation date the source knows (ORC-398), through `describe`; absent, the case is skipped. */
+  rotated?: { path: string; at: Date };
 }
 
 /** What the daemon's log may keep of an error: its message and its whole cause chain, an object cause by its JSON. */
@@ -57,6 +59,15 @@ export function describeSecretSourceContract(name: string, make: () => SecretSou
       const s = await subjectWith(make, () => ctx.skip(), 'syntax');
       expect(s.syntax.kind.checkPath(s.syntax.valid)).toBeUndefined();
       expect(s.syntax.kind.checkPath(s.syntax.invalid)).toEqual(expect.any(String));
+    });
+
+    it('describes a path with its rotation date, and one it does not hold without any, never with a value', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'rotated');
+      expect(s.source.describe).toBeDefined();
+      expect((await resolved(s.source.describe!(s.rotated.path))).rotatedAt?.getTime()).toBe(s.rotated.at.getTime());
+      const missing = await resolved(s.source.describe!(s.missing));
+      expect(missing.rotatedAt).toBeUndefined();
+      expect(JSON.stringify(missing)).not.toContain(s.present.value);
     });
   });
 }

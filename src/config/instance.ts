@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import type { FactoryYml } from './factory-yml.js';
+import { isSealed, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 
 /**
  * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml`
@@ -128,15 +129,45 @@ export function saveInstance(home: string, cfg: InstanceConfig): void {
   writeFileSync(homePaths(home).config, stringify(valid));
 }
 
-export function loadSecrets(home: string): Secrets {
-  const file = homePaths(home).secrets;
-  return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Secrets) : {};
+/**
+ * `secrets.json`, opened with `key` when it is encrypted at rest (ORC-398): factory.yml's `secrets_key`. A plaintext file, as
+ * written before, is still read; a sealed one without its key throws.
+ */
+export function loadSecrets(home: string, key?: string): Secrets {
+  return parseSecrets(secretsText(home), key);
+}
+
+/** The text of `secrets.json`, undefined when there is none. */
+export function secretsText(home: string): string | undefined {
+  try {
+    return readFileSync(homePaths(home).secrets, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
+function parseSecrets(text: string | undefined, key?: string): Secrets {
+  if (text === undefined) return {};
+  if (!isSealed(text)) return JSON.parse(text) as Secrets;
+  if (!key) throw new Error('secrets.json is encrypted at rest: it is read with the key secrets_key of factory.yml names, which the daemon reads at its start');
+  return JSON.parse(openSecretsFile(text, key)) as Secrets;
 }
 
 /** The secret values of the secrets file (identifiers left out): masked in run transcripts. */
 export function secretValues(s: Secrets): string[] {
   const l = s.linear;
   return [l?.clientSecret, l?.webhookSecret, l?.accessToken, l?.refreshToken].filter((v): v is string => !!v);
+}
+
+/**
+ * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
+ * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
+ * under any name, the interface does not. A rebound name is never one of these.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
 /**
@@ -154,16 +185,25 @@ export function effectiveInstance(home: string, yml: FactoryYml | undefined): In
  * webhook secret) taken from `factory.yml` when declared there (ORC-209). Read only: tokens go through `saveLinearTokens`.
  */
 export function linearSettings(home: string, yml: FactoryYml | undefined): LinearSecrets | undefined {
-  const stored = loadSecrets(home).linear;
+  const stored = loadSecrets(home, yml?.secretsKey).linear;
   if (!stored && !yml?.linear) return undefined;
   const fromYml = Object.fromEntries(Object.entries(yml?.linear ?? {}).filter(([, v]) => v !== undefined));
   return { clientId: '', clientSecret: '', webhookSecret: '', ...stored, ...fromYml };
 }
 
-/** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there. */
-export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>): void {
-  const s = loadSecrets(home);
-  saveSecrets(home, { ...s, linear: { clientId: '', clientSecret: '', webhookSecret: '', ...s.linear, ...patch } });
+/** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there; encrypted with `secrets_key` when factory.yml names one (ORC-398). */
+export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>, yml?: Pick<FactoryYml, 'secretsKey'>): void {
+  const key = yml?.secretsKey;
+  const s = loadSecrets(home, key);
+  saveSecrets(home, { ...s, linear: { clientId: '', clientSecret: '', webhookSecret: '', ...s.linear, ...patch } }, key);
+}
+
+/** Encrypts a plaintext `secrets.json` with `key`, at the daemon's start (ORC-398): whether there was one to encrypt. */
+export function sealSecretsAtRest(home: string, key: string): boolean {
+  const text = secretsText(home);
+  if (text === undefined || isSealed(text)) return false;
+  saveSecrets(home, parseSecrets(text), key);
+  return true;
 }
 
 /**
@@ -174,17 +214,21 @@ export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets
 export function daemonSecretValues(home: string, yml: FactoryYml | undefined, env: NodeJS.ProcessEnv = process.env): string[] {
   const fromEnv = (source: string) => source === 'env' || yml?.secretSources?.[source]?.kind === 'env';
   const repoEnv = yml?.repos?.flatMap((r) => Object.values(r.secrets ?? {}).filter((ref) => fromEnv(ref.source)).map((ref) => env[ref.path])) ?? [];
-  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, ...(yml?.claude?.accounts.map((a) => a.token) ?? []), ...repoEnv];
+  // The server's `env:` secrets by their references, a source's option among them (ORC-398); another source's are the reader's.
+  const serverEnv = Object.values(yml?.secretRefs ?? {}).filter((ref) => ref.source === 'env').map((ref) => env[ref.path]);
+  const fromYml = [yml?.github?.privateKey, yml?.github?.webhookSecret, yml?.secretsKey, ...(yml?.claude?.accounts.map((a) => a.token) ?? []), ...repoEnv, ...serverEnv];
   return [...new Set([...secretValues({ linear: linearSettings(home, yml) }), ...fromYml.filter((v): v is string => !!v)])];
 }
 
 /**
- * Mode 0600 on POSIX. Windows has no mode bits (chmod only sets read-only): the file takes the ACL of its folder, so
- * FACTORY_HOME must be in a folder only the factory's user can read (docs/installation.md).
+ * Encrypted with `key` when given (ORC-398), in clear otherwise. Mode 0600 on POSIX. Windows has no mode bits (chmod only sets
+ * read-only): the file takes the ACL of its folder, so FACTORY_HOME must be in a folder only the factory's user can read
+ * (docs/installation.md).
  */
-export function saveSecrets(home: string, s: Secrets): void {
+export function saveSecrets(home: string, s: Secrets, key?: string): void {
   ensureTree(home);
   const file = homePaths(home).secrets;
-  writeFileSync(file, JSON.stringify(s, null, 2), { mode: 0o600 });
+  const text = JSON.stringify(s, null, 2);
+  writeFileSync(file, key ? sealSecretsFile(text, key) : text, { mode: 0o600 });
   chmodSync(file, 0o600);
 }

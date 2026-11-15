@@ -5,8 +5,9 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { ENV_NAME } from '../adapters/secrets/env.js';
 import { kindOf, SECRET_SOURCE_KINDS, type SecretSourceDecl } from '../adapters/secrets/registry.js';
-import type { SecretRef, SecretSourceKind } from '../adapters/secrets/types.js';
+import { refText, type SecretRef, type SecretSourceKind } from '../adapters/secrets/types.js';
 import { MAX_DIFF } from '../checks/diff-size.js';
+import { MIN_SECRETS_KEY_LENGTH } from './secrets-file.js';
 import { READ_CAPS, type ReadCaps } from '../network/reads.js';
 import { GITHUB_LOGIN, type DashboardAccess } from '../adapters/forge/github-login.js';
 import type { Effort } from '../presets/preset.js';
@@ -14,8 +15,8 @@ import type { StepSettings } from '../presets/workflow.js';
 
 /**
  * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, optional, next to `config.yaml`
- * until ORC-199. Every secret is written `env:NAME` and resolved from the environment, never kept in the file; a repository's
- * secrets are references `<source>:<path>`, read at each `setup` (ORC-308).
+ * until ORC-199. Every secret is a reference `<source>:<path>`, never kept in the file: the server's are read at its start,
+ * `env:NAME` from the environment (ORC-398); a repository's at each `setup` (ORC-308).
  * Read only: the daemon overlays it on what it reads (`effectiveInstance`, `linearSettings`), nothing saves it.
  */
 export interface FactoryYml {
@@ -49,8 +50,12 @@ export interface FactoryYml {
    * what the repository's `.factory/config.yml` declares (ORC-211); `secrets` their references, read at the setup (ORC-308).
    */
   repos?: { linearTeam: string; github: string; env?: Record<string, string>; secrets?: Record<string, SecretRef> }[];
-  /** The secret managers `repos[].secrets` may name besides `env` (ORC-308), each validated against its adapter. */
+  /** The secret managers a reference may name besides `env` (ORC-308), each validated against its adapter. */
   secretSources?: Record<string, SecretSourceDecl>;
+  /** The key `secrets.json` is encrypted with at rest (ORC-398), read through its reference; without it, the file stays in clear. */
+  secretsKey?: string;
+  /** The reference each server secret is written with, by its key's path (`github.private_key`), for `doctor` and the masking (ORC-398). */
+  secretRefs?: Record<string, SecretRef>;
   /** Lines past which the pack's hook refuses a whole read (ORC-279); without it, the hook's own 350. */
   readGuard?: { maxLines: number };
   /**
@@ -86,12 +91,19 @@ export interface ClaudeAccount {
 /**
  * The Claude account runs use (ORC-215): `claude.active` of `<home>/factory.yml` with its token, else the daemon's
  * `CLAUDE_CODE_OAUTH_TOKEN`. The file is read at each call and its `claude` section parsed again when the text changed:
- * a change of `active` counts from the next launch, without a restart. The first read throws as the daemon's start does;
+ * a change of `active` counts from the next launch, without a restart. A token of another source than `env` is the value
+ * `sealed` holds, read at the start (ORC-398). The first read throws as the daemon's start does;
  * later, a section that does not parse, or a file gone (an editor saving it), keeps the last account, logged once per fault.
  */
-export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = process.env, log: (m: string) => void = () => {}): () => ClaudeAccount {
+export function claudeAccountReader(
+  home: string,
+  env: NodeJS.ProcessEnv = process.env,
+  log: (m: string) => void = () => {},
+  sealed?: ReadonlyMap<string, string | undefined>,
+): () => ClaudeAccount {
   const resolve = (text: string | undefined): ClaudeAccount => {
-    const yml = text === undefined ? undefined : parseSection(text, ['claude'], env);
+    // A token read from a source at the start keeps its value; an account added since with one waits for the next start (ORC-398).
+    const yml = text === undefined ? undefined : parseSection(text, ['claude', 'secret_sources'], env, sealed);
     const chosen = activeClaudeToken(yml);
     if (chosen) return { name: yml!.claude!.active, token: chosen };
     const own = claudeToken(env['CLAUDE_CODE_OAUTH_TOKEN'], 'CLAUDE_CODE_OAUTH_TOKEN');
@@ -124,7 +136,7 @@ export function claudeAccountReader(home: string, env: NodeJS.ProcessEnv = proce
 }
 
 /** The text of `<home>/factory.yml`, undefined when there is none. Any other read error is thrown as is. */
-function factoryYmlText(home: string): string | undefined {
+export function factoryYmlText(home: string): string | undefined {
   try {
     return readFileSync(join(home, 'factory.yml'), 'utf8');
   } catch (err) {
@@ -134,7 +146,7 @@ function factoryYmlText(home: string): string | undefined {
 }
 
 /** Top-level keys of the file, validated together as `parseFactoryYml` validates them, the rest of the file left out; undefined when all are absent or null. */
-function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv): FactoryYml | undefined {
+function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv, sealed?: ReadonlyMap<string, string | undefined>): FactoryYml | undefined {
   let raw: unknown;
   try {
     raw = parse(text);
@@ -143,7 +155,7 @@ function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv): Fa
   }
   const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const kept = Object.fromEntries(keys.map((k) => [k, record[k]]).filter(([, v]) => v !== undefined && v !== null));
-  return Object.keys(kept).length === 0 ? undefined : parseFactoryYml(stringify(kept), env);
+  return Object.keys(kept).length === 0 ? undefined : parseFactoryYml(stringify(kept), env, SECRET_SOURCE_KINDS, sealed);
 }
 
 /**
@@ -199,6 +211,7 @@ const SECTIONS: Record<string, string[]> = {
   max_diff: [],
   repos: [],
   secret_sources: [],
+  secrets_key: [],
   read_guard: ['max_lines'],
   audit: ['serious_defect'],
   acknowledge: [],
@@ -210,6 +223,7 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 /** A team of factory.yml's `dashboard`: `<org>/<team-slug>`. */
 const GITHUB_TEAM = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[\w.-]+$/;
 
+/** The file with its `env:` secrets only: a server secret of another source is a fault here. The daemon and the CLI read it with `loadSealedFactoryYml` (ORC-398). */
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const text = factoryYmlText(home);
   return text === undefined ? undefined : parseFactoryYml(text, env);
@@ -228,9 +242,16 @@ export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'm
 
 /**
  * Validates the file and resolves its `env:` values, but for `repos[].secrets`, references whose syntax alone is checked
- * against `kinds` (ORC-308); throws a FactoryYmlError naming the path of every faulty key.
+ * against `kinds` (ORC-308); throws a FactoryYmlError naming the path of every faulty key. A server secret written with another
+ * source takes its value from `sealed`, by its reference, which `loadSealedFactoryYml` read at the daemon's start (ORC-398):
+ * `defer` leaves it unread, as does a reference `sealed` holds without a value; without `sealed` it is a fault.
  */
-export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.env, kinds: Readonly<Record<string, SecretSourceKind>> = SECRET_SOURCE_KINDS): FactoryYml {
+export function parseFactoryYml(
+  text: string,
+  env: NodeJS.ProcessEnv = process.env,
+  kinds: Readonly<Record<string, SecretSourceKind>> = SECRET_SOURCE_KINDS,
+  sealed?: ReadonlyMap<string, string | undefined> | 'defer',
+): FactoryYml {
   let raw: unknown;
   try {
     raw = parse(text) ?? {};
@@ -253,18 +274,15 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     for (const k of Object.keys(v)) if (!SECTIONS[key]!.includes(k)) violations.push(`${key}.${k}: unknown key`);
     return v as Record<string, unknown>;
   };
-  /** A value, or `env:NAME` read from the environment; a secret must be `env:NAME`. */
-  const value = (path: string, v: unknown, secret = false): string | undefined => {
+  /** A value, or `env:NAME` read from the environment. */
+  const value = (path: string, v: unknown): string | undefined => {
     if (v === undefined || v === null) return undefined;
     const text = typeof v === 'number' ? String(v) : v;
     if (typeof text !== 'string' || text === '') {
       violations.push(`${path}: a non-empty text is expected`);
       return undefined;
     }
-    if (!text.startsWith('env:')) {
-      if (secret) violations.push(`${path}: a secret is written \`env:NAME\`, never in clear in factory.yml`);
-      return secret ? undefined : text;
-    }
+    if (!text.startsWith('env:')) return text;
     const name = text.slice(4);
     if (!ENV_NAME.test(name)) {
       violations.push(`${path}: "${text}" does not name a variable (\`env:NAME\`)`);
@@ -281,25 +299,110 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     return res.success ? res.data : undefined;
   };
 
+  const secretRefs: Record<string, SecretRef> = {};
+  /** An `env:NAME` secret, resolved now as before ORC-398, its reference kept for `doctor` and the masking. */
+  const envSecret = (path: string, v: string): string | undefined => {
+    const resolved = value(path, v);
+    if (resolved !== undefined) secretRefs[path] = { source: 'env', path: v.slice(4) };
+    return resolved;
+  };
+  const sourcesRaw = r['secret_sources'];
+  const secretSources: Record<string, SecretSourceDecl> = {};
+  /** The adapter of each source a reference may name, `env` built in; undefined for a faulty declaration, already refused. */
+  const adapters = new Map<string, SecretSourceKind | undefined>([['env', kindOf(kinds, 'env')]]);
+  if (sourcesRaw !== undefined && sourcesRaw !== null) {
+    if (typeof sourcesRaw !== 'object' || Array.isArray(sourcesRaw)) violations.push('secret_sources: an object is expected');
+    else {
+      const known = Object.keys(kinds).join(', ');
+      for (const [name, decl] of Object.entries(sourcesRaw as Record<string, unknown>)) {
+        const path = `secret_sources.${name}`;
+        if (name === 'env') {
+          violations.push(`${path}: built in, it is not declared`);
+          continue;
+        }
+        // Assigned as a key, it would set an object's prototype: the source would vanish while its references passed.
+        if (name === '__proto__') {
+          violations.push(`${path}: not a name a source can take`);
+          continue;
+        }
+        adapters.set(name, undefined);
+        if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
+          violations.push(`${path}: an object \`{ kind, … }\` is expected`);
+          continue;
+        }
+        const { kind, ...written } = decl as Record<string, unknown>;
+        const adapter = typeof kind === 'string' ? kindOf(kinds, kind) : undefined;
+        if (!adapter) {
+          violations.push(kind == null ? `${path}.kind: required (${known})` : `${path}.kind: no adapter ${String(kind)} (${known})`);
+          continue;
+        }
+        // An option written `env:NAME` (an access credential) is resolved, and masked as the daemon's own secrets (ORC-398).
+        const options = Object.fromEntries(
+          Object.entries(written).map(([key, v]) => [key, typeof v === 'string' && v.startsWith('env:') ? envSecret(`${path}.${key}`, v) : v]),
+        );
+        // Kept despite faulty options: its references are still checked against its adapter.
+        violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
+        adapters.set(name, adapter);
+        secretSources[name] = { kind: kind as string, options };
+      }
+    }
+  }
+  if (Object.keys(secretSources).length) out.secretSources = secretSources;
+  /** A secret's reference (ORC-308, ORC-398): its source declared, its path one its adapter accepts; nothing read. */
+  const reference = (path: string, v: unknown): SecretRef | undefined => {
+    // Written without a value: skipped, as before ORC-308 and as `repos[].env` does; the setup then reports it missing.
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== 'string' || v === '') {
+      violations.push(`${path}: a non-empty text is expected`);
+      return undefined;
+    }
+    const colon = v.indexOf(':');
+    if (colon <= 0) {
+      violations.push(`${path}: a reference \`<source>:<path>\` is expected (\`env:NAME\`), never a secret in clear in factory.yml`);
+      return undefined;
+    }
+    const ref = { source: v.slice(0, colon), path: v.slice(colon + 1) };
+    if (!adapters.has(ref.source)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
+    const kind = adapters.get(ref.source);
+    if (!kind) return undefined;
+    const fault = kind.checkPath(ref.path);
+    if (fault) violations.push(`${path}: ${fault}`);
+    return fault ? undefined : ref;
+  };
+  /**
+   * A server secret (ORC-398): `env:NAME` resolved now; another source's value taken from `sealed`, read at the daemon's start,
+   * left unread when `sealed` is `defer`, a fault without it.
+   */
+  const secret = (path: string, v: unknown): string | undefined => {
+    if (typeof v === 'string' && v.startsWith('env:')) return envSecret(path, v);
+    const ref = reference(path, v);
+    if (!ref) return undefined;
+    secretRefs[path] = ref;
+    if (sealed === 'defer') return undefined;
+    // Held without a value: a command that does not need this secret did not read it.
+    if (sealed?.has(refText(ref))) return sealed.get(refText(ref));
+    violations.push(`${path}: ${refText(ref)} is read from its source at the daemon's start`);
+    return undefined;
+  };
   const linear = section('linear');
   if (linear) {
     out.linear = {
       clientId: value('linear.app_client_id', linear['app_client_id']),
-      clientSecret: value('linear.client_secret', linear['client_secret'], true),
-      webhookSecret: value('linear.webhook_secret', linear['webhook_secret'], true),
+      clientSecret: secret('linear.client_secret', linear['client_secret']),
+      webhookSecret: secret('linear.webhook_secret', linear['webhook_secret']),
     };
   }
   const github = section('github');
   if (github) {
     const appId = value('github.app_id', github['app_id']);
-    const privateKey = value('github.private_key', github['private_key'], true);
+    const privateKey = secret('github.private_key', github['private_key']);
     // `== null`: an empty value (`private_key:`) is as missing as an absent one.
     if (github['app_id'] == null) violations.push('github.app_id: required');
     if (github['private_key'] == null) violations.push('github.private_key: required');
     const installationId = value('github.installation_id', github['installation_id']);
-    const webhookSecret = value('github.webhook_secret', github['webhook_secret'], true);
+    const webhookSecret = secret('github.webhook_secret', github['webhook_secret']);
     const clientId = value('github.client_id', github['client_id']);
-    const clientSecret = value('github.client_secret', github['client_secret'], true);
+    const clientSecret = secret('github.client_secret', github['client_secret']);
     if (appId && privateKey) {
       out.github = {
         appId,
@@ -324,7 +427,7 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   if (claude) {
     for (const key of ['accounts', 'active', 'default_model']) if (claude[key] == null) violations.push(`claude.${key}: required`);
     const declared = leaf('claude.accounts', claude['accounts'], z.array(z.strictObject({ name: z.string().min(1), token: z.string() })), '`[{ name, token }]` expected');
-    const accounts = (declared ?? []).map((a, i) => ({ name: a.name, token: value(`claude.accounts[${i}].token`, a.token, true) ?? '' }));
+    const accounts = (declared ?? []).map((a, i) => ({ name: a.name, token: secret(`claude.accounts[${i}].token`, a.token) ?? '' }));
     const active = leaf('claude.active', claude['active'], z.string().min(1), 'an account name is expected');
     // Only against well-formed accounts: a malformed list already has its own violation.
     if (active && declared && !accounts.some((a) => a.name === active)) {
@@ -350,6 +453,9 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
       };
     }
   }
+  const secretsKey = secret('secrets_key', r['secrets_key']);
+  if (secretsKey !== undefined && secretsKey.length < MIN_SECRETS_KEY_LENGTH) violations.push(`secrets_key: at least ${MIN_SECRETS_KEY_LENGTH} characters expected`);
+  else if (secretsKey !== undefined) out.secretsKey = secretsKey;
   const concurrency = leaf('concurrency', r['concurrency'], z.number().int().positive(), 'a positive integer is expected');
   if (concurrency !== undefined) out.concurrency = concurrency;
   // `off` disables a token cap (ORC-381): `budgets: off` both.
@@ -371,65 +477,6 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   }
   const perStepTools = leaf('tools.per_step', section('tools')?.['per_step'], z.record(z.string(), z.array(z.string().min(1))), '`step: [tool, …]` expected');
   if (perStepTools) out.tools = { perStep: perStepTools };
-  const sourcesRaw = r['secret_sources'];
-  const secretSources: Record<string, SecretSourceDecl> = {};
-  /** The adapter of each source a reference may name, `env` built in; undefined for a faulty declaration, already refused. */
-  const adapters = new Map<string, SecretSourceKind | undefined>([['env', kindOf(kinds, 'env')]]);
-  if (sourcesRaw !== undefined && sourcesRaw !== null) {
-    if (typeof sourcesRaw !== 'object' || Array.isArray(sourcesRaw)) violations.push('secret_sources: an object is expected');
-    else {
-      const known = Object.keys(kinds).join(', ');
-      for (const [name, decl] of Object.entries(sourcesRaw as Record<string, unknown>)) {
-        const path = `secret_sources.${name}`;
-        if (name === 'env') {
-          violations.push(`${path}: built in, it is not declared`);
-          continue;
-        }
-        // Assigned as a key, it would set an object's prototype: the source would vanish while its references passed.
-        if (name === '__proto__') {
-          violations.push(`${path}: not a name a source can take`);
-          continue;
-        }
-        adapters.set(name, undefined);
-        if (!decl || typeof decl !== 'object' || Array.isArray(decl)) {
-          violations.push(`${path}: an object \`{ kind, … }\` is expected`);
-          continue;
-        }
-        const { kind, ...options } = decl as Record<string, unknown>;
-        const adapter = typeof kind === 'string' ? kindOf(kinds, kind) : undefined;
-        if (!adapter) {
-          violations.push(kind == null ? `${path}.kind: required (${known})` : `${path}.kind: no adapter ${String(kind)} (${known})`);
-          continue;
-        }
-        // Kept despite faulty options: its references are still checked against its adapter.
-        violations.push(...adapter.checkOptions(options).map((v) => `${path}.${v}`));
-        adapters.set(name, adapter);
-        secretSources[name] = { kind: kind as string, options };
-      }
-    }
-  }
-  if (Object.keys(secretSources).length) out.secretSources = secretSources;
-  /** A repository secret's reference (ORC-308): its source declared, its path one its adapter accepts; nothing read. */
-  const reference = (path: string, v: unknown): SecretRef | undefined => {
-    // Written without a value: skipped, as before ORC-308 and as `repos[].env` does; the setup then reports it missing.
-    if (v === undefined || v === null) return undefined;
-    if (typeof v !== 'string' || v === '') {
-      violations.push(`${path}: a non-empty text is expected`);
-      return undefined;
-    }
-    const colon = v.indexOf(':');
-    if (colon <= 0) {
-      violations.push(`${path}: a reference \`<source>:<path>\` is expected (\`env:NAME\`), never a secret in clear in factory.yml`);
-      return undefined;
-    }
-    const ref = { source: v.slice(0, colon), path: v.slice(colon + 1) };
-    if (!adapters.has(ref.source)) violations.push(`${path}: its source is neither \`env\` nor declared under secret_sources`);
-    const kind = adapters.get(ref.source);
-    if (!kind) return undefined;
-    const fault = kind.checkPath(ref.path);
-    if (fault) violations.push(`${path}: ${fault}`);
-    return fault ? undefined : ref;
-  };
   const repos = leaf(
     'repos',
     r['repos'],
@@ -471,6 +518,7 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     out.egress = { ...(versionsPerPackage ? { versionsPerPackage } : {}), ...(assetsPerRepo ? { assetsPerRepo } : {}) };
   }
 
+  if (Object.keys(secretRefs).length) out.secretRefs = secretRefs;
   if (violations.length > 0) throw new FactoryYmlError(violations);
   return out;
 }
