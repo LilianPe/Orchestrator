@@ -8,16 +8,10 @@ import type { DecisionOutcome, DecisionRequest, Store } from '../../src/store/ty
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
 import { createHarness, trackHarnesses } from '../helpers/harness.js';
 import { createTestSchema, EMPTY_ALL, type TestSchema, PG_URL } from '../helpers/pg-database.js';
+import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /** Each event of a ticket decides one comment; a prompt appends its body to the ticket's feedback. */
-const COMMENTS = `
-version: 1
-on:
-  ticket.delegated:
-    - { comment: "délégué" }
-  session.prompted:
-    - { comment: "noté" }
-`;
+const COMMENTS: WorkflowOverrides = { on: { 'ticket.delegated': [{ comment: 'délégué' }], 'session.prompted': [{ comment: 'noté' }] } };
 
 // ORC-149 on Postgres: the decision transaction under the ticket's advisory lock, a crash after the
 // commit, and two workers (two daemons) on the same database.
@@ -67,7 +61,7 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
       );
     }
 
-    const h = createHarness({ store: new PgStore({ pool }), projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ store: new PgStore({ pool }), workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.restart();
     expect((await outbox()).slice(0, 3)).toEqual([
@@ -87,7 +81,7 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     const head = async () => (await pool.query<{ status: string; attempts: number }>(`select status, attempts from outbox where id = 'REL-1:1:1'`)).rows[0];
     expect(await head()).toEqual({ status: 'running', attempts: 1 });
 
-    const h = createHarness({ store: new PgStore({ pool }), projectYaml: CRASH_WORKFLOW, effectLeaseMs: 300 });
+    const h = createHarness({ store: new PgStore({ pool }), workflow: CRASH_WORKFLOW, effectLeaseMs: 300 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.restart();
     const open = async () => (await pool.query(`select 1 from outbox where ticket_id = 'REL-1' and status <> 'done'`)).rowCount;
@@ -194,7 +188,7 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
     const holder = await pool.connect();
     await holder.query(`select pg_advisory_lock(hashtext('REL-1'))`);
     const inner = new PgStore({ connectionString: db.url, max: 4 });
-    const h = createHarness({ store: inner, projectYaml: COMMENTS });
+    const h = createHarness({ store: inner, workflow: COMMENTS });
     for (const t of ['REL-1', 'REL-2']) h.tracker.addIssue({ identifier: t, title: t });
     const journaled = async (t: string) => (await pool.query(`select 1 from journal where ticket_id = $1`, [t])).rowCount;
     // A suite running beside this one in the same database (ORC-334), blocked on the same key.
@@ -269,7 +263,7 @@ describe.skipIf(!PG_URL)('worker on PgStore', () => {
           return outcome;
         },
       });
-      const h = createHarness({ store, projectYaml: COMMENTS, effectLeaseMs: 5_000 });
+      const h = createHarness({ store, workflow: COMMENTS, effectLeaseMs: 5_000 });
       for (const t of tickets) h.tracker.addIssue({ identifier: t, title: t });
       return { inner, h };
     };

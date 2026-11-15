@@ -110,7 +110,7 @@ describe('replay oracle (ORC-174)', () => {
   it('what-if: stops at the first event whose decision differs under a modified preset, and names it', async () => {
     const journal = await record('check-failed-then-feedback');
     // Recorded with two check attempts: the failed check resumed the run. With one, it blocks the ticket.
-    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).yaml) });
+    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).workflow) });
     const failed = journal.entries.find((e) => e.event.type === 'verify.failed')!;
     expect(new Set(report.divergences.map((d) => d.eventId))).toEqual(new Set([failed.event.id]));
     expect(report.divergences[0]).toMatchObject({ eventType: 'verify.failed', seq: failed.decision!.seq });
@@ -122,7 +122,7 @@ describe('replay oracle (ORC-174)', () => {
 
   it('what-if under the same preset finds no divergence', async () => {
     const journal = await record('check-failed-then-feedback');
-    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset().yaml) });
+    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset().workflow) });
     expect(report.divergences).toEqual([]);
     expect(report.replayed).toBe(journal.entries.length);
   });

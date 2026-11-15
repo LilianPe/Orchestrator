@@ -2,13 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206). */
-const INTAKE_FIRST = `version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", run: intake }
-`;
+const INTAKE_FIRST = delegationStarts('intake');
 const DESCRIPTION = 'Export the audits as CSV from the audit list.\n\nAcceptance criteria:\n1. A CSV button downloads the list.';
 const DEV = { events: [{ kind: 'text' as const, text: 'Done.' }] };
 const ASSESSED = {
@@ -19,8 +16,8 @@ const ASSESSED = {
 };
 
 /** REL-1, delegated to the app, « blocked by » REL-2 in `blocker`'s state. */
-function setup(blocker: { stateName: string; stateType: string }, projectYaml?: string, ticket: { stateName?: string; stateType?: string } = {}) {
-  const h = createHarness(projectYaml ? { projectYaml } : {});
+function setup(blocker: { stateName: string; stateType: string }, workflow?: WorkflowOverrides, ticket: { stateName?: string; stateType?: string } = {}) {
+  const h = createHarness(workflow ? { workflow } : {});
   h.tracker.addIssue({ identifier: 'REL-2', title: 'Audit list', ...blocker });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION, delegateId: 'app', ...ticket });
   h.tracker.blocks('REL-2', 'REL-1');

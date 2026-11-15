@@ -1,6 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { loadWorkflow } from '../../config/load-workflow.js';
+import { defaultWorkflow } from '../../presets/workflow.js';
 import { FakeClock } from '../../core/clock.js';
 import { newTicketState, type FactoryEvent } from '../../core/types.js';
 import { SqliteStore } from '../../store/sqlite-store.js';
@@ -9,7 +8,7 @@ import { PrPoller } from './pr-poller.js';
 
 describe('PrPoller', () => {
   it('emits opened, checks transitions and merged', async () => {
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });
+    const workflow = defaultWorkflow();
     const store = new SqliteStore(':memory:');
     const forge = new FakeForge();
     const events: FactoryEvent[] = [];
@@ -39,7 +38,7 @@ describe('PrPoller', () => {
     expect(events.at(-1)!.payload).toMatchObject({ number: 7, headSha: 'h7', mergeSha: 'm7', mergedAt: 77 });
   });
   function setup(submit?: (e: FactoryEvent) => void, log: (m: string) => void = () => {}) {
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });
+    const workflow = defaultWorkflow();
     const store = new SqliteStore(':memory:');
     const forge = new FakeForge();
     const events: FactoryEvent[] = [];

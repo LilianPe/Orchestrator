@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Workflow } from '../config/workflow-schema.js';
+import type { Workflow } from '../core/workflow.js';
 import type { WorkflowVersion } from '../store/types.js';
 
 /** JSON with sorted keys: the same workflow always gives the same text, whatever its key order. */

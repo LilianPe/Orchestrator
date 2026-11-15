@@ -1,4 +1,4 @@
-import type { ReviewLens } from '../config/workflow-schema.js';
+import type { ReviewLens } from './workflow.js';
 import { OUTPUT_LIMITS } from '../publish/output-limits.js';
 import type { Finding, FindingSeverity } from './agent-output.js';
 import type { ContestedFinding } from './types.js';

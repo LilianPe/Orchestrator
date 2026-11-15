@@ -10,6 +10,7 @@ import type { DecisionRequest, Store } from '../../src/store/types.js';
 import type { WorkspaceRequest } from '../../src/adapters/workspace/types.js';
 import { CRASH_WORKFLOW, crashAfterDecision } from '../helpers/crash-workflow.js';
 import { createHarness, harnessStoreKind, loadTestWorkflow } from '../helpers/harness.js';
+import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 const waitFor = async (cond: () => boolean | Promise<boolean>): Promise<void> => {
   for (let i = 0; i < 400 && !(await cond()); i++) await new Promise((r) => setTimeout(r, 5));
@@ -39,7 +40,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
     const { completed } = crashAfterDecision(file, killAt);
     expect(completed).toEqual(done);
 
-    const h = createHarness({ store: new SqliteStore(file), projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ store: new SqliteStore(file), workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     // Committed before the kill: journal, projection and the three outbox rows, the inbox row processed.
     expect((await h.store.recentEvents(10, 'REL-1')).map((e) => e.type)).toEqual(['ticket.delegated']);
@@ -70,7 +71,7 @@ describe('worker: per-ticket lock and decision transaction', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'factory-worker-')), 'factory.db');
     expect(crashAfterDecision(file, 0).completed).toEqual([]);
 
-    const h = createHarness({ store: new SqliteStore(file), projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ store: new SqliteStore(file), workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     expect(await h.store.recentEvents(10)).toEqual([]);
     expect(await h.store.getTicket('p', 'REL-1')).toBeUndefined();
@@ -117,13 +118,8 @@ describe('worker: per-ticket lock and decision transaction', () => {
   });
 
   it('keeps a ticket on the workflow version it started with when the workflow changes (criterion 4)', async () => {
-    const version = (comment: string) => `
-version: 1
-on:
-  label.changed:
-    - { label: "agent:x", comment: "${comment}" }
-`;
-    const h = createHarness({ projectYaml: version('ancienne version') });
+    const version = (comment: string): WorkflowOverrides => ({ on: { 'label.changed': [{ label: 'agent:x', comment }] } });
+    const h = createHarness({ workflow: version('ancienne version') });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -146,7 +142,7 @@ on:
   });
 
   it('writes the effects of a decision to the outbox as ticket:seq:i, seq the journal position (criterion 3)', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const journal = (await h.store.recentEvents(50, 'REL-1')).reverse().map((e) => e.id);
@@ -206,7 +202,7 @@ on:
       const last = gate();
       let tries = 0;
       const h = createHarness({
-        projectYaml: CRASH_WORKFLOW,
+        workflow: CRASH_WORKFLOW,
         processRetry: { attempts, baseMs: 1 },
         // A backoff no real timer reaches during the test: only `advance` ends it.
         effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
@@ -347,7 +343,7 @@ on:
       let hiccup = true;
       const decided: string[] = [];
       const h = createHarness({
-        projectYaml: CRASH_WORKFLOW,
+        workflow: CRASH_WORKFLOW,
         processRetry: { attempts: 5, baseMs: 1 },
         // A backoff no real timer reaches during the test: only the polls below end it.
         effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
@@ -836,7 +832,7 @@ on:
       let hiccup = true;
       const decided: string[] = [];
       const h = createHarness({
-        projectYaml: CRASH_WORKFLOW,
+        workflow: CRASH_WORKFLOW,
         processRetry: { attempts: 5, baseMs: 1 },
         // A backoff no real timer reaches during the test: the stop is what ends it.
         effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
@@ -918,7 +914,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     ({ ...TRUSTED, id: 'd1', type: 'ticket.delegated' as const, at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', payload: { linearSessionId: 'ls-1' } });
 
   it('writes each effect result to the inbox as effect:<id>, decided by the worker like any event (criteria 4 and 5)', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const rows = await h.store.listEffects('p', 'REL-1');
@@ -943,7 +939,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
   });
 
   it('retries an effect that fails for a while, after a backoff, and blocks nothing (criterion 3)', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW, effectRetry: { attempts: 4, baseMs: 20, capMs: 1_000 } });
+    const h = createHarness({ workflow: CRASH_WORKFLOW, effectRetry: { attempts: 4, baseMs: 20, capMs: 1_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     const comment = h.tracker.comment.bind(h.tracker);
     const tries: number[] = [];
@@ -968,7 +964,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
   });
 
   it('lets an effect die past its last attempt: the rest of its decision is skipped and decide blocks the ticket', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW, effectRetry: { attempts: 2, baseMs: 5, capMs: 5 } });
+    const h = createHarness({ workflow: CRASH_WORKFLOW, effectRetry: { attempts: 2, baseMs: 5, capMs: 5 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.comment = async () => {
       throw new Error('Linear down');
@@ -996,7 +992,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     const claiming = gate();
     const answer = gate();
     const h = createHarness({
-      projectYaml: CRASH_WORKFLOW,
+      workflow: CRASH_WORKFLOW,
       // A backoff no real timer reaches during the test: only the polls below move the worker.
       effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
       wrapStore: (inner) =>
@@ -1038,7 +1034,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     const answer = gate();
     const decided: string[] = [];
     const h = createHarness({
-      projectYaml: CRASH_WORKFLOW,
+      workflow: CRASH_WORKFLOW,
       effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 },
       wrapStore: (inner) =>
         Object.assign(Object.create(inner) as Store, {
@@ -1086,7 +1082,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
   });
 
   it('leaves a parked row for the next start when its effect settles during a shutdown (ORC-290)', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW, effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 } });
+    const h = createHarness({ workflow: CRASH_WORKFLOW, effectRetry: { attempts: 2, baseMs: 60_000, capMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     let tries = 0;
     const trying = gate();
@@ -1111,7 +1107,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
   });
 
   it('does not loop when the error notice of a dead effect dies too', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.tracker.comment = async () => {
       throw new Error('Linear down');
@@ -1131,7 +1127,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
     const { completed } = crashAfterDecision(file, 'acted:1', 300);
     expect(completed).toEqual([]);
 
-    const h = createHarness({ store: new SqliteStore(file), projectYaml: CRASH_WORKFLOW, effectLeaseMs: 300 });
+    const h = createHarness({ store: new SqliteStore(file), workflow: CRASH_WORKFLOW, effectLeaseMs: 300 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     // The labels were set, but the row is still running under the dead process's claim, with no result.
     expect((await h.store.listEffects('p', 'REL-1'))[0]).toMatchObject({ id: 'REL-1:1:1', status: 'running', attempts: 1 });
@@ -1158,7 +1154,7 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
   });
 
   it('hands a queued start lost in a crash out again once its lease expires', async () => {
-    const h = createHarness({ projectYaml: CRASH_WORKFLOW });
+    const h = createHarness({ workflow: CRASH_WORKFLOW });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.store.setMeta('paused', '1');
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -1176,21 +1172,14 @@ describe('outbox executors: lease, backoff, results through the inbox', () => {
 });
 
 describe('a stop and an effect held back by its backoff (ORC-150, ORC-138)', () => {
-  const RUN_THEN_COMMENT = `
-version: 1
-on:
-  ticket.delegated:
-    - { run: dev }
-  label.changed:
-    - { label: "agent:x", comment: "reçu" }
-`;
+  const RUN_THEN_COMMENT: WorkflowOverrides = { on: { 'ticket.delegated': [{ run: 'dev' }], 'label.changed': [{ label: 'agent:x', comment: 'reçu' }] } };
 
   it.each([
     { type: 'control.stop' as const, payload: {} },
     { type: 'session.stopped' as const, payload: { linearSessionId: 'ls-1' } },
   ])('lets $type stop the run without waiting for the retry, and keeps its block reason', async ({ type, payload }) => {
     // A minute of backoff: the stop must not wait for it.
-    const h = createHarness({ projectYaml: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
+    const h = createHarness({ workflow: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -1216,15 +1205,10 @@ on:
   });
 
   it('lets a stop pass the result of an effect of the same decision done before the one in backoff', async () => {
-    const LABEL_THEN_COMMENT = `
-version: 1
-on:
-  ticket.delegated:
-    - { run: dev }
-  label.changed:
-    - { label: "agent:x", labels: { add: ["vu"] }, comment: "reçu" }
-`;
-    const h = createHarness({ projectYaml: LABEL_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
+    const LABEL_THEN_COMMENT: WorkflowOverrides = {
+      on: { 'ticket.delegated': [{ run: 'dev' }], 'label.changed': [{ label: 'agent:x', labels: { add: ['vu'], remove: [] }, comment: 'reçu' }] },
+    };
+    const h = createHarness({ workflow: LABEL_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -1245,7 +1229,7 @@ on:
   });
 
   it('does not let another event pass the backoff', async () => {
-    const h = createHarness({ projectYaml: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
+    const h = createHarness({ workflow: RUN_THEN_COMMENT, effectRetry: { attempts: 8, baseMs: 60_000, capMs: 60_000 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -1261,8 +1245,7 @@ on:
 
 describe('an effect that throws something other than an Error (ORC-150 review)', () => {
   it('records its message and lets it die like any failed effect', async () => {
-    const yaml = 'version: 1\non:\n  label.changed:\n    - { label: "agent:x", comment: "reçu" }\n';
-    const h = createHarness({ projectYaml: yaml, effectRetry: { attempts: 1, baseMs: 1, capMs: 1 } });
+    const h = createHarness({ workflow: { on: { 'label.changed': [{ label: 'agent:x', comment: 'reçu' }] } }, effectRetry: { attempts: 1, baseMs: 1, capMs: 1 } });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     h.tracker.comment = async () => {

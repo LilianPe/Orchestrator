@@ -43,7 +43,7 @@ const store = Object.assign(Object.create(inner) as Store, {
     return done;
   },
 });
-const h = createHarness({ store, projectYaml: CRASH_WORKFLOW, effectLeaseMs: leaseMs ? Number(leaseMs) : undefined });
+const h = createHarness({ store, workflow: CRASH_WORKFLOW, effectLeaseMs: leaseMs ? Number(leaseMs) : undefined });
 h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
 await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 // Not reached: the process is killed while the worker executes the effects.
