@@ -61,9 +61,9 @@ const entry = (s: string): string => prose(s.replace(/\s*[\r\n]+\s*/g, ' ').trim
 const linkUrl = (url: string): string => url.replace(/[\s()<>[\]]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)));
 /**
  * What the factory's own facts may add to a description past the agent's fields: the ticket's id, the commands `verify` ran, the
- * captures. `submit_result` keeps the agent's part under the cap of a PR body by this much (`publishedSizeIssues`).
+ * captures, six links of about 175 characters each (ORC-407). `submit_result` keeps the agent's part under the cap of a PR body by this much (`publishedSizeIssues`).
  */
-export const FACTS_ROOM = 1_500;
+export const FACTS_ROOM = 2_500;
 const bullets = (items: readonly string[]): string => (items.length ? items.map((i) => `- ${i}`).join('\n') : NONE);
 /** The tests the agent says it added, the same in the PR and in the recap. */
 const testsList = (o: Pick<AgentOutput, 'tests_added'>): string => bullets(o.tests_added.map((t) => mdCode(entry(t))));

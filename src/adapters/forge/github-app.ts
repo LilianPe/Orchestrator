@@ -725,12 +725,13 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * unchanged tree (a replay) writes no commit: the links name the tip, which holds the files.
    */
   async hostArtifacts(repoPath: string, files: readonly HostedFile[]): Promise<string[]> {
-    for (const f of files) if (!ARTIFACT_PATH.test(f.path)) throw new Error(`not a path on ${ARTIFACTS_BRANCH}: ${f.path}`);
+    // No retry would make it one: an answer, as a refusal.
+    for (const f of files) if (!ARTIFACT_PATH.test(f.path)) throw new ArtifactsRefused(`not a path on ${ARTIFACTS_BRANCH}: ${f.path}`);
     const repo = await this.repo(repoPath);
     const commit = await this.onArtifacts(repo, async (token, api) => {
       const blob = async (content: Uint8Array) => (await this.read('POST', `${api}/git/blobs`, token, isSha, 'a git blob', { content: Buffer.from(content).toString('base64'), encoding: 'base64' })).sha;
       const entries = await Promise.all(files.map(async (f) => ({ path: f.path, mode: '100644', type: 'blob', sha: await blob(f.content) })));
-      return { message: `Host ${files.length} visual-proof capture(s)`, change: async () => entries };
+      return { message: `Host ${files.length} visual-proof capture(s) [skip ci]`, change: async () => entries };
     });
     const at = `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/blob/${commit}`;
     return files.map((f) => `${at}/${f.path.split('/').map(encodeURIComponent).join('/')}?raw=true`);
@@ -740,7 +741,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async pruneArtifacts(repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
     let removed: string[] = [];
     await this.onArtifacts(await this.repo(repoPath), async (token, api) => ({
-      message: 'Remove the captures of PRs closed 30 days ago',
+      message: 'Remove the captures of PRs closed 30 days ago [skip ci]',
       change: async (tip) => {
         removed = [];
         if (!tip) return undefined;
@@ -756,7 +757,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   /**
    * One change of `ARTIFACTS_BRANCH`, and of no other ref: its tip read, the tree `change` gives on it (`undefined`: nothing to
    * change), a commit on the tip, or an orphan root with its README, then the ref moved without force. Another writer's commit in
-   * between: read again, at most `ARTIFACTS_ATTEMPTS` times. What the forge refuses is `ArtifactsRefused`; a rate limit, a 5xx or
+   * between, or the branch deleted: read again, at most `ARTIFACTS_ATTEMPTS` times. What the forge refuses is `ArtifactsRefused`; a rate limit, a 5xx or
    * the network throws, to be retried. Returns the commit that holds the result.
    */
   private async onArtifacts(
@@ -780,7 +781,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
           else await this.call('POST', `${api}/git/refs`, token, { ref: `refs/${ARTIFACTS_REF}`, sha: commit.sha });
           return commit.sha;
         } catch (err) {
-          const raced = err instanceof GitHubApiError && err.status === 422 && /fast.forward|already exists/i.test(err.message);
+          const raced = err instanceof GitHubApiError && err.status === 422 && /fast.forward|already exists|does not exist/i.test(err.message);
           if (!raced) throw err;
           if (attempt >= ARTIFACTS_ATTEMPTS) throw new Error(`${ARTIFACTS_BRANCH} moved under each of ${ARTIFACTS_ATTEMPTS} writes: ${err.message}`, { cause: err });
         }

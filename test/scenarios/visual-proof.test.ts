@@ -178,6 +178,21 @@ describe('the captures in the PR (ORC-407)', () => {
     expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual(['/repo: REL-1']);
     // A ticket the factory does not know keeps its folder.
     expect([...h.forge.artifacts.keys()]).toEqual(['REL-404/after-375-0000000000000000.png']);
+    // A repository the forge refuses is logged, never a failure of the whole purge.
+    h.forge.artifactsRefusal = 'GitHub refuses to write factory/artifacts: 403';
+    expect(await h.orch.pruneCaptures(mergedAt + CAPTURES_KEPT_MS)).toEqual([]);
+    expect(h.logs.some((l) => l.level === 'warn' && l.message.includes('captures of /repo not pruned'))).toBe(true);
+  });
+
+  it("a capture gone from the factory's disk: the PR says so, without the server's path", async () => {
+    const { h } = visual(() => ({ visual: taken() }));
+    const keep = h.store.putArtifact.bind(h.store);
+    // Kept, then lost: the row names a file no longer there.
+    h.store.putArtifact = async (a) => keep({ ...a, path: `${a.path}.gone` });
+    await delegate(h);
+    expect(h.forge.artifacts.size).toBe(0);
+    expect(body(h)).toContain("**Screens**: taken by the factory, not shown here: a capture is no longer kept on the factory's disk.");
+    expect(body(h)).not.toContain('.gone');
   });
 });
 

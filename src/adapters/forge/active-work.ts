@@ -1,6 +1,6 @@
 import { allNodes, isConnection, isRecord, PAGE_INFO, type Connection } from '../graphql-pages.js';
 import type { GraphQl } from './review-threads.js';
-import type { ForgeBranch, OpenPr } from './types.js';
+import { ARTIFACTS_BRANCH, type ForgeBranch, type OpenPr } from './types.js';
 
 /** Files read of one PR, as many as intake is shown (`formatActiveWork`): past them, the PR says how many it changes. */
 const PR_FILES = 30;
@@ -110,5 +110,6 @@ export async function repoBranches(gql: GraphQl, owner: string, name: string, pr
 export async function recentRepoBranches(gql: GraphQl, owner: string, name: string): Promise<ForgeBranch[]> {
   type Recent = { url: string; defaultBranchRef: { name: string } | null; refs: { nodes: { name: string }[] } };
   const { url, defaultBranchRef, refs } = await repository<Recent>(gql, RECENT_BRANCHES_QUERY, { owner, name }, hasRecent, 'branches');
-  return refs.nodes.filter((r) => r.name !== defaultBranchRef?.name).map((r) => branchOf(url, r.name));
+  // The captures' branch (ORC-407) is the factory's, never a ticket's work.
+  return refs.nodes.filter((r) => r.name !== defaultBranchRef?.name && r.name !== ARTIFACTS_BRANCH).map((r) => branchOf(url, r.name));
 }

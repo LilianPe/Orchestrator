@@ -1259,6 +1259,7 @@ function gitData(opts: { refuse?: (url: URL, init: HttpRequest) => { status: num
     if (init.method === 'PATCH' && p.startsWith(`${api}/refs/`)) {
       opts.beforeMove?.();
       const name = p.slice(`${api}/refs/`.length);
+      if (!refs.has(name)) return { status: 422, body: { message: 'Reference does not exist' } };
       if (b.force !== false || !commits.get(String(b.sha))!.parents.includes(refs.get(name)!)) return { status: 422, body: { message: 'Update is not a fast forward' } };
       refs.set(name, String(b.sha));
       return { body: { ref: `refs/${name}` } };
@@ -1295,6 +1296,26 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
     // The Git Data API alone, and no ref but the branch's.
     for (const c of writes(calls)) expect(new URL(c.url).pathname).toMatch(/^\/repos\/acme\/app\/git\/(blobs|trees|commits|refs)$/);
     expect(writes(calls).filter((c) => c.url.endsWith('/git/refs')).map((c) => c.body)).toEqual([{ ref: 'refs/heads/factory/artifacts', sha: head }]);
+    // A push by an App's token starts the repository's workflows: not for a branch without code.
+    expect(writes(calls).find((c) => c.url.endsWith('/git/commits'))!.body).toMatchObject({ message: expect.stringContaining('[skip ci]') });
+  });
+
+  it('a branch deleted between its read and the move is made again as an orphan, not taken for a refusal', async () => {
+    let deleted = false;
+    const git = gitData({
+      beforeMove: () => {
+        if (deleted || !git.refs.has('heads/factory/artifacts')) return;
+        deleted = true;
+        git.refs.delete('heads/factory/artifacts');
+      },
+    });
+    const { forge } = makeForge([tokenRoute(42), git.route], { installationId: 42 });
+    await forge.hostArtifacts('/repo', [png('a')]);
+    await forge.hostArtifacts('/repo', [png('b')]);
+    expect(deleted).toBe(true);
+    const head = git.refs.get('heads/factory/artifacts')!;
+    expect(git.commits.get(head)!.parents).toEqual([]);
+    expect([...git.tip().keys()].sort()).toEqual(['ORC-1/b.png', 'README.md']);
   });
 
   it('commits on the tip by a fast forward only, and a replay that finds its files writes nothing', async () => {
@@ -1352,10 +1373,10 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
     expect(String(err)).toMatch(/moved under each of 3 writes/);
   });
 
-  it('refuses a path that is not a folder and a file, before any call', async () => {
+  it('refuses a path that is not a folder and a file, before any call: an answer, which no retry would change', async () => {
     const { forge, calls } = makeForge([tokenRoute(42), gitData().route], { installationId: 42 });
     for (const path of ['../x.png', 'x.png', 'ORC-1/../x.png', 'ORC-1/.x.png', '/ORC-1/x.png']) {
-      await expect(forge.hostArtifacts('/repo', [{ path, content: Buffer.from('x') }])).rejects.toThrow('not a path on factory/artifacts');
+      await expect(forge.hostArtifacts('/repo', [{ path, content: Buffer.from('x') }])).rejects.toThrow(ArtifactsRefused);
     }
     expect(calls).toEqual([]);
   });

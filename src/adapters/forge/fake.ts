@@ -189,6 +189,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
 
   async pruneArtifacts(_repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
     this.answer();
+    if (this.artifactsRefusal) throw new ArtifactsRefused(this.artifactsRefusal);
     const removed: string[] = [];
     for (const folder of new Set([...this.artifacts.keys()].map((p) => p.split('/')[0]!))) if (await expired(folder)) removed.push(folder);
     for (const p of [...this.artifacts.keys()]) if (removed.includes(p.split('/')[0]!)) this.artifacts.delete(p);

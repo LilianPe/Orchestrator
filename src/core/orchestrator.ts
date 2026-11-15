@@ -1362,12 +1362,13 @@ export class Orchestrator {
       files = await Promise.all(
         shots.map(async (s) => {
           const path = kept.get(captureArtifactId(c.runId, s));
-          if (!path) throw new Error(`no row in artifacts for ${captureLabel(s)}`);
+          if (!path) throw new Error('no row in artifacts');
           return { path: `${t.ticketId}/${s.side}-${s.width}-${s.sha256.slice(0, 16)}.png`, content: await readFile(path) };
         }),
       );
-    } catch (err) {
-      return { unhosted: `a capture is no longer kept on the factory's disk: ${(err as Error).message}` };
+    } catch {
+      // Its path is the server's: not for the PR.
+      return { unhosted: "a capture is no longer kept on the factory's disk." };
     }
     try {
       const urls = await this.d.captureHost.hostArtifacts(project.repoPath, files);
@@ -1401,7 +1402,9 @@ export class Orchestrator {
         }
         return false;
       };
-      for (const folder of await host.pruneArtifacts(repoPath, expired)) removed.push(`${repoPath}: ${folder}`);
+      // One repository the forge refuses keeps none of the others from their cleanup.
+      const folders = await host.pruneArtifacts(repoPath, expired).catch((err: Error) => (this.log('warn', `captures of ${repoPath} not pruned: ${err.message}`), []));
+      for (const folder of folders) removed.push(`${repoPath}: ${folder}`);
     }
     return removed;
   }
