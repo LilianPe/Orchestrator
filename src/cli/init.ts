@@ -5,7 +5,8 @@ import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning, MISSING_TEST_COMMAND, parseRepoConfig, REPO_CONFIG_PATH } from '../config/repo-config.js';
+import { makeRepoConfig } from '../app/repo-variables.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -96,15 +97,6 @@ function proposal({ setup, commands, preview }: Detected): string | undefined {
   return text ? PROPOSAL_HEADER + text : undefined;
 }
 
-/** The commands of the repository's `.factory/config.yml` as checked out: none when it does not parse (`factory validate` says why). */
-function committedCommands(repo: string): Record<string, string> | undefined {
-  try {
-    return parseRepoConfig(readFileSync(join(repo, REPO_CONFIG_PATH), 'utf8')).commands;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
@@ -153,16 +145,15 @@ export async function runInit(d: InitDeps): Promise<void> {
   // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
   // default branch, which `init` proposes and leaves to commit.
   for (const file of ignoredWorkflowFiles(repoPath)) io.print(ignoredWorkflowWarning(file));
-  let commands: Readonly<Record<string, string>> | undefined;
-  if (existsSync(join(repoPath, REPO_CONFIG_PATH))) commands = committedCommands(repoPath);
-  else {
-    const detected = detect(repoPath);
-    const proposed = proposal(detected);
-    if (proposed) io.print(proposed);
-    commands = detected.commands;
-  }
-  // The red check's command (ORC-412): without it, every ticket blocks at the tests step.
-  if (commands && !commands['test']) io.print(MISSING_TEST_COMMAND);
+  const detected = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : detect(repoPath);
+  const proposed = detected && proposal(detected);
+  if (proposed) io.print(proposed);
+  // The red check's command (ORC-412), in what it proposes or, as the daemon reads it, on the default branch: without it,
+  // every ticket blocks at the tests step. A file git cannot read there is `factory validate`'s and `factory doctor`'s to name.
+  const commands = detected
+    ? detected.commands
+    : await makeRepoConfig({ exec: d.exec })({ repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
+  for (const warning of testCommandWarnings(commands)) io.print(warning);
 
   saveInstance(d.home, cfg);
   io.print(

@@ -91,6 +91,9 @@ export const ignoredWorkflowWarning = (file: string): string =>
  */
 export const MISSING_TEST_COMMAND = `Warning: ${REPO_CONFIG_PATH} has no \`commands.test\`: the red check of the tests step cannot run, and every ticket blocks there (infra). Declare the command that runs the tests, e.g. \`commands: { test: npm test }\`.`;
 
+/** `MISSING_TEST_COMMAND` when the repository's commands have no `test`: none when they could not be read. */
+export const testCommandWarnings = (commands: Readonly<Record<string, string>> | undefined): string[] => (commands && !commands['test'] ? [MISSING_TEST_COMMAND] : []);
+
 /** How the daemon reads it on the default branch. `fetch: false`: the forge was just fetched, or the read follows the launch's. */
 export interface RepoConfigRead {
   fetch?: boolean;

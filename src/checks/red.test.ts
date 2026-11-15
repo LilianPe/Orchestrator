@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkRed, readTestRun, type RedDeps } from './red.js';
+import { checkRed, readTestRun, runnerOfCommand, type RedDeps } from './red.js';
 
 // Trimmed outputs of each runner, as they print them.
 const VITEST_ASSERTION = `
@@ -343,6 +343,15 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, { head: { 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }) } });
     expect(await checkRed('npm test', d)).toMatchObject({ command: "npm test -- 'src/export.test.ts'" });
     expect(d.commands[0]).toContain("npm test -- 'src/export.test.ts' --reporter=default --reporter=json");
+  });
+
+  it('reads the script of the last command, through yarn too, past its variables (ORC-412)', async () => {
+    const runner = (command: string) => runnerOfCommand(command, { showAtHead: async () => JSON.stringify({ scripts: { test: 'vitest run' } }) });
+    expect(await runner('cd web && CI=1 npm test --')).toBe('vitest');
+    expect(await runner('npm ci && npm test --')).toBe('vitest');
+    expect(await runner('yarn test --')).toBe('vitest');
+    expect(await runner('yarn jest --')).toBe('jest');
+    expect(await runner('npm test')).toBeUndefined();
   });
 
   it('reads a test file that did not load from the report: a missing module', async () => {

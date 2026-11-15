@@ -196,20 +196,31 @@ function runnerOf(line: string): Runner | undefined {
   return undefined;
 }
 
-// `npm test --`, `pnpm run test --`: the arguments after `--` reach the script.
-const PACKAGE_SCRIPT = /^(?:npm|pnpm)\s+(?:run(?:-script)?\s+)?([\w:.-]+)\s+(?:.*\s)?--(?:\s|$)/;
+/**
+ * The arguments of the last command of a line when it runs a script through npm, pnpm or yarn, past its variables:
+ * undefined for another program, and for `exec` or `dlx`, which run one.
+ */
+function packageArgs(line: string): string | undefined {
+  const args = /^(?:\w+=\S*\s+)*(?:npm|pnpm|yarn)(?:\s+|$)(.*)$/.exec(lastCommand(line))?.[1];
+  return args === undefined || /^(?:exec|dlx)(?:\s|$)/.test(args) ? undefined : args;
+}
+
+const hasSeparator = (args: string): boolean => /(?:^|\s)--(?:\s|$)/.test(args);
 
 /**
- * The runner of the repository's test command: named in it, or in the `package.json` script it runs through npm or pnpm
- * past a `--`. Undefined when the flags would reach another program: the text output is read.
+ * The runner of the repository's test command: named in it, or in the `package.json` script it runs through npm, pnpm
+ * or yarn past a `--` (`npm test --`, `pnpm run test --`). Undefined when the flags would reach another program: the
+ * text output is read.
  */
 export async function runnerOfCommand(command: string, deps: Pick<RedDeps, 'showAtHead'>): Promise<Runner | undefined> {
-  const script = PACKAGE_SCRIPT.exec(`${command} `)?.[1];
+  const args = packageArgs(command);
+  const script = args !== undefined && hasSeparator(args) ? /^(?:run(?:-script)?\s+)?(\w[\w:.-]*)\s/.exec(args)?.[1] : undefined;
   if (!script) return runnerOf(command);
   try {
     const scripts = (JSON.parse((await deps.showAtHead('package.json')) ?? '{}') as { scripts?: Record<string, unknown> }).scripts;
     const body = scripts?.[script === 't' ? 'test' : script];
-    return typeof body === 'string' ? runnerOf(body) : undefined;
+    // No such script: a program pnpm or yarn runs (`yarn vitest run --`), named in the command.
+    return typeof body === 'string' ? runnerOf(body) : runnerOf(command);
   } catch {
     return undefined;
   }
@@ -292,13 +303,11 @@ export const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
  * The repository's test command with the `--` npm, pnpm or yarn need before the test files appended to it (ORC-412): added
- * when its last command, past its variables, runs a script through one of them and has none. Any other command, and
- * `exec` or `dlx`, which run a program and not a script, is left as it is.
+ * when its last command runs a script through one of them (`packageArgs`) and has none. Any other command is left as it is.
  */
 export function withScriptArgs(command: string): string {
-  const last = lastCommand(command).replace(/^(?:\w+=\S*\s+)*/, '');
-  const script = /^(?:npm|pnpm|yarn)(?:\s|$)/.test(last) && !/^\S+\s+(?:exec|dlx)(?:\s|$)/.test(last);
-  return script && !/(?:^|\s)--(?:\s|$)/.test(last) ? `${command.trimEnd()} --` : command;
+  const args = packageArgs(command);
+  return args !== undefined && !hasSeparator(args) ? `${command.trimEnd()} --` : command;
 }
 
 /** Runs the tests the step added with the repository's test command, and says whether they are red for the right reason. */

@@ -11,7 +11,7 @@ import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning, MISSING_TEST_COMMAND, type RepoConfig } from '../config/repo-config.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -475,7 +475,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
   const ignored = ignoredWorkflowFiles(repoPath);
   // Neither is part of the verdict: said whatever it is.
-  const warnings = options.commands && !options.commands['test'] ? [MISSING_TEST_COMMAND] : [];
+  const warnings = testCommandWarnings(options.commands);
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
   const failure = (message: string) => doctorFailure(options, message, ignored, warnings);
   let workflows: WorkflowSource[];
