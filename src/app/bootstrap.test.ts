@@ -348,7 +348,8 @@ describe('bootstrap', () => {
 
   it("guards the dashboard with the GitHub sign-in of the factory's App on a non-loopback host", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    // Written with its trailing slash: the callback URL is the one the App declares all the same.
+    saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example/', relay: { kind: 'none' }, projects: [], limits: {} });
     writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
     const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw' } });
     try {

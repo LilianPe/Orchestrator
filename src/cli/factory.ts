@@ -13,7 +13,7 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import { openStore } from '../store/open.js';
 import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
-import { runStatusCommand, runStopCommand } from './control.js';
+import { runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
 import { runInit } from './init.js';
 import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
@@ -119,9 +119,7 @@ async function main(): Promise<number> {
       return runStatusCommand(control);
     case 'pause':
     case 'resume':
-      await fetch(`${api}/api/control/${cmd}`, { method: 'POST' });
-      console.log(cmd === 'pause' ? 'Queue paused.' : 'Queue resumed.');
-      return 0;
+      return runQueueCommand(control, cmd);
     case 'stop':
       if (!arg) break;
       return runStopCommand(control, arg);

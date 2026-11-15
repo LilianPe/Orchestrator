@@ -226,7 +226,7 @@ export function createApp(d: ServerDeps): Hono {
         return c.html(`<p>The GitHub sign-in failed: ${escapeHtml((err as Error).message)}</p>`, 502);
       }
       if (!who.allowed) {
-        d.bus.publish({ kind: 'log', level: 'warn', message: `GitHub sign-in refused to the dashboard: ${who.login} is not in its list, org or team (factory.yml dashboard)`, at: d.clock.now() });
+        d.bus.publish({ kind: 'log', level: 'warn', message: `GitHub sign-in refused to the dashboard: ${who.login} is not in its list, org or team (factory.yml dashboard; an org or a team also needs the App's Members: read permission and its installation there)`, at: d.clock.now() });
         return c.html(`<p>${escapeHtml(who.login)} is not allowed on this ${escapeHtml(PRODUCT_NAME)}: ask its maintainers to add you to its dashboard's list, org or team.</p>`, 403);
       }
       setCookie(c, SESSION_COOKIE, signSession(who.login, d.clock.now() + SESSION_MS, sessionKey), { ...COOKIE, maxAge: SESSION_MS / 1000 });

@@ -934,7 +934,7 @@ describe('server', () => {
       expect(back.status).toBe(403);
       expect(await back.text()).toContain('mallory is not allowed');
       expect(headers.cookie).toBe('');
-      expect(logs).toEqual(['GitHub sign-in refused to the dashboard: mallory is not in its list, org or team (factory.yml dashboard)']);
+      expect(logs).toEqual(["GitHub sign-in refused to the dashboard: mallory is not in its list, org or team (factory.yml dashboard; an org or a team also needs the App's Members: read permission and its installation there)"]);
     });
 
     it('refuses a callback whose state is not the one this browser was given: no code is exchanged', async () => {

@@ -109,7 +109,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | one of these means | Tokens for the Claude Code accounts, read by `factory.yml` (`token: env:CLAUDE_TOKEN_1`); the `claude.active` account is the runs' only credential. |
 | `ANTHROPIC_API_KEY` | one of these means | Claude Code authentication without an active account, for the runs of this container, which still run next to the daemon (until ORC-179). Compose no longer requires it: without either, runs fail at authentication. |
 | `GH_TOKEN` | yes | `gh` and HTTPS reads, until ORC-181; publishing goes through the GitHub App. Permissions: [`github.md`](github.md#permissions-required-for-the-gh-fallback). |
-| `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | yes | The GitHub App's OAuth client, for the dashboard's GitHub sign-in (ORC-399): the container listens beyond loopback. |
+| `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | yes, unless `factory.yml` gives `github.client_id` | The GitHub App's OAuth client, for the dashboard's GitHub sign-in (ORC-399): the container listens beyond loopback, and `factoryd` refuses to start without it. |
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |

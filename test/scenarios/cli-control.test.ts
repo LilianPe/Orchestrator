@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
+import { runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { newTicketState } from '../../src/core/types.js';
 import { createApp } from '../../src/server/app.js';
@@ -86,6 +86,25 @@ describe('factory status and factory stop (ORC-220)', () => {
     const c = control(createHarness());
     expect(await runStopCommand(c, 'REL-9')).toBe(1);
     expect(c.lines[0]).toContain('REL-9 unknown');
+  });
+
+  it('pauses and resumes the queue, and says so only once the daemon has taken the command', async () => {
+    const h = createHarness();
+    const c = control(h);
+    expect(await runQueueCommand(c, 'pause')).toBe(0);
+    expect(await runQueueCommand(c, 'resume')).toBe(0);
+    expect(c.lines).toEqual(['Queue paused.', 'Queue resumed.']);
+  });
+
+  // ORC-399: off the loopback the daemon asks for a GitHub sign-in the CLI cannot give; it must never say the queue is paused.
+  it('says the queue is not paused when the daemon refuses, never that it is', async () => {
+    const lines: string[] = [];
+    const deps = { api: 'http://127.0.0.1:1', headers: {}, out: (l: string) => void lines.push(l) };
+    expect(await runQueueCommand({ ...deps, fetch: async () => new Response('{"error":"sign in with GitHub first"}', { status: 401 }) }, 'pause')).toBe(1);
+    expect(await runQueueCommand({ ...deps, fetch: async () => Promise.reject(new Error('fetch failed')) }, 'resume')).toBe(1);
+    expect(lines[0]).toBe('Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives. The queue is not paused.');
+    expect(lines[1]).toContain('factory up');
+    expect(lines.join('\n')).not.toMatch(/Queue (paused|resumed)\./);
   });
 
   it('says what to do when the daemon is down or asks for a GitHub sign-in (ORC-399)', async () => {

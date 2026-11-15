@@ -81,7 +81,8 @@ function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, c
   }
   if (!yml?.dashboard) throw new Error(`${exposed}: name who may sign in, dashboard: { logins, org, team } in factory.yml.`);
   if (!instance.publicUrl?.startsWith('https://')) throw new Error(`${exposed}: set publicUrl to its https:// address, where GitHub calls the sign-in back and the session cookie is sent.`);
-  const redirectUri = `${instance.publicUrl}${GITHUB_CALLBACK_PATH}`;
+  // A publicUrl written with its trailing slash must still give the callback URL the App declares.
+  const redirectUri = `${instance.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
   const options = { ...client, redirectUri, access: yml.dashboard };
   return { authorizeUrl: (state) => githubAuthorizeUrl({ clientId: client.clientId, redirectUri, state }), signIn: (code) => githubSignIn(options, code) };
 }

@@ -111,9 +111,10 @@ describe('compose.yaml (ORC-203)', () => {
   });
 
   // ORC-399: factoryd listens beyond its loopback, so its dashboard is reached through a GitHub sign-in; no shared password.
-  it("requires the App's OAuth client for the dashboard's GitHub sign-in, and no UI password", () => {
-    expect(factoryd.environment!['GH_APP_CLIENT_ID']).toMatch(/^\$\{GH_APP_CLIENT_ID:\?/);
-    expect(factoryd.environment!['GH_APP_CLIENT_SECRET']).toMatch(/^\$\{GH_APP_CLIENT_SECRET:\?/);
+  it("passes the App's OAuth client of the dashboard's GitHub sign-in through as it is, and no UI password", () => {
+    // Passed as is: factory.yml may name them (`client_secret: env:GH_APP_CLIENT_SECRET`); factoryd refuses to start without a client.
+    expect(factoryd.environment!['GH_APP_CLIENT_ID']).toBeNull();
+    expect(factoryd.environment!['GH_APP_CLIENT_SECRET']).toBeNull();
     expect(factoryd.environment!).not.toHaveProperty('FACTORY_UI_PASSWORD');
   });
 

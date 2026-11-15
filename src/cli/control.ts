@@ -42,16 +42,23 @@ function formatStatus(s: State, now: number): string[] {
   return lines;
 }
 
-/** The state; or undefined, the reason told: a daemon down, a sign-in asked. */
-async function readState(d: ControlDeps): Promise<State | undefined> {
-  let res: Response;
+const SIGN_IN_ASKED = 'Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.';
+
+/** The daemon's answer to `path`; or undefined when it does not answer, the reason told. */
+async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promise<Response | undefined> {
   try {
-    res = await (d.fetch ?? fetch)(`${d.api}/api/state`, { headers: d.headers });
+    return await (d.fetch ?? fetch)(`${d.api}${path}`, { ...init, headers: d.headers });
   } catch (err) {
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
   }
-  if (res.status === 401) d.out('Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.');
+}
+
+/** The state; or undefined, the reason told: a daemon down, a sign-in asked. */
+async function readState(d: ControlDeps): Promise<State | undefined> {
+  const res = await ask(d, '/api/state');
+  if (!res) return undefined;
+  if (res.status === 401) d.out(SIGN_IN_ASKED);
   else if (!res.ok) d.out(`The daemon answers ${res.status} on /api/state.`);
   return res.ok ? ((await res.json()) as State) : undefined;
 }
@@ -60,6 +67,19 @@ export async function runStatusCommand(d: ControlDeps, now: number = Date.now())
   const s = await readState(d);
   if (!s) return 1;
   for (const line of formatStatus(s, now)) d.out(line);
+  return 0;
+}
+
+/** Pauses or resumes the queue, said done only once the daemon has taken the command (ORC-399: never on a refusal). */
+export async function runQueueCommand(d: ControlDeps, command: 'pause' | 'resume'): Promise<number> {
+  const res = await ask(d, `/api/control/${command}`, { method: 'POST' });
+  if (!res) return 1;
+  if (!res.ok) {
+    const not = command === 'pause' ? 'The queue is not paused.' : 'The queue is not resumed.';
+    d.out(`${res.status === 401 ? SIGN_IN_ASKED : `The daemon refuses to ${command} the queue (${res.status}).`} ${not}`);
+    return 1;
+  }
+  d.out(command === 'pause' ? 'Queue paused.' : 'Queue resumed.');
   return 0;
 }
 

@@ -34,9 +34,10 @@ services:
       ANTHROPIC_API_KEY:
       # Until the gh CLI goes (ORC-181): the factory's own publication goes by the GitHub App.
       GH_TOKEN: ${GH_TOKEN:?définissez GH_TOKEN (lecture HTTPS et gh pr)}
-      # The dashboard's GitHub sign-in (ORC-399): factoryd listens beyond its loopback, so its App's OAuth client is required.
-      GH_APP_CLIENT_ID: ${GH_APP_CLIENT_ID:?set GH_APP_CLIENT_ID (the GitHub App's client id, for the dashboard sign-in)}
-      GH_APP_CLIENT_SECRET: ${GH_APP_CLIENT_SECRET:?set GH_APP_CLIENT_SECRET (the GitHub App's client secret, for the dashboard sign-in)}
+      # The dashboard's GitHub sign-in (ORC-399): factoryd listens beyond its loopback and refuses to start without the App's
+      # OAuth client, from factory.yml (github.client_id, client_secret: env:...) or from these. Unset here, unset in the container.
+      GH_APP_CLIENT_ID:
+      GH_APP_CLIENT_SECRET:
       # Unset in the container when unset here, so the image identity (the product name) applies.
       GIT_AUTHOR_NAME:
       GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-factory@localhost}
