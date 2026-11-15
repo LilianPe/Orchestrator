@@ -110,6 +110,13 @@ describe('compose.yaml (ORC-203)', () => {
     expect(factoryd.environment!['GH_TOKEN']).toMatch(/^\$\{GH_TOKEN:\?/);
   });
 
+  // ORC-399: factoryd listens beyond its loopback, so its dashboard is reached through a GitHub sign-in; no shared password.
+  it("requires the App's OAuth client for the dashboard's GitHub sign-in, and no UI password", () => {
+    expect(factoryd.environment!['GH_APP_CLIENT_ID']).toMatch(/^\$\{GH_APP_CLIENT_ID:\?/);
+    expect(factoryd.environment!['GH_APP_CLIENT_SECRET']).toMatch(/^\$\{GH_APP_CLIENT_SECRET:\?/);
+    expect(factoryd.environment!).not.toHaveProperty('FACTORY_UI_PASSWORD');
+  });
+
   it('reads the store from postgres', () => {
     expect(factoryd.environment!['FACTORY_DATABASE_URL']).toMatch(/@postgres:5432\/factory$/);
   });

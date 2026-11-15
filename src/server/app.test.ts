@@ -1,6 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from './live-feed.js';
 import { FakeClock } from '../core/clock.js';
@@ -12,8 +13,24 @@ import { pendingLabels } from '../core/attempt-labels.js';
 import { AGENT_MCP_PATH, agentOnly, createApp, isAgentPath, type ServerDeps, type TakeOverDesk } from './app.js';
 import { TAKEN_OVER } from '../core/block-cause.js';
 
-/** The HTTP Basic header the UI password asks for; its user is free. */
-const basic = (password: string) => ({ authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` });
+/** GitHub as the dashboard's sign-in sees it (ORC-399): the code names who signs in, and `armand` alone is let in. */
+const GITHUB: NonNullable<ServerDeps['githubLogin']> = {
+  authorizeUrl: (state) => `https://github.test/login/oauth/authorize?state=${state}`,
+  signIn: async (code) => ({ login: code, allowed: code === 'armand' }),
+};
+/** The `name=value` of a cookie a response sets, undefined when it sets none by that name. */
+const cookieOf = (res: Response, name: string) => res.headers.getSetCookie().map((c) => c.split(';')[0]!).find((c) => c.startsWith(`${name}=`));
+/** A page opened without a session, as a browser opens it: the redirect to GitHub, and the state cookie set with it. */
+async function startSignIn(app: Hono) {
+  const res = await app.request('/', { headers: { accept: 'text/html,application/xhtml+xml' } });
+  return { res, state: new URL(res.headers.get('location') ?? 'http://none').searchParams.get('state') ?? '', stateCookie: cookieOf(res, '__Host-factory_oauth') ?? '' };
+}
+/** Signs `login` in as a browser does, through GitHub's callback; the callback's answer and the headers of a request signed in. */
+async function signIn(app: Hono, login = 'armand') {
+  const { state, stateCookie } = await startSignIn(app);
+  const back = await app.request(`/auth/github/callback?code=${login}&state=${state}`, { headers: { cookie: stateCookie } });
+  return { back, headers: { cookie: cookieOf(back, '__Host-factory_session') ?? '' } };
+}
 /** A JSON-RPC message to the factory MCP, as Claude Code sends it, by default with the run token of `setup`'s run. */
 const mcpRequest = (body: unknown = { jsonrpc: '2.0', id: 1, method: 'ping' }, token = 'tok') => ({
   method: 'POST',
@@ -23,7 +40,7 @@ const mcpRequest = (body: unknown = { jsonrpc: '2.0', id: 1, method: 'ping' }, t
 /** factory-agent's routes, gone with it (ORC-192), the bare prefix and a path past the MCP's. */
 const FACTORY_AGENT_PATHS = ['/agent', '/agent/issue/REL-1', '/agent/search?q=export', '/agent/kb/search?q=export', '/agent/ask', '/agent/mcp/extra'];
 
-async function setup(extra: Partial<Pick<ServerDeps, 'uiPassword' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'githubLogin' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
   const store = new SqliteStore(':memory:');
   const bus = new EventBus();
   const submitted: FactoryEvent[] = [];
@@ -116,8 +133,8 @@ describe('server', () => {
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
     });
 
-    it('asks for the password, as the other routes of the interface', async () => {
-      const { app } = await setup({ uiPassword: 'secret' });
+    it('asks for the GitHub sign-in, as the other routes of the interface', async () => {
+      const { app } = await setup({ githubLogin: GITHUB });
       expect((await app.request('/api/flow')).status).toBe(401);
     });
 
@@ -217,8 +234,8 @@ describe('server', () => {
       expect(body.tickets.map((t: { ticketId: string }) => t.ticketId)).not.toContain('REL-1');
     });
 
-    it('asks for the password, as the other routes of the interface', async () => {
-      const { app } = await setup({ uiPassword: 'secret' });
+    it('asks for the GitHub sign-in, as the other routes of the interface', async () => {
+      const { app } = await setup({ githubLogin: GITHUB });
       expect((await app.request('/api/measures')).status).toBe(401);
     });
   });
@@ -274,9 +291,9 @@ describe('server', () => {
       expect(logs).toEqual([expect.stringContaining('journal illisible')]);
     });
 
-    it('refuses a period that is not one, and asks for the password as the other routes of the interface', async () => {
+    it('refuses a period that is not one, and asks for the GitHub sign-in as the other routes of the interface', async () => {
       expect((await (await setup()).app.request('/api/overview?since=100&until=10')).status).toBe(400);
-      expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/overview')).status).toBe(401);
+      expect((await (await setup({ githubLogin: GITHUB })).app.request('/api/overview')).status).toBe(401);
     });
   });
 
@@ -315,7 +332,7 @@ describe('server', () => {
       expect((await (await app.request('/api/audit')).json()).sheets).toEqual([]);
       expect(read.mock.calls.map((c) => c[1]).sort()).toEqual(['REL-1', 'REL-2']);
       read.mockRestore();
-      expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/audit/p/REL-1')).status).toBe(401);
+      expect((await (await setup({ githubLogin: GITHUB })).app.request('/api/audit/p/REL-1')).status).toBe(401);
     });
 
     it('takes a defect found in human review, linked to an AI finding of the ticket or not, with its operator and the definition in force', async () => {
@@ -383,7 +400,7 @@ describe('server', () => {
       expect((await (await app.request('/api/changelog?project=ops')).json()).entries.map((e: ChangelogEntry) => e.ticketId)).toEqual(['OPS-1']);
       // Nothing writes it from outside: the after_merge step alone appends to it.
       for (const method of ['POST', 'PUT', 'DELETE']) expect((await app.request('/api/changelog', { method })).status).not.toBe(200);
-      expect((await (await setup({ uiPassword: 'secret' })).app.request('/api/changelog')).status).toBe(401);
+      expect((await (await setup({ githubLogin: GITHUB })).app.request('/api/changelog')).status).toBe(401);
     });
   });
 
@@ -489,8 +506,8 @@ describe('server', () => {
       expect(all.causes.map((c: { cause: string; count: number }) => [c.cause, c.count])).toEqual([['red', 3], ['limit', 1], ['loop', 1]]);
     });
 
-    it('asks for the password, as the other routes of the interface', async () => {
-      const { app } = await setup({ uiPassword: 'secret' });
+    it('asks for the GitHub sign-in, as the other routes of the interface', async () => {
+      const { app } = await setup({ githubLogin: GITHUB });
       for (const path of ['/api/security', '/api/security/runs/r1', '/api/blocks']) expect((await app.request(path)).status, path).toBe(401);
     });
   });
@@ -592,19 +609,32 @@ describe('server', () => {
       expect(new Set(submitted.map((e) => e.id)).size).toBe(2);
     });
 
-    it('names the author by the user of the HTTP Basic auth, behind the password', async () => {
-      const { app, store, submitted } = await setup({ uiPassword: 's3cret' });
+    // ORC-399, criterion 3: the actor is the GitHub login signed in, as for the webhooks, with the role the guard gives.
+    it('journals the pauses, stops, take-overs and defects of whoever signed in with GitHub as github:<login>, an operator', async () => {
+      const { app, store, submitted } = await setup({ githubLogin: GITHUB, takeOver: { attach: async () => undefined, keepBundle: async () => '/b.bundle' } });
       await atWork(store);
-      const headers = { authorization: `Basic ${Buffer.from('armand:s3cret').toString('base64')}` };
-      expect((await app.request('/api/runs/r1/stop', { method: 'POST' })).status).toBe(401);
-      expect((await app.request('/api/runs/r1/stop', { method: 'POST', headers })).status).toBe(200);
-      expect(submitted.map((e) => e.actor)).toEqual(['dashboard:armand']);
+      const { headers } = await signIn(app);
+      expect((await app.request('/api/runs/r1/pause', { method: 'POST' })).status).toBe(401);
+      for (const path of ['/api/control/pause', '/api/control/resume', '/api/runs/r1/pause', '/api/runs/r1/stop', '/api/runs/r1/take-over', '/api/tickets/p/REL-1/stop']) {
+        expect((await app.request(path, { method: 'POST', headers })).status, path).toBe(200);
+      }
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
+        ['control.pause', 'github:armand', ['operator']],
+        ['control.resume', 'github:armand', ['operator']],
+        ...Array(4).fill(['control.stop', 'github:armand', ['operator']]),
+      ]);
+      expect(submitted[2]!.payload).toEqual({ runId: 'r1', pause: true });
+      await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), prNumber: 3 });
+      await store.recordEvent({ ...TRUSTED, id: 'o', type: 'pr.opened', at: 2, projectId: 'p', ticketId: 'REL-1', payload: { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' } } as FactoryEvent);
+      const defect = await app.request('/api/audit/p/REL-1/defects', { method: 'POST', headers, body: JSON.stringify({ prNumber: 3, description: 'header row missing' }) });
+      expect(defect.status).toBe(200);
+      expect((await defect.json()).defect.enteredBy).toBe('github:armand');
     });
 
-    it('takes no name from a Basic header without a password: on the loopback, the author is local', async () => {
+    it('takes no name from a header on the loopback: the author is local, whatever Basic header or cookie comes', async () => {
       const { app, store, submitted } = await setup();
       await atWork(store);
-      await app.request('/api/runs/r1/stop', { method: 'POST', headers: { authorization: `Basic ${Buffer.from('lilian:x').toString('base64')}` } });
+      await app.request('/api/runs/r1/stop', { method: 'POST', headers: { authorization: `Basic ${Buffer.from('lilian:x').toString('base64')}`, cookie: '__Host-factory_session=lilian.9999999999999.x' } });
       expect(submitted.map((e) => e.actor)).toEqual(['dashboard:local']);
     });
 
@@ -699,12 +729,12 @@ describe('server', () => {
     });
   });
 
-  it("answers 404 on factory-agent's API, with or without the run token, behind the password or not: the MCP is all that is left (ORC-192)", async () => {
+  it("answers 404 on factory-agent's API, with or without the run token, behind the GitHub sign-in or not: the MCP is all that is left (ORC-192)", async () => {
     const open = await setup();
-    const guarded = await setup({ uiPassword: 'pw' });
+    const guarded = await setup({ githubLogin: GITHUB });
     const token = { authorization: 'Bearer tok' };
     for (const path of FACTORY_AGENT_PATHS) {
-      for (const [app, init, how] of [[open.app, { headers: token }, 'token'], [open.app, {}, 'no token'], [guarded.app, { method: 'POST', headers: token }, 'password']] as const) {
+      for (const [app, init, how] of [[open.app, { headers: token }, 'token'], [open.app, {}, 'no token'], [guarded.app, { method: 'POST', headers: token }, 'sign-in']] as const) {
         expect((await app.request(path, init)).status, `${path} ${how}`).toBe(404);
       }
     }
@@ -712,7 +742,7 @@ describe('server', () => {
   });
 
   it('the agent listener serves the factory MCP, with its run token, and nothing else (ORC-204)', async () => {
-    const { app } = await setup({ uiPassword: 'pw' });
+    const { app } = await setup({ githubLogin: GITHUB });
     const get = (path: string) => agentOnly(app)(new Request(`http://172.17.0.1:4101${path}`, { headers: { authorization: 'Bearer tok' } }));
     for (const path of ['/api/state', '/', '/webhooks/linear', '/agent/../api/state', '/agent%2F..%2Fapi/state', ...FACTORY_AGENT_PATHS]) {
       expect((await get(path)).status, path).toBe(404);
@@ -854,46 +884,115 @@ describe('server', () => {
     });
   });
 
-  describe('UI password (non-loopback host)', () => {
-
-    it('requires Basic auth on the API, the UI and /oauth/start', async () => {
-      const { app } = await setup({ uiPassword: 's3cret' });
-      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript', '/api/runs/r1']) {
+  // ORC-399: off the loopback, one account per person, through the factory's GitHub App; the shared password is gone.
+  describe('GitHub sign-in (non-loopback host)', () => {
+    // Criterion 1 (ORC-222's criterion 2): a visitor not signed in is refused.
+    it('refuses a visitor not signed in: 401 on the API, the health check and /oauth/start; a page sends them to GitHub', async () => {
+      const { app, submitted } = await setup({ githubLogin: GITHUB });
+      for (const path of ['/api/state', '/', '/oauth/start', '/api/runs/r1/transcript', '/api/runs/r1', '/health', '/tickets/REL-1/diagnosis']) {
         const res = await app.request(path);
         expect(res.status, path).toBe(401);
-        expect(res.headers.get('www-authenticate')).toMatch(/^Basic /);
+        expect(res.headers.get('www-authenticate'), path).toBeNull();
       }
-      expect((await app.request('/api/state', { headers: basic('wrong') })).status).toBe(401);
-      expect((await app.request('/api/state', { headers: basic('s3cret') })).status).toBe(200);
       expect((await app.request('/api/control/pause', { method: 'POST' })).status).toBe(401);
+      // A browser opening a page: GitHub's authorization of the App, its state kept in a cookie of this site alone.
+      const { res, state, stateCookie } = await startSignIn(app);
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe(`https://github.test/login/oauth/authorize?state=${state}`);
+      expect(state).toMatch(/^[0-9a-f]{32}$/);
+      expect(stateCookie).toBe(`__Host-factory_oauth=${state}`);
+      expect(res.headers.getSetCookie()[0]).toMatch(/; Max-Age=600; Path=\/; HttpOnly; Secure; SameSite=Lax$/);
+      expect(submitted).toEqual([]);
     });
 
-    it('leaves the webhook, the OAuth callback and the run-token agent API open', async () => {
-      const { app } = await setup({ uiPassword: 's3cret' });
+    it('signs in a person of the list: a signed session cookie, HttpOnly, Secure and SameSite, then the dashboard answers', async () => {
+      const clock = new FakeClock(10);
+      const { app } = await setup({ githubLogin: GITHUB, clock });
+      const { back, headers } = await signIn(app);
+      expect(back.status).toBe(302);
+      expect(back.headers.get('location')).toBe('/');
+      const session = back.headers.getSetCookie().find((c) => c.startsWith('__Host-factory_session='))!;
+      expect(session).toMatch(/^__Host-factory_session=armand\.\d+\.[\w-]+; Max-Age=43200; Path=\/; HttpOnly; Secure; SameSite=Lax$/);
+      // The state is spent with the callback.
+      expect(back.headers.getSetCookie()).toContainEqual(expect.stringMatching(/^__Host-factory_oauth=; Max-Age=0/));
+      expect((await app.request('/api/state', { headers })).status).toBe(200);
+      expect((await app.request('/', { headers })).status).toBe(200);
+      // A session that is forged, changed, or past its 12 hours is refused.
+      const [, expires, mac] = headers.cookie.split('=')[1]!.split('.');
+      expect((await app.request('/api/state', { headers: { cookie: `__Host-factory_session=lilianpe.${expires}.${mac}` } })).status).toBe(401);
+      expect((await app.request('/api/state', { headers: { cookie: '__Host-factory_session=armand.9999999999999.forged' } })).status).toBe(401);
+      clock.advance(12 * 3_600_000);
+      expect((await app.request('/api/state', { headers })).status).toBe(401);
+    });
+
+    // Criterion 2: GitHub says who it is; the list, org or team of factory.yml decides whether they come in.
+    it('refuses after the GitHub sign-in a person outside the list, org or team: 403, no session, logged', async () => {
+      const { app, bus } = await setup({ githubLogin: GITHUB });
+      const logs: string[] = [];
+      bus.subscribe((m) => void (m.kind === 'log' && logs.push(m.message)));
+      const { back, headers } = await signIn(app, 'mallory');
+      expect(back.status).toBe(403);
+      expect(await back.text()).toContain('mallory is not allowed');
+      expect(headers.cookie).toBe('');
+      expect(logs).toEqual(['GitHub sign-in refused to the dashboard: mallory is not in its list, org or team (factory.yml dashboard)']);
+    });
+
+    it('refuses a callback whose state is not the one this browser was given: no code is exchanged', async () => {
+      const signInSpy = vi.fn(GITHUB.signIn);
+      const { app } = await setup({ githubLogin: { ...GITHUB, signIn: signInSpy } });
+      const { state, stateCookie } = await startSignIn(app);
+      // No state cookie, another state cookie, or this browser's cookie with a forged state.
+      for (const [cookie, given] of [[undefined, state], ['__Host-factory_oauth=another', state], [stateCookie, 'forged']] as const) {
+        const res = await app.request(`/auth/github/callback?code=armand&state=${given}`, { headers: cookie ? { cookie } : {} });
+        expect(res.status).toBe(400);
+        expect(cookieOf(res, '__Host-factory_session')).toBeUndefined();
+      }
+      expect(signInSpy).not.toHaveBeenCalled();
+    });
+
+    it('answers 502 when GitHub fails the sign-in, and signs no one in', async () => {
+      const { app } = await setup({ githubLogin: { ...GITHUB, signIn: async () => Promise.reject(new Error('GitHub OAuth refused: bad_verification_code')) } });
+      const { back, headers } = await signIn(app);
+      expect(back.status).toBe(502);
+      expect(await back.text()).toContain('bad_verification_code');
+      expect(headers.cookie).toBe('');
+    });
+
+    it('leaves the webhooks, the OAuth callbacks and the run-token agent API open', async () => {
+      const { app } = await setup({ githubLogin: GITHUB });
       expect((await app.request('/webhooks/linear', { method: 'POST', body: '{}' })).status).toBe(200);
-      // Its own signature guards it: the answer is the ingestion's, never the UI password's.
-      expect((await app.request('/webhooks/github', { method: 'POST', body: '{}' })).headers.get('www-authenticate')).toBeNull();
+      // Its own signature guards it: the answer is the ingestion's, never the sign-in's.
+      expect((await app.request('/webhooks/github', { method: 'POST', body: '{}' })).status).toBe(401);
       expect((await app.request('/oauth/callback?code=x&state=y')).status).not.toBe(401);
+      expect((await app.request('/auth/github/callback?code=x&state=y')).status).toBe(400);
       expect((await app.request('/agent/mcp', mcpRequest())).status).toBe(200);
     });
 
-    // ORC-222: what the password does not guard is guarded by a signature (the webhooks, each tested in bootstrap.test.ts), the
-    // OAuth state, or the run token. A route added open outside these fails here before it ships unsigned.
+    it('has no GitHub callback on the loopback, where nobody signs in: the path is a page of the interface, and no session is set', async () => {
+      const { app } = await setup();
+      const res = await app.request('/auth/github/callback?code=armand&state=s');
+      expect(cookieOf(res, '__Host-factory_session')).toBeUndefined();
+      expect(await res.text()).toBe('<h1>Factory</h1>');
+      expect((await app.request('/', { headers: { accept: 'text/html' } })).status).toBe(200);
+    });
+
+    // ORC-222: what the sign-in does not guard is guarded by a signature (the webhooks, each tested in bootstrap.test.ts), an OAuth
+    // state (Linear's callback, GitHub's sign-in callback), or the run token. A route added open outside these fails here before it ships.
     it('leaves no other route open: a new inbound route needs its own guard', async () => {
-      const { app } = await setup({ uiPassword: 's3cret' });
+      const { app } = await setup({ githubLogin: GITHUB });
       const open: string[] = [];
       for (const { method, path } of app.routes) {
-        // `/agent` passes the password, so no Basic challenge there: the MCP answers 401 without its run token to POST and 405
-        // otherwise (its ALL routes are probed with GET), every other path 404 (ORC-192). A route added there fails here.
+        // `/agent` passes the sign-in: the MCP answers 401 without its run token to POST and 405 otherwise (its ALL routes are
+        // probed with GET), every other path 404 (ORC-192). A route added there fails here.
         const agent = isAgentPath(path);
         const m = method !== 'ALL' ? method : agent ? 'GET' : 'POST';
         const res = await app.request(path.replace(/:[^/]+|\*/g, 'x'), { method: m, body: m === 'GET' ? undefined : '{}' });
-        const challenge = res.headers.get('www-authenticate');
         const expected = path !== AGENT_MCP_PATH ? 404 : m === 'POST' ? 401 : 405;
-        const guarded = agent ? !challenge && res.status === expected : challenge?.startsWith('Basic ');
+        const refused = res.status === 401 && (await res.clone().json().catch(() => ({}))).error === 'sign in with GitHub first';
+        const guarded = agent ? !refused && res.status === expected : refused;
         if (!guarded) open.push(`${m} ${path}`);
       }
-      expect([...new Set(open)].sort()).toEqual(['GET /oauth/callback', 'POST /webhooks/github', 'POST /webhooks/linear']);
+      expect([...new Set(open)].sort()).toEqual(['GET /auth/github/callback', 'GET /oauth/callback', 'POST /webhooks/github', 'POST /webhooks/linear']);
     });
   });
 
@@ -919,14 +1018,15 @@ describe('server', () => {
     // What a proxy that keeps the Host sends on: the public name, its own X-Forwarded-*, on plain HTTP.
     const PUBLIC = 'factory.example.com';
     const proxied = (headers: Record<string, string> = {}) => ({ host: PUBLIC, 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7', 'x-forwarded-host': PUBLIC, ...headers });
-    /** A write of the interface's through the proxy, behind the password: each test changes the headers it is about. */
+    /** A write of the interface's through the proxy, signed in: each test changes the headers it is about. */
     const pause = async (url: string, headers: Record<string, string>) => {
-      const { app, submitted } = await setup({ uiPassword: 's3cret' });
-      return { status: (await app.request(`${url}/api/control/pause`, { method: 'POST', headers: proxied({ ...basic('s3cret'), ...headers }) })).status, submitted };
+      const { app, submitted } = await setup({ githubLogin: GITHUB });
+      const session = await signIn(app);
+      return { status: (await app.request(`${url}/api/control/pause`, { method: 'POST', headers: proxied({ ...session.headers, ...headers }) })).status, submitted };
     };
 
     it('takes the webhooks under the public name, on plain HTTP, the headers passed on as they came', async () => {
-      const { app, linearWebhook, githubWebhook } = await setup({ uiPassword: 's3cret' });
+      const { app, linearWebhook, githubWebhook } = await setup({ githubLogin: GITHUB });
       expect((await app.request(`http://${PUBLIC}/webhooks/linear`, { method: 'POST', body: '{}', headers: proxied() })).status).toBe(200);
       await app.request(`http://${PUBLIC}/webhooks/github`, { method: 'POST', body: '{}', headers: proxied({ 'x-hub-signature-256': 'sha256=00' }) });
       expect(githubWebhook).toHaveBeenCalledWith('{}', expect.objectContaining({ 'x-hub-signature-256': 'sha256=00', 'x-forwarded-proto': 'https' }));
@@ -971,12 +1071,13 @@ describe('server', () => {
       for (const host of ['factory.example.com', '127.0.0.1.evil.example', 'localhost.evil.example:4100', '127.0.0.1x']) expect((await app.request('/api/state', as(host))).status, host).toBe(403);
     });
 
-    it('leaves the webhooks and the run-token agent API to their own guards, and the password-guarded interface to its password', async () => {
+    it('leaves the webhooks and the run-token agent API to their own guards, and the interface off the loopback to the GitHub sign-in', async () => {
       const { app } = await setup();
       expect((await app.request('/webhooks/linear', as('relay.example', { method: 'POST', body: '{}' }))).status).toBe(200);
       expect((await app.request('/agent/mcp', as('host.containers.internal:4101', mcpRequest()))).status).toBe(200);
-      const guarded = await setup({ uiPassword: 's3cret' });
-      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers: basic('s3cret') }))).status).toBe(200);
+      const guarded = await setup({ githubLogin: GITHUB });
+      const { headers } = await signIn(guarded.app);
+      expect((await guarded.app.request('/api/state', as('192.168.1.20:4100', { headers }))).status).toBe(200);
     });
   });
 });

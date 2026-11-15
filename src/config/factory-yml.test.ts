@@ -326,3 +326,27 @@ describe('factory.yml (ORC-209, part B)', () => {
     });
   });
 });
+
+describe('who may sign in to the dashboard (ORC-399)', () => {
+  const GH = 'github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY, client_id: Iv1.abc, client_secret: env:GH_APP_CLIENT_SECRET }\n';
+  const env = { ...ENV, GH_APP_CLIENT_SECRET: 'client-secret-123' };
+
+  it("reads the App's OAuth client, its secret from the environment, and the logins, org and team let in", () => {
+    const c = parseFactoryYml(`${GH}dashboard: { logins: [armand, LilianPe], org: acme, team: acme/factory-ops }\n`, env);
+    expect(c.github).toEqual({ appId: '42', privateKey: PEM, clientId: 'Iv1.abc', clientSecret: 'client-secret-123' });
+    expect(c.dashboard).toEqual({ logins: ['armand', 'LilianPe'], org: 'acme', team: 'acme/factory-ops' });
+    expect(parseFactoryYml('dashboard: { org: acme }\n', env).dashboard).toEqual({ logins: [], org: 'acme' });
+  });
+
+  it('refuses the client secret in clear, a dashboard that lets nobody in, and names that are not GitHub logins, orgs or teams', () => {
+    expect(violations('github: { app_id: 1, private_key: env:GH_APP_KEY, client_secret: plain }\n')).toEqual(['github.client_secret: a secret is written `env:NAME`, never in clear in factory.yml']);
+    expect(violations('dashboard: {}\n')).toEqual(['dashboard: name the logins, the org or the team let in']);
+    expect(violations('dashboard: { logins: [] }\n')).toEqual(['dashboard: name the logins, the org or the team let in']);
+    expect(violations('dashboard: { logins: ["a b"], org: "acme/x", team: acme, extra: 1 }\n')).toEqual([
+      'dashboard.extra: unknown key',
+      'dashboard.logins: GitHub logins expected',
+      'dashboard.org: a GitHub org expected',
+      'dashboard.team: `<org>/<team-slug>` expected',
+    ]);
+  });
+});

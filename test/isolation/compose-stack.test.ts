@@ -21,7 +21,8 @@ const base = `factory-recette-${Date.now()}`;
 const dir = `${parent}/${base}`;
 const HTTPS_PORT = process.env['FACTORY_HTTPS_PORT'] ?? '18443';
 const HTTP_PORT = process.env['FACTORY_LOOPBACK_PORT'] ?? '14100';
-const PASSWORD = 'recette-ui-password';
+/** The refusal of a request without a GitHub session (ORC-399): no one signs in here, so the dashboard answers this alone. */
+const SIGN_IN = 'sign in with GitHub first';
 
 const env = {
   ...process.env,
@@ -34,7 +35,8 @@ const env = {
   FACTORY_PUBLIC_HOST: 'localhost',
   FACTORY_HTTP_PORT: process.env['FACTORY_HTTP_PORT'] ?? '18080',
   FACTORY_HTTPS_PORT: HTTPS_PORT,
-  FACTORY_UI_PASSWORD: PASSWORD,
+  GH_APP_CLIENT_ID: 'Iv1.recette',
+  GH_APP_CLIENT_SECRET: 'recette-client-secret',
   POSTGRES_PASSWORD: 'recettepostgres',
   ANTHROPIC_API_KEY: 'sk-recette-unused',
   GH_TOKEN: 'recette-unused',
@@ -115,15 +117,15 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
   let result: Result;
 
   /** By caddy in TLS, or straight to factoryd in plain HTTP on the loopback, as the host's reverse proxy reaches it. */
-  const get = (path: string, password?: string, plain = false) =>
-    new Promise<{ status: number; body: string }>((ok, ko) => {
-      const headers = { host: 'localhost', ...(password ? { authorization: `Basic ${Buffer.from(`x:${password}`).toString('base64')}` } : {}) };
+  const get = (path: string, plain = false, accept = 'application/json') =>
+    new Promise<{ status: number; body: string; location?: string }>((ok, ko) => {
+      const headers = { host: 'localhost', accept };
       const req = (plain ? plainRequest : request)(
         plain ? { host: '127.0.0.1', port: Number(HTTP_PORT), path, headers } : { host: '127.0.0.1', servername: 'localhost', port: Number(HTTPS_PORT), path, rejectUnauthorized: false, headers },
         (res) => {
           let body = '';
           res.on('data', (c) => (body += c));
-          res.on('end', () => ok({ status: res.statusCode ?? 0, body }));
+          res.on('end', () => ok({ status: res.statusCode ?? 0, body, ...(res.headers.location ? { location: res.headers.location } : {}) }));
         },
       );
       req.on('error', ko);
@@ -134,13 +136,13 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     if (!runnerImage) throw new Error('FACTORY_RUNNER_IMAGE names the runner image to test.');
     asEngineRoot(
       `cd /base && mkdir -p ${base}/data/network ${base}/repos ${base}/install ${base}/egress-ca && ` +
-        `printf 'host: 0.0.0.0\\nport: 4100\\nrelay: { kind: none }\\nprojects: []\\nlimits: {}\\n' > ${base}/data/config.yaml && ` +
-        `printf 'concurrency: 1\\n' > ${base}/data/factory.yml && chown -R 1000:1000 ${base}`,
+        `printf 'host: 0.0.0.0\\nport: 4100\\npublicUrl: https://localhost\\nrelay: { kind: none }\\nprojects: []\\nlimits: {}\\n' > ${base}/data/config.yaml && ` +
+        `printf 'concurrency: 1\\ndashboard: { logins: [recette] }\\n' > ${base}/data/factory.yml && chown -R 1000:1000 ${base}`,
     );
     compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '180');
     for (let i = 0; ; i++) {
-      const up = await get('/api/state', PASSWORD).catch(() => undefined);
-      if (up?.status === 200) break;
+      const up = await get('/api/state').catch(() => undefined);
+      if (up?.status === 401 && up.body.includes(SIGN_IN)) break;
       if (i === 60) throw new Error(`factoryd n'a pas répondu par caddy :\n${compose('logs', '--tail', '40')}`);
       await new Promise((r) => setTimeout(r, 1000));
     }
@@ -171,11 +173,12 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     expect(() => compose('run', '--rm', '--no-deps', '-T', '-e', 'FACTORY_ALLOW_ROOTFUL_ENGINE=', 'factoryd', 'true')).toThrow(/rootless/);
   });
 
-  it('answers in TLS through caddy, behind the password, on the store of postgres', async () => {
-    expect((await get('/api/state')).status).toBe(401);
-    const state = JSON.parse((await get('/api/state', PASSWORD)).body) as { capacity: { dev: { total: number } } };
-    expect(state.capacity.dev.total).toBe(1);
-    expect(compose('logs', 'factoryd')).toContain('store : Postgres');
+  it("answers in TLS through caddy, behind the GitHub sign-in of the factory's App, on the store of postgres", async () => {
+    expect(await get('/api/state')).toMatchObject({ status: 401, body: expect.stringContaining(SIGN_IN) });
+    const page = await get('/', false, 'text/html');
+    expect(page.status).toBe(302);
+    expect(page.location).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?client_id=Iv1\.recette&redirect_uri=https%3A%2F%2Flocalhost%2Fauth%2Fgithub%2Fcallback&/);
+    expect(compose('logs', 'factoryd')).toContain('store: Postgres');
   });
 
   it('publishes neither the proxy nor postgres, and factoryd on the loopback alone (ORC-221)', () => {
@@ -186,9 +189,9 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     expect(factoryd.filter((p) => p.PublishedPort > 0).map((p) => p.URL)).toEqual(['127.0.0.1']);
   });
 
-  it("answers the host's reverse proxy in plain HTTP on the loopback, behind the password (ORC-221)", async () => {
-    expect((await get('/api/state', undefined, true)).status).toBe(401);
-    expect((await get('/api/state', PASSWORD, true)).status).toBe(200);
+  it("answers the host's reverse proxy in plain HTTP on the loopback, behind the GitHub sign-in (ORC-221, ORC-399)", async () => {
+    expect(await get('/api/state', true)).toMatchObject({ status: 401, body: expect.stringContaining(SIGN_IN) });
+    expect((await get('/', true, 'text/html')).status).toBe(302);
   });
 
   it('keeps the authority out of factoryd', () => {

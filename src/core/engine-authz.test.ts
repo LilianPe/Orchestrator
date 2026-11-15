@@ -187,6 +187,11 @@ describe('decide — pausing and stopping a run from the dashboard (ORC-301)', (
     expect(out.effects.slice(0, 2)).toEqual([{ kind: 'stop_run' }, { kind: 'activity', type: 'response', body: expect.stringMatching(/^Paused from the dashboard\. Reply/) }]);
   });
 
+  it('checks a pause of whoever signed in with GitHub (github:<login>, ORC-399) on the same row: the operator role, never the login', () => {
+    expect(refused(decide(running(), stopOf({ runId: 'r1', pause: true }, 'github:armand', OPERATOR), workflow).trace)).toBe(false);
+    expect(refused(decide(running(), stopOf({ runId: 'r1', pause: true }, 'github:armand', ['repo_writer', 'repo_merger']), workflow).trace)).toBe(true);
+  });
+
   it('an operator stops the running run, as the Stop button always did', () => {
     const out = decide(running(), stopOf({ runId: 'r1' }, 'dashboard:armand', OPERATOR), workflow);
     expect(out.events).toEqual([{ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: STOPPED, kind: 'stopped' }]);

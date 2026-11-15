@@ -5,6 +5,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { MAX_DIFF } from '../checks/diff-size.js';
 import { READ_CAPS, type ReadCaps } from '../network/reads.js';
+import type { DashboardAccess } from '../adapters/forge/github-login.js';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from '../presets/workflow.js';
 
@@ -15,7 +16,10 @@ import type { StepSettings } from '../presets/workflow.js';
  */
 export interface FactoryYml {
   linear?: { clientId?: string; clientSecret?: string; webhookSecret?: string };
-  github?: { appId: string; privateKey: string; installationId?: string; webhookSecret?: string };
+  /** `clientId` and `clientSecret`: the App's OAuth client, for the dashboard's GitHub sign-in (ORC-399). */
+  github?: { appId: string; privateKey: string; installationId?: string; webhookSecret?: string; clientId?: string; clientSecret?: string };
+  /** Who may sign in to the dashboard off the loopback (ORC-399): logins, the members of an org, or of a team. */
+  dashboard?: DashboardAccess;
   /** `effort` is applied by `stepSettings` (ORC-136); `accounts` and `active` read again at each launch by `claudeAccountReader` (ORC-215). */
   claude?: {
     runtime: 'claude-code';
@@ -183,7 +187,8 @@ export class FactoryYmlError extends Error {
 
 const SECTIONS: Record<string, string[]> = {
   linear: ['app_client_id', 'client_secret', 'webhook_secret'],
-  github: ['app_id', 'private_key', 'installation_id', 'webhook_secret'],
+  github: ['app_id', 'private_key', 'installation_id', 'webhook_secret', 'client_id', 'client_secret'],
+  dashboard: ['logins', 'org', 'team'],
   claude: ['runtime', 'accounts', 'active', 'default_model', 'per_step', 'effort'],
   concurrency: [],
   budgets: ['per_step_tokens', 'per_ticket_tokens', 'max_turns', 'on_usage_limit'],
@@ -198,6 +203,9 @@ const SECTIONS: Record<string, string[]> = {
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
 const REPO = /^[\w.-]+\/[\w.-]+$/;
+/** A GitHub login or org name; a team is `<org>/<team-slug>`. */
+const GITHUB_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const GITHUB_TEAM = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[\w.-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
@@ -285,7 +293,27 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
     if (github['private_key'] == null) violations.push('github.private_key: required');
     const installationId = value('github.installation_id', github['installation_id']);
     const webhookSecret = value('github.webhook_secret', github['webhook_secret'], true);
-    if (appId && privateKey) out.github = { appId, privateKey, ...(installationId ? { installationId } : {}), ...(webhookSecret ? { webhookSecret } : {}) };
+    const clientId = value('github.client_id', github['client_id']);
+    const clientSecret = value('github.client_secret', github['client_secret'], true);
+    if (appId && privateKey) {
+      out.github = {
+        appId,
+        privateKey,
+        ...(installationId ? { installationId } : {}),
+        ...(webhookSecret ? { webhookSecret } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(clientSecret ? { clientSecret } : {}),
+      };
+    }
+  }
+  const dashboard = section('dashboard');
+  if (dashboard) {
+    const logins = leaf('dashboard.logins', dashboard['logins'], z.array(z.string().regex(GITHUB_NAME)), 'GitHub logins expected');
+    const org = leaf('dashboard.org', dashboard['org'], z.string().regex(GITHUB_NAME), 'a GitHub org expected');
+    const team = leaf('dashboard.team', dashboard['team'], z.string().regex(GITHUB_TEAM), '`<org>/<team-slug>` expected');
+    const named = (v: unknown) => v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0);
+    if (!['logins', 'org', 'team'].some((k) => named(dashboard[k]))) violations.push('dashboard: name the logins, the org or the team let in');
+    out.dashboard = { logins: logins ?? [], ...(org ? { org } : {}), ...(team ? { team } : {}) };
   }
   const claude = section('claude');
   if (claude) {

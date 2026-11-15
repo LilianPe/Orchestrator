@@ -40,12 +40,6 @@ const USAGE = `Usage: factory <command>
   baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub
   ghost start|collect|judge|report|list  replay closed tickets without effects, and judge the PRs blind against the human ones`;
 
-/** Basic auth for an instance bound to a non-loopback host (FACTORY_UI_PASSWORD). */
-function uiAuth(): Record<string, string> {
-  const pw = process.env['FACTORY_UI_PASSWORD'];
-  return pw ? { authorization: `Basic ${Buffer.from(`factory:${pw}`).toString('base64')}` } : {};
-}
-
 async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
@@ -66,7 +60,8 @@ async function main(): Promise<number> {
   // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);
   const api = `http://127.0.0.1:${cfg.port}`;
-  const control = { api, headers: uiAuth(), out: (l: string) => console.log(l) };
+  // No credential: off the loopback, the daemon asks for a GitHub sign-in (ORC-399), which only the dashboard gives.
+  const control = { api, headers: {}, out: (l: string) => console.log(l) };
 
   switch (cmd) {
     case 'init': {
@@ -124,7 +119,7 @@ async function main(): Promise<number> {
       return runStatusCommand(control);
     case 'pause':
     case 'resume':
-      await fetch(`${api}/api/control/${cmd}`, { method: 'POST', headers: uiAuth() });
+      await fetch(`${api}/api/control/${cmd}`, { method: 'POST' });
       console.log(cmd === 'pause' ? 'Queue paused.' : 'Queue resumed.');
       return 0;
     case 'stop':

@@ -67,6 +67,21 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
 }
 
 /**
+ * The App's OAuth client (ORC-399), for the dashboard's GitHub sign-in: `github.clientId` and `github.clientSecret` of
+ * config.yaml or factory.yml, else `GH_APP_CLIENT_ID` and `GH_APP_CLIENT_SECRET`. Undefined when neither is set; one
+ * without the other is an error.
+ */
+export function githubOAuthClient(config: InstanceConfig, env: NodeJS.ProcessEnv = process.env): { clientId: string; clientSecret: string } | undefined {
+  const clientId = config.github?.clientId?.trim() || env['GH_APP_CLIENT_ID']?.trim() || '';
+  const clientSecret = config.github?.clientSecret?.trim() || env['GH_APP_CLIENT_SECRET']?.trim() || '';
+  if (!clientId && !clientSecret) return undefined;
+  if (!clientId || !clientSecret) {
+    throw new Error("Incomplete GitHub sign-in: set the App's client id and its client secret (github.client_id and github.client_secret, or GH_APP_CLIENT_ID and GH_APP_CLIENT_SECRET).");
+  }
+  return { clientId, clientSecret };
+}
+
+/**
  * Secret of the GitHub webhooks (ORC-134): `github.webhookSecret` of config.yaml, else the
  * `GH_WEBHOOK_SECRET` env var. Empty when neither is set: every GitHub webhook is then refused.
  */

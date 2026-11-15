@@ -290,10 +290,18 @@ describe('bootstrap', () => {
     await expect(new TrackerSwitch(4100).getIssue('REL-1')).rejects.toThrow('Linear not connected: open http://localhost:4100/oauth/start');
   });
 
-  it('refuses a non-loopback host without FACTORY_UI_PASSWORD', async () => {
+  // ORC-399: off the loopback, the dashboard is reached through a GitHub sign-in alone; the shared password is gone.
+  it("refuses a non-loopback host without the GitHub sign-in: the App's OAuth client, who is let in, an HTTPS publicUrl", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4196, host: '0.0.0.0', relay: { kind: 'none' }, projects: [], limits: {} });
-    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/FACTORY_UI_PASSWORD/);
+    const client = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
+    const start = (env: NodeJS.ProcessEnv) => startFactory({ home, fakeRunner: true, log: () => {}, env });
+    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    // The old password opens nothing any more.
+    await expect(start({ FACTORY_UI_PASSWORD: 'pw' })).rejects.toThrow(/GitHub sign-in.*github\.client_id.*GH_APP_CLIENT_ID/);
+    await expect(start(client)).rejects.toThrow(/dashboard: \{ logins, org, team \}/);
+    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
+    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'http://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    await expect(start(client)).rejects.toThrow(/publicUrl.*https/);
   });
 
   it('refuses to start real runs without a container engine or FACTORY_ALLOW_HOST_RUNS=1 (ORC-349)', async () => {
@@ -338,17 +346,26 @@ describe('bootstrap', () => {
     }
   });
 
-  it('protects the API with the UI password on a non-loopback host', async () => {
+  it("guards the dashboard with the GitHub sign-in of the factory's App on a non-loopback host", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4195, host: '0.0.0.0', relay: { kind: 'none' }, projects: [], limits: {} });
-    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { FACTORY_UI_PASSWORD: 'pw' } });
+    saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw' } });
     try {
       expect((await fetch('http://127.0.0.1:4195/api/state')).status).toBe(401);
+      // No password opens it any more.
       const auth = { authorization: `Basic ${Buffer.from('x:pw').toString('base64')}` };
-      expect((await fetch('http://127.0.0.1:4195/api/state', { headers: auth })).status).toBe(200);
+      expect((await fetch('http://127.0.0.1:4195/api/state', { headers: auth })).status).toBe(401);
       // The health check and the diagnosis too (ORC-350): what blocks a ticket is the operators'.
       expect((await fetch('http://127.0.0.1:4195/health')).status).toBe(401);
       expect((await fetch('http://127.0.0.1:4195/tickets/REL-1/diagnosis')).status).toBe(401);
+      // A page sends the browser to GitHub, to the App's authorization, coming back to the public URL.
+      const page = await fetch('http://127.0.0.1:4195/', { headers: { accept: 'text/html' }, redirect: 'manual' });
+      expect(page.status).toBe(302);
+      const to = new URL(page.headers.get('location')!);
+      expect(to.origin + to.pathname).toBe('https://github.com/login/oauth/authorize');
+      expect(to.searchParams.get('client_id')).toBe('Iv1.client');
+      expect(to.searchParams.get('redirect_uri')).toBe('https://factory.example/auth/github/callback');
     } finally {
       await app.stop();
     }

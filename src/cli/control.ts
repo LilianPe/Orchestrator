@@ -42,7 +42,7 @@ function formatStatus(s: State, now: number): string[] {
   return lines;
 }
 
-/** The state; or undefined, the reason told: a daemon down, a password missing. */
+/** The state; or undefined, the reason told: a daemon down, a sign-in asked. */
 async function readState(d: ControlDeps): Promise<State | undefined> {
   let res: Response;
   try {
@@ -51,7 +51,7 @@ async function readState(d: ControlDeps): Promise<State | undefined> {
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
   }
-  if (res.status === 401) d.out('Access refused by the daemon: set FACTORY_UI_PASSWORD in this shell.');
+  if (res.status === 401) d.out('Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.');
   else if (!res.ok) d.out(`The daemon answers ${res.status} on /api/state.`);
   return res.ok ? ((await res.json()) as State) : undefined;
 }

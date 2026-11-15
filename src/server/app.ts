@@ -1,13 +1,15 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import { parseStreamLine } from '../adapters/runner/stream-parser.js';
 import { maskTranscriptLine, TRANSCRIPT_RETENTION_MS } from '../adapters/runner/transcript.js';
 import type { ReplaySource } from '../ghost/delegate.js';
+import type { SignIn } from '../adapters/forge/github-login.js';
 import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
 import type { BusMessage, EventBus } from './live-feed.js';
 import type { Clock } from '../core/clock.js';
@@ -25,6 +27,7 @@ import { handleMcp } from '../api/mcp.js';
 import type { KbHit } from '../knowledge/kb.js';
 import { runSecurityView, shownHosts } from '../network/security-log.js';
 import { buildFlow, flowKey, flowTicket } from './flow.js';
+import { readSession, signSession } from './session.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -54,8 +57,12 @@ export interface ServerDeps {
   capacity: () => { dev: { used: number; total: number }; questions: { used: number; total: number } };
   transcriptsDir: string;
   webDir?: string;
-  /** When set (non-loopback host), HTTP Basic auth with this password guards everything but the webhook, the OAuth callback and /agent. */
-  uiPassword?: string;
+  /**
+   * When set (non-loopback host, ORC-399), a GitHub sign-in through the factory's App guards everything but the webhooks,
+   * the OAuth callbacks and /agent: `authorizeUrl` is GitHub's authorization for a state, `signIn` who a callback's code
+   * signs in and whether factory.yml lets them in. Absent: the loopback, where nobody signs in.
+   */
+  githubLogin?: { authorizeUrl: (state: string) => string; signIn: (code: string) => Promise<SignIn> };
   /** A human's take-over of a run (ORC-234), only with sandboxes: absent, there is none. */
   takeOver?: TakeOverDesk;
   /** Why the configuration lets no ticket reach its end (ORC-350): the daemon then takes none. Empty or absent: it takes them. */
@@ -134,37 +141,29 @@ function sameSecret(a: string, b: string): boolean {
   return timingSafeEqual(h(a), h(b));
 }
 
-/** The user and the password of an HTTP Basic header. */
-function basicCredentials(header: string | undefined): { user: string; password: string } | undefined {
-  const m = header?.match(/^Basic\s+(.+)$/i);
-  if (!m) return undefined;
-  const decoded = Buffer.from(m[1]!, 'base64').toString('utf8');
-  const i = decoded.indexOf(':');
-  return i < 0 ? undefined : { user: decoded.slice(0, i), password: decoded.slice(i + 1) };
-}
-
-/** The longest operator name journaled, of what the HTTP Basic user gives. */
-const OPERATOR_NAME_MAX = 64;
-
+/** GitHub's callback of the dashboard's sign-in (ORC-399), guarded by its state. */
+export const GITHUB_CALLBACK_PATH = '/auth/github/callback';
+/** The session and the sign-in's state, each a cookie of this site alone: `__Host-` makes them HTTPS, path `/`, no domain. */
+const SESSION_COOKIE = '__Host-factory_session';
+const STATE_COOKIE = '__Host-factory_oauth';
+/** How long a session lasts, and a sign-in started. */
+const SESSION_MS = 12 * 3_600_000;
+const SIGN_IN_MS = 10 * 60_000;
 /**
- * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: the user of its HTTP Basic
- * auth behind the password, `local` on the loopback without one, whatever header comes then. Not signed: whoever passed
- * the guard is an operator, and names themself.
+ * Not `Strict`: the sign-in comes back from GitHub, and a strict cookie would not follow its redirect. The writes are
+ * the `Origin` check's.
  */
-function operator(c: Context, password: string | undefined): Pick<FactoryEvent, 'actor' | 'roles'> {
-  const user = password && basicCredentials(c.req.header('authorization'))?.user.replace(/[^\p{L}\p{N}._@-]/gu, '').slice(0, OPERATOR_NAME_MAX);
-  return { actor: `dashboard:${user || 'local'}`, roles: ['operator'] };
-}
+const COOKIE = { path: '/', httpOnly: true, secure: true, sameSite: 'Lax' } as const;
 
 /** The factory MCP (ORC-288): all the agents reach of the factory (ORC-192). */
 export const AGENT_MCP_PATH = '/agent/mcp';
 
-/** Public, guarded by their own: the webhooks, the OAuth callback, and `/agent`, so that what is not the MCP there answers 404, never 401. */
 /** The agents' prefix: the MCP and, everywhere else under it, a 404 (ORC-192). */
 export const isAgentPath = (path: string) => path === '/agent' || path.startsWith('/agent/');
 
+/** Public, guarded by their own: the webhooks, the OAuth callbacks, and `/agent`, so that what is not the MCP there answers 404, never 401. */
 function isPublicPath(method: string, path: string): boolean {
-  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && path === '/oauth/callback') || isAgentPath(path);
+  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && (path === '/oauth/callback' || path === GITHUB_CALLBACK_PATH)) || isAgentPath(path);
 }
 
 /**
@@ -193,15 +192,45 @@ export function createApp(d: ServerDeps): Hono {
     }
   };
 
-  if (d.uiPassword) {
-    const password = d.uiPassword;
+  // Drawn at each start and kept in memory alone (ORC-399): a restart ends every session.
+  const sessionKey = randomBytes(32);
+  /** The GitHub login of the request's session, undefined without a valid one. */
+  const signedIn = (c: Context) => readSession(getCookie(c, SESSION_COOKIE), sessionKey, d.clock.now());
+  /**
+   * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: `github:<login>` of the
+   * session off the loopback (ORC-399), as the GitHub webhooks name their sender; `dashboard:local` on the loopback,
+   * whatever header comes. Whoever passed the guard is an operator.
+   */
+  const operator = (c: Context): Pick<FactoryEvent, 'actor' | 'roles'> => ({ actor: d.githubLogin ? `github:${signedIn(c)}` : 'dashboard:local', roles: ['operator'] });
+
+  if (d.githubLogin) {
+    const github = d.githubLogin;
     app.use('*', async (c, next) => {
-      if (isPublicPath(c.req.method, c.req.path)) return next();
-      const given = basicCredentials(c.req.header('authorization'))?.password;
-      if (given === undefined || !sameSecret(given, password)) {
-        return c.text('Authentication required', 401, { 'WWW-Authenticate': `Basic realm="${PRODUCT_NAME}", charset="UTF-8"` });
+      if (isPublicPath(c.req.method, c.req.path) || signedIn(c)) return next();
+      // A page a browser opens goes to GitHub, its state in a cookie of this browser; the API and the tools get a 401.
+      if (c.req.method === 'GET' && c.req.header('accept')?.includes('text/html')) {
+        const state = randomBytes(16).toString('hex');
+        setCookie(c, STATE_COOKIE, state, { ...COOKIE, maxAge: SIGN_IN_MS / 1000 });
+        return c.redirect(github.authorizeUrl(state));
       }
-      return next();
+      return c.json({ error: 'sign in with GitHub first' }, 401);
+    });
+    // The state is this browser's and spent here: a callback another page forged, or replayed, exchanges no code.
+    app.get(GITHUB_CALLBACK_PATH, async (c) => {
+      const expected = deleteCookie(c, STATE_COOKIE, COOKIE);
+      if (!expected || !sameSecret(expected, c.req.query('state') ?? '')) return c.html('<p>This sign-in was not started here, or has expired: open the dashboard again.</p>', 400);
+      let who: SignIn;
+      try {
+        who = await github.signIn(c.req.query('code') ?? '');
+      } catch (err) {
+        return c.html(`<p>The GitHub sign-in failed: ${escapeHtml((err as Error).message)}</p>`, 502);
+      }
+      if (!who.allowed) {
+        d.bus.publish({ kind: 'log', level: 'warn', message: `GitHub sign-in refused to the dashboard: ${who.login} is not in its list, org or team (factory.yml dashboard)`, at: d.clock.now() });
+        return c.html(`<p>${escapeHtml(who.login)} is not allowed on this ${escapeHtml(PRODUCT_NAME)}: ask its maintainers to add you to its dashboard's list, org or team.</p>`, 403);
+      }
+      setCookie(c, SESSION_COOKIE, signSession(who.login, d.clock.now() + SESSION_MS, sessionKey), { ...COOKIE, maxAge: SESSION_MS / 1000 });
+      return c.redirect('/');
     });
   } else {
     // DNS rebinding (ORC-349): a page whose name the attacker rebinds to 127.0.0.1 is same-origin with this server under
@@ -433,7 +462,7 @@ export function createApp(d: ServerDeps): Hono {
       ...(entry.file === undefined ? {} : { file: entry.file }),
       ...(entry.line === undefined ? {} : { line: entry.line }),
       definition,
-      enteredBy: operator(c, d.uiPassword).actor!,
+      enteredBy: operator(c).actor!,
       at: d.clock.now(),
     };
     await d.store.putReviewDefect(defect);
@@ -520,10 +549,10 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ...detail, transcript });
   });
 
-  // The answer waits for the inbox write (ORC-147): `ok` means the command is recorded.
+  // The answer waits for the inbox write (ORC-147): `ok` means the command is recorded, with who asked it.
   const control = (type: 'control.pause' | 'control.resume') => async (c: Context) => {
     const at = d.clock.now();
-    await d.submit({ ...TRUSTED, id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
+    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:${type}:${at}`, type, at, projectId: '*', payload: {} } as FactoryEvent);
     return c.json({ ok: true });
   };
   app.post('/api/control/pause', control('control.pause'));
@@ -532,7 +561,7 @@ export function createApp(d: ServerDeps): Hono {
   app.post('/api/tickets/:projectId/:ticketId/stop', async (c) => {
     const at = d.clock.now();
     const ticketId = c.req.param('ticketId');
-    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
+    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
   });
   // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check,
@@ -546,7 +575,7 @@ export function createApp(d: ServerDeps): Hono {
     if (action === 'take-over' && !d.takeOver) return c.json({ error: 'taking over a run needs the sandboxes (FACTORY_CONTAINER_CLI): never a shell on the server' }, 409);
     const at = d.clock.now();
     const payload = { runId, ...RUN_CONTROL[action] };
-    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:${action}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
+    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:${action}:${runId}:${at}`, type: 'control.stop', at, projectId: run.projectId, ticketId: run.ticketId, payload });
     return c.json({ ok: true });
   };
   app.post('/api/runs/:id/pause', runControl('pause'));
@@ -576,7 +605,7 @@ export function createApp(d: ServerDeps): Hono {
     if (!bytes.byteLength) return c.json({ error: 'empty bundle' }, 400);
     const file = await at.desk.keepBundle(at.projectId, at.ticketId, bytes);
     const now = d.clock.now();
-    await d.submit({ ...TRUSTED, ...operator(c, d.uiPassword), id: `ui:bundle:${at.ticketId}:${now}`, type: 'control.bundle', at: now, projectId: at.projectId, ticketId: at.ticketId, payload: { file } });
+    await d.submit({ ...TRUSTED, ...operator(c), id: `ui:bundle:${at.ticketId}:${now}`, type: 'control.bundle', at: now, projectId: at.projectId, ticketId: at.ticketId, payload: { file } });
     return c.json({ ok: true });
   });
 

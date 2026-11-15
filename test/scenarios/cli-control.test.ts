@@ -88,12 +88,12 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(c.lines[0]).toContain('REL-9 unknown');
   });
 
-  it('says what to do when the daemon is down or asks for its password', async () => {
+  it('says what to do when the daemon is down or asks for a GitHub sign-in (ORC-399)', async () => {
     const lines: string[] = [];
     const deps = { api: 'http://127.0.0.1:1', headers: {}, out: (l: string) => void lines.push(l) };
     expect(await runStatusCommand({ ...deps, fetch: async () => Promise.reject(new Error('fetch failed')) })).toBe(1);
     expect(lines.at(-1)).toContain('factory up');
     expect(await runStopCommand({ ...deps, fetch: async () => new Response('', { status: 401 }) }, 'REL-1')).toBe(1);
-    expect(lines.at(-1)).toContain('FACTORY_UI_PASSWORD');
+    expect(lines.at(-1)).toBe('Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.');
   });
 });
