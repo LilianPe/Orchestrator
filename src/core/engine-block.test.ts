@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
 import type { Workflow } from './workflow.js';
 import { causeOf, type BlockKind } from './block-cause.js';
-import type { Role } from './authz.js';
+import { DEFAULT_MATRIX, type Role } from './authz.js';
 import type { Decision } from './decision.js';
 import { BLOCKED_LABEL, decide, mayCheck, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
@@ -276,6 +276,58 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
 
   it('the roles of who comments are resolved, journaled with the event', () => {
     expect(mayCheck(comment({}), workflow)).toBe(true);
+  });
+
+  describe('a mention answers the block as a reply does (ORC-415): never unblocked with no step running', () => {
+    const writer = { actor: 'u-member', roles: ['team_member', 'repo_writer'] as readonly Role[] };
+    const mention = (kind?: MessageKind, extra: Partial<FactoryEvent> = writer) =>
+      ev('session.mentioned', { linearSessionId: 's-m', body: 'Pourquoi le tri ?', author: 'Lilian', ack: true, ...(kind ? { kind } : {}) }, extra);
+    const appended = (d: Decision) => d.events.flatMap((e) => (e.type === 'feedback.appended' ? [e.item] : []));
+
+    it.each([
+      ['a question', mention('question')],
+      ['a row with no class', mention()],
+    ])('%s starts the job that blocked, the mention kept for its agent, in its session, and says it resumes', (_what, event) => {
+      const out = decide(blockedOn('dev'), event, workflow);
+      expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
+      expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
+      expect(appended(out)).toEqual([expect.objectContaining({ body: 'Pourquoi le tri ?', source: 'session' })]);
+      expect(out.effects).toContainEqual({ kind: 'labels', add: [], remove: [BLOCKED_LABEL] });
+      expect(out.effects[0]).toEqual({ kind: 'ack', body: 'Noted, resuming.', linearSessionId: 's-m' });
+    });
+
+    it('gives the bounds back, and resumes a stranded pending job, as a reply does', () => {
+      const bounds = decide(blockedOn('dev', { leaseRelaunches: 1, ciFixAttempts: 2 }), mention('question'), workflow);
+      expect(bounds.events).toEqual(expect.arrayContaining([{ type: 'ticket.patched', patch: { leaseRelaunches: 0 } }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]));
+      const pending = { job: 'review', input: 'diff' as const };
+      const stranded = decide(blockedOn('review', { blockKind: 'stuck', pendingJob: pending }), mention('question'), workflow);
+      expect(stranded.events).toContainEqual({ type: 'pending.cleared', job: pending });
+      expect(starts(stranded)).toEqual([expect.objectContaining({ job: 'review' })]);
+    });
+
+    it('a block with no step of its own relaunches the reply\'s job', () => {
+      expect(starts(decide(blockedOn('dev', { blockedJob: undefined }), mention('question'), workflow))).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    });
+
+    it('needs the right to relaunch a block: refused, the ticket keeps its block and nothing starts', () => {
+      const matrix = { ...DEFAULT_MATRIX, relaunch_blocked: { ...DEFAULT_MATRIX.relaunch_blocked, anyOf: [['maintainer' as const]] } };
+      const out = decide(blockedOn('dev'), mention('question'), workflow, matrix);
+      expect(out.trace.join()).toContain('authz: refused relaunch_blocked');
+      expect(out.events).toEqual([]);
+      expect(starts(out)).toEqual([]);
+    });
+
+    it('on a ticket no longer delegated, no reply resumes anything: the question is answered, the block kept', () => {
+      const out = decide(blockedOn('dev', { delegated: false }), mention('question'), workflow);
+      expect(starts(out)).toEqual([expect.objectContaining({ job: 'ask', input: 'thread' })]);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+    });
+
+    it('an instruction waits in the inbox, the block kept, as before', () => {
+      const out = decide(blockedOn('dev'), mention('instruction'), workflow);
+      expect(starts(out)).toEqual([]);
+      expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
+    });
   });
 
   it('unblocked, the ticket forgets the step', () => {

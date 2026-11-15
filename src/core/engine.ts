@@ -716,6 +716,9 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
  */
 const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
 
+/** A human's relaunch of a blocked ticket: those events, and a mention, which only unblocks when it answers the block (ORC-415). */
+const relaunchedByHuman = (event: FactoryEvent): boolean => HUMAN_RELAUNCH.has(event.type) || event.type === 'session.mentioned';
+
 /** The human review loop starts over with its whole bound (ORC-190); nothing is recorded when its count is already 0 or absent. */
 function resetHumanRounds(out: Decision, ticket: TicketState | undefined): void {
   if (ticket?.humanReviewRounds) out.events.push({ type: 'ticket.patched', patch: { humanReviewRounds: 0 } });
@@ -733,7 +736,7 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
  */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
-  if (!HUMAN_RELAUNCH.has(event.type)) return;
+  if (!relaunchedByHuman(event)) return;
   resetRedCi(out, ticket);
   // The human review rounds too (ORC-190): the reply to their own bound relaunches on the feedback it kept.
   resetHumanRounds(out, ticket);
@@ -1109,7 +1112,7 @@ function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefin
     case 'ticket.commented':
       return start(ticket?.blocked ? resumeBlocked(event, ticket, workflow) : undefined);
     case 'session.mentioned':
-      return start(askQuestion(event, ticket, workflow));
+      return start(mentionAnswersBlock(event, ticket) ? resumeBlocked(event, ticket!, workflow) : askQuestion(event, ticket, workflow));
     case 'label.changed':
     case 'session.stopped':
       return stopped(out, event);
@@ -1401,8 +1404,16 @@ function strandedPending(ticket: TicketState | undefined, workflow: Workflow): P
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
-/** A reply to a blocked ticket: it resumes the blocked step (ORC-196). */
-const repliesToBlock = (event: FactoryEvent, ticket: TicketState | undefined): boolean => REPLIES.has(event.type) && !!ticket?.blocked;
+/** A reply to a blocked ticket: it resumes the blocked step (ORC-196), a mention that answers the block as well (ORC-415). */
+const repliesToBlock = (event: FactoryEvent, ticket: TicketState | undefined): boolean => (REPLIES.has(event.type) && !!ticket?.blocked) || mentionAnswersBlock(event, ticket);
+
+/**
+ * A mention on a blocked ticket answers the block as a reply does (ORC-415): a question asked there would otherwise lift the
+ * block for its answer alone, the blocked step never resumed. Not on a ticket no longer delegated, which no reply resumes (its
+ * question is answered, its block kept), nor an instruction or a command, decided apart.
+ */
+const mentionAnswersBlock = (event: FactoryEvent, ticket: TicketState | undefined): boolean =>
+  event.type === 'session.mentioned' && !!ticket?.blocked && ticket.delegated && event.payload.kind !== 'instruction' && event.payload.kind !== 'command';
 
 /** Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision. */
 function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
@@ -1412,7 +1423,7 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
   // A round was counted when it was decided; a human reply gave the rounds back (`unblock`): this start is the first of the new ones (ORC-190).
-  if (HUMAN_RELAUNCH.has(event.type)) humanRound(out, ticket, workflow, job, () => startAs(out, event, ticket, job, pending));
+  if (relaunchedByHuman(event)) humanRound(out, ticket, workflow, job, () => startAs(out, event, ticket, job, pending));
   else startAs(out, event, ticket, job, pending);
   return out;
 }
@@ -1433,9 +1444,9 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   if (pending) return startPending(out, event, ticket!, workflow, pending);
   const resumed = resumedJob(event, ticket, workflow);
   const job = resumed ?? r.job;
-  // The ticket keeps its block for a run refused.
+  // The ticket keeps its block for a run refused, and for an answer to a question, which resumes no step of it (ORC-415).
   const merged = refused(ticket, job);
-  if (!merged && ticket?.blocked) unblock(out, event, ticket);
+  if (!merged && ticket?.blocked && job.queue !== 'questions') unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
   else if (!merged && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
@@ -1448,7 +1459,8 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
     const inbox = ((event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind) || event.type === 'pr.reviewed';
     out.timers.push({ kind: 'debounce', slot: job.name, ms: r.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
   } else {
-    const threaded = event.type === 'session.mentioned' || event.type === 'command';
+    // A mention that resumes the blocked step is read from the inbox, in the ticket's session (ORC-415).
+    const threaded = !resumed && (event.type === 'session.mentioned' || event.type === 'command');
     const run = { input: resumed ? 'feedback' : job.input, inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
     humanRound(out, ticket, workflow, job, () => startRun(out, event, ticket, job, run));
   }
@@ -1796,8 +1808,8 @@ function acknowledge(out: Decision, event: FactoryEvent, state: TicketState | un
   if (event.type === 'session.prompted' && kind === 'command') return;
   const delegation = event.type === 'ticket.delegated';
   const plan = delegation && out.effects.some((e) => e.kind === 'start_run');
-  // A mention that asks a question keeps the ack of a trigger (ORC-171).
-  const body = kind === 'instruction' || (event.type === 'session.prompted' && kind) ? messageAck(out, state) : ACK_BODY;
+  // A mention that asks a question keeps the ack of a trigger (ORC-171), but the one that answers a block: it resumes (ORC-415).
+  const body = kind === 'instruction' || (event.type === 'session.prompted' && kind) || mentionAnswersBlock(event, state) ? messageAck(out, state) : ACK_BODY;
   out.effects.unshift({
     kind: 'ack',
     body,
@@ -2480,6 +2492,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (event.payload.kind === 'command') return factoryCommand(out, event, ticket, workflow);
       break;
     case 'session.mentioned':
+      // An answer to the block (ORC-415): under the right of a reply, kept for the agent the reaction resumes.
+      if (mentionAnswersBlock(event, ticket)) {
+        if (!authorize(out, event, ticket, 'relaunch_blocked', 'linear', matrix)) return out;
+        keepMessage(out, event, 'session');
+        break;
+      }
       // Kept, as any message (ORC-180). One that asks for an action never takes the question path of its reaction.
       if (event.payload.kind && ticket) {
         const order = event.payload.kind === 'instruction' && ticket.delegated;
