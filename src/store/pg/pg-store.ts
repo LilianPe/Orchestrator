@@ -1056,9 +1056,7 @@ export class PgStore implements AsyncStore {
   }
 
   async putDryRun(d: DryRun): Promise<void> {
-    // Through JSON: an absent field stays absent, as the SQLite store keeps it.
-    const data = JSON.parse(JSON.stringify(d)) as DryRun;
-    const row = { projectId: d.projectId, sha: d.sha, target: d.target, endedAt: new Date(d.endedAt), data };
+    const row = { projectId: d.projectId, sha: d.sha, target: d.target, endedAt: new Date(d.endedAt), data: d };
     await this.db.insert(schema.dryRuns).values({ id: d.id, ...row }).onConflictDoUpdate({ target: schema.dryRuns.id, set: row });
   }
 

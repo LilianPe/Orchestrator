@@ -1,14 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import type { Exec } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
-import { HARDENING, IN_SANDBOX } from '../publish/extract.js';
-import { BASE, boxOpener, cloneGit, reportRun, show, testRunners, verifyCommand, withDeadline, withoutCredentials, type CloneGit } from './clean-verify.js';
+import { IN_SANDBOX } from '../publish/extract.js';
+import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testRunners, verifyCommand, withDeadline, zFields, type CloneGit } from './clean-verify.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
@@ -62,7 +60,7 @@ export interface DryRunRequest {
   originUrl: string;
   /** A commit given; absent, the forge's default branch. */
   sha?: string;
-  /** On the host, empty, and the caller's to remove. */
+  /** On the host, empty, and the caller's to remove: the clone the sandboxes mount. */
   workDir: string;
   /** The workflow's (`workspace.setup`, `jobs.dev.verify`): what the commit's `.factory/config.yml` does not declare. */
   setup: readonly string[];
@@ -95,12 +93,10 @@ export function dryRunFingerprint(i: { setup: readonly string[]; image: string; 
 /** Each lockfile of `LOCKFILES` at the root of `sha`, by its blob: git's own hash of its content. */
 async function lockfilesAt(git: CloneGit, sha: string): Promise<Record<string, string>> {
   const out = await git.raw('ls-tree', '-z', sha, '--', ...LOCKFILES);
-  const entries = out.split('\0').filter(Boolean).map((e) => /^\d+ blob (\w+)\t(.+)$/.exec(e)).filter((m) => m !== null);
+  const entries = zFields(out).map((e) => /^\d+ blob (\w+)\t(.+)$/.exec(e)).filter((m) => m !== null);
   return Object.fromEntries(entries.map((m) => [m[2]!, m[1]!]));
 }
 
-/** A commit's full id, SHA-1 or SHA-256: a branch, a short sha or a refspec would be fetched as such. */
-const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const OUTPUT_MAX = 4000;
 const DETAIL_MAX = 300;
 const DEPENDENCY = `a dependency is missing, or younger than the ${RELEASE_AGE_DAYS} days the setup allows`;
@@ -193,30 +189,31 @@ export function breaksOfRuns(runs: readonly CommandRun[], standing: Standing, de
     if (!settled.failures.length) return [];
     const counted = settled.flaky.filter((t) => !t.indicative);
     const flaky = counted.filter((t) => t.attempts.some((a) => a.on === 'head' && a.attempt === 2 && a.outcome === 'passed'));
-    const breaks = flaky.map((t): DryRunBreak => ({ kind: 'flaky', step: 'command', command: run.command, detail: `${t.test} failed, then passed on its rerun`, output: logExcerpt(run.output, OUTPUT_MAX) }));
+    const output = logExcerpt(run.output, OUTPUT_MAX);
+    const breaks = flaky.map((t): DryRunBreak => ({ kind: 'flaky', step: 'command', command: run.command, detail: `${t.test} failed, then passed on its rerun`, output }));
     // `withoutIndicative` is set only when every failing test is a known flaky one, none of them counted.
     const onlyFlaky = flaky.length > 0 && flaky.length === counted.length && !run.notRerun && run.withoutIndicative === undefined;
-    return onlyFlaky ? breaks : [...breaks, breakOf('command', run.command, run.output, declared)];
+    return onlyFlaky ? breaks : [...breaks, { ...classifyBreak(run.output, 'command', declared), step: 'command', command: run.command, output }];
   });
 }
 
 /** The forge's default branch into the clone, and the commit given when the fetch of it did not bring it. */
 async function fetchCommit(req: DryRunRequest, git: CloneGit, cloneDir: string): Promise<string> {
-  const fetch = async (refspec: string, said: string) => {
-    const args = [...HARDENING.flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, refspec];
-    try {
-      await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
-    } catch (err) {
-      // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
-      throw new Error(`${said} not read from the forge: ${withoutCredentials((err as Error).message, req.originUrl)}`);
-    }
-  };
-  await fetch(`+HEAD:${BASE}`, 'the default branch');
+  await fetchFromForge(req, cloneDir, [`+HEAD:${BASE}`], "the forge's default branch");
   if (!req.sha) return git('rev-parse', '--verify', `${BASE}^{commit}`);
-  const held = async () => (await git.status('cat-file', '-e', `${req.sha}^{commit}`)).code === 0;
-  if (!(await held())) await fetch(req.sha, `the commit ${req.sha.slice(0, 12)}`);
-  if (!(await held())) throw new Error(`the commit ${req.sha.slice(0, 12)} is not on the forge`);
-  return git('rev-parse', '--verify', `${req.sha}^{commit}`);
+  const sha = req.sha;
+  const held = async () => {
+    const r = await git.status('rev-parse', '--verify', '--quiet', `${sha}^{commit}`);
+    return r.code === 0 ? r.stdout.trim() : undefined;
+  };
+  const said = `the commit ${sha.slice(0, 12)}`;
+  let found = await held();
+  if (!found) {
+    await fetchFromForge(req, cloneDir, [sha], `${said} of the forge`);
+    found = await held();
+  }
+  if (!found) throw new Error(`${said} is not on the forge`);
+  return found;
 }
 
 /**
@@ -237,65 +234,59 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   const startedAt = req.now();
   const sandboxes = withDeadline(req.sandboxes, req.deadlineMs ?? VERIFY_TIMEOUT_MS + 60_000);
   const inBox = boxOpener(sandboxes, { runId: req.runId, ticketId: req.projectId, log: req.log });
-  const cloneDir = join(req.workDir, 'clone');
-  mkdirSync(cloneDir);
+  const cloneDir = req.workDir;
+  const git = cloneGit(req, cloneDir);
+  await initHardenedClone(git);
+  const sha = await fetchCommit(req, git, cloneDir);
+  const lockfiles = await lockfilesAt(git, sha);
+  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
+    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length,
+    fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, lockfiles }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
+  });
+  let config: RepoConfig;
   try {
-    const git = cloneGit(req, cloneDir);
-    await git('init', '--quiet', '--template=');
-    for (const c of HARDENING) await git('config', c.slice(0, c.indexOf('=')), c.slice(c.indexOf('=') + 1));
-    const sha = await fetchCommit(req, git, cloneDir);
-    const lockfiles = await lockfilesAt(git, sha);
-    const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
-      id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length,
-      fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, lockfiles }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
-    });
-    let config: RepoConfig;
-    try {
-      config = parseRepoConfig(await show(git, sha, REPO_CONFIG_PATH));
-    } catch (err) {
-      if (!(err instanceof RepoConfigError)) throw err;
-      const broke: DryRunBreak = { kind: 'failure', step: 'config', command: REPO_CONFIG_PATH, detail: brief(err.message.replaceAll('\n', ' ')), output: err.message };
-      return dryRun([broke], req.setup, []);
-    }
-    const declared = Object.values(config.commands);
-    const commands = declared.length ? declared : req.commands;
-    const setup = config.setup ? [config.setup] : req.setup;
-    const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
-    if (unprovided.length) {
-      const detail = `${unprovided.join(', ')}: declared under \`services\` in ${REPO_CONFIG_PATH}, and no sandbox backend of this factory provides ${unprovided.length === 1 ? 'it' : 'them'}`;
-      return dryRun([{ kind: 'service', step: 'config', command: REPO_CONFIG_PATH, detail, output: '' }], setup, commands);
-    }
-    await inBox('prepare', cloneDir, [], async (id) => {
-      // `-c`: the clone's config is ours.
-      const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
-      if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
-    });
-    // Read before any of its code runs, and before the setup opens services that a failure here would leave behind.
-    const runners = await testRunners(git, sha, commands);
-    const env = await req.env(config);
-    if (setup.length) {
-      try {
-        await runSealedSetup(sandboxes, { runId: `${req.runId}-run`, ticketId: req.projectId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services: config.services, now: new Date(req.now()) });
-      } catch (err) {
-        if (!(err instanceof SetupFailure)) throw err;
-        if (err.exitCode === null) return dryRun([{ kind: 'failure', step: 'setup', command: err.command, detail: err.message, output: logExcerpt(err.output, OUTPUT_MAX) }], setup, commands);
-        const broke = breakOf('setup', err.command, err.output, config);
-        // A registry or the proxy that did not answer says nothing of the repository: no dry run, as for the forge or the engine.
-        const down = broke.kind === 'failure' ? unreachable(err.output) : undefined;
-        if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
-        return dryRun([broke], setup, commands);
-      }
-    }
-    const standing: Standing = { known: req.knownFlaky ?? [] };
-    const failed: CommandRun[] = [];
-    await inBox('run', cloneDir, [], async (id) => {
-      for (const command of commands) {
-        const run = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
-        if (run) failed.push(run);
-      }
-    }, { ...DEFAULT_REQUIREMENTS, services: config.services });
-    return dryRun(breaksOfRuns(failed, standing, config), setup, commands);
-  } finally {
-    await rm(cloneDir, { recursive: true, force: true }).catch((err: Error) => req.log(`${cloneDir} not removed: ${err.message}`));
+    config = parseRepoConfig(await show(git, sha, REPO_CONFIG_PATH));
+  } catch (err) {
+    if (!(err instanceof RepoConfigError)) throw err;
+    const broke: DryRunBreak = { kind: 'failure', step: 'config', command: REPO_CONFIG_PATH, detail: brief(err.message.replaceAll('\n', ' ')), output: err.message };
+    return dryRun([broke], req.setup, []);
   }
+  const declared = Object.values(config.commands);
+  const commands = declared.length ? declared : req.commands;
+  const setup = config.setup ? [config.setup] : req.setup;
+  const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
+  if (unprovided.length) {
+    const detail = `${unprovided.join(', ')}: declared under \`services\` in ${REPO_CONFIG_PATH}, and no sandbox backend of this factory provides ${unprovided.length === 1 ? 'it' : 'them'}`;
+    return dryRun([{ kind: 'service', step: 'config', command: REPO_CONFIG_PATH, detail, output: '' }], setup, commands);
+  }
+  await inBox('prepare', cloneDir, [], async (id) => {
+    // `-c`: the clone's config is ours.
+    const out = await sandboxes.exec(id, ['git', ...IN_SANDBOX, 'checkout', '--quiet', '--detach', sha]);
+    if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
+  });
+  // Read before any of its code runs, and before the setup opens services that a failure here would leave behind.
+  const runners = await testRunners(git, sha, commands);
+  const env = await req.env(config);
+  if (setup.length) {
+    try {
+      await runSealedSetup(sandboxes, { runId: `${req.runId}-run`, ticketId: req.projectId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services: config.services, now: new Date(req.now()) });
+    } catch (err) {
+      if (!(err instanceof SetupFailure)) throw err;
+      if (err.exitCode === null) return dryRun([{ kind: 'failure', step: 'setup', command: err.command, detail: err.message, output: logExcerpt(err.output, OUTPUT_MAX) }], setup, commands);
+      const broke = breakOf('setup', err.command, err.output, config);
+      // A registry or the proxy that did not answer says nothing of the repository: no dry run, as for the forge or the engine.
+      const down = broke.kind === 'failure' ? unreachable(err.output) : undefined;
+      if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
+      return dryRun([broke], setup, commands);
+    }
+  }
+  const standing: Standing = { known: req.knownFlaky ?? [] };
+  const failed: CommandRun[] = [];
+  await inBox('run', cloneDir, [], async (id) => {
+    for (const command of commands) {
+      const run = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
+      if (run) failed.push(run);
+    }
+  }, { ...DEFAULT_REQUIREMENTS, services: config.services });
+  return dryRun(breaksOfRuns(failed, standing, config), setup, commands);
 }
