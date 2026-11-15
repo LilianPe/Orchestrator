@@ -219,8 +219,12 @@ describe('GitHubAppApi', () => {
 });
 
 describe('GitHubAppApi.branchProtection (ORC-208)', () => {
-  const protectionRoutes = (branch: unknown, rules: unknown, repo: unknown = { default_branch: 'main' }): Route[] => [
+  const protectionRoutes = (branch: unknown, rules: unknown, repo: unknown = { default_branch: 'main' }, rulesets: Record<string, unknown> = {}): Route[] => [
     tokenRoute(),
+    (url) => {
+      const id = /^\/repos\/acme\/app\/rulesets\/(\d+)$/.exec(url.pathname)?.[1];
+      return id ? { body: rulesets[id] ?? { id: Number(id), current_user_can_bypass: 'never' } } : undefined;
+    },
     (url) => (url.pathname === '/repos/acme/app' ? { body: repo } : undefined),
     (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: branch } : undefined),
     (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: rules } : undefined),
@@ -229,15 +233,23 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
   it('reads the default branch, its classic protection flag and the rule types its active rulesets apply, once each', async () => {
     const calls: Call[] = [];
     const rules = [{ type: 'pull_request', ruleset_id: 1 }, { type: 'deletion', ruleset_id: 1 }, { type: 'pull_request', ruleset_id: 2 }];
-    const protection = await makeApi(protectionRoutes({ name: 'main', protected: false }, rules), calls).branchProtection('/repo');
-    expect(protection).toEqual({ branch: 'main', classic: false, rules: ['deletion', 'pull_request'] });
+    const rulesets = { '2': { id: 2, current_user_can_bypass: 'always' } };
+    const protection = await makeApi(protectionRoutes({ name: 'main', protected: false }, rules, undefined, rulesets), calls).branchProtection('/repo');
+    expect(protection).toEqual({ branch: 'main', classic: false, rules: ['deletion', 'pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }, { id: 2, bypass: 'always' }] });
     expect(calls.every((call) => !call.url.includes('/protection'))).toBe(true);
+    expect(calls.filter((call) => call.url.includes('/rulesets/'))).toHaveLength(2);
+  });
+
+  it("rejects a ruleset that does not say whether the App can bypass it", async () => {
+    const routes = protectionRoutes({ protected: false }, [{ type: 'pull_request', ruleset_id: 7 }], undefined, { '7': { id: 7 } });
+    await expect(makeApi(routes).branchProtection('/repo')).rejects.toThrow(/unreadable answer, not a ruleset/);
   });
 
   it.each([
     ['a repository without its default branch', { name: 'app' }, { protected: true }, []],
     ['a branch without its protected flag', { default_branch: 'main' }, { name: 'main' }, []],
     ['rules that are not a list of typed rules', { default_branch: 'main' }, { protected: true }, [{ ruleset_id: 1 }]],
+    ['a rule without its ruleset', { default_branch: 'main' }, { protected: true }, [{ type: 'pull_request' }]],
   ])('rejects, never reads "protected", %s', async (_case, repo, branch, rules) => {
     await expect(makeApi(protectionRoutes(branch, rules, repo)).branchProtection('/repo')).rejects.toThrow(/unreadable answer/);
   });

@@ -196,18 +196,18 @@ The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](
 
 The knowledge repository (`relais-knowledge`) deserves the same protection: a human merges there.
 
-`factory doctor` refuses a repository whose default branch has neither (ORC-208). It reads, with the App's read permissions only (*Metadata*): `GET /repos/{owner}/{repo}` for the default branch, `GET /repos/{owner}/{repo}/branches/{branch}` for the classic protection's `protected` flag, and `GET /repos/{owner}/{repo}/rules/branches/{branch}` for the rules the repository's **active** rulesets apply to it (a ruleset in *Evaluate* mode applies none). Accepted:
+`factory doctor` refuses a repository whose default branch has neither (ORC-208). It reads, with the App's read permissions only (*Metadata*): `GET /repos/{owner}/{repo}` for the default branch, `GET /repos/{owner}/{repo}/branches/{branch}` for the classic protection's `protected` flag, `GET /repos/{owner}/{repo}/rules/branches/{branch}` for the rules the repository's **active** rulesets apply to it (a ruleset in *Evaluate* mode applies none), and `GET /repos/{owner}/{repo}/rulesets/{id}` of each ruleset with a pull request rule, whose `current_user_can_bypass` says whether the App is in its bypass list. Accepted:
 
-- a ruleset with the **Require a pull request before merging** rule (`pull_request`): `doctor` can read it, it is the recommended form;
+- a ruleset with the **Require a pull request before merging** rule (`pull_request`) that the App cannot bypass (`current_user_can_bypass: never`): `doctor` can read it, it is the recommended form. A ruleset the App bypasses (`always`, `pull_requests_only`, `exempt`) does not count; with no other, `doctor` refuses and names it;
 - a classic branch protection: its rules need the *Administration* permission, which the App does not have, so `doctor` credits its flag alone and says so; check by hand that it requires a pull request.
 
-Refused: no protection and no ruleset, or rulesets without the `pull_request` rule (blocking force pushes or deletion alone still lets a direct push land). An unreadable answer refuses too.
+Refused: no protection and no ruleset, rulesets without the `pull_request` rule (blocking force pushes or deletion alone still lets a direct push land), or only rulesets the App bypasses. An unreadable answer refuses too. Not checked: the number of approvals the rule requires (0 is accepted, see the bullet list above), nor what a classic protection holds.
 
 ## `factory doctor`: host, branch protection, CI secrets and factory branches
 
-`factory doctor [repo] [--json]` (current repository by default), run on the server as the daemon's user, checks before entrusting a repository that the host can limit the sandbox, that the default branch is protected ([above](#branch-protection-required-by-factory-doctor)), and that no CI can expose secrets to the factory's branches. Each check has its verdict; one refusal refuses.
+`factory doctor [repo] [--json]` (current repository by default), run **on the server, as the user the container engine runs under** (not inside the `factoryd` container, whose cgroups are its own), checks before entrusting a repository that the host can limit the sandbox, that the default branch is protected ([above](#branch-protection-required-by-factory-doctor)), and that no CI can expose secrets to the factory's branches. Each check has its verdict; one refusal refuses.
 
-**The host (ORC-208).** The attempt containers are limited in processes, memory and CPUs through cgroups ([`tests.md`](tests.md), isolation 9). `doctor` refuses a host without cgroup v2 (no `/sys/fs/cgroup/cgroup.controllers`: cgroups v1 or the hybrid layout), or whose root lacks one of the `cpu`, `memory` and `pids` controllers. Run as any user but root (a rootless engine), it also reads the cgroup systemd delegates to that user, `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/cgroup.controllers`, and refuses when it is absent (no systemd user session: `sudo loginctl enable-linger <user>`) or lacks one of the three. A host where the limits are removed (`FACTORY_SANDBOX_*=none`) is refused all the same: the sandbox would have no protection against resource exhaustion.
+**The host (ORC-208).** The attempt containers are limited in processes, memory and CPUs through cgroups ([`tests.md`](tests.md), isolation 9). `doctor` refuses a host without cgroup v2 (no `/sys/fs/cgroup/cgroup.controllers`: cgroups v1 or the hybrid layout), or whose root lacks one of the `cpu`, `memory` and `pids` controllers. Run as any user but root (a rootless engine), it also reads the cgroup systemd delegates to that user, `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/cgroup.controllers`, and refuses when it is absent (no systemd user session: `sudo loginctl enable-linger <user>`) or lacks one of the three. The check runs regardless of `FACTORY_SANDBOX_*`: removing the limits does not make a host without them acceptable. A cgroup file that exists but cannot be read refuses with its error.
 
 **CI secrets.** The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
 
@@ -279,7 +279,7 @@ jobs:
 
 `factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`. The CI without secrets can still run on the factory's branches beside it, in another job or workflow, without approval.
 
-`--json` produces the same verdict in an object `{ repoPath, accepted, host: { cgroupV2, controllers, delegated?, verdict, reasons }, branchProtection: { branch, classic, rules, verdict, reasons }, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
+`--json` produces the same verdict in an object `{ repoPath, accepted, host: { cgroupV2, controllers, delegated?, verdict, reasons }, branchProtection: { branch, classic, rules, pullRequestRulesets: [{ id, bypass }], verdict, reasons }, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
 
 ### Limitations
 

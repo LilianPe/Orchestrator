@@ -41,7 +41,7 @@ class FakeApi implements DoctorApi {
 
   async branchProtection(): Promise<BranchProtection> {
     if (this.options.failProtection) throw new Error('403 Resource not accessible');
-    return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'] };
+    return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] };
   }
 }
 
@@ -423,7 +423,8 @@ jobs:
       (url) => (url.pathname === '/repos/acme/app/environments' ? { body: { total_count: 0, environments: [] } } : undefined),
       (url) => (url.pathname === '/repos/acme/app' ? { body: { default_branch: 'main' } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: { name: 'main', protected: false } } : undefined),
-      (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request' }] } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request', ruleset_id: 9 }] } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/rulesets/9' ? { body: { id: 9, current_user_can_bypass: 'never' } } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -758,6 +759,16 @@ describe('the host: cgroup v2 and its controllers (ORC-208, criterion 1)', () =>
     expect(checkHost(files({ [ROOT]: 'cpu memory pids' }), 0).verdict).toBe('accepted');
   });
 
+  it('names a cgroup file it cannot read, never reads it as absent', () => {
+    const host = checkHost((path) => {
+      if (path === ROOT) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      return undefined;
+    }, 0);
+    expect(host.verdict).toBe('refused');
+    expect(host.reasons.join(' ')).toContain('EACCES');
+    expect(host.reasons.join(' ')).not.toContain('cgroups v1');
+  });
+
   it('puts the host in the JSON report', async () => {
     const result = await doctor([], [], { json: true, host: checkHost(files({}), 1000) });
     const report = JSON.parse(result.text) as { accepted: boolean; host: HostReport };
@@ -767,7 +778,8 @@ describe('the host: cgroup v2 and its controllers (ORC-208, criterion 1)', () =>
 });
 
 describe("the default branch's protection (ORC-208, criterion 2)", () => {
-  const protection = (p: Partial<BranchProtection>): { fake: FakeOptions } => ({ fake: { protection: { branch: 'main', classic: false, rules: [], ...p } } });
+  const protection = (p: Partial<BranchProtection>): { fake: FakeOptions } => ({ fake: { protection: { branch: 'main', classic: false, rules: [], pullRequestRulesets: [], ...p } } });
+  const pullRequest = (...bypass: string[]) => protection({ rules: ['pull_request'], pullRequestRulesets: bypass.map((b, i) => ({ id: i + 1, bypass: b })) });
 
   it('refuses a repository whose default branch has neither branch protection nor a ruleset that requires a pull request', async () => {
     const result = await doctor([], [], protection({}));
@@ -784,11 +796,21 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
   });
 
   it('accepts a ruleset that requires a pull request, and a classic protection, whose rules the App cannot read, saying so', async () => {
-    const ruleset = await doctor([], [], protection({ rules: ['pull_request'] }));
+    const ruleset = await doctor([], [], pullRequest('never'));
     expect(ruleset.code).toBe(0);
     const classic = await doctor([], [], protection({ classic: true }));
     expect(classic.code).toBe(0);
     expect(classic.text).toContain('Administration');
+  });
+
+  it.each(['always', 'pull_requests_only', 'exempt'])("refuses a pull request ruleset the factory's App can bypass (%s), and names it", async (bypass) => {
+    const result = await doctor([], [], pullRequest(bypass));
+    expect(result.code).toBe(1);
+    expect(result.text).toContain(`ruleset 1 (${bypass})`);
+  });
+
+  it('accepts when one pull request ruleset holds the App, though another lets it bypass', async () => {
+    expect((await doctor([], [], pullRequest('always', 'never'))).code).toBe(0);
   });
 
   it('fails closed when the protection cannot be read', async () => {

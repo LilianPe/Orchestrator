@@ -71,6 +71,14 @@ const REQUIRED_CONTROLLERS = ['cpu', 'memory', 'pids'];
  * service, which holds only the controllers systemd delegates to it. `read`: a file's text, undefined when absent.
  */
 export function checkHost(read: (path: string) => string | undefined, uid: number | undefined): HostReport {
+  try {
+    return readHost(read, uid);
+  } catch (error) {
+    return { cgroupV2: false, controllers: [], verdict: 'refused', reasons: [`cannot read the host's cgroups: ${errorMessage(error)}`] };
+  }
+}
+
+function readHost(read: (path: string) => string | undefined, uid: number | undefined): HostReport {
   const root = read(`${CGROUP_ROOT}/cgroup.controllers`);
   if (root === undefined) {
     return {
@@ -120,8 +128,17 @@ export interface BranchProtectionReport extends BranchProtection {
  */
 function judgeProtection(protection: BranchProtection): BranchProtectionReport {
   const rules = protection.rules.join(', ');
-  if (protection.rules.includes('pull_request')) {
-    return { ...protection, verdict: 'accepted', reasons: [`a ruleset requires a pull request (rules: ${rules})`] };
+  const held = protection.pullRequestRulesets.filter((ruleset) => ruleset.bypass === 'never');
+  if (held.length > 0) {
+    return { ...protection, verdict: 'accepted', reasons: [`a ruleset the App cannot bypass requires a pull request (rules: ${rules})`] };
+  }
+  if (protection.pullRequestRulesets.length > 0) {
+    const bypassed = protection.pullRequestRulesets.map((ruleset) => `ruleset ${ruleset.id} (${ruleset.bypass})`).join(', ');
+    return {
+      ...protection,
+      verdict: 'refused',
+      reasons: [`not protected from the factory: its App can bypass every ruleset that requires a pull request, ${bypassed}; remove it from their bypass list`],
+    };
   }
   if (protection.classic) {
     return {
@@ -678,11 +695,13 @@ export interface DoctorCommandOptions {
   uid?: number;
 }
 
+/** A host file's text; undefined only when it does not exist, any other error thrown (`checkHost` names it). */
 function readIfPresent(path: string): string | undefined {
   try {
     return readFileSync(path, 'utf8');
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
   }
 }
 

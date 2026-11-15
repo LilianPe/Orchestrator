@@ -38,7 +38,7 @@ describe.skipIf(skip)(title, () => {
   it("doctor accepts the test repository, whose CI reads a secret behind a human's approval; without it, refuses", async () => {
     const live = new GitHubAppApi(appOptions());
     // The CI secret check alone: the host and the branch protection (ORC-208) are other verdicts, held accepted here.
-    const branchProtection = async () => ({ branch: 'main', classic: false, rules: ['pull_request'] });
+    const branchProtection = async () => ({ branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] });
     const host = checkHost(() => 'cpu memory pids', 0);
     const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection };
     const lines: string[] = [];

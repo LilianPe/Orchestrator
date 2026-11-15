@@ -22,6 +22,11 @@ export interface BranchProtection {
   branch: string;
   classic: boolean;
   rules: string[];
+  /**
+   * The rulesets with a `pull_request` rule, each with whether the App may bypass it (`current_user_can_bypass`:
+   * `always`, `pull_requests_only`, `exempt` or `never`): a ruleset the App bypasses does not keep the branch from it.
+   */
+  pullRequestRulesets: { id: number; bypass: string }[];
 }
 
 interface ContentEntryDto {
@@ -79,7 +84,9 @@ const isEnvironment = (v: unknown): v is EnvironmentDto =>
 
 const isRepository = (v: unknown): v is { default_branch: string } => isRecord(v) && typeof v.default_branch === 'string' && v.default_branch !== '';
 const isBranch = (v: unknown): v is { protected: boolean } => isRecord(v) && typeof v.protected === 'boolean';
-const isRuleList = (v: unknown): v is { type: string }[] => Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.type === 'string');
+const isRuleList = (v: unknown): v is { type: string; ruleset_id: number }[] =>
+  Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number');
+const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
 
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
   return (rules ?? []).some((rule) => rule.type === 'required_reviewers' && (rule.reviewers ?? []).length > 0);
@@ -135,6 +142,10 @@ export class GitHubAppApi extends GitHubAppAuth {
       this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its protection flag'),
       this.read('GET', `${base}/rules/branches/${segment(branch)}?per_page=100`, token, isRuleList, 'a list of branch rules'),
     ]);
-    return { branch, classic, rules: [...new Set(rules.map((rule) => rule.type))].sort() };
+    const ids = [...new Set(rules.filter((rule) => rule.type === 'pull_request').map((rule) => rule.ruleset_id))].sort((a, b) => a - b);
+    const pullRequestRulesets = await Promise.all(
+      ids.map(async (id) => ({ id, bypass: (await this.read('GET', `${base}/rulesets/${id}`, token, isRuleset, 'a ruleset')).current_user_can_bypass })),
+    );
+    return { branch, classic, rules: [...new Set(rules.map((rule) => rule.type))].sort(), pullRequestRulesets };
   }
 }
