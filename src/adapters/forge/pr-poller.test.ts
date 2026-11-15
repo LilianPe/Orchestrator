@@ -144,6 +144,38 @@ describe('PrPoller', () => {
       expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN })]);
     });
 
+    it('judges the head on the ticket as it is once the PR is read, not as the pass began', async () => {
+      // A commit verified and published while the pass reads the forge: on the PR before its `publish.done`, and before the pass's snapshot knows it.
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED });
+      await s.store.recordEvent(published(PUBLISHED));
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: OTHER, checks: 'none', failedChecks: [] });
+      const findPr = s.forge.findPr.bind(s.forge);
+      vi.spyOn(s.forge, 'findPr').mockImplementation(async (...a) => {
+        await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, verifiedSha: OTHER });
+        return findPr(...a);
+      });
+      await s.poller.pollOnce('p');
+      expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
+    });
+
+    it('waits for a take-over to end, and for a publication to compare with, before judging a head', async () => {
+      // A take-over's bundle is on the forge before its `push.human`, under the human's name, is accepted.
+      expect(await headIs(HUMAN, { blocked: true, blockKind: 'taken_over' })).toEqual([]);
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED, blocked: true, blockKind: 'taken_over' });
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: HUMAN, checks: 'none', failedChecks: [] });
+      await s.poller.pollOnce('p');
+      // No publication yet: nothing to compare with.
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, blocked: false, blockKind: undefined });
+      await s.poller.pollOnce('p');
+      expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
+      // The same head, judged again once both are there.
+      await s.store.recordEvent(published(PUBLISHED));
+      await s.poller.pollOnce('p');
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
+    });
+
     it('is not told with no publication of the factory to compare with, nor without a head', async () => {
       expect(await headIs(HUMAN, {}, [])).toEqual([]);
       // An `empty` publication pushed nothing (ORC-402): its sha is no head of the factory's.

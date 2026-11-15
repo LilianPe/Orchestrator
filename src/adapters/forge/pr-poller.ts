@@ -2,6 +2,7 @@ import type { Clock } from "../../core/clock.js";
 import { pushedPublications } from "../../core/changelog.js";
 import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
+import { isTakenOver } from "../../core/block-cause.js";
 import { upcast } from "../../core/upcast.js";
 import type { Store } from "../../store/types.js";
 import { checksEventId, prEventId, pushEventId } from "./github-webhook.js";
@@ -102,14 +103,20 @@ export class PrPoller {
    * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
    * (ORC-281), under the webhook's id. Each head is judged once: the journal is read again only for a new one.
    */
-  private async lostPush(t: TicketState, pr: PrInfo, at: number): Promise<void> {
+  private async lostPush(pass: TicketState, pr: PrInfo, at: number): Promise<void> {
     const head = pr.headSha;
-    if (!head || head === t.verifiedSha || head === t.humanHead) return;
+    if (!head) return;
+    // The factory's push is on the forge before its event: the ticket as it is now, read after the PR, knows the commit it verified.
+    const t = (await this.d.store.getTicket(pass.projectId, pass.ticketId)) ?? pass;
+    // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234).
+    if (head === t.verifiedSha || head === t.humanHead || isTakenOver(t)) return;
     const seenKey = `lost-push:${t.projectId}:${t.ticketId}`;
     if ((await this.d.store.getMeta(seenKey)) === head) return;
     const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event))).map((p) => p.sha);
     const published = heads.at(-1);
-    if (published && !heads.includes(head))
+    // Nothing to compare with yet: judged again once the factory has published.
+    if (!published) return;
+    if (!heads.includes(head))
       await this.d.submit({
         ...TRUSTED,
         // What the push brought was verified by no one in the factory (I12).
