@@ -103,11 +103,15 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // each setup (ORC-308), whose references' syntax alone is checked here.
   const { yml, sealed, reader: repoSecrets } = await loadSealedFactoryYml(o.home, env);
   const instance = effectiveInstance(o.home, yml);
-  // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398).
-  const secretsKey = yml?.secretsKey;
-  if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   const oauthClient = githubOAuthClient(instance, env);
   const githubLogin = dashboardLogin(instance, yml, oauthClient);
+  // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398); a key
+  // required off the loopback, as the sign-in is (ORC-399): optional on it, where doctor warns of the file in clear.
+  const secretsKey = yml?.secretsKey;
+  if (!secretsKey && !isLoopbackHost(instance.host)) {
+    throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: set secrets_key in factory.yml (a reference, at least 32 characters: openssl rand -base64 32), which encrypts secrets.json at rest, or set host: 127.0.0.1 back in config.yaml.`);
+  }
+  if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
   if (!o.fakeRunner) checkHostRuns(env);
   const paths = homePaths(o.home);

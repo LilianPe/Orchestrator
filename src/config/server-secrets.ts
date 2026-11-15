@@ -89,7 +89,7 @@ export async function serverSecretReport(
   const stored = secretsText(home);
   if (stored !== undefined) {
     const sealed = isSealed(stored);
-    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : ['in clear on disk: set secrets_key in factory.yml to encrypt it'] });
+    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : ['in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)'] });
   }
   return reports;
 }

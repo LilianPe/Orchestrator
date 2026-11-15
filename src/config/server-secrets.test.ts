@@ -102,7 +102,7 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     saveSecrets(h, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w', accessToken: 'a' } });
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
       { key: 'github.privateKey', reference: 'config.yaml', inClear: true, warnings: ['in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)'] },
-      { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it'] },
+      { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)'] },
     ]);
     saveSecrets(h, {}, 'k'.repeat(32));
     expect((await serverSecretReport(h, {}, { now: NOW })).find((r) => r.key === 'secrets.json')).toEqual({ key: 'secrets.json', inClear: false, warnings: [] });
@@ -112,12 +112,12 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     expect(
       serverSecretLines([
         { key: 'github.private_key', reference: 'coffre:gh#key', inClear: false, rotatedAt: '2026-11-05T00:00:00.000Z', warnings: [] },
-        { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it'] },
+        { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)'] },
       ]),
     ).toEqual([
       'Server secrets:',
       '  github.private_key (coffre:gh#key): sealed, rotated 2026-11-05',
-      '  secrets.json: in clear — warning: in clear on disk: set secrets_key in factory.yml to encrypt it',
+      '  secrets.json: in clear — warning: in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)',
     ]);
   });
 });

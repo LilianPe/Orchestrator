@@ -334,6 +334,9 @@ describe('bootstrap', () => {
     writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
     saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'http://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
     await expect(start(client)).rejects.toThrow(/publicUrl.*https/);
+    // ORC-398: the sign-in set, secrets.json must be encrypted at rest; the message names the key.
+    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    await expect(start(client)).rejects.toThrow(/exposes .* outside this machine: set secrets_key in factory\.yml/);
   });
 
   it('refuses to start real runs without a container engine or FACTORY_ALLOW_HOST_RUNS=1 (ORC-349)', async () => {
@@ -378,8 +381,10 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     // Written with its trailing slash: the callback URL is the one the App declares all the same.
     saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example/', relay: { kind: 'none' }, projects: [], limits: {} });
-    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
-    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw' } });
+    // secrets_key required off the loopback (ORC-398).
+    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\nsecrets_key: env:FACTORY_SECRETS_KEY\n');
+    const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRETS_KEY: 'k'.repeat(44) };
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env });
     try {
       expect((await fetch('http://127.0.0.1:4195/api/state')).status).toBe(401);
       // No password opens it any more.
