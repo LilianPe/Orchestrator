@@ -102,8 +102,8 @@ export class PrPoller {
 
   /**
    * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
-   * (ORC-281), under the webhook's id. A head is judged when the PR comes to it: the head read last is kept, and the journal
-   * is read only for a new one.
+   * (ORC-281), under the webhook's id. A head is judged when the PR comes to it: the head read last outside a take-over is
+   * kept, and the journal is read only for a new one.
    */
   private async lostPush(pass: TicketState, pr: PrInfo, at: number): Promise<void> {
     const head = pr.headSha;
