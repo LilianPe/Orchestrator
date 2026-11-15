@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 
 const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
@@ -281,5 +281,53 @@ describe('makeOriginUrl (ORC-151)', () => {
     expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
     expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
     expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('makeStartFingerprint (ORC-406)', () => {
+  it('changes with what decides how the application starts on the default branch, and only with it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-start-fp-'));
+    try {
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
+      const fingerprint = makeStartFingerprint();
+      const commit = (path: string, text: string) => {
+        writeFileSync(join(repo, path), text);
+        run(repo, 'add', '.');
+        run(repo, 'commit', '--quiet', '-m', path);
+        run(repo, 'push', '--quiet', 'origin', 'main');
+        run(repo, 'fetch', '--quiet', 'origin');
+      };
+      commit('package.json', JSON.stringify({ name: 'shop', version: '1.0.0', scripts: { dev: 'vite' } }));
+      const first = await fingerprint({ repoPath: repo });
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+      // The README, the package's version: not how it starts.
+      commit('README.md', '# Shop\n');
+      commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite' } }));
+      expect(await fingerprint({ repoPath: repo })).toBe(first);
+      // Its scripts are.
+      commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite --host' } }));
+      const scripts = await fingerprint({ repoPath: repo });
+      expect(scripts).not.toBe(first);
+      // So are a lockfile, a Makefile, a pyproject.toml, a compose file.
+      let last = scripts;
+      for (const [path, text] of [['package-lock.json', '{}'], ['Makefile', 'serve:\n\tnpm run dev\n'], ['pyproject.toml', '[project]\nname = "shop"\n'], ['compose.yaml', 'services: {}\n']] as const) {
+        commit(path, text);
+        const now = await fingerprint({ repoPath: repo });
+        expect(now, path).not.toBe(last);
+        last = now;
+      }
+      // Never the agent's worktree: what is not on the default branch does not count.
+      writeFileSync(join(repo, 'Makefile'), 'serve:\n\tmake other\n');
+      expect(await fingerprint({ repoPath: repo })).toBe(last);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is undefined, logged, when git cannot read the default branch', async () => {
+    const logged: string[] = [];
+    const exec: Exec = async () => ({ stdout: '', stderr: 'fatal', code: 128 });
+    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
+    expect(logged).toHaveLength(1);
   });
 });

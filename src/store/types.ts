@@ -103,6 +103,8 @@ export interface RunRecord {
   blockedBy?: Blocker[];
   /** The head of its worktree at the launch of the workflow's relay job (ORC-375), which its end compares. Absent for any other job. */
   startHead?: string;
+  /** The fingerprint of the files that decide how the application starts, read at a `build` launch (ORC-406). Absent when unread. */
+  startFingerprint?: string;
 }
 
 /**

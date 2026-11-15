@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import { execCmd, execFailure, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
+import { START_FILES } from '../knowledge/preview-recipe.js';
 
 /**
  * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
@@ -43,6 +45,43 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     for (const w of config.sensitivePathWarnings ?? []) o.log?.(`${REPO_CONFIG_PATH} on ${name}: ignored ${w}; a branch that took untrusted content is refused until it is fixed`);
     return config;
   };
+}
+
+/**
+ * The fingerprint of the files that decide how a project's application starts (ORC-406, `START_FILES`), on its default branch as
+ * `makeRepoConfig` reads it, with no fetch of its own: each file by its blob, package.json by its scripts only. Undefined, logged,
+ * where git cannot read the branch.
+ */
+export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { repoPath: string }) => Promise<string | undefined> {
+  const exec = o.exec ?? execCmd;
+  return async ({ repoPath }) => {
+    const { ref } = await originHeadOf(exec, repoPath);
+    const tree = await exec('git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', ...START_FILES]);
+    if (tree.code !== 0) {
+      o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'ls-tree', ref], tree).message}`);
+      return undefined;
+    }
+    const parts: string[] = [];
+    for (const entry of tree.stdout.split('\0').filter(Boolean)) {
+      const m = /^\d+ \w+ ([0-9a-f]+)\t(.+)$/.exec(entry);
+      if (!m) continue;
+      const blob = m[1]!;
+      const path = m[2]!;
+      parts.push(`${path}\0${path === 'package.json' ? await scriptsOf(exec, repoPath, blob) : blob}`);
+    }
+    return createHash('sha256').update(parts.sort().join('\n')).digest('hex');
+  };
+}
+
+/** The scripts of a package.json, in a stable form; its blob where it does not parse, which a fix changes all the same. */
+async function scriptsOf(exec: Exec, repoPath: string, blob: string): Promise<string> {
+  const r = await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob]);
+  try {
+    const scripts = (JSON.parse(r.stdout) as { scripts?: unknown }).scripts ?? {};
+    return JSON.stringify(scripts, typeof scripts === 'object' && scripts ? Object.keys(scripts).sort() : undefined);
+  } catch {
+    return blob;
+  }
 }
 
 /**

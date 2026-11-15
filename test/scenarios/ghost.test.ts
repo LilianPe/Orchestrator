@@ -216,6 +216,36 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     expect(git('log', '--format=%s')).toBe('init');
   });
 
+  it('ORC-406: a replayed ticket with no recipe to start by writes no failed search either', async () => {
+    const live = mkdtempSync(join(tmpdir(), 'factory-ghost-kb-'));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: live, encoding: 'utf8' }).trim();
+    git('init', '-q', '-b', 'main');
+    writeFileSync(join(live, 'INDEX.md'), '- none\n');
+    git('add', '.');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
+    const recipes = new PreviewRecipes(new KnowledgeBase(live));
+    const { h, ghost } = replayed({
+      visualShooter: new FakeShooter(),
+      previewRecipes: recipes,
+      startFingerprint: async () => 'a'.repeat(64),
+      cleanVerify: async () => ({ ok: true, failures: [], sha: 'sha-dev', tree: 't', commands: [] }),
+    });
+    expect(await ghost(['start', 'p', '--threshold', '0.6', '--as-is', '0.3', '--tickets', 'REL-1=12'], {
+      environment: async ({ dir: at }) => {
+        mkdirSync(join(at, 'repo'), { recursive: true });
+        mkdirSync(join(at, 'knowledge'), { recursive: true });
+        return { start: 'start-sha' };
+      },
+    })).toBe(0);
+    h.checks.failNext('AssertionError: expected 1 to be 2');
+    h.runner.enqueue(out({ intake: { size: 's', risk: 'low', complete: true, missing: [], screen: true } }), out({ spec: SPEC }), {}, out({ summary: 'Done.' }));
+    await h.delegateReplays();
+    const dev = h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!;
+    expect(dev.prompt).not.toContain('## Find how to start the application');
+    expect(recipes.read('p')).toBeUndefined();
+    expect(git('log', '--format=%s')).toBe('init');
+  });
+
   it('criterion 2: a daemon without sandboxes, the replay is refused with the reason', async () => {
     const { h, ghost, lines } = replayed();
     expect(await ghost(['start', 'p', '--threshold', '0.6', '--as-is', '0.3', '--tickets', 'REL-1=12'], { sandboxes: async () => false })).toBe(1);

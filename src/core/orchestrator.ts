@@ -66,7 +66,7 @@ import { branchName, namesTicket } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
-import { isNote, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
+import { isNote, noSearchReason, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -279,6 +279,11 @@ export interface OrchestratorDeps {
    * recipe when nothing is declared, and without one the `build` agent is asked to find it. Absent: none learned nor searched.
    */
   previewRecipes?: PreviewRecipes;
+  /**
+   * The fingerprint of the files that decide how the application starts, on the repository's default branch (ORC-406): three
+   * searches that found no recipe ask none more while it holds. Absent, or undefined where git cannot read it: the last one holds.
+   */
+  startFingerprint?: (project: ProjectRuntime) => Promise<string | undefined>;
   /**
    * Where the effects of a project without effects are kept (ORC-231), `<keptEffectsDir>/<ticket>/<row>.json`, each with its row in
    * `artifacts`. Absent, such an effect fails: its ticket is blocked, nothing goes out.
@@ -1209,13 +1214,14 @@ export class Orchestrator {
     if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
     const recipe = await this.recipeOf(project, t);
     // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
-    const asked = !!recipe && searchAsked(this.searchContext(project, job, run.repoConfig), recipe.note);
+    const asked = !!recipe && searchAsked(this.searchContext(project, job, run.repoConfig, run.startFingerprint), recipe.note);
     const found = asked ? output?.preview : undefined;
-    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, output, recipe?.note, found) });
+    const noSearch = recipe && noSearchReason(recipe.note, run.startFingerprint);
+    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: { ...this.visualRequest(project, t, output, recipe?.note, found), ...(noSearch ? { noSearch } : {}) } });
     // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push. Never a replayed ticket's.
     const recipes = this.d.previewRecipes;
     if (recipe && recipes && !project.replayed) {
-      const settled = recipes.settle(recipe.repo, recipe.note, { asked, found, outcome: res.preview, sha: res.sha, port: project.workflow.workspace.portBase, runId: run.id, ticket: t.ticketId, at: new Date(this.d.clock.now()) }, (text) => this.policy.vet(text, 'start recipe'));
+      const settled = recipes.settle(recipe.repo, recipe.note, { asked, found, outcome: res.preview, sha: res.sha, port: project.workflow.workspace.portBase, runId: run.id, ticket: t.ticketId, at: new Date(this.d.clock.now()), fingerprint: run.startFingerprint, declared: !!run.repoConfig?.preview }, (text) => this.policy.vet(text, 'start recipe'));
       this.track(settled.then(
         (said) => void (said && this.log('warn', `${t.ticketId}: ${said}`)),
         (err: Error) => this.log('warn', `${t.ticketId}: start recipe of ${recipe.repo} not written to the knowledge base: ${err.message}`),
@@ -1243,8 +1249,9 @@ export class Orchestrator {
   }
 
   /** What decides, at a `build` launch and at its check alike, whether its agent searches a start recipe (ORC-386). */
-  private searchContext(project: ProjectRuntime, job: JobSpec, config: RepoConfig | undefined): SearchContext {
+  private searchContext(project: ProjectRuntime, job: JobSpec, config: RepoConfig | undefined, fingerprint: string | undefined): SearchContext {
     return {
+      fingerprint,
       step: job.step,
       canShoot: !!this.d.visualProof,
       replayed: !!project.replayed,
@@ -3110,7 +3117,9 @@ export class Orchestrator {
       const specShown = !!t.spec && job.queue === 'dev' && (job.step === 'spec_draft' ? !t.spec.approval : !!t.spec.approval);
       // Nothing declares how to start the application, nothing learned it (ORC-386): the build agent finds it.
       const recipe = job.step === 'build' ? await this.recipeOf(project, t) : undefined;
-      const previewSearch = !!recipe && searchAsked(this.searchContext(project, job, config), recipe.note);
+      // Read with the config, on the default branch (ORC-406), and kept on the run: its check counts a failed search against it.
+      const startFingerprint = recipe && !project.replayed ? await this.d.startFingerprint?.(project) : undefined;
+      const previewSearch = !!recipe && searchAsked(this.searchContext(project, job, config, startFingerprint), recipe.note);
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
@@ -3164,6 +3173,7 @@ export class Orchestrator {
         ...(pickup ? { pickup } : {}),
         ...(blockedBy ? { blockedBy } : {}),
         ...(startHead ? { startHead } : {}),
+        ...(startFingerprint ? { startFingerprint } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays

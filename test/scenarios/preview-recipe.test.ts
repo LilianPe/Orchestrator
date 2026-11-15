@@ -44,7 +44,7 @@ const required = (start: VisualProof['start'], unavailable?: string): CleanVerif
   files: [],
 });
 
-function preview(opts: { result?: (req: CleanVerifyRequest) => Partial<CleanVerifyResult>; output?: Partial<AgentOutput>; config?: string; tickets?: number } = {}) {
+function preview(opts: { result?: (req: CleanVerifyRequest) => Partial<CleanVerifyResult>; output?: Partial<AgentOutput>; config?: string; tickets?: number; fingerprint?: () => Promise<string | undefined> } = {}) {
   const kb = kbRepo();
   const asked: CleanVerifyRequest[] = [];
   const h = createHarness({
@@ -52,6 +52,7 @@ function preview(opts: { result?: (req: CleanVerifyRequest) => Partial<CleanVeri
     sandboxed: true,
     visualShooter: new FakeShooter(),
     previewRecipes: kb.recipes,
+    ...(opts.fingerprint ? { startFingerprint: opts.fingerprint } : {}),
     cleanVerify: async (req) => {
       asked.push(req);
       return { ok: true, failures: [], sha: SHA, tree: 't', commands: [], ...opts.result?.(req) };
@@ -122,14 +123,13 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
     expect(h.publisher.asked[0]!.body).toContain('**Start command**: learned');
   });
 
-  it('criterion 5: the agent finds none: nothing written, the proof unavailable with why in the PR, which is not blocked', async () => {
+  it('criterion 5: the agent finds none: only the failed search noted (ORC-406), the proof unavailable with why in the PR, which is not blocked', async () => {
     const { h, recipes, origin } = preview({ result: () => ({ visual: required('none', 'no command starts the application (`preview` in .factory/config.yml), and the knowledge base has learned none') }) });
-    const before = lastSubject(origin);
     h.runner.enqueue(dev());
     await delegate(h);
     expect(h.runner.requests[0]!.prompt).toContain(SEARCH);
-    expect(recipes.read('p')).toBeUndefined();
-    expect(lastSubject(origin)).toBe(before);
+    expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 1, ticket: 'REL-1' });
+    expect(lastSubject(origin)).toBe('preview(p): no start recipe found on c0ffee000000 (REL-1, 1 of 3)');
     expect(h.publisher.asked[0]!.body).toContain('**Start command**: none');
     expect(h.forge.checkRuns.find((c) => c.name === VISUAL_PROOF_CHECK)).toMatchObject({ conclusion: 'neutral', summary: expect.stringContaining('learned none') });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
@@ -166,11 +166,11 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review' });
   });
 
-  it('a found recipe is written only where verify says it answered', async () => {
+  it('a found recipe is written only where verify says it answered: one that did not is a failed search', async () => {
     const { h, recipes } = preview({ result: () => ({ preview: { of: 'found', answered: false, detail: 'nothing answers' } }) });
     h.runner.enqueue(dev({ preview: NPM_DEV }));
     await delegate(h);
-    expect(recipes.read('p')).toBeUndefined();
+    expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 1 });
   });
 
   it('a recipe already invalidated twice is no search, and verify gets nothing to start', async () => {
@@ -188,5 +188,46 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
     expect(h.runner.requests[0]!.prompt).not.toContain(SEARCH);
     expect(asked[0]!.visual?.learned).toBeUndefined();
     expect(asked[0]!.visual?.found).toBeUndefined();
+  });
+});
+
+describe('a search bounded at three failures (ORC-406)', () => {
+  const FP = 'a'.repeat(64);
+
+  it('criterion 1: after three searches that find nothing on the same repository, the fourth ticket asks none, and the proof says why', async () => {
+    const { h, asked, recipes } = preview({ tickets: 4, fingerprint: async () => FP });
+    h.runner.enqueue(dev(), dev(), dev(), dev());
+    for (const i of [1, 2, 3]) {
+      await delegate(h, `REL-${i}`);
+      expect(h.runner.requests[i - 1]!.prompt).toContain(SEARCH);
+      expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: i, fingerprint: FP, ticket: `REL-${i}` });
+    }
+    await delegate(h, 'REL-4');
+    expect(h.runner.requests[3]!.prompt).not.toContain(SEARCH);
+    expect(asked.at(-1)!.visual).toMatchObject({ noSearch: expect.stringContaining('searched 3 times') });
+    expect(recipes.read('p')).toMatchObject({ failures: 3, ticket: 'REL-3' });
+  });
+
+  it("criterion 2: a change of package.json's scripts asks a search again, its failure counted from one", async () => {
+    let fingerprint = FP;
+    const { h, asked, recipes } = preview({ tickets: 4, fingerprint: async () => fingerprint });
+    h.runner.enqueue(dev(), dev(), dev(), dev());
+    for (const i of [1, 2, 3]) await delegate(h, `REL-${i}`);
+    // The fingerprint of the files that decide the start (`makeStartFingerprint`, which reads the scripts of package.json).
+    fingerprint = 'b'.repeat(64);
+    await delegate(h, 'REL-4');
+    expect(h.runner.requests[3]!.prompt).toContain(SEARCH);
+    expect(asked.at(-1)!.visual?.noSearch).toBeUndefined();
+    expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 1, fingerprint, ticket: 'REL-4' });
+  });
+
+  it('a declared `preview` sets the count back to zero', async () => {
+    const { h, recipes } = preview({ config: 'preview: npm start\n', fingerprint: async () => FP });
+    const run = { asked: true, found: undefined, outcome: undefined, sha: SHA, port: 4200, runId: 'r0', fingerprint: FP, declared: false, at: new Date() };
+    for (const ticket of ['REL-7', 'REL-8', 'REL-9']) await recipes.settle('p', recipes.read('p'), { ...run, ticket }, async () => {});
+    h.runner.enqueue(dev());
+    await delegate(h);
+    expect(h.runner.requests[0]!.prompt).not.toContain(SEARCH);
+    expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 0, ticket: 'REL-1' });
   });
 });
