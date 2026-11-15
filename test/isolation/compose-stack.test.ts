@@ -37,6 +37,8 @@ const env = {
   FACTORY_HTTPS_PORT: HTTPS_PORT,
   GH_APP_CLIENT_ID: 'Iv1.recette',
   GH_APP_CLIENT_SECRET: 'recette-client-secret',
+  // secrets_key, required off the loopback (ORC-398).
+  FACTORY_SECRETS_KEY: 'recette-secrets-key-recette-secrets-key-0123',
   POSTGRES_PASSWORD: 'recettepostgres',
   ANTHROPIC_API_KEY: 'sk-recette-unused',
   GH_TOKEN: 'recette-unused',
@@ -137,7 +139,7 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     asEngineRoot(
       `cd /base && mkdir -p ${base}/data/network ${base}/repos ${base}/install ${base}/egress-ca && ` +
         `printf 'host: 0.0.0.0\\nport: 4100\\npublicUrl: https://localhost\\nrelay: { kind: none }\\nprojects: []\\nlimits: {}\\n' > ${base}/data/config.yaml && ` +
-        `printf 'concurrency: 1\\ndashboard: { logins: [recette] }\\n' > ${base}/data/factory.yml && chown -R 1000:1000 ${base}`,
+        `printf 'concurrency: 1\\ndashboard: { logins: [recette] }\\nsecrets_key: env:FACTORY_SECRETS_KEY\\n' > ${base}/data/factory.yml && chown -R 1000:1000 ${base}`,
     );
     compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '180');
     for (let i = 0; ; i++) {

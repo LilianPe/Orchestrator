@@ -556,6 +556,55 @@ describe('decide — built-ins', () => {
     expect(out).toEqual(decision());
   });
 
+  describe('a dev run that ends well on a ticket blocked meanwhile (ORC-403)', () => {
+    const done = ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' });
+    const blockedBy = (kind: BlockKind | undefined, patch: Partial<TicketState> = {}) =>
+      ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev', prNumber: 7, blocked: true, blockReason: 'x', ...(kind ? { blockKind: kind } : {}), ...patch });
+
+    // Nothing of these stops the run: its work is checked and published, and the block stays shown until a human lifts it.
+    const kept: BlockKind[] = ['infra', 'dead_letter', 'ci_bound', 'conflict', 'loop', 'budget', 'limit', 'failed', 'red', 'contested', 'repo_config', 'stuck', 'pickup', 'question', 'other'];
+    it.each(kept)('blocked as %s: its done is kept, verified, the block left as it is', (kind) => {
+      const out = decide(blockedBy(kind), done, workflow);
+      expect(out).toEqual(decision({ events: [{ type: 'verify.started', runId: 'r1' }], effects: [{ kind: 'run_verify', runId: 'r1', job: 'dev' }] }));
+    });
+
+    // A stop, a pause, a take-over, a closed PR and a human's push stop the run: what it did after is not the factory's to publish.
+    // A question journaled before ORC-400 (`asked`), or a block from before kinds (ORC-345), wins over the end of its turn, as it did.
+    // A kind this version does not know (written by a newer one) drops it too: publishing is never the guess.
+    const dropped: (BlockKind | undefined)[] = ['stopped', 'paused', 'taken_over', 'pr_closed', 'human_push', 'asked', undefined, 'from_a_newer_version' as BlockKind];
+    it.each(dropped)('blocked as %s: its done is dropped, the block holds', (kind) => {
+      expect(decide(blockedBy(kind), done, workflow)).toEqual(decision());
+    });
+
+    it('an intake or a lens of the AI review publishes nothing: its end on a blocked ticket stays dropped', () => {
+      const lens = Object.values(workflow.jobs).find((j) => j.lens)!;
+      const intake = Object.values(workflow.jobs).find((j) => j.step === 'intake')!;
+      for (const job of [lens, intake]) {
+        expect(job.queue).toBe('dev');
+        const end = ev('run.finished', { ...(done.payload as EventPayloads['run.finished']), job: job.name });
+        expect(decide(blockedBy('dead_letter', { activeJob: job.name }), end, workflow)).toEqual(decision());
+      }
+    });
+
+    // Its move is made; the next step's start is refused by the launch on a blocked ticket, as for a block that comes during verify.
+    it('the done kept goes out to the end: published and moved on, the ticket still blocked, its label untouched', () => {
+      const passed = decide(blockedBy('infra', { activeRunId: undefined, verifyingRunId: 'r1' }), ev('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
+      expect(passed.effects).toContainEqual(expect.objectContaining({ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc' }));
+      const published = decide(blockedBy('infra', { activeRunId: undefined, verifyingRunId: 'r1', verifiedSha: 'abc' }), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
+      expect(published.effects).toContainEqual({ kind: 'move', to: 'ai_review' });
+      expect(published.events.some((e) => e.type === 'ticket.unblocked')).toBe(false);
+      expect(published.effects.some((e) => e.kind === 'labels')).toBe(false);
+    });
+
+    it('the Bloqué label a human puts by hand blocks nothing: the done goes on as on any ticket', () => {
+      const running = ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev', prNumber: 7 });
+      const label = ev('label.changed', { label: 'Bloqué', change: 'added' });
+      const after = decide(running, label, workflow).events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(running, label));
+      expect(after?.blocked).toBe(false);
+      expect(decide(after, done, workflow).effects).toEqual([{ kind: 'run_verify', runId: 'r1', job: 'dev' }]);
+    });
+  });
+
   it('run success with verify asks for verification', () => {
     const wf = { ...workflow, jobs: { ...workflow.jobs, dev: { ...workflow.jobs['dev']!, verify: ['npm test'] } } };
     const out = decide(ticket({ activeRunId: 'r1' }), ev('run.finished', { runId: 'r1', job: 'dev', outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' }), wf);

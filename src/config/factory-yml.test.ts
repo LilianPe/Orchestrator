@@ -70,7 +70,7 @@ describe('factory.yml (ORC-209, part B)', () => {
 
   it('refuses a secret written in the file instead of env:NAME', () => {
     expect(violations('github: { app_id: 42, private_key: "-----BEGIN RSA PRIVATE KEY-----" }\n')).toEqual([
-      'github.private_key: a secret is written `env:NAME`, never in clear in factory.yml',
+      'github.private_key: a reference `<source>:<path>` is expected (`env:NAME`), never a secret in clear in factory.yml',
     ]);
   });
 
@@ -235,8 +235,8 @@ describe('factory.yml (ORC-209, part B)', () => {
 
     it('refuses an unknown adapter, a missing kind, options its adapter refuses, and a source named env', () => {
       expect(faults('secret_sources:\n  a: { kind: vault }\n  b: { name: x }\n  c: { kind: fake }\n  env: { kind: fake, name: x }\n  d: fake\n')).toEqual([
-        'secret_sources.a.kind: no adapter vault (env, fake)',
-        'secret_sources.b.kind: required (env, fake)',
+        'secret_sources.a.kind: no adapter vault (env, systemd-creds, fake)',
+        'secret_sources.b.kind: required (env, systemd-creds, fake)',
         'secret_sources.c.name: required',
         'secret_sources.env: built in, it is not declared',
         'secret_sources.d: an object `{ kind, … }` is expected',
@@ -245,7 +245,7 @@ describe('factory.yml (ORC-209, part B)', () => {
 
     it('refuses a declared source of an unknown adapter once, not again at each reference to it', () => {
       expect(faults('secret_sources: { coffre: { kind: vault } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "coffre:kv/app#k" } }\n')).toEqual([
-        'secret_sources.coffre.kind: no adapter vault (env, fake)',
+        'secret_sources.coffre.kind: no adapter vault (env, systemd-creds, fake)',
       ]);
     });
 
@@ -259,15 +259,106 @@ describe('factory.yml (ORC-209, part B)', () => {
       expect(violations('repos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "constructor:foo" } }\n')).toEqual([
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);
-      expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env)']);
+      expect(violations('secret_sources: { a: { kind: toString } }\n')).toEqual(['secret_sources.a.kind: no adapter toString (env, systemd-creds)']);
       expect(violations('secret_sources: { __proto__: { kind: env } }\nrepos:\n  - { linear_team: ENG, github: org/app, secrets: { K: "__proto__:FOO" } }\n')).toEqual([
         'secret_sources.__proto__: not a name a source can take',
         'repos[0].secrets.K: its source is neither `env` nor declared under secret_sources',
       ]);
     });
 
-    it('only knows env by default: no real secret manager is shipped', () => {
-      expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual(['secret_sources.coffre.kind: no adapter vault (env)']);
+    it('only knows env and systemd-creds by default: no adapter that needs a network credential before ORC-179', () => {
+      expect(violations('secret_sources: { coffre: { kind: vault } }\n')).toEqual(['secret_sources.coffre.kind: no adapter vault (env, systemd-creds)']);
+    });
+  });
+
+  describe('the server secrets by reference (ORC-398)', () => {
+    const kinds = { ...SECRET_SOURCE_KINDS, fake: fakeSecretKind({}) };
+    const SEALED = `secret_sources: { coffre: { kind: fake, name: coffre } }
+github: { app_id: 42, private_key: "coffre:gh#key", webhook_secret: env:GH_WEBHOOK_SECRET }
+linear: { client_secret: "coffre:lin#secret" }
+claude: { runtime: claude-code, accounts: [{ name: a, token: "coffre:claude#a" }], active: a, default_model: m }
+secrets_key: "coffre:factory#secrets_key"
+`;
+    const values = new Map([
+      ['coffre:gh#key', PEM],
+      ['coffre:lin#secret', 'lin-secret-sealed'],
+      ['coffre:claude#a', 'tok-sealed'],
+      ['coffre:factory#secrets_key', 'secrets-key-sealed-of-at-least-32-chars'],
+    ]);
+    const faults = (yaml: string, sealed?: ReadonlyMap<string, string>): string[] => {
+      try {
+        parseFactoryYml(yaml, ENV, kinds, sealed);
+        return [];
+      } catch (err) {
+        if (err instanceof FactoryYmlError) return err.violations;
+        throw err;
+      }
+    };
+
+    it('takes the value read from its source for each reference, and keeps every reference by its key', () => {
+      const c = parseFactoryYml(SEALED, ENV, kinds, values);
+      expect(c.github).toEqual({ appId: '42', privateKey: PEM, webhookSecret: 'gh-webhook-secret-123' });
+      expect(c.linear?.clientSecret).toBe('lin-secret-sealed');
+      expect(c.claude?.accounts).toEqual([{ name: 'a', token: 'tok-sealed' }]);
+      expect(c.secretsKey).toBe('secrets-key-sealed-of-at-least-32-chars');
+      expect(c.secretRefs).toEqual({
+        'github.private_key': { source: 'coffre', path: 'gh#key' },
+        'github.webhook_secret': { source: 'env', path: 'GH_WEBHOOK_SECRET' },
+        'linear.client_secret': { source: 'coffre', path: 'lin#secret' },
+        'claude.accounts[0].token': { source: 'coffre', path: 'claude#a' },
+        secrets_key: { source: 'coffre', path: 'factory#secrets_key' },
+      });
+    });
+
+    it('deferred, leaves a reference unread without a fault: the first pass of the start', () => {
+      const c = parseFactoryYml(SEALED, ENV, kinds, 'defer');
+      expect(c.github).toBeUndefined();
+      expect(c.secretsKey).toBeUndefined();
+      expect(c.secretRefs?.['github.private_key']).toEqual({ source: 'coffre', path: 'gh#key' });
+    });
+
+    it('without the values, names each reference only the start reads', () => {
+      expect(faults(SEALED)).toEqual([
+        'linear.client_secret: coffre:lin#secret is read from its source at the daemon\'s start',
+        'github.private_key: coffre:gh#key is read from its source at the daemon\'s start',
+        'claude.accounts[0].token: coffre:claude#a is read from its source at the daemon\'s start',
+        'secrets_key: coffre:factory#secrets_key is read from its source at the daemon\'s start',
+      ]);
+    });
+
+    it('refuses a secrets_key too short to derive a key from', () => {
+      expect(faults('secrets_key: env:CLAUDE_TOKEN_1\n')).toEqual(['secrets_key: at least 32 characters expected']);
+    });
+
+    it('refuses a reference to a source not declared, or a path its adapter refuses', () => {
+      expect(faults('github: { app_id: 42, private_key: "vault:gh#key" }\nsecrets_key: "coffre:no-hash"\nsecret_sources: { coffre: { kind: fake, name: coffre } }\n', values)).toEqual([
+        'github.private_key: its source is neither `env` nor declared under secret_sources',
+        'secrets_key: "no-hash" is not `<path>#<key>`',
+      ]);
+    });
+
+    it('resolves an option of a source written env:NAME, and names it when its variable is not set (point 5)', () => {
+      const c = parseFactoryYml('secret_sources: { coffre: { kind: fake, name: env:CLAUDE_TOKEN_1 } }\n', ENV, kinds);
+      expect(c.secretSources).toEqual({ coffre: { kind: 'fake', options: { name: 'tok-1' } } });
+      expect(c.secretRefs).toEqual({ 'secret_sources.coffre.name': { source: 'env', path: 'CLAUDE_TOKEN_1' } });
+      expect(faults('secret_sources: { coffre: { kind: fake, name: env:NOPE } }\n')).toEqual([
+        'secret_sources.coffre.name: the environment variable NOPE is not set',
+        'secret_sources.coffre.name: required',
+      ]);
+    });
+
+    it('a Claude account read from a source is re-read with the values of the start; a new one waits for the next start', () => {
+      const h = mkdtempSync(join(tmpdir(), 'factory-home-'));
+      const yaml = SEALED.replace('fake', 'env').replace(', name: coffre', '').replace(/coffre:([a-z]+)#([a-z_]+)/g, 'coffre:SEALED_$1');
+      writeFileSync(join(h, 'factory.yml'), yaml);
+      const logs: string[] = [];
+      const account = claudeAccountReader(h, ENV, (m) => logs.push(m), new Map([['coffre:SEALED_claude', 'tok-sealed']]));
+      expect(account()).toEqual({ name: 'a', token: 'tok-sealed' });
+      writeFileSync(join(h, 'factory.yml'), yaml.replace('[{ name: a, token: "coffre:SEALED_claude" }], active: a', '[{ name: a, token: "coffre:SEALED_claude" }, { name: b, token: "coffre:SEALED_b" }], active: b'));
+      expect(account()).toEqual({ name: 'a', token: 'tok-sealed' });
+      expect(logs).toEqual([
+        'Warning: factory.yml: the Claude account is not read again, a stays active: invalid factory.yml:\n- claude.accounts[1].token: coffre:SEALED_b is read from its source at the daemon\'s start',
+      ]);
     });
   });
 
@@ -417,7 +508,7 @@ describe('who may sign in to the dashboard (ORC-399)', () => {
   });
 
   it('refuses the client secret in clear, a dashboard that lets nobody in, and names that are not GitHub logins, orgs or teams', () => {
-    expect(violations('github: { app_id: 1, private_key: env:GH_APP_KEY, client_secret: plain }\n')).toEqual(['github.client_secret: a secret is written `env:NAME`, never in clear in factory.yml']);
+    expect(violations('github: { app_id: 1, private_key: env:GH_APP_KEY, client_secret: plain }\n')).toEqual(['github.client_secret: a reference `<source>:<path>` is expected (`env:NAME`), never a secret in clear in factory.yml']);
     expect(violations('dashboard: {}\n')).toEqual(['dashboard: name the logins, the org or the team let in']);
     expect(violations('dashboard: { logins: [] }\n')).toEqual(['dashboard: name the logins, the org or the team let in']);
     expect(violations('dashboard: { logins: ["a b"], org: "acme/x", team: acme, extra: 1 }\n')).toEqual([
