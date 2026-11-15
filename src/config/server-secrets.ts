@@ -1,15 +1,14 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { SecretReader } from '../adapters/secrets/reader.js';
 import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { refText, type SecretRef, type SecretSource, type SecretSourceKind } from '../adapters/secrets/types.js';
+import { DAY_MS } from '../core/baseline.js';
 import { FactoryYmlError, factoryYmlText, parseFactoryYml, type FactoryYml } from './factory-yml.js';
-import { homePaths, loadInstance } from './instance.js';
+import { loadInstance, secretsText } from './instance.js';
 import { isSealed } from './secrets-file.js';
 
 /** Past this, `doctor` says a secret's rotation is too old (ORC-398, ORC-222 criterion 4). */
 export const ROTATION_MAX_DAYS = 180;
 
-const DAY = 86_400_000;
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
 
 export interface SealedFactoryYml {
@@ -28,6 +27,7 @@ export interface SealedFactoryYml {
 export async function loadSealedFactoryYml(
   home: string,
   env: NodeJS.ProcessEnv = process.env,
+  /** `only`: the sections (`github`) or keys (`secrets_key`) to read; every one when absent. */
   o: { kinds?: Readonly<Record<string, SecretSourceKind>>; only?: readonly string[] } = {},
 ): Promise<SealedFactoryYml> {
   const kinds = o.kinds ?? SECRET_SOURCE_KINDS;
@@ -35,8 +35,8 @@ export async function loadSealedFactoryYml(
   const draft = text === undefined ? undefined : parseFactoryYml(text, env, kinds, 'defer');
   const reader = new SecretReader(openSecretSources(draft?.secretSources, kinds, env));
   const refs = Object.entries(draft?.secretRefs ?? {}).filter(([, ref]) => ref.source !== 'env');
-  // A command reads only the keys it needs: the others stay unset, so a source out of its reach does not stop it.
-  const wanted = refs.filter(([key]) => !o.only || o.only.includes(key));
+  // A command reads only the sections it needs: the others stay unset, so a source out of its reach does not stop it.
+  const wanted = refs.filter(([key]) => !o.only || o.only.some((s) => key === s || key.startsWith(`${s}.`)));
   let values: Record<string, string>;
   try {
     values = await reader.read(Object.fromEntries(wanted), 1);
@@ -47,9 +47,9 @@ export async function loadSealedFactoryYml(
   return { yml: text === undefined ? undefined : parseFactoryYml(text, env, kinds, sealed), sealed, reader };
 }
 
-/** The server secrets a CLI command reads besides `env:` (ORC-398): Linear's and the key of `secrets.json`; the GitHub App's key. */
-export const LINEAR_SECRETS = ['linear.client_secret', 'linear.webhook_secret', 'secrets_key'] as const;
-export const GITHUB_APP_SECRETS = ['github.private_key'] as const;
+/** The sections whose secrets a CLI command reads besides `env:` (ORC-398): Linear's, with the key of `secrets.json` that holds its tokens; the GitHub App's. */
+export const LINEAR_SECRETS = ['linear', 'secrets_key'] as const;
+export const GITHUB_APP_SECRETS = ['github'] as const;
 
 /** One line of `doctor`'s instance section: a server secret, where it is kept, its rotation. */
 export interface SecretReport {
@@ -86,9 +86,9 @@ export async function serverSecretReport(
   } else if (!yml?.secretRefs?.['github.private_key'] && env['GH_APP_KEY']) {
     reports.push({ key: 'github.privateKey', reference: 'env:GH_APP_KEY', inClear: true, warnings: [IN_CLEAR_ENV] });
   }
-  const file = homePaths(home).secrets;
-  if (existsSync(file)) {
-    const sealed = isSealed(readFileSync(file, 'utf8'));
+  const stored = secretsText(home);
+  if (stored !== undefined) {
+    const sealed = isSealed(stored);
     reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : ['in clear on disk: set secrets_key in factory.yml to encrypt it'] });
   }
   return reports;
@@ -107,7 +107,7 @@ async function describeRef(key: string, ref: SecretRef, yml: FactoryYml | undefi
   // Rotating `secrets_key` would leave secrets.json unreadable, nothing re-encrypts it yet: never asked for.
   const rotates = key !== 'secrets_key';
   if (!rotatedAt) return { key, reference, inClear: false, warnings: rotates ? ['its source knows no rotation date'] : [] };
-  const days = Math.floor((now - rotatedAt.getTime()) / DAY);
+  const days = Math.floor((now - rotatedAt.getTime()) / DAY_MS);
   const stale = rotates && days > ROTATION_MAX_DAYS;
   return { key, reference, inClear: false, rotatedAt: rotatedAt.toISOString(), warnings: stale ? [`rotated ${days} days ago, past ${ROTATION_MAX_DAYS}`] : [] };
 }

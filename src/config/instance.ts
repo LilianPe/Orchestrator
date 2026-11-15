@@ -134,9 +134,21 @@ export function saveInstance(home: string, cfg: InstanceConfig): void {
  * written before, is still read; a sealed one without its key throws.
  */
 export function loadSecrets(home: string, key?: string): Secrets {
-  const file = homePaths(home).secrets;
-  if (!existsSync(file)) return {};
-  const text = readFileSync(file, 'utf8');
+  return parseSecrets(secretsText(home), key);
+}
+
+/** The text of `secrets.json`, undefined when there is none. */
+export function secretsText(home: string): string | undefined {
+  try {
+    return readFileSync(homePaths(home).secrets, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
+function parseSecrets(text: string | undefined, key?: string): Secrets {
+  if (text === undefined) return {};
   if (!isSealed(text)) return JSON.parse(text) as Secrets;
   if (!key) throw new Error('secrets.json is encrypted at rest: it is read with the key secrets_key of factory.yml names, which the daemon reads at its start');
   return JSON.parse(openSecretsFile(text, key)) as Secrets;
@@ -169,17 +181,18 @@ export function linearSettings(home: string, yml: FactoryYml | undefined): Linea
   return { clientId: '', clientSecret: '', webhookSecret: '', ...stored, ...fromYml };
 }
 
-/** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there; encrypted with `key` when given (ORC-398). */
-export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>, key?: string): void {
+/** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there; encrypted with `secrets_key` when factory.yml names one (ORC-398). */
+export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>, yml?: Pick<FactoryYml, 'secretsKey'>): void {
+  const key = yml?.secretsKey;
   const s = loadSecrets(home, key);
   saveSecrets(home, { ...s, linear: { clientId: '', clientSecret: '', webhookSecret: '', ...s.linear, ...patch } }, key);
 }
 
 /** Encrypts a plaintext `secrets.json` with `key`, at the daemon's start (ORC-398): whether there was one to encrypt. */
 export function sealSecretsAtRest(home: string, key: string): boolean {
-  const file = homePaths(home).secrets;
-  if (!existsSync(file) || isSealed(readFileSync(file, 'utf8'))) return false;
-  saveSecrets(home, loadSecrets(home), key);
+  const text = secretsText(home);
+  if (text === undefined || isSealed(text)) return false;
+  saveSecrets(home, parseSecrets(text), key);
   return true;
 }
 

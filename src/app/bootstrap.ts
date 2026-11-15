@@ -164,7 +164,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           const l = linearSettings(o.home, yml);
           return l?.accessToken ? { accessToken: l.accessToken, refreshToken: l.refreshToken, expiresAt: l.expiresAt } : undefined;
         },
-        save: (t) => saveLinearTokens(o.home, t, secretsKey),
+        save: (t) => saveLinearTokens(o.home, t, yml),
       });
     };
     const connectLinear = async () => {
@@ -447,10 +447,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
               if (!oauthStates.delete(state)) throw new Error('unknown OAuth state, start the connection again');
               const s = linearSettings(o.home, yml)!;
               const tokens = await exchangeCode({ clientId: s.clientId, clientSecret: s.clientSecret, code, redirectUri: `${baseUrl}/oauth/callback` });
-              saveLinearTokens(o.home, tokens, secretsKey);
+              saveLinearTokens(o.home, tokens, yml);
               const api = new LinearApi(async () => tokens.accessToken);
               const who = await api.gql<{ viewer: { id: string }; organization: { id: string } }>(Q.viewer);
-              saveLinearTokens(o.home, { appUserId: who.viewer.id, organizationId: who.organization.id }, secretsKey);
+              saveLinearTokens(o.home, { appUserId: who.viewer.id, organizationId: who.organization.id }, yml);
               await connectLinear();
               for (const p of projects) {
                 const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);

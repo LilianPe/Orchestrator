@@ -375,7 +375,7 @@ export function parseFactoryYml(
    */
   const secret = (path: string, v: unknown): string | undefined => {
     if (typeof v === 'string' && v.startsWith('env:')) return envSecret(path, v);
-    const ref = reference(path, typeof v === 'number' ? String(v) : v);
+    const ref = reference(path, v);
     if (!ref) return undefined;
     secretRefs[path] = ref;
     if (sealed === 'defer') return undefined;

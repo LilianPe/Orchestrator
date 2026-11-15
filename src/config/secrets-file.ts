@@ -13,21 +13,18 @@ const AAD = Buffer.from('secrets.json');
 /** What a derived key needs to start from: `openssl rand -base64 32` gives 44 characters. */
 export const MIN_SECRETS_KEY_LENGTH = 32;
 
-interface Sealed {
-  format: typeof FORMAT;
-  salt: string;
-  /** The data key, encrypted by the key derived from `secrets_key`. */
-  key: Box;
-  /** The text, encrypted by the data key: `iv`, `tag` and `data` at the top level. */
+interface Box {
   iv: string;
   tag: string;
   data: string;
 }
 
-interface Box {
-  iv: string;
-  tag: string;
-  data: string;
+/** The text, encrypted by the data key, its box at the top level. */
+interface Sealed extends Box {
+  format: typeof FORMAT;
+  salt: string;
+  /** The data key, encrypted by the key derived from `secrets_key`. */
+  key: Box;
 }
 
 const b64 = (b: Buffer) => b.toString('base64');

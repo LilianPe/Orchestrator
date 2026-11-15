@@ -150,7 +150,7 @@ describe('secrets.json encrypted at rest (ORC-398)', () => {
 
   it('Linear tokens saved and read through factory.yml\'s key stay sealed', () => {
     const h = home();
-    saveLinearTokens(h, { accessToken: 'refreshed-token-value' }, KEY);
+    saveLinearTokens(h, { accessToken: 'refreshed-token-value' }, { secretsKey: KEY });
     expect(readFileSync(homePaths(h).secrets, 'utf8')).not.toContain('refreshed-token-value');
     expect(linearSettings(h, { secretsKey: KEY })?.accessToken).toBe('refreshed-token-value');
   });
