@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
 import type { Role } from './authz.js';
 import type { Decision, Effect } from './decision.js';
+import { nextOf } from './chain.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
@@ -146,7 +147,7 @@ describe('human review feedback goes back through fix → verify → AI review �
   it('criterion 2: fix-human done goes through verify, then publish, AI Review and the AI review, before Human Review', () => {
     const job = workflow.jobs['fix-human']!;
     expect(job.repoChecks).toBe(true);
-    expect(job.onSuccess).toEqual({ move: 'ai_review', post: 'reply', run: 'review' });
+    expect(nextOf(workflow, job)).toMatchObject({ move: 'ai_review', post: 'reply', run: { name: 'review' } });
     const running = inHumanReview({ activeRunId: 'r1', activeJob: 'fix-human' });
     const end = decide(running, event('run.finished', { runId: 'r1', job: 'fix-human', outcome: 'success', costUsd: 0, turns: 1, lastText: 'done' }), workflow);
     // Not straight back to Human Review: verify first.

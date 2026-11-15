@@ -1,5 +1,6 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import type { Approvers } from '../core/diff-class.js';
+import type { PickupCheck, ReviewLens } from '../core/workflow.js';
 import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
 import { checkBudgets, type BudgetCaps } from './budget.js';
@@ -15,6 +16,13 @@ export interface Preset {
   sameFailure: { limit: number; cause: 'boucle' };
   /** An attempt that writes nothing on its stream for this long is stopped, the run Blocked (ORC-136): the lease only says that its container lives. */
   silentRun: { minutes: number };
+  /** The longest an attempt of an agent step may run, whatever it writes (`limits.per_run.duration` of the former pack): past it, a limit. */
+  attempt: { minutes: number };
+  /**
+   * The guard's deterministic inputs (ORC-206): what the launch checks of the ticket before its first step that writes, or
+   * hands to `intake`'s end when intake runs first. A failed check asks the ticket's author to complete it.
+   */
+  guard: { checks: PickupCheck[] };
   /**
    * Where a red CI goes, from any step while the PR is open (the merge gate included): it is the failure of
    * a push, and it never restarts `fix` outside this counter.
@@ -43,8 +51,13 @@ export interface FailureEdge {
 }
 
 export type Effort = 'low' | 'medium' | 'high';
-/** What sent the run to `fix`, which picks its skill. */
-export type FixCause = 'ci' | 'review' | 'human';
+/**
+ * What sent the run to `fix`, which picks its skill. `ci`, `review` and `human` come back by a failure edge, on its counter
+ * (`redCi`, the review's, the merge gate's). `instruction` (a human's message while the run works, ORC-180) and `relay` (the
+ * answer to a question relayed to the agent, ORC-375) take no edge, so no round of any counter; a relay checks and reviews
+ * nothing unless it commits.
+ */
+export type FixCause = 'ci' | 'review' | 'human' | 'instruction' | 'relay';
 /** What an agent step writes: only `code` must wait for the frozen tests. Required, so that omitting it never passes. */
 export type Writes = 'nothing' | 'spec' | 'tests' | 'code';
 
@@ -68,11 +81,18 @@ export type Step =
   /** `readOnly`: it reads and searches, no write tool and no shell (`READ_TOOLS`, ORC-367); only a step that writes nothing in its worktree, the spec aside. */
   | (BaseStep & AgentFields & { type: 'agent_step'; writes: Writes; skill?: string; optional?: boolean; readOnly?: boolean })
   | (BaseStep & AgentFields & { type: 'fix'; skills: Record<FixCause, string> })
-  | (BaseStep & AgentFields & { type: 'review'; skill: string; readOnly: boolean })
-  | (BaseStep & { type: 'verify'; mode: 'red' | 'freeze' | 'full'; network: NetworkLevel })
+  /** `lenses`: the angles of the review, run one after the other on the same commit; the last one publishes them all (ORC-183). */
+  | (BaseStep & AgentFields & { type: 'review'; skill: string; readOnly: boolean; lenses: ReviewLens[] })
+  /**
+   * `red`: whether a red not verified sends the step back (`blocking`) or is only recorded (`measure`, ORC-123), on a red step only.
+   * Its command is `commands.test` of the repository's `.factory/config.yml`.
+   */
+  | (BaseStep & { type: 'verify'; mode: 'red' | 'freeze' | 'full'; network: NetworkLevel; red?: 'measure' | 'blocking' })
   | (BaseStep & { type: 'spec_check'; network: NetworkLevel })
   | (BaseStep & { type: 'human_gate'; gate: 'spec' | 'merge' })
-  | (BaseStep & { type: 'publish'; mode: 'push' | 'merge' });
+  | (BaseStep & { type: 'publish'; mode: 'push' | 'merge' })
+  /** A step the factory runs itself, with no agent: `after_merge` (ORC-197), the requester told, the changelog entry, then the cleanup. */
+  | (BaseStep & { type: 'factory_step'; does: 'after_merge' });
 
 export interface CompileOptions {
   /** Network level chosen by the repository; a step can only narrow it. */
@@ -109,6 +129,7 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   }
   if (!isPositiveInt(preset.sameFailure.limit)) violations.push('sameFailure: limit must be a positive integer');
   if (!isPositiveInt(preset.silentRun.minutes)) violations.push('silentRun: minutes must be a positive integer');
+  if (!isPositiveInt(preset.attempt.minutes)) violations.push('attempt: minutes must be a positive integer');
   checkEdge('redCi', preset.redCi);
   checkEdge('conflict', preset.conflict);
   for (const [cls, actions] of Object.entries(preset.approvers)) {
@@ -126,9 +147,11 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
       }
     }
     if (s.type === 'verify' && s.network !== 'none') violations.push(`${where}: a verify step must run with network none`);
+    if (s.type === 'verify' && (s.mode === 'red') !== (s.red !== undefined)) violations.push(`${where}: a red step, and only it, says whether its red is measured or blocking`);
     if (s.type === 'review') {
       if (!s.readOnly) violations.push(`${where}: a review step must be read-only`);
       if (NETWORK_RANK[s.network] > NETWORK_RANK['claude-api']) violations.push(`${where}: a review step runs with network claude-api at most`);
+      if (s.lenses.length === 0 || new Set(s.lenses).size !== s.lenses.length) violations.push(`${where}: a review step needs its lenses, each once`);
     }
     if (s.type === 'agent_step' && !s.writes) violations.push(`${where}: an agent step must declare what it writes`);
     // The spec goes through `submit_result` (ORC-212): nothing in the worktree.
@@ -170,7 +193,9 @@ function isPositiveInt(n: number): boolean {
 }
 
 /** A step an agent runs: it has a model, an effort and a cap of turns. */
-export function isAgentStep(s: Step): s is Extract<Step, { maxTurns: number }> {
+export type AgentStep = Extract<Step, { maxTurns: number }>;
+
+export function isAgentStep(s: Step): s is AgentStep {
   return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
 }
 

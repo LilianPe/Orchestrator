@@ -40,8 +40,8 @@ import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variabl
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
-import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
+import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
@@ -120,13 +120,16 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const githubSecret = githubWebhookSecret(instance, env);
 
   // The workflow of factory/default for every project: a repository's `.factory/workflow.yml` is ignored (ORC-388).
-  const workflow = defaultWorkflow(stepSettings(yml));
+  const settings = stepSettings(yml);
+  const workflow = defaultWorkflow(settings);
+  // The replay of closed tickets (ORC-231): driven by the fantome's own steps, with the instance's step settings.
+  const ghost = presetWorkflow(fantome, settings);
   const projects: ProjectRuntime[] = instance.projects.map((p) => ({
     id: p.id,
     repoPath: p.repoPath,
     teamKey: p.linearTeamKey,
-    // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
-    workflow: isFantome(p) ? asFantome(workflow) : workflow,
+    // The replay of closed tickets (ORC-231): nothing of the project leaves the factory.
+    workflow: isFantome(p) ? ghost : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
   }));
   // Said at each start, not only by `factory doctor`.

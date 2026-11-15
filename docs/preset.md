@@ -1,8 +1,8 @@
 # The `factory/default` preset
 
-The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules (ORC-187). The rules and the jobs still drive the runs ([the workflow the engine runs](#the-workflow-the-engine-runs-orc-389)), but the engine already takes its bounds from the preset, compiled each time the workflow is built (see "What the engine already reads"). Since ORC-388 they are built in TypeScript, `defaultWorkflow()` in `src/presets/workflow.ts`; a repository's `.factory/workflow.yml` is ignored: `factory doctor` says so, and the daemon logs it at each start.
+The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop (ORC-187). Since ORC-391 it drives the chain: the end of each job walks the preset's steps (`step.next`) to the job it starts, the move it makes and what it posts ([the chain](#the-chain-orc-391)). The `on` rules still say what a human's event starts, until ORC-392 codes them in `decide` ([the workflow the engine runs](#the-workflow-the-engine-runs-orc-389)). The engine takes its bounds from the preset too, compiled each time the workflow is built (see "What the engine already reads"). The workflow is built in TypeScript, `presetWorkflow()` in `src/presets/workflow.ts`; a repository's `.factory/workflow.yml` is ignored: `factory doctor` says so, and the daemon logs it at each start.
 
-Code: `src/presets/preset.ts` (types and compiler), `src/presets/factory-default.ts` (the definition), `src/presets/workflow.ts` (the workflow the engine runs).
+Code: `src/presets/preset.ts` (types and compiler), `src/presets/factory-default.ts` (the definition), `src/presets/workflow.ts` (the workflow the engine runs), `src/presets/runtime-bindings.ts` (how each step runs), `src/core/chain.ts` (the walk).
 
 ## Sequence
 
@@ -12,9 +12,9 @@ intake → clarify (if the ticket is unclear) → spec_draft → spec_check → 
   → merge (after a human moves it to Done) → after_merge
 ```
 
-After publishing, a single `fix` step serves all loops: `fix → verify_fix → publish → AI review → human_review`. Its skill depends on the cause: `factory:fix-ci` for a red CI, `factory:feedback` for an AI review or human feedback. A conflict with the default branch takes its own way back: `rebase → verify_rebase → publish → AI review → human_review` ([below](#rebase-step-orc-146)).
+After publishing, a single `fix` step serves all loops: `fix → verify_fix → publish → AI review → human_review`. Its skill depends on the cause: `factory:fix-ci` for a red CI, `factory:feedback` for an AI review, human feedback, an instruction while the ticket is In Progress (`instruction`) or the answer to a relayed question (`relay`, ORC-375). Only the first three come back by a failure edge, each on its counter; `instruction` and `relay` take no round. A conflict with the default branch takes its own way back: `rebase → verify_rebase → publish_rebase`, with no AI review after it (decided on 14/11: the ticket stays where it was, [below](#rebase-step-orc-146)).
 
-Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze`, `full`), `review`, `fix`, `human_gate` (gate `spec` or `merge`), `publish` (modes `push`, `merge`). A step has a follow-up on success (`next`) and, if it can fail, a step back (`onFailure`) that consumes a counter. Every `agent_step` step declares what it writes (`writes`: `nothing`, `spec`, `tests` or `code`): an omission makes compilation fail.
+Each step has a type: `spec_check`, `agent_step`, `verify` (modes `red`, `freeze`, `full`; the `red` step says whether its red is measured or blocking, `red: measure` in `factory/default`), `review` (its `lenses`, run one after the other), `fix`, `human_gate` (gate `spec` or `merge`), `publish` (modes `push`, `merge`), `factory_step` (a step the factory runs itself, with no agent: `after_merge`, ORC-197). A step has a follow-up on success (`next`) and, if it can fail, a step back (`onFailure`) that consumes a counter. Every `agent_step` step declares what it writes (`writes`: `nothing`, `spec`, `tests` or `code`): an omission makes compilation fail.
 
 ## Bounds
 
@@ -40,12 +40,15 @@ A red CI is the failure of a push: as long as the PR is open, including during t
 | -- | -- | -- | -- | -- |
 | `intake`, `clarify` | Sonnet | low | 150 | Limited |
 | `spec_draft` | Sonnet | high | 150 | Limited |
-| `tests`, `after_merge` | Sonnet | medium | 150 | Limited |
+| `tests` | Sonnet | medium | 150 | Limited |
 | `build` | Sonnet | medium | 150 | Limited |
 | `fix` | Sonnet | medium | 60 | Limited |
 | `rebase` | Sonnet | medium | 60 | Limited |
 | `review` | Opus | high | 25 | Claude API |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | (factory check) | | | None |
+| `after_merge` | (the factory, no agent) | | | |
+
+An attempt of an agent step runs 90 minutes at most (`attempt`, the former `per_run.duration`), whatever it writes; the answer agent, out of the steps, 5. The guard's deterministic checks are the preset's too (`guard.checks`: `has_description`, `not_started`).
 
 The turns of steps the MVP doc does not quantify reuse the old `per_run.turns: 150`. Token caps remain to be calibrated: none by default, and `factory validate` refuses until each agent step has its `per_step_tokens` and the ticket its `per_ticket_tokens` (ORC-216).
 
@@ -62,14 +65,14 @@ Each agent step has a list of built-in tools, passed to `claude --tools` and enf
 | Steps | Default tools |
 | -- | -- |
 | `intake`, `clarify`, `spec_draft`, `review`, and the answer agent (`ask`, a job out of the preset) | `Read`, `Grep`, `Glob`: read-only, no write tool and no shell |
-| `tests`, `build`, `fix`, `rebase`, `after_merge` | `Read`, `Grep`, `Glob`, `Edit`, `Write`, `NotebookEdit`, `Bash`, `TodoWrite`, `Skill`: no subagent, no web tool |
+| `tests`, `build`, `fix`, `rebase` | `Read`, `Grep`, `Glob`, `Edit`, `Write`, `NotebookEdit`, `Bash`, `TodoWrite`, `Skill`: no subagent, no web tool |
 | `spec_check`, `verify*`, `red`, `freeze_tests` | none: the factory's own checks, no agent |
 
 `factory.yml` sets a step's list (`tools.per_step`, [configuration](configuration.md#factoryyml-orc-209)), and the repository's `.factory/config.yml` can only restrict it (`tools.per_step`, [repository configuration](repository-configuration.md#keys)): the run gets the tools of both lists. A list never gives a step more than its preset step and its network allow, and a value that would is refused when it is read: no write tool or shell for a read-only step, no `WebFetch` below network `limited` (a repository at `none` included), never `WebSearch`, and no tool the factory does not know (`Task` among them). At the launch, `WebFetch` is also dropped from a run whose network does not reach past the Claude API. Like the rest of the workflow, a step's tools are frozen with the ticket's version; a version frozen before ORC-383 keeps every tool for the steps that write, narrowed to the repository's list when it has one. `factory validate` shows each step's tools.
 
 ## What the engine already reads
 
-`defaultWorkflow` compiles the preset then carries its bounds over into `limits`, which is frozen with each ticket's workflow version (ORC-149). A ticket therefore keeps the bounds it started with.
+`presetWorkflow` compiles the preset, puts it in the workflow, then carries its bounds over into `limits`, which is frozen with each ticket's workflow version (ORC-149). A ticket therefore keeps the bounds it started with.
 
 | Preset bound | In the workflow | Effect |
 | -- | -- | -- |
@@ -77,7 +80,7 @@ Each agent step has a list of built-in tools, passed to `claude --tools` and enf
 | `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 runs per run of the ticket between `fix-ci` on red CI, `rebase` on a conflict (ORC-146) and `fix-review` on a blocking finding of the AI review (ORC-184); the next red CI, conflict or review that still finds blocks |
 | `sameFailure` (3) | `limits.repeatedFailures` = 3 | same failure on an unchanged worktree, 3 times in a row: Blocked, cause « Loop » |
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
-| `counters.human_review` (3) | `limits.humanReviewRounds` = 3 | 3 rounds of human review feedback (`fix-human`, the job with `counter: human_review`, ORC-190), apart from `ciFixAttempts`; the 4th feedback blocks |
+| `counters.human_review` (3) | `limits.humanReviewRounds` = 3 | 3 rounds of human review feedback (`fix-human`, the fix the merge gate's failure edge sends the run to, ORC-190), apart from `ciFixAttempts`; the 4th feedback blocks |
 
 A repository no longer overrides them: its `.factory/workflow.yml`, where `verify_attempts`, `ci_fix_attempts` and `human_review_rounds` did, is ignored since ORC-388.
 
@@ -102,8 +105,9 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 The preset of the replay of closed tickets, at the Rapide level (`level: rapide`): `factory/default` without `clarify`, without
 the spec gate and without anything after the publication. What `clarify` would ask is assumed, written in the spec and counted; the
-spec that passes `spec_check` is approved by the preset; a human gate at that level is refused by the compiler. Code:
-`src/presets/fantome.ts`; see [the replay of closed tickets](ghost-replay.md).
+spec that passes `spec_check` is approved by the preset; a human gate at that level is refused by the compiler. The engine walks
+its own steps (`presetWorkflow(fantome)`, ORC-391): delegation runs `intake`, then the spec, the tests and `build`, whose publication
+ends the run; at that level nothing moves nor is posted. Code: `src/presets/fantome.ts`; see [the replay of closed tickets](ghost-replay.md).
 
 ## `rebase` step (ORC-146)
 
@@ -152,7 +156,7 @@ A new run starts again from its own level (ORC-365). A delegation whose decision
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev`: until the delegation starts at `intake` (ORC-395), the chain's entry is `build`, and intake, run before it, is its guard and hands over to it (ORC-391). `dev` moves the ticket to In Progress at its launch. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
 `intake` is off in the factory's workflow: delegation starts `dev`, until ORC-395 makes it start at the preset's entry. A repository can no longer turn it on, as its `.factory/workflow.yml` is ignored since ORC-388; the scenarios and `factory/fantome` do. Without it, `dev`'s pickup checks block directly, as before.
 
@@ -160,7 +164,7 @@ Then the guard before In Progress: a failed deterministic check, a probable dupl
 
 A ticket « blocked by » a Linear ticket that is not done waits instead of starting. Done is a status of Linear's `completed` type; a cancelled blocker delivered nothing and still holds; a deleted one (in Linear's trash), or one the factory's token cannot read, holds nothing. The blockers are read with the ticket (`blockedBy` of the [tracker port](ports/tracker.md)), before its first run, where the pickup checks run:
 
-- **`intake` on**: they are an input of its guard, journaled with its end (`blockedBy` of `run.finished`). A ticket incomplete or failing a check is asked its questions first (`clarify`, below): the human has something to answer; `intake` runs again after the last answer, and the wait comes then. A complete one waits, and what `intake` would start (`on_success.run`, `dev`) is the start it waits for; an `on_success.post` is posted at once, an `on_success.move` is not made (the start moves the ticket itself).
+- **`intake` on**: they are an input of its guard, journaled with its end (`blockedBy` of `run.finished`). A ticket incomplete or failing a check is asked its questions first (`clarify`, below): the human has something to answer; `intake` runs again after the last answer, and the wait comes then. A complete one waits, and what `intake` would start (`dev`) is the start it waits for; what its step posts is posted at once, a move is not made (the start moves the ticket itself).
 - **`intake` off** (`factory/default`): the guard lives at the launch of the job with `pickup: true` (`dev`), in the orchestrator, after the pickup checks: a failed check still blocks; else, an open blocker makes that very start wait, as it was decided (its input, its restrictions).
 
 The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer. The session gets a thought naming the blockers and their status. `/status` says it. The ticket stays where it is (Todo): nothing moves to In Progress. While it waits, a reply, a move or a debounced reply starts no dev work; a message stays in `humanInbox` for the run that starts later. A delegation again keeps the wait. A stop (a block), an undelegation or a dev run started all the same end it.
@@ -225,7 +229,7 @@ Every section is optional to the schema: a missing one is `spec_check`'s verdict
 
 | Command | Effect |
 | -- | -- |
-| `/approve` (or `/approve <version>`, which must be the version waiting) | records who approved the version and when (`spec.approval`), then starts the job after the spec (`onSuccess.run`: `tests` in `factory/default`) |
+| `/approve` (or `/approve <version>`, which must be the version waiting) | records who approved the version and when (`spec.approval`), then passes the gate: the chain goes on to the step after it (`tests` in `factory/default`) |
 | `/changes <comment>` | the comment goes into `humanInbox` as an instruction (ORC-180), and the job drafts the next version from it and its last one (« Spec under review »), in a session of its own, never the ticket's; a version is never approved by an earlier approval. Until it is published (`spec.drafting`, a start still in the queue included), nothing is approved, changed or rejected. 3 rounds since the last approval (counter `spec_review`, `limits.specChanges`): the 4th blocks the ticket on the job, step `spec_review`, cause « limit » |
 | `/reject` | blocks the ticket on the job, step `spec_review`, cause « stopped »: a reply drafts again |
 
@@ -235,13 +239,13 @@ A command with no spec waiting (none yet, a ticket blocked or undelegated), on a
 
 **After approval.** Every later step of the ticket's dev queue reads the approved spec in its prompt (« Approved spec »): `tests` writes its criteria as the acceptance tests, the build works within it. The freeze after `red` (ORC-131) keeps the approved criteria with the frozen tests (`frozenTests.criteria`); like its files, a later freeze adds the criteria of a version approved since to those already frozen, and the tests of a changed criterion stay frozen until `/refreeze`, which keeps the criteria approved then. A new delegation clears the ticket's spec: the work starts afresh. A redraft reads its last version (« Spec under review »).
 
-`spec` is off in the factory's workflow, until ORC-395: the scenarios and `factory/fantome` run it after `intake` (`jobs.intake.on_success: { run: spec }`); a repository no longer can (ORC-388).
+`spec` is off in the factory's workflow, until ORC-395: the scenarios start it by a delegation of their own, and `factory/fantome` runs it after `intake`, its `next`; a repository no longer can (ORC-388).
 
 **Not yet**: the « Spec » status or the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); the properties frozen as tests (ORC-261); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
 
 ## `review` step (ORC-183)
 
-Once `dev`'s commit is published (`on_success: { move: ai_review, post: summary, run: review }`), the AI review starts: two agent sessions on Opus, effort high, 25 turns, one after the other, each a fresh session of its own (role `reviewer`), never the implementer's. Every job that writes goes back through it the same way: `fix-ci`, `fix-review`, `fix-human`, and `dev-feedback` since ORC-170. When `dev`'s publication is refused and a later job publishes, that end makes the move `dev` owed and starts the review it came with (on a version frozen before ORC-170, `dev-feedback` has no move of its own: the owed move and its review are what reach the reviewer).
+Once `dev`'s commit is published (`build → verify → publish → review`: the move to AI Review, the build's summary, the first lens), the AI review starts: two agent sessions on Opus, effort high, 25 turns, one after the other, each a fresh session of its own (role `reviewer`), never the implementer's. Every job that writes goes back through it the same way: `fix-ci`, `fix-review`, `fix-human`, and `dev-feedback` since ORC-170. When `dev`'s publication is refused and a later job publishes, that end makes the move `dev` owed and starts the review it came with (on a version frozen before ORC-170, `dev-feedback` has no move of its own: the owed move and its review are what reach the reviewer).
 
 | Job | Lens | What it looks at |
 | -- | -- | -- |
@@ -254,11 +258,11 @@ Both flag over-engineering (an abstraction with one user, code outside the ticke
 
 **What a lens hands back.** Through `submit_result`, a `findings` list (`[]` when it found nothing): `{ file, line, severity: blocking | minor | out_of_scope, explanation, suggestion, fact? }`, at most 50. `fact` is the id of a Claim Ledger fact the finding violates, for when the reviewers get them as a checklist (ORC-254, ORC-229). A lens without a findings list, or a ticket without a published commit, is blocked.
 
-**What the factory publishes.** Each lens's findings are kept in the `findings` table, by ticket, commit and lens, a lens run again on the same commit replacing its own. At the end of `review-security` (`on_success.post: review`), every lens's findings on that commit go out as one GitHub review on the PR (a comment, it neither approves nor requests changes), each blocking or minor finding a comment on its line, the out-of-scope ones (on code the diff does not change) listed in the review's text; when GitHub cannot place one (a line the diff does not show), all of them are listed there instead, shortened if they would not fit in one text. The texts are vetted together, one secret scan for them all. Then the `factory/review` check on the commit: failed while a blocking finding stands, green otherwise, its title the count (« 1 blocking finding, 2 minor, 0 out of scope »). Every text goes through the `OutputPolicy`: a refused one is replaced by its notice, its place kept. Nothing goes to Linear. Then the move to Human Review, which records the reviewed commit as before. A review that fails to go out is retried by the outbox; a dead one blocks the ticket, and the move waits.
+**What the factory publishes.** Each lens's findings are kept in the `findings` table, by ticket, commit and lens, a lens run again on the same commit replacing its own. At the end of `review-security`, the last lens of the step (it posts the review), every lens's findings on that commit go out as one GitHub review on the PR (a comment, it neither approves nor requests changes), each blocking or minor finding a comment on its line, the out-of-scope ones (on code the diff does not change) listed in the review's text; when GitHub cannot place one (a line the diff does not show), all of them are listed there instead, shortened if they would not fit in one text. The texts are vetted together, one secret scan for them all. Then the `factory/review` check on the commit: failed while a blocking finding stands, green otherwise, its title the count (« 1 blocking finding, 2 minor, 0 out of scope »). Every text goes through the `OutputPolicy`: a refused one is replaced by its notice, its place kept. Nothing goes to Linear. Then the move to Human Review, which records the reviewed commit as before. A review that fails to go out is retried by the outbox; a dead one blocks the ticket, and the move waits.
 
-**No human move needed (ORC-170).** A commit `dev-feedback` publishes (a reply in In Progress, or to a block with no step of its own) ends as `fix-human` does: `on_success: { move: ai_review, post: reply, run: review }`, then Human Review on that commit. Messages that came in meanwhile are handed over at the review's end, in Human Review: a round of `fix-human`.
+**No human move needed (ORC-170).** A commit `dev-feedback` publishes (a reply in In Progress, or to a block with no step of its own) ends as `fix-human` does, both jobs of `fix`: AI Review, its reply, the review, then Human Review on that commit. Messages that came in meanwhile are handed over at the review's end, in Human Review: a round of `fix-human`.
 
-**Nothing new, no review (ORC-170).** The end of a job that writes and whose `on_success` starts the AI review (`dev`, `dev-feedback`, `fix-ci`, `fix-review`, `fix-human`) starts it only when there is something new to review. With no PR (nothing ever published), or on the commit shown in Human Review, already reviewed (`reviewSha`: an answer that committed nothing), it posts its reply or summary, moves nothing and starts no review: the ticket stays where it is, and messages waiting are handed over as at any end with no step behind it. With no PR and nothing committed either (the publication found no commit beyond the base: a first `dev` that wrote nothing, or an answer before the first commit), and no human feedback waiting for the agent (which the end hands over as usual; a relayed question alone does not count), the ticket would sit with nothing running and nothing to show: it is blocked instead (kind `question`, label Bloqué), on a comment that asks a human what to do, and a reply resumes the work. A block already in place stays as it is. Only in Human Review: out of it (the review loop, or after a human's move, which keeps the reviewed commit), the end is judged again, a `fix-review` that contests without committing included. The lenses chain as before. On a version frozen before ORC-170, `dev-feedback` moves nothing: a human moves the ticket to AI Review to have its commit reviewed. A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
+**Nothing new, no review (ORC-170).** The end of a job that writes and whose step leads to the AI review (`dev`, `dev-feedback`, `fix-ci`, `fix-review`, `fix-human`) starts it only when there is something new to review. With no PR (nothing ever published), or on the commit shown in Human Review, already reviewed (`reviewSha`: an answer that committed nothing), it posts its reply or summary, moves nothing and starts no review: the ticket stays where it is, and messages waiting are handed over as at any end with no step behind it. With no PR and nothing committed either (the publication found no commit beyond the base: a first `dev` that wrote nothing, or an answer before the first commit), and no human feedback waiting for the agent (which the end hands over as usual; a relayed question alone does not count), the ticket would sit with nothing running and nothing to show: it is blocked instead (kind `question`, label Bloqué), on a comment that asks a human what to do, and a reply resumes the work. A block already in place stays as it is. Only in Human Review: out of it (the review loop, or after a human's move, which keeps the reviewed commit), the end is judged again, a `fix-review` that contests without committing included. The lenses chain as before. On a version frozen before ORC-170, `dev-feedback` moves nothing: a human moves the ticket to AI Review to have its commit reviewed. A push by a human is verified (ORC-159), not reviewed: the AI review reads only what the factory published.
 
 ## Human review feedback (ORC-190)
 
@@ -278,7 +282,7 @@ human_review (gate) → feedback? [ fix → verify_fix → publish → AI review
 loop ≤ 2 [ AI review → fix → verify_fix → publish → AI review ]
 ```
 
-**Counted.** Each lens's blocking findings are counted on the commit it read (`reviewBlocking` of the ticket). Once `review-security` ends with one standing, of either lens, its `on_blocking` job starts in place of its `on_success`: `fix-review`, one round of `review_ci`, the counter red CI and conflicts use (`ciFixAttempts`). The review is published all the same, `factory/review` red, and the ticket stays in AI Review. Past the bound, nothing starts: the ticket is blocked (kind `limit`, step `fix`), the findings on the PR; a reply resumes `fix-review` on it, which then goes back through the review, and gives the counter back. A red CI during the merge gate uses a round too.
+**Counted.** Each lens's blocking findings are counted on the commit it read (`reviewBlocking` of the ticket). Once `review-security` ends with one standing, of either lens, the review's failure edge starts in place of the move to Human Review: `fix-review` (the `fix` job of cause `review`), one round of `review_ci`, the counter red CI and conflicts use (`ciFixAttempts`). The review is published all the same, `factory/review` red, and the ticket stays in AI Review. Past the bound, nothing starts: the ticket is blocked (kind `limit`, step `fix`), the findings on the PR; a reply resumes `fix-review` on it, which then goes back through the review, and gives the counter back. A red CI during the merge gate uses a round too.
 
 **The fix.** `fix-review` (step `fix`, skill `factory:feedback`, Sonnet, effort medium, 60 turns, the repository's network) resumes the ticket's session in its worktree. Its input (`findings`) is the review's blocking findings, read from the `findings` table on the reviewed commit, each under an id (its lens and its rank, `correctness-1`), then the PR's unresolved review threads as they are, untrusted. One commit per finding fixed, or the finding contested with a justification: its `submit_result` says which of each id, in `fixed` (`{ finding, commit }`) and `contested` (`{ finding, justification }`), and refuses two findings on one commit. Then `verify_fix`, `publish` and both lenses again; `fix-ci` takes the same way back since ORC-184. The review starts at the publication, as after `dev`, without waiting for the CI.
 
@@ -305,8 +309,8 @@ An attempt whose process stops without a `result` line, without having been stop
 The `tests` step (agent, skill `factory:tests`, Sonnet, effort medium, repository network) writes **only** the tests that translate the acceptance criteria, and commits them. The factory does not take its word for it: the `red` check (`src/checks/red.ts`) observes for itself.
 
 1. When the step launches, the factory records the worktree's head (`baseSha`); a return to the step keeps the first one. The check reads the files changed by the step's commits only (`baseSha..HEAD`, on the factory's repository), plus the worktree's uncommitted or untracked files. A file that is not a test (single rule in `src/checks/test-files.ts`, helpers and data under a test folder included) is a scope violation (`scope`), observed without running anything.
-2. It runs only the added or modified test files (`*.test.ts`, `test_*.py`…, not helpers or data) with the job's command (`red.command`, `npm test --` in `factory/default`). With sandboxes, `git status` and the tests run in a separate sandbox, without network; without them, on the host like `verify`.
-3. It reads the runner's machine report (ORC-342): the JSON report of vitest (`--reporter=json`) or jest (`--json`), the JUnit report of pytest (`--junitxml`), written to a temporary file and printed after the output behind a random marker. The runner is the one the command names (`npx vitest run`, `python -m pytest`), or the one the `package.json` script runs when the command goes through `npm` or `pnpm` past a `--` (`npm test --` in `factory/default`), as the last command of that script. Only the report's failure messages and the errors of the files that did not load are classified, never a test's name: a passing test called "fails on an AssertionError" changes nothing. Without a known runner, or when the runner wrote no report (it crashed before, the flags went elsewhere), the text output is read as before, a word of a test's name included. It classifies (vitest, jest, pytest), errors before "no tests" (pytest writes `collected 0 items / 1 error` before an import error):
+2. It runs only the added or modified test files (`*.test.ts`, `test_*.py`…, not helpers or data) with the repository's test command (`commands.test` of its `.factory/config.yml`, ORC-391; with none, the check cannot run: `infra`). With sandboxes, `git status` and the tests run in a separate sandbox, without network; without them, on the host like `verify`.
+3. It reads the runner's machine report (ORC-342): the JSON report of vitest (`--reporter=json`) or jest (`--json`), the JUnit report of pytest (`--junitxml`), written to a temporary file and printed after the output behind a random marker. The runner is the one the command names (`npx vitest run`, `python -m pytest`), or the one the `package.json` script runs when the command goes through `npm` or `pnpm` past a `--` (`npm test --`), as the last command of that script. Only the report's failure messages and the errors of the files that did not load are classified, never a test's name: a passing test called "fails on an AssertionError" changes nothing. Without a known runner, or when the runner wrote no report (it crashed before, the flags went elsewhere), the text output is read as before, a word of a test's name included. It classifies (vitest, jest, pytest), errors before "no tests" (pytest writes `collected 0 items / 1 error` before an import error):
 
 | Output | Cause | Red |
 | -- | -- | -- |
@@ -322,7 +326,7 @@ The `tests` step (agent, skill `factory:tests`, Sonnet, effort medium, repositor
 | non-test file, committed or not | `scope` | refused |
 | the check could not run (git, worktree, sandbox) | `infra` | no verdict |
 
-The verdict comes back like the result of `verify`: `verify.passed` or `verify.failed`, with the `red` field carrying the cause. A verified red starts the next job (`onSuccess.run`, `dev` in `factory/default`).
+The verdict comes back like the result of `verify`: `verify.passed` or `verify.failed`, with the `red` field carrying the cause. A verified red starts the next agent step's job (`build`'s, `dev`, in `factory/default`).
 
 **Measurement mode.** For the first 20 tickets, the check is in measurement mode: it never blocks. An unverified red, a scope violation included, leaves in the decision the trace "red: would have blocked (<cause>), measure mode: the run goes on", and the build starts. The verdicts are in the ticket's measurements (`red` of `TicketMeasures`, ORC-235): a red that is not `verified` is what the check would have blocked.
 
@@ -392,9 +396,22 @@ Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`
 | A cancelled ticket cancels the run | ORC-170 (its cancel) | `cancel.test.ts`, « ticket cancelled by a human (ORC-170) » |
 | The delegation withdrawn cancels the run | ORC-227 | `cancel.test.ts`, « delegation withdrawn (ORC-227) » |
 
+## The chain (ORC-391)
+
+The end of a job walks its step's `next` past the steps the engine runs itself around a run (the checks, `spec_check`, the publication of a push) to the next step that waits (`src/core/chain.ts`):
+
+- an agent step: its job starts (the first lens of a review; a `fix` starts only by its cause, on a failure edge);
+- a human gate, the merge, or the end of the run (`next: null`): nothing starts.
+
+The ticket moves to the status of the step reached (`STEP_STATUS`, ORC-170's names: `build` In Progress, `review` AI Review, `human_review` Human Review); the chain's entry moves it at its own launch instead, wherever it starts from. What is posted comes from the step that ended (`STEP_POST`): the build's summary, a fix's reply, the review (by its last lens). A review lens hands over to the next lens of its step. A relayed answer ends where it is (ORC-375). At the Rapide level nothing moves nor is posted. `/approve` passes the spec gate: the walk goes on from it.
+
+The chain's entry is `build` in `factory/default` until the delegation starts at `intake` (ORC-395): `intake`, when a test runs it, is the guard of `build` and hands over to it. The review's fix (`fix-review`) is the fix of the review step's failure edge; a round of human review (`fix-human`) is the fix of the merge gate's.
+
+A ticket frozen on a version from before ORC-391 has no preset in its workflow: its jobs chain by their own `onSuccess`, `onStart`, `onBlocking` and `counter`, as they did, until ORC-392 and ORC-393 drop those versions.
+
 ## The workflow the engine runs (ORC-389)
 
-Until the engine walks the preset's steps itself (ORC-391, ORC-392), it runs **jobs** chained by their `onSuccess` and **rules** that react to events. `defaultWorkflow()` (`src/presets/workflow.ts`) builds them in TypeScript: the jobs and rules are a table, the bounds and each job's effort, turns, network and tools come from the preset, and `factory.yml`'s step settings apply. The YAML pack (`packs/standard/workflow.yml`), its loader and `docs/workflow.md` are gone since ORC-389; a repository's `.factory/workflow.yml` is ignored since ORC-388. Tests vary the workflow in TypeScript (`workflowWith`, [tests](tests.md)), and `factory replay --what-if <preset>` replays journals on a compiled preset ([CLI](cli.md)).
+The workflow carries the preset, the **jobs** that run its agent steps and the **rules** that react to a human's events (until ORC-392). `presetWorkflow()` (`src/presets/workflow.ts`) builds it in TypeScript: the jobs come from the runtime bindings (`src/presets/runtime-bindings.ts`: queue, workspace, session, input, structured output, cause or lens, outside the `Preset` type), each job's skill, effort, turns, network, tools, attempt duration and red mode from its step, and `factory.yml`'s step settings apply. The YAML pack (`packs/standard/workflow.yml`), its loader and `docs/workflow.md` are gone since ORC-389; a repository's `.factory/workflow.yml` is ignored since ORC-388. Tests vary the workflow in TypeScript (`workflowWith`, [tests](tests.md)), and `factory replay --what-if <preset>` replays journals on a compiled preset ([CLI](cli.md)).
 
 ### Jobs
 
@@ -402,7 +419,7 @@ A job describes **how** to launch a Claude Code run (`JobSpec`, `src/core/workfl
 
 | Field | Values | Default | Effect |
 |---|---|---|---|
-| `step` | agent step of the preset | — | The step this job runs (ORC-136): it sets its effort (`claude --effort`), its network and its tools, and caps its turns. A name that is not an agent step makes `defaultWorkflow` throw. Without `step` (`ask`), the job has its own limits, effort, network and tools (ORC-182). |
+| `step` | agent step of the preset | — | The step this job runs (ORC-136): it sets its effort (`claude --effort`), its network and its tools, and caps its turns. A name that is not a step of the workflow's preset is refused (`workflowViolations`). Without `step` (`ask`), the job has its own limits, effort, network and tools (ORC-182). |
 | `queue` | `dev`, `questions` | **required** | Execution queue ([from an event to a run](#from-an-event-to-a-run)). A `dev` job is only launched on a ticket delegated to Relais. |
 | `model` | text | **required** | Passed as is to `claude --model` (alias such as `sonnet`, `opus`, `haiku`, or full identifier). |
 | `workspace` | `worktree`, `trunk-readonly`, `published` | **required** | `worktree`: git worktree specific to the ticket, on a `relais/<ticket>-<title>` branch, reused from one run to the next. `trunk-readonly`: up-to-date copy of the main branch, gone with the run, run launched in plan mode (read-only), or held to `Read`, `Grep` and `Glob` for a read-only step of the preset (`intake`, which must have it, ORC-367). Every job of a preset step has its step's tools (ORC-383, [tools per step](#the-agents-tools-per-step-orc-383)). `knowledge`, a worktree of the knowledge repository, is refused since ORC-193: the memory in writing sleeps, and the launch refuses the `learn` and `remember` of a version frozen before. `published`: a fresh clone of the commit the factory published, detached, gone with the run; only a job of the `review` step has it, and it must (ORC-183). |
@@ -418,6 +435,8 @@ A job describes **how** to launch a Claude Code run (`JobSpec`, `src/core/workfl
 | `limits` | `{ turns, durationMs, tokens }` | `limits.perRun` | The run's limits. `tokens`, a cap per attempt (cache reads left out), set for a job without `step`: a step's comes from `budgets.per_step_tokens` (ORC-182). |
 | `effort` | `low`, `medium`, `high` | — | `claude --effort`: its step's, or a job's own without `step` (ORC-182). |
 | `network` | `none`, `claude-api`, `limited` | the repository's | Its step's, or a job's own without `step` (ORC-182), narrowed by the repository's; `full` is reserved for setup. |
+| `cause` | `ci`, `review`, `human`, `instruction`, `relay` | — | The cause of a `fix` job: it picks the step's skill, and the edge (with its counter) that sends the run there (ORC-391). |
+| `onStart`, `onSuccess`, `counter`, `onBlocking` | — | — | Only in a version frozen before ORC-391, with no preset: what [the chain](#the-chain-orc-391) now reads in the steps. Below, what they said. |
 | `onStart` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
 | `onSuccess` | `{ move: <logical state>, post: summary \| reply \| synthesis \| review, run: <job> }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message the factory composes from the agent's `submit_result`, never from its last message (ORC-214): `summary` (end of the dev work) posts the recap: its summary, why, risks, untested and points to review when stated, the tests added, and the attempts, turns, tokens and duration of the ticket's work (ORC-195); `reply` (reply to feedback, to a question) and `synthesis` (the review synthesis of a version frozen before ORC-183) post its `summary` alone; `review` posts nothing in Linear: the findings of the ticket's AI review lenses go to the PR as a GitHub review and the `factory/review` check (ORC-183). `run` starts that job next. A run that returned no result posts a fixed sentence saying so. The text then goes through the `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)). |
 | `counter` | `human_review` | — | Each start of the job, a relaunch after a cut and a return of `verify` aside, is a round of human review feedback, counted up to `limits.humanReviewRounds`; past it, the ticket is blocked instead (ORC-190). |
@@ -447,14 +466,14 @@ The jobs of `factory/default`:
 
 | Job | Queue | Model | Role |
 |---|---|---|---|
-| `dev` | dev | sonnet | First development; moves the ticket to `dev` at the start; once published, posts a summary, moves it to `ai_review` and starts `review`. |
+| `dev` | dev | sonnet | `build`, the chain's entry: moves the ticket to `dev` at the start; once published, posts a summary, moves it to `ai_review` and starts `review`. |
 | `dev-feedback` | dev | sonnet | Extends `dev`: resumes the session to address feedback, then `verify`, publication and the AI review (`move: ai_review, post: reply, run: review`, ORC-170). |
 | `fix-ci` | dev | sonnet | Extends `dev-feedback`: fixes CI, then goes back through `verify`, publication and the AI review (ORC-184). |
 | `fix-review` | dev | sonnet | Extends `dev-feedback`: the fix of the review loop, on the blocking findings of the last AI review and the PR's unresolved threads; one commit per finding fixed or a justified contest (`fixed`, `contested` of `submit_result`), then `verify`, publication and the AI review again (ORC-184). |
-| `fix-human` | dev | sonnet | Extends `dev-feedback`: the fix of human review feedback in Human Review (the session's replies, the PR's reviews and unresolved threads), then `verify`, publication, the AI review and Human Review again; each start a round of `humanReviewRounds` (`counter: human_review`, ORC-190). |
+| `fix-human` | dev | sonnet | Extends `dev-feedback`: the fix of human review feedback in Human Review (the session's replies, the PR's reviews and unresolved threads), then `verify`, publication, the AI review and Human Review again; each start a round of `humanReviewRounds` (the merge gate's edge, ORC-190). |
 | `review` | dev | opus | First lens of the AI review (correctness and spec), read-only, on a fresh clone of the published commit; then starts `review-security` ([preset.md](#review-step-orc-183)). |
-| `review-security` | dev | opus | Extends `review`: the security and tests lens; publishes both lenses' findings (GitHub review, `factory/review` check), then moves the ticket to `human_review`; a blocking finding starts `fix-review` instead (`onBlocking`, ORC-184). |
-| `answer-relayed` | dev | sonnet | Extends `dev-feedback`, the workflow's `relayJob` (ORC-375): resumes the session to answer the questions relayed to it, with no human feedback waiting; no checks (no `repoChecks`), no counter, and an empty `onSuccess`: the ticket stays where it is, nothing is posted beside the answers, no review. A commit it leaves goes the reply rule's job's way. |
+| `review-security` | dev | opus | Extends `review`: the security and tests lens; publishes both lenses' findings (GitHub review, `factory/review` check), then moves the ticket to `human_review`; a blocking finding starts `fix-review` instead (the review's failure edge, ORC-184). |
+| `answer-relayed` | dev | sonnet | Extends `dev-feedback`, the workflow's `relayJob` (ORC-375): resumes the session to answer the questions relayed to it, with no human feedback waiting; `fix` of cause `relay`: no checks (no `repoChecks`), no counter, and its end walks nothing: the ticket stays where it is, nothing is posted beside the answers, no review. A commit it leaves goes the reply rule's job's way. |
 | `ask` | questions | sonnet | The answer agent (ORC-182): answers a question read-only (`Read`, `Grep`, `Glob`), at network `claude-api`, low effort, 30 turns, 200,000 tokens, 5 min; relays what it cannot answer to the agent that implements. |
 
 ### Linear statuses

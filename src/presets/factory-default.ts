@@ -21,6 +21,10 @@ export const factoryDefault: Preset = {
   sameFailure: { limit: 3, cause: 'boucle' },
   // Longer than any Bash call of Claude Code (10 min at most) and than a slow model call retried: a long test run is no silence.
   silentRun: { minutes: 30 },
+  // The former `limits.per_run.duration` of the standard pack.
+  attempt: { minutes: 90 },
+  // The checks of the former `tracker.pickup.checks`: a ticket with no description, or already started by a human, is not taken.
+  guard: { checks: ['has_description', 'not_started'] },
   redCi: { goto: 'fix', counter: 'review_ci' },
   // A conflict with the default branch (ORC-146): the rebase step, on the counter of the review and CI loop.
   conflict: { goto: 'rebase', counter: 'review_ci' },
@@ -28,14 +32,15 @@ export const factoryDefault: Preset = {
   // before publication, for a designated maintainer's `/refreeze`.
   approvers: { normal: ['done_merge'], sensitive: ['done_merge'], 'verification-config': ['refreeze', 'done_merge'] },
   steps: [
-    { id: 'intake', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
+    { id: 'intake', type: 'agent_step', skill: 'factory:intake', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
     { id: 'clarify', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },
     // Read-only (ORC-383): it hands the spec back through `submit_result`, nothing in the worktree.
-    { id: 'spec_draft', type: 'agent_step', writes: 'spec', readOnly: true, model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
+    { id: 'spec_draft', type: 'agent_step', skill: 'factory:spec', writes: 'spec', readOnly: true, model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
     { id: 'spec_check', type: 'spec_check', network: 'none', next: 'spec_review', onFailure: { goto: 'spec_draft', counter: 'spec_check' } },
     { id: 'spec_review', type: 'human_gate', gate: 'spec', next: 'tests', onFailure: { goto: 'spec_draft', counter: 'spec_review' } },
-    { id: 'tests', type: 'agent_step', writes: 'tests', model: SONNET, effort: 'medium', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'red' },
-    { id: 'red', type: 'verify', mode: 'red', network: 'none', next: 'freeze_tests', onFailure: { goto: 'tests', counter: 'red' } },
+    { id: 'tests', type: 'agent_step', skill: 'factory:tests', writes: 'tests', model: SONNET, effort: 'medium', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'red' },
+    // Measured (ORC-123): what a red not verified would block is recorded, until the golden tickets validate `blocking` (ORC-236).
+    { id: 'red', type: 'verify', mode: 'red', red: 'measure', network: 'none', next: 'freeze_tests', onFailure: { goto: 'tests', counter: 'red' } },
     { id: 'freeze_tests', type: 'verify', mode: 'freeze', network: 'none', next: 'build' },
     {
       id: 'build', type: 'agent_step', skill: 'factory:dev', writes: 'code',
@@ -46,15 +51,16 @@ export const factoryDefault: Preset = {
     { id: 'publish', type: 'publish', mode: 'push', next: 'review' },
     {
       id: 'review', type: 'review', skill: 'factory:review', readOnly: true,
-      model: OPUS, effort: 'high', maxTurns: 25, network: 'claude-api', next: 'human_review', onFailure: { goto: 'fix', counter: 'review_ci' },
+      lenses: ['correctness', 'security'], model: OPUS, effort: 'high', maxTurns: 25, network: 'claude-api', next: 'human_review', onFailure: { goto: 'fix', counter: 'review_ci' },
     },
     { id: 'human_review', type: 'human_gate', gate: 'merge', next: 'merge', onFailure: { goto: 'fix', counter: 'human_review' } },
     // Run by the factory once an authorized human moves the ticket to Done (ORC-148).
     { id: 'merge', type: 'publish', mode: 'merge', next: 'after_merge' },
-    { id: 'after_merge', type: 'agent_step', writes: 'nothing', model: SONNET, effort: 'medium', maxTurns: DEFAULT_TURNS, network: 'limited', next: null },
+    // No agent (ORC-197): the memory in writing sleeps (ORC-193), the factory tells the requester and writes the changelog itself.
+    { id: 'after_merge', type: 'factory_step', does: 'after_merge', next: null },
     // The loop after publication: fix → verify → publish → AI review, then the human gate again.
     {
-      id: 'fix', type: 'fix', skills: { ci: 'factory:fix-ci', review: 'factory:feedback', human: 'factory:feedback' },
+      id: 'fix', type: 'fix', skills: { ci: 'factory:fix-ci', review: 'factory:feedback', human: 'factory:feedback', instruction: 'factory:feedback', relay: 'factory:feedback' },
       model: SONNET, effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_fix',
     },
     { id: 'verify_fix', type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'fix', counter: 'verify' } },
@@ -63,6 +69,8 @@ export const factoryDefault: Preset = {
       id: 'rebase', type: 'agent_step', skill: 'factory:rebase', writes: 'code',
       model: SONNET, effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_rebase',
     },
-    { id: 'verify_rebase', type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'rebase', counter: 'verify' } },
+    { id: 'verify_rebase', type: 'verify', mode: 'full', network: 'none', next: 'publish_rebase', onFailure: { goto: 'rebase', counter: 'verify' } },
+    // No AI review after a rebase (decided 14/11): the ticket stays where it was, and a Done reviews a head that moved again (ORC-148).
+    { id: 'publish_rebase', type: 'publish', mode: 'push', next: null },
   ],
 };

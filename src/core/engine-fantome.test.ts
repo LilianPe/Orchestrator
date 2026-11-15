@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultWorkflow } from '../presets/workflow.js';
-import { asFantome, FANTOME_APPROVER } from '../presets/fantome.js';
+import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
+import { fantome, FANTOME_APPROVER } from '../presets/fantome.js';
 import type { AgentOutput } from './agent-output.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
@@ -11,7 +11,7 @@ import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState
  * The Rapide level of `factory/fantome` (ORC-231): a closed ticket has nobody to answer. What `clarify` would ask is assumed,
  * written in the spec and counted; the spec that passes `spec_check` is approved by the preset, and the tests start.
  */
-const workflow = asFantome(defaultWorkflow());
+const workflow = presetWorkflow(fantome);
 
 const SPEC: Spec = { goal: 'Export the audits as CSV.', out_of_scope: [], criteria: ['Given 2 audits, when I click CSV, then 3 lines.'], files: ['src/export.ts'], architecture: 'None.', risks: [], assumed: ['the CSV library escapes quotes'] };
 const output = (extra: Partial<AgentOutput>): AgentOutput => ({ status: 'done', summary: 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...extra });

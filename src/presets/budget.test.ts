@@ -13,14 +13,16 @@ const loop: Preset = {
   counters: { v: { limit: 2 }, r: { limit: 1 } },
   sameFailure: { limit: 3, cause: 'boucle' },
   silentRun: { minutes: 30 },
+  attempt: { minutes: 90 },
+  guard: { checks: [] },
   redCi: { goto: 'fix', counter: 'r' },
   conflict: { goto: 'fix', counter: 'r' },
   approvers: { normal: ['done_merge'], sensitive: ['done_merge'], 'verification-config': ['refreeze', 'done_merge'] },
   steps: [
     { id: 'build', type: 'agent_step', writes: 'code', model: 'm', effort: 'low', maxTurns: 10, network: 'limited', next: 'verify' },
     { id: 'verify', type: 'verify', mode: 'full', network: 'none', next: 'review', onFailure: { goto: 'build', counter: 'v' } },
-    { id: 'review', type: 'review', skill: 's', readOnly: true, model: 'm', effort: 'low', maxTurns: 5, network: 'claude-api', next: null, onFailure: { goto: 'fix', counter: 'r' } },
-    { id: 'fix', type: 'fix', skills: { ci: 'a', review: 'b', human: 'c' }, model: 'm', effort: 'low', maxTurns: 4, network: 'limited', next: 'verify_fix' },
+    { id: 'review', type: 'review', skill: 's', readOnly: true, lenses: ['correctness'], model: 'm', effort: 'low', maxTurns: 5, network: 'claude-api', next: null, onFailure: { goto: 'fix', counter: 'r' } },
+    { id: 'fix', type: 'fix', skills: { ci: 'a', review: 'b', human: 'c', instruction: 'd', relay: 'e' }, model: 'm', effort: 'low', maxTurns: 4, network: 'limited', next: 'verify_fix' },
     { id: 'verify_fix', type: 'verify', mode: 'full', network: 'none', next: 'review', onFailure: { goto: 'fix', counter: 'v' } },
   ],
 };
@@ -51,17 +53,18 @@ describe('the worst case of a preset (ORC-216)', () => {
     expect(worstCase(loop, { ...caps, maxTurns: { build: 999 } })).toMatchObject({ turns: 3 * 10 + 5 + 3 * 4 + 5 });
   });
 
-  it('on factory/default: 41 agent attempts at most, the review loop twice and the human one three times', () => {
+  it('on factory/default: 40 agent attempts at most, the review loop twice and the human one three times; after_merge has no agent', () => {
     // Each of the 5 entries into `fix` gets its 3 retries of `verify` again, as the build does.
     expect(worstCase(factoryDefault, { perStepTokens: every(1) })).toEqual({
-      tokens: 41, turns: 3600, attempts: { intake: 1, clarify: 1, spec_draft: 5, tests: 3, build: 4, review: 6, after_merge: 1, fix: 20, rebase: 0 },
+      tokens: 40, turns: 3450, attempts: { intake: 1, clarify: 1, spec_draft: 5, tests: 3, build: 4, review: 6, fix: 20, rebase: 0 },
     });
   });
 
   it('on factory/default: counts the rebases a conflict starts, on the review and CI counter, where they cost more than a fix (ORC-146)', () => {
     // The 2 runs of `review_ci` go to `rebase` (each with its 3 retries of `verify_rebase`) instead of `fix`; the human loop keeps its 3 entries into `fix`.
+    // No AI review after a rebase (ORC-391): its publication ends the run, so 2 reviews fewer than after the fixes they replace.
     expect(worstCase(factoryDefault, { perStepTokens: { ...every(1), rebase: 2 } })).toMatchObject({
-      tokens: 41 - 8 + 8 * 2, attempts: { review: 6, fix: 12, rebase: 8 },
+      tokens: 40 - 8 + 8 * 2 - 2, attempts: { review: 4, fix: 12, rebase: 8 },
     });
   });
 
@@ -74,12 +77,12 @@ describe('the invariant « budget caps » of the core (ORC-216)', () => {
   const capped = (perTicketTokens?: number): BudgetCaps => ({ perStepTokens: every(1_000), ...(perTicketTokens ? { perTicketTokens } : {}) });
 
   it('passes a worst case under the ticket cap, the cap itself included', () => {
-    expect(checkBudgets(factoryDefault, capped(41_000))).toMatchObject({ violations: [], worst: { tokens: 41_000 } });
+    expect(checkBudgets(factoryDefault, capped(40_000))).toMatchObject({ violations: [], worst: { tokens: 40_000 } });
   });
 
   it('refuses a worst case over the ticket cap, saying by how much', () => {
-    expect(checkBudgets(factoryDefault, capped(40_999)).violations).toEqual([
-      'worst case 41000 tokens per ticket exceeds budgets.per_ticket_tokens 40999: lower a step\'s per_step_tokens or a counter of factory/default',
+    expect(checkBudgets(factoryDefault, capped(39_999)).violations).toEqual([
+      'worst case 40000 tokens per ticket exceeds budgets.per_ticket_tokens 39999: lower a step\'s per_step_tokens or a counter of factory/default',
     ]);
   });
 
@@ -91,7 +94,7 @@ describe('the invariant « budget caps » of the core (ORC-216)', () => {
   });
 
   it('passes a cap disabled in factory.yml, never one left unset (ORC-381)', () => {
-    expect(checkBudgets(factoryDefault, { perStepTokens: every(1_000), perTicketTokens: 'off' })).toMatchObject({ violations: [], worst: { tokens: 41_000 } });
+    expect(checkBudgets(factoryDefault, { perStepTokens: every(1_000), perTicketTokens: 'off' })).toMatchObject({ violations: [], worst: { tokens: 40_000 } });
     // No worst case in tokens without the per-step caps: the ticket's cap, set, has nothing to bound.
     expect(checkBudgets(factoryDefault, { perStepTokens: 'off', perTicketTokens: 1 })).toEqual({ violations: [] });
     expect(checkBudgets(factoryDefault, { perStepTokens: 'off', perTicketTokens: 'off' })).toEqual({ violations: [] });
@@ -99,7 +102,7 @@ describe('the invariant « budget caps » of the core (ORC-216)', () => {
   });
 
   it('is checked when the preset compiles with its budgets', () => {
-    expect(() => compilePreset(factoryDefault, { budgets: capped(41_000) })).not.toThrow();
+    expect(() => compilePreset(factoryDefault, { budgets: capped(40_000) })).not.toThrow();
     expect(() => compilePreset(factoryDefault, { budgets: capped(1_000) })).toThrow(PresetError);
     // Without budgets, as the daemon loads it: the caps are to calibrate, the structure alone is checked.
     expect(() => compilePreset(factoryDefault)).not.toThrow();

@@ -75,7 +75,7 @@ describe('a block posts the standard comment (ORC-196)', () => {
   });
 
   it('a red check that could not run says why in the comment', () => {
-    const wf: Workflow = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { command: 'npm test --', mode: 'measure', attempts: 3 } } } };
+    const wf: Workflow = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { mode: 'measure', attempts: 3 } } } };
     const out = decide(verifying({ activeJob: 'tests' }), ev('verify.failed', { runId: 'r1', job: 'tests', red: 'infra', failures: [{ command: 'factory/red', exitCode: null, output: 'base absente' }] }), wf);
     // One line per check, as every verify path: never the raw output.
     expect(notice(out)?.block).toMatchObject({ step: 'red', tried: ['`factory/red` (code timeout)'] });

@@ -6,13 +6,14 @@ import { decide, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type TicketState } from './types.js';
 import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
+import { beforeOrc391 } from '../../test/helpers/frozen-jobs.js';
 
 const workflow = defaultWorkflow();
 /** `workflow` as a version frozen before ORC-375 holds it: no relay job, the reply rule's job answers a relayed question. */
 const { relayJob: _relayJob, ...beforeOrc375 } = workflow;
 const withFeedback = (w: Workflow, patch: Partial<Workflow['jobs'][string]>): Workflow => ({ ...w, jobs: { ...w.jobs, 'dev-feedback': { ...w.jobs['dev-feedback']!, ...patch } } });
 /** A version frozen before ORC-170, whose `dev-feedback` moves nothing and starts no review. */
-const beforeOrc170 = withFeedback(workflow, { onSuccess: { post: 'reply' } });
+const beforeOrc170 = withFeedback(beforeOrc391(workflow), { onSuccess: { post: 'reply' } });
 /** `dev-feedback` with no checks: its end applies its `on_success` at once. */
 const quick = (w: Workflow) => withFeedback(w, { verify: [], repoChecks: false });
 const reviewing = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'move' || e.kind === 'start_run');

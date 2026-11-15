@@ -24,8 +24,8 @@ intake → spec_draft → spec_check → tests → red → freeze_tests → buil
   publication, which the no-effect mode keeps (below).
 - The spec comes from `spec_draft` (ORC-212): the replay does not use the ticket's text plus the build's assumptions.
 
-Until the engine runs the preset's steps itself (ORC-177), `asFantome` sets the workflow it drives: delegation runs `intake`,
-`intake` the spec, the spec the tests, the tests `dev`, whose publication ends the run. A project runs it with `preset: factory/fantome`
+The engine walks the preset's own steps (ORC-391): delegation runs `intake`, `intake` the spec, the spec the tests, the tests
+`dev`, whose publication ends the run. A project runs it with `preset: factory/fantome`
 in `config.yaml`; such a project always has no effects.
 
 ## No-effect mode

@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { hashText } from '../core/attempt-labels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
+import { blockingFix, nextOf } from '../core/chain.js';
 import { agentStep, defaultWorkflow, workflowViolations, type StepSettings } from './workflow.js';
 
 /**
- * The hashes of the workflow the standard pack's YAML gave, before ORC-389 removed it: the canonical one, which each ticket's
- * frozen version and the replay journals carry, and the one of its JSON text, keys in their order, which the journals hold.
- * A change of either changes the journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR.
+ * The hashes of the workflow of `factory/default`: the canonical one, which each ticket's frozen version and the replay
+ * journals carry, and the one of its JSON text, keys in their order, which the journals hold. A change of either changes the
+ * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-391, the preset in it).
  */
-const CANONICAL = '65580a4d6840b36252fc5c18f8fee2b7703ccba61bc52686ffe93d30550e6796';
-const TEXT = 'sha256:a1ea6046ae772b4ee7d1ebe4a73f7e47df56e035422ed550af0a9e7f1a178ea4';
+const CANONICAL = 'ceded6bae18e3e9a32cf4c448a50ee9e0c7e86d5a7555a1d8d5978a51eb369ee';
+const TEXT = 'sha256:abc3a9dcc5228d543266fb823b2199ef66a26936efdafee32326d11d02794e28';
 
-describe('defaultWorkflow (ORC-388, ORC-389)', () => {
-  // The safety net of ORC-177's later parts: the workflow is the pack's, so no ticket decides otherwise.
-  it("is the workflow the standard pack held, its hash and its keys' order included", () => {
+describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
+  // The safety net of ORC-177's later parts: a change of the workflow is a change of the journals, seen in their diff.
+  it("is the workflow the journals pin, its hash and its keys' order included", () => {
     expect(hashCanonical(defaultWorkflow())).toBe(CANONICAL);
     expect(hashText(JSON.stringify(defaultWorkflow()))).toBe(TEXT);
   });
@@ -36,19 +37,18 @@ describe('defaultWorkflow (ORC-388, ORC-389)', () => {
   });
 
   // What the loader refused in a YAML file, held by the TypeScript table on its own.
-  it('names only jobs and statuses it has: every run, every move, the blocking findings and the relayed answer', () => {
+  it("names only jobs, steps and statuses it has: every run, every move, each job's step, the blocking findings and the relayed answer", () => {
     const wf = defaultWorkflow();
     expect(workflowViolations(wf)).toEqual([]);
-    expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback' });
-    expect(wf.jobs[wf.relayJob!]!.counter).toBeUndefined();
+    expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback', cause: 'relay' });
     const wrong = defaultWorkflow();
-    wrong.jobs.dev!.onSuccess.run = 'reveiw';
+    wrong.jobs['answer-relayed']!.step = 'fxi';
     wrong.on['pr.merged']![0]!.move = 'ready';
     wrong.on['label.changed']![0]!.do = 'after_merge';
     expect(workflowViolations(wrong)).toEqual([
       'on.label.changed[0].do: after_merge is the step of a merged PR, on pr.merged only',
       'on.pr.merged[0].move: no status for "ready"',
-      'jobs.dev.onSuccess.run: unknown job "reveiw"',
+      'jobs.answer-relayed.step: fxi is not a step of factory/default',
     ]);
   });
 
@@ -59,23 +59,23 @@ describe('defaultWorkflow (ORC-388, ORC-389)', () => {
       const review = j.step === 'review';
       expect(!!j.lens, `${j.name}.lens`).toBe(review);
       expect(j.workspace === 'published', `${j.name}.workspace`).toBe(review);
-      if (j.onSuccess.post === 'review') expect(j.step, `${j.name}.onSuccess.post`).toBe('review');
-      if (j.onBlocking) expect(j.onSuccess.post, `${j.name}.onBlocking`).toBe('review');
+      if (nextOf(wf, j).post === 'review') expect(j.step, `${j.name}: posts the review`).toBe('review');
+      if (blockingFix(wf, j)) expect(nextOf(wf, j).post, `${j.name}: has a fix of its findings`).toBe('review');
       if (j.queue === 'questions') expect(j.session, `${j.name}.session`).toBe('new');
       const step = j.step === undefined ? undefined : agentStep(j.step);
       if (step?.type === 'agent_step' && step.readOnly && step.writes === 'nothing' && !review) expect(j.workspace, `${j.name}.workspace`).toBe('trunk-readonly');
     }
   });
 
-  it('gives each call a workflow of its own: a test that changes a job, a rule or a limit changes no other workflow', () => {
+  it('gives each call a workflow of its own: a test that changes a job, a step, a rule or a limit changes no other workflow', () => {
     const a = defaultWorkflow();
-    a.jobs.dev!.onSuccess = {};
-    a.jobs['fix-ci']!.onSuccess.move = 'dev';
+    a.jobs.dev!.skill = 'x';
+    a.preset!.steps.find((s) => s.id === 'review')!.next = null;
     a.on['ticket.delegated']![0]!.run = 'intake';
     a.limits.verifyAttempts = 1;
     a.limits.perRun.turns = 1;
-    expect(defaultWorkflow().jobs.dev!.onSuccess).toEqual({ move: 'ai_review', post: 'summary', run: 'review' });
-    expect(defaultWorkflow().jobs['dev-feedback']!.onSuccess.move).toBe('ai_review');
+    expect(defaultWorkflow().jobs.dev!.skill).toBe('factory:dev');
+    expect(defaultWorkflow().preset!.steps.find((s) => s.id === 'review')!.next).toBe('human_review');
     expect(defaultWorkflow().on['ticket.delegated']![0]!.run).toBe('dev');
     expect(defaultWorkflow().limits).toMatchObject({ verifyAttempts: 4, perRun: { turns: 150 } });
   });
