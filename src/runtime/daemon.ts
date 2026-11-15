@@ -24,14 +24,14 @@ import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-re
 import { IssueNotFoundError, type ActivityInput, type LabelsWritten, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
 import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
-import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
-import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
+import type { RepoVariables } from '../config/repo-variables.js';
+import { RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from '../core/workflow.js';
 import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from './outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
 import { KEPT_PR, LEASE_MS, PAUSE_ACCEPTED, RUN_LEASE_MS, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type QueueItem, type RunRecord, type SessionRole, type Store } from '../store/types.js';
-import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from '../core/agent-output.js';
+import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { describePr, START_SAID, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused } from '../publish/output-policy.js';
 import type { EventBus } from '../server/live-feed.js';
@@ -41,7 +41,7 @@ import { deadLetteredEvent, repairedEvent } from '../core/dead-letter.js';
 import type { HeldRow } from '../core/diagnosis.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from '../core/block-comment.js';
-import { goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from '../core/engine.js';
+import { HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from '../core/engine.js';
 import { codeRunTokens, runMeasure } from '../core/measures.js';
 import { attemptLabels, packFingerprints } from '../core/attempt-labels.js';
 import { formatReuse, ownWork, ticketBranches } from '../core/intake-checks.js';
@@ -49,7 +49,7 @@ import { branchName, namesTicket } from '../core/naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from '../core/pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from '../core/prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
-import { isNote, noSearchReason, repoNameOf, searchAsked, searchCounted, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
+import { searchAsked, searchCounted, type PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { formatLinked, formatRunState, formatTranscript } from '../core/answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from '../core/human-message.js';
@@ -80,30 +80,23 @@ import {
 } from '../core/types.js';
 import { runSealedSetup } from '../core/sealed-setup.js';
 import type { RegistryOpener } from '../checks/registry.js';
-import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from '../core/clean-verify.js';
-import { logExcerpt } from '../checks/log-excerpt.js';
-import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from '../core/verify.js';
-import { needsRefreeze, REVIEW_LABELS, reviewLabel, type ClassifiedDiff } from '../core/diff-class.js';
+import { servicesUnavailable, type CleanVerifier } from '../core/clean-verify.js';
+import { VERIFY_CHECK, type Verifier } from '../core/verify.js';
+import { REVIEW_LABELS, reviewLabel } from '../core/diff-class.js';
 import { blockingFindings, contestedInput, findingsInput, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from '../core/review.js';
 import { PRODUCT_NAME } from '../product.js';
-import { checkRed, type RedDeps, type RedResult } from '../checks/red.js';
-import { checkFrozen, FREEZE_CHECK, freezeTests, newTestsOnly, REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import { isTestFile } from '../checks/test-files.js';
+import { FREEZE_CHECK } from '../checks/freeze.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
-import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
+import { captureLabel, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
 import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from '../core/changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
-import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
-import { factoryDefault } from '../presets/factory-default.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from '../core/block-cause.js';
 import { DECLARED_READS, declaredReads, type DeclaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
-import { DaemonBase } from './daemon-base.js';
-
-/** Meta key of the head a ticket's tests step started on (ORC-123). */
-const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+import { redBaseKey } from './daemon-base.js';
+import { DaemonChecks } from './checks.js';
 
 /** The contested findings as the first lens of a round read them (ORC-184): its own end replaces its findings on the commit, which the ids name by rank. */
 const contestedKey = (projectId: string, ticketId: string): string => `contested-input:${projectId}:${ticketId}`;
@@ -485,14 +478,6 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
   return { conclusion: 'success', summary: `Captures taken by the factory, before on the base and after on this commit:\n${lines.join('\n')}\n${why}` };
 }
 
-/** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
-type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky']; diffClass?: CleanVerifyResult['diffClass'] };
-
-const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
-
-/** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
-const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
-
 /** A block made out of a decision, its step to resume as the engine's `block` journals it (ORC-196). */
 const blockedOn = (kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, job });
 
@@ -510,7 +495,7 @@ export interface TakeOverDesk {
   keepBundle(projectId: string, ticketId: string, bytes: Uint8Array): Promise<string>;
 }
 
-export class Daemon extends DaemonBase {
+export class Daemon extends DaemonChecks {
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
       if (fresh) this.wake();
@@ -555,7 +540,7 @@ export class Daemon extends DaemonBase {
   }
 
   /** A result the orchestrator produces itself (a check, a run lost): `deliver`ed to the inbox. */
-  private submitResult(event: FactoryEvent): Promise<void> {
+  protected submitResult(event: FactoryEvent): Promise<void> {
     return this.deliver(event.id, `event ${event.id} (${event.type})`, async () => void (await this.accept(event)));
   }
 
@@ -906,7 +891,7 @@ export class Daemon extends DaemonBase {
    * `~/.claude` goes with it (a dir left by a failed removal is purged with the run's dir, at 30 days).
    * Then the security log of the attempt `owner` ran there, if any (ORC-296): its journals are complete.
    */
-  private async destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void> {
+  protected async destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void> {
     await this.d.sandboxes?.destroy(id).catch((err: Error) => this.log('error', `sandbox ${id} not destroyed: ${err.message}`));
     if (this.d.runsDir) rmSync(join(this.d.runsDir, runId, 'claude'), { recursive: true, force: true });
     if (owner) await this.ingestSecurityLog(runId, owner);
@@ -964,7 +949,7 @@ export class Daemon extends DaemonBase {
    * level for the agent (`agentPolicy`, from the config read at the launch); `none` for a check (the red sandbox).
    * The repository's `services` (ORC-309), for the agent: those its setup filled, owned by this sandbox and gone with it.
    */
-  private async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services: readonly string[] = []): Promise<Sandbox> {
+  protected async openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services: readonly string[] = []): Promise<Sandbox> {
     if (!this.d.sessionsDir || !this.d.runsDir) throw new Error('sessionsDir and runsDir are required with sandboxes');
     const runDir = join(this.d.runsDir, runId);
     const claudeDir = ticketSession ? join(this.d.sessionsDir, project.id, ticketId) : join(runDir, 'claude');
@@ -1035,360 +1020,6 @@ export class Daemon extends DaemonBase {
     return this.d.readSecrets(refs).catch((err: Error) => {
       throw new Error(`The worktree setup failed: ${err.message}`, { cause: err });
     });
-  }
-
-  /** `.factory/config.yml` on the default branch (ORC-209 C): it rejects on an invalid file. */
-  private async repoConfigOf(project: ProjectRuntime, read?: RepoConfigRead): Promise<RepoConfig> {
-    return this.d.repoConfig ? this.d.repoConfig(project, read) : parseRepoConfig(undefined);
-  }
-
-  /**
-   * What the runner gets of the repository (ORC-211), from `config` when the caller has it (the launch's read, kept on
-   * the run; `verify`'s), else read here without a fetch, for a run recorded before ORC-209 C: none when it cannot be
-   * read, the caller goes on.
-   */
-  private async repoVariablesOf(project: ProjectRuntime, config?: RepoConfig): Promise<RepoVariables> {
-    if (!this.d.repoVariables) return NO_REPO_VARIABLES;
-    try {
-      return await this.d.repoVariables(project, config ?? (await this.repoConfigOf(project, { fetch: false })));
-    } catch (err) {
-      this.log('warn', `${project.id}: repository variables not read: ${(err as Error).message}`);
-      return NO_REPO_VARIABLES;
-    }
-  }
-
-  /**
-   * The `red` check of a finished `tests` run (ORC-123): the step's commits from the head it started on, read on the
-   * factory's repository; its uncommitted files and its tests run in a sandbox of their own without network, on the
-   * host as `verify` without sandboxes. A check that cannot run gives no verdict on the tests: `infra`.
-   */
-  private async checkRed(project: ProjectRuntime, run: RunRecord, alreadyFrozen: boolean): Promise<RedResult & { frozen?: FrozenTests }> {
-    const sandboxes = this.d.sandboxes;
-    const redRunId = `${run.id}-red`;
-    let sandbox: Sandbox | undefined;
-    try {
-      // The repository's test command (ORC-391), as the launch read `.factory/config.yml`: no command, no red to check.
-      const command = (run.repoConfig ?? (await this.repoConfigOf(project, { fetch: false }))).commands['test'];
-      if (!command) throw new Error('`.factory/config.yml` has no `commands.test` to run the tests with');
-      const base = await this.d.store.getMeta(redBaseKey(project.id, run.ticketId));
-      if (!base) throw new Error('the starting commit of the step is not recorded');
-      const diff = await this.d.workspaces.stepDiff(project.repoPath, run.cwd, base);
-      if (!diff) throw new Error(`no worktree at ${run.cwd}`);
-      let uncommitted: string[];
-      let runTests: RedDeps['run'];
-      if (!sandboxes) {
-        if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
-        uncommitted = await this.d.workspaces.uncommitted(run.cwd);
-        const { env } = await this.repoVariablesOf(project, run.repoConfig);
-        runTests = async (cmd) => {
-          const res = await this.d.verify(run.cwd, [cmd], undefined, env);
-          return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
-        };
-      } else {
-        // Not the ticket session: an empty per-run `~/.claude`, as any run that does not resume it.
-        const box = (sandbox = await this.openSandbox(sandboxes, project, run.ticketId, { path: run.cwd }, redRunId, false, { level: 'none', allow: [] }));
-        // The tests must fail on the missing behaviour, not on a variable the repository declares (ORC-211).
-        const { env } = await this.repoVariablesOf(project, run.repoConfig);
-        const status = await sandboxes.exec(box.id, ['git', 'status', '--porcelain', '-z', '--untracked-files=all']);
-        if (status.code !== 0) throw new Error(`git status: ${status.stderr.trim()}`);
-        uncommitted = parseStatus(status.stdout);
-        runTests = async (cmd) => {
-          const started = Date.now();
-          const r = await sandboxes.exec(box.id, cappedCommand(cmd), { env });
-          return { exitCode: cappedExit(r.code, started), output: r.stdout + r.stderr };
-        };
-      }
-      const red = await checkRed(command, { ...diff, uncommitted, run: runTests });
-      // The freeze (ORC-131) on the same commit: the step's tests and the harness, whatever the red's verdict.
-      // ponytail: committed files only; a test left uncommitted is not frozen (verify reads commits once ORC-151 lands).
-      const tests = diff.changed.filter((f) => !f.deleted && isTestFile(f.path)).map((f) => f.path);
-      const read = await freezeTests(tests, diff);
-      return { ...red, frozen: alreadyFrozen ? newTestsOnly(read) : read };
-    } catch (err) {
-      return { verified: false, cause: 'infra', command: '', exitCode: null, detail: `The red check could not run: ${(err as Error).message}` };
-    } finally {
-      if (sandbox) await this.destroySandbox(sandbox.id, redRunId, run);
-    }
-  }
-
-  /**
-   * The commands of a job on what its run committed (ORC-151): out of the agent's worktree and the daemon, in
-   * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
-   * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
-   */
-  private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec, output?: AgentOutput): Promise<Verified> {
-    const { sandboxes } = this.d;
-    if (!sandboxes) {
-      if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
-      // Read before the commands: what they would commit is not what they checked.
-      const sha = await this.d.workspaces.head(run.cwd);
-      // As on the clone, before any command: a refused branch runs nothing.
-      const { failures: paths, diffClass } = await this.checkPathsOnHost(project, t, run);
-      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
-      // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
-      const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
-      const blocking = [...paths, ...frozen];
-      return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify, diffClass };
-    }
-    // The commit a job writes, which it publishes (ORC-176).
-    const recipe = await this.recipeOf(project, t);
-    // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
-    // The launch's own decision, kept on the run (ORC-406): another ticket's write to the note since then changes nothing of what was
-    // asked. Recomputed only for a run recorded before it was kept.
-    const asked = !!recipe && (run.previewSearch ?? searchAsked(this.searchContext(project, job, run.repoConfig, run.startFingerprint), recipe.note));
-    const found = asked ? output?.preview : undefined;
-    const noSearch = recipe && !asked ? noSearchReason(recipe.note, run.startFingerprint) : undefined;
-    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, output, recipe?.note, found, noSearch) });
-    // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push. Never a replayed ticket's.
-    const recipes = this.d.previewRecipes;
-    if (recipe && recipes && !project.replayed) {
-      const settled = recipes.settle(recipe.repo, recipe.note, { asked, found, outcome: res.preview, sha: res.sha, port: project.workflow.workspace.portBase, runId: run.id, ticket: t.ticketId, at: new Date(this.d.clock.now()), fingerprint: run.startFingerprint, declared: !!run.repoConfig?.preview }, (text) => this.policy.vet(text, 'start recipe'));
-      this.track(settled.then(
-        (said) => void (said && this.log('warn', `${t.ticketId}: ${said}`)),
-        (err: Error) => this.log('warn', `${t.ticketId}: start recipe of ${recipe.repo} not written to the knowledge base: ${err.message}`),
-      ));
-    }
-    return res;
-  }
-
-  /**
-   * The repository's start recipe as the knowledge base holds it (ORC-386), by the name its origin gives it: a replayed ticket's in
-   * the knowledge base at its start (ORC-376), none with `--memory off`. Undefined without a knowledge base; a note it cannot read
-   * is logged and read as none to search for, never written over.
-   */
-  private async recipeOf(project: ProjectRuntime, t: TicketState): Promise<{ repo: string; note: ReadNote } | undefined> {
-    const recipes = this.d.previewRecipes;
-    const replayed = project.replayed;
-    if (!recipes || (replayed && replayed.knowledge === undefined)) return undefined;
-    const repo = repoNameOf(await this.d.originUrl?.(project).catch(() => undefined), project.id);
-    try {
-      return { repo, note: recipes.read(repo, replayed?.knowledge) };
-    } catch (err) {
-      this.log('warn', `${t.ticketId}: start recipe of ${repo} not read from the knowledge base: ${(err as Error).message}`);
-      return { repo, note: 'unreadable' };
-    }
-  }
-
-  /** What decides, at a `build` launch and at its check alike, whether its agent searches a start recipe (ORC-386). */
-  private searchContext(project: ProjectRuntime, job: JobSpec, config: RepoConfig | undefined, fingerprint: string | undefined): SearchContext {
-    return {
-      fingerprint,
-      step: job.step,
-      canShoot: !!this.d.visualProof,
-      replayed: !!project.replayed,
-      declared: !!config?.preview,
-      services: !!config?.services.length,
-    };
-  }
-
-  /**
-   * `runCleanVerify` for the ticket under the checks of `job`, in a place of its own under `runsDir/<runId>`: the commit
-   * the agent's worktree holds, or with `head` a human's push, as the forge holds it (ORC-159).
-   */
-  private async cleanCheck(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, over: Pick<CleanVerifyRequest, 'green' | 'head' | 'humanHead' | 'visual'>): Promise<CleanVerifyResult> {
-    const { sandboxes, runsDir, originUrl } = this.d;
-    if (!sandboxes || !runsDir || !originUrl) throw new Error('runsDir and originUrl are required with sandboxes');
-    if (!t.branch || (!over.head && !t.worktreePath)) throw new Error(`no branch or no worktree for ${t.ticketId}`);
-    const untrusted = await this.untrustedMark(project, t);
-    // A place the engine mounts from, new for each check: one cut can leave its own behind.
-    const workDir = join(runsDir, runId, `verify-${randomUUID()}`);
-    mkdirSync(workDir, { recursive: true });
-    try {
-      return await (this.d.cleanVerify ?? runCleanVerify)({
-        sandboxes,
-        runId,
-        ticketId: t.ticketId,
-        branch: t.branch,
-        worktree: t.worktreePath ?? '',
-        originUrl: await originUrl(project),
-        workDir,
-        setup: project.workflow.workspace.setup,
-        commands: job.verify,
-        gitleaks: true,
-        semgrep: true,
-        ...(this.d.maxDiff ? { maxDiff: this.d.maxDiff } : {}),
-        knownFlaky: await this.d.store.knownFlakyTests(project.id),
-        ...over,
-        ...(goesThroughFreeze(t, job) ? { frozen: t.frozenTests! } : {}),
-        ...(untrusted ? { untrusted } : {}),
-        ...(this.d.registries ? { registries: this.d.registries } : {}),
-        env: async (config) => (await this.repoVariablesOf(project, config)).env,
-        log: (message) => this.log('warn', `verify of ${t.ticketId}: ${message}`),
-      });
-    } finally {
-      // Under the check's dir, purged with it: what the attack left unremovable costs no verdict.
-      await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `verify of ${t.ticketId}: ${workDir} not removed: ${err.message}`));
-    }
-  }
-
-  /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
-  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined, note: ReadNote, found: PreviewRecipe | undefined, noSearch: string | undefined): VisualRequest {
-    return {
-      intake: t.visualProof === 'required',
-      ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
-      // ORC-386: the learned recipe; the one the agent found only where it was asked to search.
-      ...(isNote(note) && note.status === 'valid' ? { learned: note.recipe } : {}),
-      ...(found ? { found } : {}),
-      ...(noSearch ? { noSearch } : {}),
-      port: project.workflow.workspace.portBase,
-      path: scenarioPath(output?.visual_scenario?.url),
-      gate: (c) => this.policy.capture(c),
-    };
-  }
-
-  /**
-   * The captures `verify` took (ORC-176), kept before the verdict that names them: each file by its hash, under `artifactsDir`, which
-   * no run mounts, and its row in `artifacts`, once by its id. A capture that cannot be kept throws: no verdict names a missing file.
-   */
-  private async keepCaptures(t: TicketState, runId: string, files: NonNullable<CleanVerifyResult['visual']>['files']): Promise<void> {
-    // Only a shooter takes captures, and it comes with its dir.
-    const dir = join(this.d.visualProof!.artifactsDir, t.ticketId);
-    await mkdir(dir, { recursive: true });
-    const createdAt = this.d.clock.now();
-    await Promise.all(
-      files.map(async ({ capture, png }) => {
-        const path = join(dir, `${capture.sha256}.png`);
-        await writeFile(path, png);
-        await this.d.store.putArtifact({ id: captureArtifactId(runId, capture), ticketId: t.ticketId, attemptId: runId, kind: 'visual-proof', path, sha256: capture.sha256, createdAt });
-      }),
-    );
-  }
-
-  /**
-   * `verify` on a human's push (ORC-159): the pushed commit as the forge holds it, in a fresh clone, under the checks of the
-   * job the factory publishes, the freeze included; never in the agent's worktree, and no run of it. Its verdict keeps the
-   * check's id. Without sandboxes there is no clone to check it in, so no verdict: an infrastructure failure.
-   */
-  private verifyPush(project: ProjectRuntime, t: TicketState, c: Extract<Effect, { kind: 'run_verify' }>, head: string): void {
-    const job = project.workflow.jobs[c.job];
-    // No longer awaited (a newer push, a stop): a replayed effect checks nothing.
-    if (!job || t.verifyingRunId !== c.runId) return;
-    // Without sandboxes there is nothing to run, so no slot to wait for: the verdict is the infrastructure failure at once.
-    if (!this.d.sandboxes) return this.track(this.submitVerdict(project, t, c.runId, job, () => Promise.reject(new Error(PUSH_NEEDS_SANDBOXES))));
-    this.withSlot(project, t.ticketId, job.queue, c.runId, (now) =>
-      this.submitVerdict(project, now, c.runId, job, async () => {
-        try {
-          return await this.cleanCheck(project, now, c.runId, job, { head });
-        } finally {
-          // The check's own folder: no run purges it.
-          if (this.d.runsDir) await rm(join(this.d.runsDir, c.runId), { recursive: true, force: true }).catch(() => {});
-        }
-      }),
-    );
-  }
-
-  /**
-   * A check runs the agent's code within the slots of `queue` (ORC-353), as its runs do: `concurrency` bounds both. It waits
-   * for a slot, then checks the ticket as it is by then, nothing if it no longer awaits that check, and drains the queue once
-   * done. A daemon that stops runs its waiting checks without a slot, as before slots counted them, and its shutdown waits
-   * for them: a check dropped would come back at the next start as a cut (`verify.lost`).
-   */
-  private withSlot(project: ProjectRuntime, ticketId: string, queue: QueueName, runId: string, check: (t: TicketState) => Promise<void>): void {
-    const key = `verify:${runId}`;
-    const run = (held: boolean) =>
-      this.track(
-        (async () => {
-          try {
-            const t = await this.ticket(project.id, ticketId);
-            if (t.verifyingRunId === runId) await check(t);
-          } finally {
-            if (held) {
-              this.d.scheduler.release(key);
-              await this.drain(queue);
-            }
-          }
-        })(),
-      );
-    if (this.stopping) return run(false);
-    void this.d.scheduler.acquire(queue, key).then((slot) => run(slot !== null));
-  }
-
-  /** The verdict of a check, under its id `check:<runId>`: none when it threw, an infrastructure failure the agent is not sent. */
-  private async submitVerdict(project: ProjectRuntime, t: TicketState, runId: string, job: JobSpec, check: () => Promise<Verified & { tree?: string }>, output?: AgentOutput): Promise<void> {
-    const base = { ...TRUSTED, at: this.d.clock.now(), projectId: project.id, ticketId: t.ticketId, id: `check:${runId}` };
-    const payload = { runId, job: job.name };
-    let res: Verified & { tree?: string };
-    try {
-      res = await check();
-      if (res.ok && res.visual?.files.length) await this.keepCaptures(t, runId, res.visual.files);
-    } catch (err) {
-      await this.submitResult({ ...base, type: 'verify.errored', payload: { ...payload, error: (err as Error).message } });
-      return;
-    }
-    await this.submitResult(
-      res.ok
-        ? { ...base, type: 'verify.passed', payload: { ...payload, ...(res.sha ? { sha: res.sha } : {}), ...(res.commands ? { commands: res.commands } : {}), ...(output ? { output } : {}), ...(res.visual ? { visualProof: res.visual.proof } : {}), ...(res.flaky ? { flaky: res.flaky } : {}), ...(res.diffClass ? { diffClass: res.diffClass } : {}) } }
-        : { ...base, type: 'verify.failed', payload: { ...payload, failures: res.failures.map((f) => ({ ...f, output: logExcerpt(f.output) })), ...(res.tree ? { tree: res.tree } : {}), ...(res.flaky ? { flaky: res.flaky } : {}) } },
-    );
-  }
-
-  /**
-   * `factory/chemins-interdits` without sandboxes (ORC-338): `checkBranchPaths`, as on the clone, on the worktree's branch read
-   * on the factory's repository against the default branch: the forge's, fetched, for a marked branch; without a mark, the
-   * repository's as the launch last fetched it, so that a slow forge holds back no ticket that does not need it (ORC-358).
-   * As on the clone, what gives no verdict throws, an infrastructure or config failure the agent is not sent: no worktree,
-   * a read that fails, a config the default branch refuses.
-   */
-  private async checkPathsOnHost(project: ProjectRuntime, t: TicketState, run: RunRecord): Promise<{ failures: VerifyFailure[]; diffClass: ClassifiedDiff }> {
-    const untrusted = await this.untrustedMark(project, t);
-    const reader = await this.d.workspaces.branchReader(project.repoPath, run.cwd, { fetch: !!untrusted });
-    if (!reader) throw new Error(`the forbidden paths check could not run: no worktree with a commit at ${run.cwd}`);
-    const config = parseRepoConfig(await reader.baseConfig());
-    // The class of the diff (ORC-198), read as the clone's.
-    const [failures, diffClass] = await Promise.all([checkBranchPaths(reader, untrusted && untrustedCheck(untrusted, config)), classOfBranch(reader, config)]);
-    return { failures, diffClass };
-  }
-
-  /**
-   * The ticket's mark (ORC-338), with the heads humans pushed to its branch; none on a trusted branch. A ticket the mark
-   * has not seen yet (`untrustedSince` absent: it came before the mark existed) is read once in its run records, and the
-   * answer kept on it: `''` (its whole branch) when an untrusted run of a worktree job worked on it, the scope of the mark, else `null`.
-   */
-  private async untrustedMark(project: ProjectRuntime, t: TicketState): Promise<UntrustedMark | undefined> {
-    const since = (await this.readUntrusted(project, t)).untrustedSince;
-    return since === null || since === undefined ? undefined : { since, humanPushes: t.humanPushes ?? [] };
-  }
-
-  /** The one-time read of `untrustedMark`, for a ticket the mark has not seen; the ticket as it is otherwise. */
-  private async readUntrusted(project: ProjectRuntime, t: TicketState): Promise<TicketState> {
-    if (t.untrustedSince !== undefined) return t;
-    const runs = await this.d.store.ticketRuns(t.projectId, t.ticketId);
-    // A job gone from the workflow counts: fail closed.
-    const read = runs.some((r) => !!r.sensitivePaths?.length && (project.workflow.jobs[r.job]?.workspace ?? 'worktree') === 'worktree') ? '' : null;
-    return this.apply(t, { type: 'untrusted.read', since: read });
-  }
-
-  /**
-   * `factory/tests-gelés` on a worktree's head (ORC-131): the commits since the freeze, read on the factory's repository.
-   * A check that cannot read them fails: the freeze never opens on a breakdown.
-   */
-  private async checkFrozen(project: ProjectRuntime, cwd: string, frozen: FrozenTests): Promise<VerifyFailure[]> {
-    const fail = (output: string) => [{ command: FREEZE_CHECK, exitCode: 1, output }];
-    try {
-      const diff = await this.d.workspaces.stepDiff(project.repoPath, cwd, frozen.sha);
-      if (!diff) return fail(`The freeze check could not run: no worktree at ${cwd}.`);
-      const r = await checkFrozen(frozen, diff);
-      return r.ok ? [] : fail(r.summary);
-    } catch (err) {
-      return fail(`The freeze check could not run: ${(err as Error).message}`);
-    }
-  }
-
-  /**
-   * A `/refreeze` gets the freeze at its ticket's branch head before its decision (ORC-131), as roles are resolved:
-   * `decide` stays pure and a replay regels the same files. The files frozen before, and the harness. No worktree, none; no
-   * freeze, none either, it is the way out of a freeze, not a way in, but for a diff of the verification configuration held for
-   * this very `/refreeze` (ORC-198): its harness is frozen as the maintainer approved it. The head alone: the frozen commit may
-   * be gone after a rebase.
-   */
-  private async withFreeze(event: FactoryEvent): Promise<FactoryEvent> {
-    if (event.type !== 'command' || event.payload.name !== REFREEZE || event.payload.frozen || !event.ticketId) return event;
-    const t = await this.d.store.getTicket(event.projectId, event.ticketId);
-    if (!t?.worktreePath || (!t.frozenTests && !needsRefreeze(t.diffClass?.class, factoryDefault.approvers))) return event;
-    const head = await this.d.workspaces.head(t.worktreePath);
-    const diff = head ? await this.d.workspaces.stepDiff(this.project(event.projectId).repoPath, t.worktreePath, head) : undefined;
-    if (!diff) return event;
-    return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(t.frozenTests?.files ?? {}), diff) } };
   }
 
   /** A block made out of a decision (a launch that failed, a refused pickup): the same comment as any other, without an effect's key. */
@@ -1731,7 +1362,7 @@ export class Daemon extends DaemonBase {
   }
 
   /** Starts queued items while slots are free, one drain at a time. */
-  private drain(queue: QueueName): Promise<void> {
+  protected drain(queue: QueueName): Promise<void> {
     const next = this.draining.then(() => this.drainNow(queue));
     this.draining = next.catch(() => undefined);
     return next;

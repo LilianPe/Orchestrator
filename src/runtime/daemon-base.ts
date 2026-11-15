@@ -1,16 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import type { RunHandle } from '../adapters/runner/types.js';
+import type { Sandbox, SandboxProvider } from '../adapters/sandbox/types.js';
 import type { Tracker } from '../adapters/tracker/types.js';
+import type { Workspace } from '../adapters/workspace/types.js';
 import type { Workflow } from '../core/workflow.js';
 import { Worker } from './worker.js';
 import { FrozenFormatError, frozenWorkflow, workflowVersion } from './workflow-version.js';
-import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, WorkflowVersion } from '../store/types.js';
+import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, RunRecord, WorkflowVersion } from '../store/types.js';
 import { OutputPolicy, PolicedTracker } from '../publish/output-policy.js';
 import { blockedLabelChange } from '../core/engine.js';
 import { reduce } from '../core/reduce.js';
 import type { StoredEvent } from '../core/upcast.js';
 import type { InternalEvent, QueueName, FactoryEvent, TicketState } from '../core/types.js';
+import type { EgressPolicy } from '../network/levels.js';
 import type { DaemonDeps, ProjectRuntime } from './daemon.js';
+
+/** Meta key of the head a ticket's tests step started on (ORC-123). */
+export const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
 
 /** The daemon's state and what every part of it uses (ORC-394): the projects' workflows, a ticket's projection and its changes, the log. */
 export abstract class DaemonBase {
@@ -236,10 +242,14 @@ export abstract class DaemonBase {
    */
 
   // Provided by the classes above (ORC-394), each in its module.
+  protected abstract submitResult(event: FactoryEvent): Promise<void>;
+  protected abstract destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void>;
+  protected abstract openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services?: readonly string[]): Promise<Sandbox>;
   protected abstract prepared(event: FactoryEvent): Promise<FactoryEvent>;
   protected abstract request(event: FactoryEvent): DecisionRequest;
   protected abstract freeSlot(row: StoredEvent): Promise<void>;
   protected abstract committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void>;
   protected abstract execute(row: OutboxRow): Promise<EffectOutcome | void>;
   protected abstract keep(row: OutboxRow, dir: string): Promise<void>;
+  protected abstract drain(queue: QueueName): Promise<void>;
 }
