@@ -5,7 +5,7 @@ import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMa
 import { blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
-import { blockFacts, type BlockFacts } from './block-comment.js';
+import { blockFacts } from './block-comment.js';
 import { AGENT_QUESTION, causeOf, CLARIFY_EXPIRED, isTakenOver, NO_ASSESSMENT, PAUSED, STOPPED, TAKEN_OVER, type BlockKind } from './block-cause.js';
 import type { Decision, Effect } from './decision.js';
 import { CLASS_PATHS, needsRefreeze, type ClassifiedDiff } from './diff-class.js';
@@ -312,11 +312,11 @@ function waitFor(out: Decision, blockers: readonly Blocker[], start: PendingJob)
 
 /**
  * The end of an AI review lens (ORC-183): its findings kept on the published commit it read (`verifiedSha`, what its
- * launch cloned), and published with the other lens's by the job whose `on_success` posts the review; then its `on_success`.
+ * launch cloned), and published with the other lens's by the last lens of the step (`publishesReview`); then the job's end (`nextOf`).
  * A lens that handed back no findings list, or a ticket with no published commit, is blocked: a silent review is no review.
  *
  * The review loop (ORC-184): each lens's blocking findings are counted on the commit, and once the lens that publishes ends
- * with one standing, its `on_blocking` fix starts in place of its `on_success`, one round of the review and CI loop; past
+ * with one standing, the fix of the review's failure edge starts in place of its end (`blockingFix`), one round of the review and CI loop; past
  * the bound, the ticket is blocked. A preset whose review has no failure edge goes on to Human Review.
  */
 function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, lens: ReviewLens, p: EventPayloads['run.finished']): Decision {
@@ -577,14 +577,9 @@ type Block = Omit<Parameters<typeof blockFacts>[0], 'step'> & { kind: BlockKind 
 /** What a run's end says of its block: its job is the caller's. */
 type RunBlock = Pick<Block, 'kind' | 'reason' | 'tried' | 'question'>;
 
-/** A block is told by the standard comment (ORC-196). */
-function tell(out: Decision, facts: BlockFacts): void {
-  out.effects.push({ kind: 'block_comment', block: facts });
-}
-
 function block(out: Decision, workflow: Workflow, b: Block): Decision {
   out.events.push({ type: 'ticket.blocked', reason: b.reason, kind: b.kind, ...(b.job ? { job: b.job } : {}) });
-  tell(out, blockFacts({ ...b, step: b.step ?? stepOf(workflow, b.job!) }));
+  out.effects.push({ kind: 'block_comment', block: blockFacts({ ...b, step: b.step ?? stepOf(workflow, b.job!) }) });
   return out;
 }
 
@@ -613,7 +608,7 @@ function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, { 
 
 /** A wait for a repo: only an action lifts it, no job of the ticket has started. */
 function askForRepo(out: Decision, reason: string, question: string, tried: string): void {
-  tell(out, { ...blockFacts({ reason, step: 'intake', tried: [tried], question }), waits: true });
+  out.effects.push({ kind: 'block_comment', block: { ...blockFacts({ reason, step: 'intake', tried: [tried], question }), waits: true } });
 }
 
 /** Failed checks, the block's fields. */
@@ -1423,17 +1418,17 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   const resumed = resumedJob(event, ticket, workflow);
   const job = resumed ?? r.job;
   // The ticket keeps its block for a run refused.
-  const no = refused(ticket, job);
-  if (!no && ticket?.blocked) unblock(out, event, ticket);
+  const merged = refused(ticket, job);
+  if (!merged && ticket?.blocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
-  else if (!no && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
+  else if (!merged && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
   const waits = heldByWait(ticket, job);
   if (waits) {
     out.trace.push(`${job.name} not started, ${waits}`);
     return out;
   }
-  if (r.debounceMs && !no) {
+  if (r.debounceMs && !merged) {
     const inbox = ((event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind) || event.type === 'pr.reviewed';
     out.timers.push({ kind: 'debounce', slot: job.name, ms: r.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
   } else {
@@ -1451,7 +1446,7 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
  * A start refused anyway (merged PR) is no round: `refusesDevWork`, the only refusal of a job that writes code.
  */
 function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, job: JobSpec, start: () => void): void {
-  if (!humanRoundJob(workflow, job) || refusesDevWork(ticket, job) === 'merged') {
+  if (!humanRoundJob(workflow, job) || refused(ticket, job)) {
     start();
     return;
   }
@@ -1936,7 +1931,6 @@ function unrouted(state: TicketState | undefined, event: FactoryEvent, workflow:
   const sessionId = (event.payload as { linearSessionId?: string }).linearSessionId;
   if (event.type === 'ticket.delegated' && repos) {
     if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body, kind: 'pickup' }, { type: 'ticket.patched', patch: { awaitingRepo: repos } });
-    // In the session this delegation opened: the ticket keeps the first one it had.
     askForRepo(out, body, `Which repository: ${choices.map((r) => `\`${repoLabel(r)}\``).join(' or ')}? Add its label to the ticket, then delegate it again.`, 'Delegation on a team with several repositories, without a label naming one.');
     // A new ticket: `blockedLabel` sees no state before it and puts no label.
     if (!state) out.effects.push(blockedLabelChange(false, true)!);
@@ -2311,10 +2305,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // repairing this event does not lift a block that is not its own. The event is still announced.
       if (ticket.blocked) out.trace.push(`dead_letter.added: ticket already blocked (${ticket.blockReason ?? 'no reason'}), reason kept`);
       else out.events.push({ type: 'ticket.blocked', reason, kind: 'dead_letter', eventId: event.payload.eventId });
-      tell(
-        out,
-        blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? event.payload.eventType), attempts: event.payload.attempts ?? event.payload.failures, tried: [deadLetterTried(event.payload)], question: `Can a maintainer repair this event: \`factory run repair ${ticket.ticketId}\`?` }),
-      );
+      out.effects.push({
+        kind: 'block_comment',
+        block: blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? event.payload.eventType), attempts: event.payload.attempts ?? event.payload.failures, tried: [deadLetterTried(event.payload)], question: `Can a maintainer repair this event: \`factory run repair ${ticket.ticketId}\`?` }),
+      });
       return out;
     }
     case 'effect.failed': {
@@ -2357,7 +2351,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const reason = `Error: ${error}`;
       out.events.push({ type: 'ticket.blocked', reason, kind: 'infra' });
       // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.
-      if (!eventId.startsWith('effect:')) tell(out, blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? kind), tried: [`The effect ${kind}, ${event.payload.attempts} times.`] }));
+      if (!eventId.startsWith('effect:')) out.effects.push({ kind: 'block_comment', block: blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? kind), tried: [`The effect ${kind}, ${event.payload.attempts} times.`] }) });
       return out;
     }
     case 'pr.merged':

@@ -300,7 +300,7 @@ export interface EventPayloads {
    * `headMoved`: refused for a push since the review, whose new commits go through the AI review again.
    */
   'pr.merge_refused': PrPayload & { reason: string; headMoved?: boolean };
-  /** The verified commit is on the forge and its PR open (ORC-125), or the branch holds nothing to publish. The job's `on_success` applies. */
+  /** The verified commit is on the forge and its PR open (ORC-125), or the branch holds nothing to publish. The job's end applies (`nextOf`). */
   /** `empty`: the run committed nothing, and no PR was opened (ORC-170). */
   'publish.done': { runId: string; job: string; sha: string; output?: AgentOutput; empty?: true };
   /** The factory did not publish, and says why (ORC-125): nothing was written on the forge. The ticket is blocked. */
@@ -560,7 +560,7 @@ export interface TicketState {
   blockKind?: BlockKind;
   /** The event a `dead_letter` block sets aside: its repair lifts that block, not another one. */
   blockedEvent?: string;
-  /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job, and on versions frozen before it. */
+  /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job. */
   blockedJob?: string;
   claudeSessionId?: string;
   linearSessionId?: string;
@@ -619,8 +619,8 @@ export interface TicketState {
   /** The last failed check (worktree and failed commands) and how many times in a row it came back (ORC-187). */
   repeatedFailure?: { signature: string; count: number } | null;
   /**
-   * The move of a job's `on_success` that waits for its publication (ORC-125). Kept through a refusal: what relaunches the ticket
-   * is `dev-feedback`, which had no move of its own before ORC-170 (a frozen version still has none), and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
+   * The move of a job's end (`nextOf`) that waits for its publication (ORC-125). Kept through a refusal: what relaunches the ticket
+   * is `dev-feedback`, which had no move of its own before ORC-170, and the work would never reach its reviewer. `null`, not undefined, survives the journal's JSON.
    */
   owedMove?: LogicalState | null;
   /**

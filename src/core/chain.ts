@@ -1,4 +1,4 @@
-import { isAgentStep, type Step } from '../presets/preset.js';
+import { isAgentStep, mergeGate, type Step } from '../presets/preset.js';
 import type { LogicalState } from './types.js';
 import type { JobSpec, Post, Workflow } from './workflow.js';
 
@@ -123,12 +123,12 @@ export function blockingFix(wf: Workflow, job: JobSpec): JobSpec | undefined {
 }
 
 /** The preset has rounds of human review feedback (ORC-190): its merge gate sends the run back to a fix. */
-export const hasHumanRounds = (wf: Workflow): boolean => wf.preset.steps.some((s) => s.type === 'human_gate' && s.gate === 'merge' && !!s.onFailure);
+export const hasHumanRounds = (wf: Workflow): boolean => !!mergeGate(wf.preset)?.onFailure;
 
 /**
  * Each start of `job` is a round of human review feedback (ORC-190): the fix the merge gate's failure edge sends the run to,
  * on its counter (`limits.humanReviewRounds`).
  */
 export function humanRoundJob(wf: Workflow, job: JobSpec): boolean {
-  return job.cause === 'human' && wf.preset.steps.some((s) => s.type === 'human_gate' && s.gate === 'merge' && s.onFailure?.goto === job.step);
+  return job.cause === 'human' && mergeGate(wf.preset)?.onFailure?.goto === job.step;
 }

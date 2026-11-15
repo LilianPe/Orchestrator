@@ -20,7 +20,7 @@ export type Effect =
   | { kind: 'run_verify'; runId: string; job: string; output?: AgentOutput; head?: string }
   /**
    * The verified commit out to the forge (ORC-125), by the factory alone, then `publish.done` or `publish.refused`. `output`: for
-   * the `post_output` the job's `on_success` writes once it is out. `rewrite`: the commit of a rebase (ORC-146), which may
+   * the `post_output` the job's end writes once it is out. `rewrite`: the commit of a rebase (ORC-146), which may
    * replace the head the factory published last, and that head only.
    */
   | { kind: 'publish'; runId: string; job: string; sha: string; output?: AgentOutput; commands?: readonly string[]; rewrite?: true; visualProof?: VisualProof }

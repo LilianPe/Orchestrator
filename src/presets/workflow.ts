@@ -2,7 +2,7 @@ import { WORKFLOW_FORMAT, type JobSpec, type Limits, type RunLimits, type Workfl
 import { blockingFix, nextOf, startingJob } from '../core/chain.js';
 import { REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
-import { compilePreset, isAgentStep, type AgentStep, type Effort, type Preset } from './preset.js';
+import { compilePreset, isAgentStep, mergeGate, type AgentStep, type Effort, type Preset } from './preset.js';
 import { BINDINGS, type Binding } from './runtime-bindings.js';
 import { perStepToolViolations, READ_TOOLS, stepTools } from './tools.js';
 
@@ -151,7 +151,7 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
   const entryStep = p.steps.find((s) => s.id === entry);
   if (!entryStep || !startingJob(jobs, entryStep)) throw new WorkflowError(`preset ${p.name}: its entry ${entry} has no job`);
   // The bounds of the loops, read on the edges that take them: red CI's (the review and CI loop), the merge gate's (human review).
-  const merge = p.steps.find((s) => s.type === 'human_gate' && s.gate === 'merge');
+  const merge = mergeGate(p);
   const limits: Limits = {
     perRun,
     // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.

@@ -107,7 +107,7 @@ export interface Workflow {
    * The Linear status of each logical state. `ready` (« Ready to Merge ») is gone (ORC-170). `cancelled` has no status of its
    * own: it is read on the Linear type, and nothing moves a ticket to it.
    */
-  states: Record<Exclude<LogicalState, 'ready' | 'cancelled'>, string>;
+  states: Record<Exclude<LogicalState, 'ready' | 'cancelled'>, string> & { ready?: never; cancelled?: never };
   limits: Limits;
   /** `portBase`: the `PORT` the visual proof's application listens on (ORC-176); what starts it is `.factory/config.yml`'s `preview`. */
   workspace: { setup: string[]; portBase: number };

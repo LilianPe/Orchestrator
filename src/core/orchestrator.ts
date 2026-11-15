@@ -37,7 +37,6 @@ import {
   LEASE_MS,
   PAUSE_ACCEPTED,
   RUN_LEASE_MS,
-  RUN_SILENT_MS,
   type DecisionOutcome,
   type DecisionRequest,
   type EffectOutcome,
@@ -194,7 +193,7 @@ const causeChain = (err: unknown): string => {
  * What a run's stagnation is watched against (ORC-136, ORC-187). Only a dev job has its worktree read for a loop: `decide`
  * blocks no ticket on a question, whose checkout stays out of it.
  */
-function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation: StagnationBounds } {
+function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation: StagnationBounds & { silentMs: number } } {
   return { stagnation: { silentMs: wf.limits.silentAfterMs, ...(job.queue === 'dev' ? { repeats: wf.limits.repeatedFailures } : {}) } };
 }
 
@@ -536,8 +535,9 @@ export class Orchestrator {
   private readonly relayTracker: Tracker;
   /** Versions of the projects' workflows, by workflow object. */
   private versionOfWorkflow = new WeakMap<Workflow, WorkflowVersion>();
-  /** The frozen versions refused for their format (ORC-393), whose refusal is logged once. */
-  private refusedVersions = new Set<string>();
+  /** The frozen versions refused for their format (ORC-393), and the tickets whose refusal is logged, once each. */
+  private refusedVersions = new Map<string, FrozenFormatError>();
+  private refusedTickets = new Set<string>();
   /** Workflows by version hash: the current ones and those tickets are frozen on. */
   private workflows = new Map<string, Workflow>();
   /** Dequeued items whose start has not taken its slot yet, per queue: drain hands out no more than the free slots. */
@@ -809,7 +809,7 @@ export class Orchestrator {
   }
 
   /** An attempt this process follows from now on (ORC-344): its handle, its lease token, its progress counted from now. */
-  private follow(runId: string, handle: RunHandle, token: number, silentMs = RUN_SILENT_MS): void {
+  private follow(runId: string, handle: RunHandle, token: number, silentMs: number): void {
     this.handles.set(runId, handle);
     this.held.set(runId, { token, seenAt: this.d.clock.now(), silentMs });
   }
@@ -1618,20 +1618,28 @@ export class Orchestrator {
     return v;
   }
 
-  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket, logged once (ORC-393). */
+  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket (ORC-393). */
   private workflowOf(version: WorkflowVersion, ticketId: string | undefined): Workflow {
     let wf = this.workflows.get(version.hash);
     if (!wf) {
       try {
         wf = frozenWorkflow(version);
       } catch (err) {
-        if (!this.refusedVersions.has(version.hash)) this.log('error', `${ticketId ?? 'an event'} refused: ${(err as Error).message}`);
-        this.refusedVersions.add(version.hash);
+        if (err instanceof FrozenFormatError) this.refuse(version.hash, ticketId, err);
         throw err;
       }
       this.workflows.set(version.hash, wf);
     }
     return wf;
+  }
+
+  /** A ticket refused for the format of its frozen version: in the daemon's log, once per ticket. */
+  private refuse(hash: string, ticketId: string | undefined, err: FrozenFormatError): void {
+    this.refusedVersions.set(hash, err);
+    const key = `${ticketId ?? ''}:${hash}`;
+    if (this.refusedTickets.has(key)) return;
+    this.refusedTickets.add(key);
+    this.log('error', `${ticketId ?? 'an event'} refused: ${err.message}`);
   }
 
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
@@ -1646,9 +1654,20 @@ export class Orchestrator {
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);
     if (!workflow) {
+      // A ticket refused for its version's format (ORC-393) has no runtime: nothing is launched, executed nor kept for it.
+      const refused = this.refusedVersions.get(hash);
+      if (refused) {
+        this.refuse(hash, ticketId, refused);
+        return undefined;
+      }
       const stored = await this.d.store.getWorkflowVersion(hash);
       if (!stored) throw new Error(`workflow version ${hash} of ${ticketId} is not stored`);
-      workflow = this.workflowOf(stored, ticketId);
+      try {
+        workflow = this.workflowOf(stored, ticketId);
+      } catch (err) {
+        if (err instanceof FrozenFormatError) return undefined;
+        throw err;
+      }
     }
     return { ...project, workflow };
   }
@@ -1965,11 +1984,7 @@ export class Orchestrator {
       const taken = () => this.d.store.finishQueued(claim).then(() => void (finished = true));
       this.worker
         .exclusive(item, async () => {
-          // A ticket frozen on a workflow it no longer reads (ORC-393): its start leaves the queue, launched never.
-          const project = await this.runtimeFor(item.projectId, item.ticketId).catch((err: unknown) => {
-            if (err instanceof FrozenFormatError) return undefined;
-            throw err;
-          });
+          const project = await this.runtimeFor(item.projectId, item.ticketId);
           // Launched before a crash cut it before it left the queue: recover()'s, not launched again (ORC-277).
           const launched = item.startMark !== undefined && (await this.startHandled(item.startMark));
           let outcome: StartOutcome = 'done';
@@ -2276,7 +2291,7 @@ export class Orchestrator {
   /** `state`: as `sessionFor`'s. */
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState, keepReviewSha?: boolean, state: StateIo = asIs): Promise<void> {
     // `ready` and `cancelled` have no status (ORC-170): nothing moves a ticket to them.
-    const stateName = to === 'ready' || to === 'cancelled' ? undefined : project.workflow.states[to];
+    const stateName = project.workflow.states[to];
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     if (this.silenced(project.id, `the move of ${t.ticketId} to ${to}`)) return;
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
