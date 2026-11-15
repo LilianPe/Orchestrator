@@ -11,9 +11,10 @@ export type MergedPr = Extract<Effect, { kind: 'after_merge' }>;
 /**
  * The work the merged PR carries, as the ticket's journal has it: the green verdict of the merged head when GitHub names it
  * (a human's push verified since, ORC-159), else of the commit the factory published last (ORC-125), else the last green verdict.
+ * An `empty` publication pushed nothing: it carries no work (ORC-402).
  */
 export function mergedWork(events: readonly FactoryEvent[], headSha?: string): EventPayloads['verify.passed'] | undefined {
-  const published = events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done')?.payload.runId;
+  const published = events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !(e as FactoryEvent<'publish.done'>).payload.empty)?.payload.runId;
   const passed = events.filter((e): e is FactoryEvent<'verify.passed'> => e.type === 'verify.passed').map((e) => e.payload);
   return (headSha ? passed.findLast((p) => p.sha === headSha) : undefined) ?? passed.findLast((p) => p.runId === published) ?? passed.at(-1);
 }

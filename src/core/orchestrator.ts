@@ -2416,11 +2416,14 @@ export class Orchestrator {
 
   /**
    * The head the factory published last on the ticket's branch (ORC-146), read from its journal: the sha of its last
-   * `publish.done`, which is journaled once the push is on the forge. The one head a rebase may replace.
+   * `publish.done` that pushed something, which is journaled once the push is on the forge; an `empty` one pushed nothing
+   * (ORC-402). The one head a rebase may replace.
    */
   private async lastPublished(projectId: string, ticketId: string): Promise<string | undefined> {
-    const done = (await this.d.store.ticketJournal(projectId, ticketId)).findLast((e) => e.event.type === 'publish.done');
-    return (done?.event.payload as EventPayloads['publish.done'] | undefined)?.sha;
+    const pushed = (await this.d.store.ticketJournal(projectId, ticketId))
+      .map((e) => (e.event.type === 'publish.done' ? (e.event.payload as EventPayloads['publish.done']) : undefined))
+      .findLast((p) => p && !p.empty);
+    return pushed?.sha;
   }
 
   /**
