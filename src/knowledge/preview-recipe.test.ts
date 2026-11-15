@@ -260,11 +260,28 @@ describe('a search bounded at three failures (ORC-406)', () => {
     expect(recipes.read('acme/shop')).toMatchObject({ status: 'not_found', failures: 1, fingerprint: other });
   });
 
-  it('a fingerprint git could not read holds as long as it stays unread: the cost stays bounded', () => {
+  it('a fingerprint git could not read leaves the last one standing: a passing git failure neither asks again nor resets the count', async () => {
     const { fingerprint: _, ...unread } = { ...notFound, failures: 3 };
     expect(searchOwed(unread, undefined)).toBe(false);
     expect(searchOwed(unread, FP)).toBe(true);
-    expect(searchOwed({ ...notFound, failures: 3 }, undefined)).toBe(true);
+    expect(searchOwed({ ...notFound, failures: 3 }, undefined)).toBe(false);
+    expect(noSearchReason({ ...notFound, failures: 3 }, undefined)).toMatch(/searched 3 times/);
+    const { repo } = kbRepo();
+    const recipes = new PreviewRecipes(new KnowledgeBase(repo));
+    await recipes.settle('acme/shop', undefined, settled('REL-1'), vet);
+    await recipes.settle('acme/shop', recipes.read('acme/shop'), settled('REL-2', { fingerprint: undefined }), vet);
+    expect(recipes.read('acme/shop')).toMatchObject({ failures: 2, fingerprint: FP });
+  });
+
+  it("counts one failure per ticket: a ticket's own relaunches spend nothing of the other tickets' searches", async () => {
+    const { repo } = kbRepo();
+    const recipes = new PreviewRecipes(new KnowledgeBase(repo));
+    await recipes.settle('acme/shop', undefined, settled('REL-1'), vet);
+    expect(await recipes.settle('acme/shop', recipes.read('acme/shop'), settled('REL-1'), vet)).toBeUndefined();
+    expect(recipes.read('acme/shop')).toMatchObject({ failures: 1, ticket: 'REL-1' });
+    // Unless the start files changed meanwhile: that count starts again from this ticket.
+    await recipes.settle('acme/shop', recipes.read('acme/shop'), settled('REL-1', { fingerprint: 'b'.repeat(64) }), vet);
+    expect(recipes.read('acme/shop')).toMatchObject({ failures: 1, fingerprint: 'b'.repeat(64) });
   });
 
   it('a found recipe that did not answer is a failure; one the check never reached is not, and a search not asked writes nothing', async () => {
@@ -291,7 +308,7 @@ describe('a search bounded at three failures (ORC-406)', () => {
     const recipes = new PreviewRecipes(new KnowledgeBase(repo));
     for (const ticket of ['REL-1', 'REL-2', 'REL-3']) await recipes.settle('acme/shop', recipes.read('acme/shop'), settled(ticket), vet);
     await recipes.settle('acme/shop', recipes.read('acme/shop'), settled('REL-4', { asked: false, declared: true }), vet);
-    expect(recipes.read('acme/shop')).toMatchObject({ status: 'not_found', failures: 0 });
+    expect(recipes.read('acme/shop')).toMatchObject({ status: 'not_found', failures: 0, origin: 'factory@run-REL-4', ticket: 'REL-4' });
     expect(git(origin, 'log', '-1', '--format=%s', 'main')).toBe('preview(acme/shop): failed searches reset, `preview` declared (REL-4)');
     expect(searchOwed(recipes.read('acme/shop'), FP)).toBe(true);
     const commits = git(origin, 'rev-list', '--count', 'main');

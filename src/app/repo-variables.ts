@@ -5,6 +5,7 @@ import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.
 import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
+import { zFields } from '../core/clean-verify.js';
 import { START_FILES } from '../knowledge/preview-recipe.js';
 
 /**
@@ -56,13 +57,13 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
   const exec = o.exec ?? execCmd;
   return async ({ repoPath }) => {
     const { ref } = await originHeadOf(exec, repoPath);
-    const tree = await exec('git', ['-C', repoPath, 'ls-tree', '-z', ref, '--', ...START_FILES]);
+    const tree = await exec('git', ['-C', repoPath, '--literal-pathspecs', 'ls-tree', '-z', ref, '--', ...START_FILES]);
     if (tree.code !== 0) {
       o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'ls-tree', ref], tree).message}`);
       return undefined;
     }
     const parts: string[] = [];
-    for (const entry of tree.stdout.split('\0').filter(Boolean)) {
+    for (const entry of zFields(tree.stdout)) {
       const m = /^\d+ \w+ ([0-9a-f]+)\t(.+)$/.exec(entry);
       if (!m) continue;
       const blob = m[1]!;

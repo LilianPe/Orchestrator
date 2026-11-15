@@ -109,8 +109,12 @@ export const isNote = (n: ReadNote): n is RecipeNote => typeof n === 'object' &&
 
 export const isNotFound = (n: ReadNote): n is NotFoundNote => typeof n === 'object' && n.status === 'not_found';
 
-/** No search past `MAX_FAILED_SEARCHES` that found nothing, while the files that decide the start are as they were (ORC-406). */
-const exhausted = (n: NotFoundNote, fingerprint: string | undefined): boolean => n.failures >= MAX_FAILED_SEARCHES && n.fingerprint === fingerprint;
+/**
+ * No search past `MAX_FAILED_SEARCHES` that found nothing, while the files that decide the start are as they were (ORC-406). A
+ * fingerprint git could not read leaves the last one standing: a passing failure of git neither asks again nor resets the count.
+ */
+const sameStart = (n: NotFoundNote, fingerprint: string | undefined): boolean => fingerprint === undefined || n.fingerprint === fingerprint;
+const exhausted = (n: NotFoundNote, fingerprint: string | undefined): boolean => n.failures >= MAX_FAILED_SEARCHES && sameStart(n, fingerprint);
 
 /**
  * A search is owed with no note, under three that found nothing on the same start files (ORC-406), or once after an invalidation;
@@ -244,11 +248,14 @@ export class PreviewRecipes {
 
   /**
    * A search with no recipe to show for it, over no note or earlier ones (ORC-406): counted while the files that decide the start
-   * hold `fingerprint`, counted from one when they changed.
+   * hold `fingerprint`, counted from one when they changed; once per ticket, whose own relaunches spend no other ticket's search.
    */
   searchFailed(repo: string, previous: NotFoundNote | undefined, s: { fingerprint: string | undefined; sha: string; runId: string; ticket: string; at: Date }, vet: Vet): Promise<string | undefined> {
-    const failures = previous && previous.fingerprint === s.fingerprint ? previous.failures + 1 : 1;
-    const note: NotFoundNote = { scope: `repo:${repo}`, status: 'not_found', failures, ...(s.fingerprint ? { fingerprint: s.fingerprint } : {}), origin: `agent:build@${s.runId}`, ticket: s.ticket, checkedAt: isoDay(s.at) };
+    const same = previous && sameStart(previous, s.fingerprint);
+    if (same && previous.ticket === s.ticket && previous.failures > 0) return Promise.resolve(undefined);
+    const failures = same ? previous.failures + 1 : 1;
+    const fingerprint = s.fingerprint ?? previous?.fingerprint;
+    const note: NotFoundNote = { scope: `repo:${repo}`, status: 'not_found', failures, ...(fingerprint ? { fingerprint } : {}), origin: `agent:build@${s.runId}`, ticket: s.ticket, checkedAt: isoDay(s.at) };
     return this.write(repo, note, previous, `no start recipe found on ${s.sha.slice(0, 12)} (${s.ticket}, ${failures} of ${MAX_FAILED_SEARCHES})`, vet);
   }
 
@@ -266,7 +273,7 @@ export class PreviewRecipes {
     const o = s.outcome;
     if (o?.of === 'found' && o.answered && s.found) return this.record(repo, { recipe: s.found, sha: s.sha, port: s.port, runId: s.runId, ticket: s.ticket, at: s.at }, note, vet);
     if (o?.of === 'learned' && isNote(note)) return this.invalidate(repo, note, { reason: firstLine(o.detail) || 'the application did not start', sha: s.sha, ticket: s.ticket, at: s.at }, vet);
-    if (s.declared && isNotFound(note) && note.failures > 0) return this.write(repo, { ...note, failures: 0, ticket: s.ticket, checkedAt: isoDay(s.at) }, note, `failed searches reset, \`preview\` declared (${s.ticket})`, vet);
+    if (s.declared && isNotFound(note) && note.failures > 0) return this.write(repo, { ...note, failures: 0, origin: `factory@${s.runId}`, ticket: s.ticket, checkedAt: isoDay(s.at) }, note, `failed searches reset, \`preview\` declared (${s.ticket})`, vet);
     // No recipe handed back, or one tried that did not answer; never one the check did not reach.
     if (!s.asked || (s.found && o?.of !== 'found')) return Promise.resolve(undefined);
     if (isNote(note)) return this.searchSpent(repo, note, { ticket: s.ticket, sha: s.sha }, vet);

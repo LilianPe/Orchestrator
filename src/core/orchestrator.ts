@@ -66,7 +66,7 @@ import { branchName, namesTicket } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
-import { isNote, noSearchReason, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
+import { isNote, isNotFound, noSearchReason, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -1214,7 +1214,8 @@ export class Orchestrator {
     if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
     const recipe = await this.recipeOf(project, t);
     // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
-    const asked = !!recipe && searchAsked(this.searchContext(project, job, run.repoConfig, run.startFingerprint), recipe.note);
+    // The launch's own decision where it kept it: another ticket's write to the note since then changes nothing of what was asked.
+    const asked = !!recipe && (run.previewSearch ?? searchAsked(this.searchContext(project, job, run.repoConfig, run.startFingerprint), recipe.note));
     const found = asked ? output?.preview : undefined;
     const noSearch = recipe && noSearchReason(recipe.note, run.startFingerprint);
     const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: { ...this.visualRequest(project, t, output, recipe?.note, found), ...(noSearch ? { noSearch } : {}) } });
@@ -3118,7 +3119,9 @@ export class Orchestrator {
       // Nothing declares how to start the application, nothing learned it (ORC-386): the build agent finds it.
       const recipe = job.step === 'build' ? await this.recipeOf(project, t) : undefined;
       // Read with the config, on the default branch (ORC-406), and kept on the run: its check counts a failed search against it.
-      const startFingerprint = recipe && !project.replayed ? await this.d.startFingerprint?.(project) : undefined;
+      // Only where a search could be asked, with no recipe in the way: never on a dormant instance, a declared start, a learned recipe.
+      const counted = !!recipe && (recipe.note === undefined || isNotFound(recipe.note)) && searchAsked(this.searchContext(project, job, config, undefined), undefined);
+      const startFingerprint = counted ? await this.d.startFingerprint?.(project) : undefined;
       const previewSearch = !!recipe && searchAsked(this.searchContext(project, job, config, startFingerprint), recipe.note);
       const promptInput = {
         skill: job.skill,
@@ -3174,6 +3177,7 @@ export class Orchestrator {
         ...(blockedBy ? { blockedBy } : {}),
         ...(startHead ? { startHead } : {}),
         ...(startFingerprint ? { startFingerprint } : {}),
+        ...(recipe ? { previewSearch } : {}),
       };
       // The mark, then the ticket, then the run (`startHandled`, ORC-277): a dev ticket holds its run before
       // the run is written, so recover() finds it whichever write a crash falls after. The feedback stays

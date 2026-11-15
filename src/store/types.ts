@@ -105,6 +105,8 @@ export interface RunRecord {
   startHead?: string;
   /** The fingerprint of the files that decide how the application starts, read at a `build` launch (ORC-406). Absent when unread. */
   startFingerprint?: string;
+  /** Whether its `build` launch asked the agent to search a start recipe (ORC-386, ORC-406): its check reads this decision. */
+  previewSearch?: boolean;
 }
 
 /**
