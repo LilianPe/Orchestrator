@@ -367,7 +367,7 @@ jobs:
   it('puts whether the visual proof can be taken on this instance in the JSON report, whatever the verdict, a failure included (ORC-404)', async () => {
     const report = async (api: FakeApi, visualProof: { image?: string; detail: string }) => {
       const json: string[] = [];
-      const code = await runDoctor({ repoPath: '/repo', api, out: (l) => json.push(l), json: true, visualProof });
+      const code = await runDoctor({ repoPath: '/repo', api, host: goodHost, out: (l) => json.push(l), json: true, visualProof });
       return { code, report: JSON.parse(json.join('\n')) as unknown };
     };
     expect(await report(new FakeApi([]), { image: 'b:1', detail: 'the captures run in b:1' })).toEqual({
