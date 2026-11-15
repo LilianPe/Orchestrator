@@ -74,10 +74,8 @@ export interface BootOptions {
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
 /**
- * What exposing the daemon off the loopback requires, one missing refusing the start: the dashboard's GitHub sign-in
- * (ORC-399), the factory App's OAuth client, who factory.yml lets in and the HTTPS public URL GitHub calls back to; and
- * `secrets_key`, which encrypts secrets.json at rest (ORC-398). Undefined on the loopback, where nobody signs in and
- * `secrets_key` stays optional (doctor warns of the file in clear).
+ * The dashboard's GitHub sign-in off the loopback (ORC-399): the factory App's OAuth client, who factory.yml lets in, and
+ * the HTTPS public URL GitHub calls back to. Undefined on the loopback, where nobody signs in; one missing refuses the start.
  */
 function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, client: { clientId: string; clientSecret: string } | undefined): ServerDeps['githubLogin'] {
   if (isLoopbackHost(instance.host)) return undefined;
@@ -87,11 +85,18 @@ function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, c
   }
   if (!yml?.dashboard) throw new Error(`${exposed}: name who may sign in, dashboard: { logins, org, team } in factory.yml.`);
   if (!instance.publicUrl?.startsWith('https://')) throw new Error(`${exposed}: set publicUrl to its https:// address, where GitHub calls the sign-in back and the session cookie is sent.`);
-  if (!yml.secretsKey) throw new Error(`${exposed}: ${SECRETS_KEY_REQUIRED}.`);
   // A publicUrl written with its trailing slash must still give the callback URL the App declares.
   const redirectUri = `${instance.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
   const options = { ...client, redirectUri, access: yml.dashboard };
   return { authorizeUrl: (state) => githubAuthorizeUrl({ clientId: client.clientId, redirectUri, state }), signIn: (code) => githubSignIn(options, code) };
+}
+
+/**
+ * Off the loopback, as the sign-in, `secrets_key`, which encrypts secrets.json at rest (ORC-398): its absence refuses the
+ * start, naming it. Optional on the loopback, where doctor warns of the file in clear.
+ */
+function requireSecretsKeyWhenExposed(instance: InstanceConfig, yml: FactoryYml | undefined): void {
+  if (!yml?.secretsKey && !isLoopbackHost(instance.host)) throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: ${SECRETS_KEY_REQUIRED}.`);
 }
 
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
@@ -108,7 +113,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const instance = effectiveInstance(o.home, yml);
   const oauthClient = githubOAuthClient(instance, env);
   const githubLogin = dashboardLogin(instance, yml, oauthClient);
-  // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398), as it must off the loopback.
+  // After the sign-in's refusals, before secrets.json is touched. The tokens the daemon writes itself, encrypted at rest
+  // from now on when factory.yml names a key (ORC-398).
+  requireSecretsKeyWhenExposed(instance, yml);
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.

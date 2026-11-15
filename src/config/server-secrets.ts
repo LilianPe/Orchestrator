@@ -3,14 +3,14 @@ import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/regi
 import { refText, type SecretRef, type SecretSource, type SecretSourceKind } from '../adapters/secrets/types.js';
 import { DAY_MS } from '../core/baseline.js';
 import { FactoryYmlError, factoryYmlText, parseFactoryYml, type FactoryYml } from './factory-yml.js';
-import { isSealed } from './secrets-file.js';
 import { isLoopbackHost, loadInstance, secretsText } from './instance.js';
+import { isSealed, MIN_SECRETS_KEY_LENGTH } from './secrets-file.js';
 
 /** Past this, `doctor` says a secret's rotation is too old (ORC-398, ORC-222 criterion 4). */
 export const ROTATION_MAX_DAYS = 180;
 
 /** Why the daemon refuses to start exposed without `secrets_key` (ORC-398): the start and doctor say it alike. */
-export const SECRETS_KEY_REQUIRED = 'set secrets_key in factory.yml (a reference, at least 32 characters: openssl rand -base64 32), required off the loopback: it encrypts secrets.json at rest';
+export const SECRETS_KEY_REQUIRED = `set secrets_key in factory.yml (a reference, at least ${MIN_SECRETS_KEY_LENGTH} characters: openssl rand -base64 32), required off the loopback: it encrypts secrets.json at rest`;
 
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
 
@@ -68,8 +68,8 @@ export interface SecretReport {
 
 /**
  * What `doctor` says of the server secrets (ORC-398): for each reference of factory.yml, whether it is in clear (`env`) and its
- * rotation date (`describe`), warned past `ROTATION_MAX_DAYS` or when unknown; a GitHub key left in config.yaml or `GH_APP_KEY`;
- * and whether `secrets.json` is encrypted. No value is read.
+ * rotation date (`describe`), warned past `ROTATION_MAX_DAYS` or when unknown; a missing `secrets_key` off the loopback, which
+ * refuses the start; a GitHub key left in config.yaml or `GH_APP_KEY`; and whether `secrets.json` is encrypted. No value is read.
  */
 export async function serverSecretReport(
   home: string,
@@ -84,9 +84,10 @@ export async function serverSecretReport(
   const reports: SecretReport[] = [];
   for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) reports.push(await describeRef(key, ref, yml, sources, now));
   const instance = loadInstance(home);
-  // Off the loopback, the daemon does not start without it: said whether or not secrets.json exists yet. Its reference,
-  // as a value read from a source is deferred here.
-  if (!yml?.secretRefs?.['secrets_key'] && !isLoopbackHost(instance.host)) {
+  // Off the loopback, the daemon does not start without it: said whether or not secrets.json exists yet. Checked on
+  // `secretRefs`: values are deferred here, so `secretsKey` is unset for a key read from a source.
+  const keyMissing = !yml?.secretRefs?.['secrets_key'] && !isLoopbackHost(instance.host);
+  if (keyMissing) {
     reports.push({ key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (host: ${instance.host}): ${SECRETS_KEY_REQUIRED}`] });
   }
   // A copy left in config.yaml is still on the disk, even when factory.yml's reference replaces it.
@@ -98,7 +99,7 @@ export async function serverSecretReport(
   const stored = secretsText(home);
   if (stored !== undefined) {
     const sealed = isSealed(stored);
-    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : ['in clear on disk: set secrets_key in factory.yml to encrypt it'] });
+    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : [keyMissing ? 'in clear on disk' : 'in clear on disk: set secrets_key in factory.yml to encrypt it'] });
   }
   return reports;
 }

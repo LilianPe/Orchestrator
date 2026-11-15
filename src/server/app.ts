@@ -25,13 +25,13 @@ import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import { cliActor, githubActor } from '../core/authz.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
+import { isLoopbackHost } from '../config/instance.js';
 import type { KbHit } from '../knowledge/kb.js';
 import { runSecurityView, shownHosts } from '../network/security-log.js';
 import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readSession, signSession } from './session.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
-import { isLoopbackHost } from '../config/instance.js';
 
 declare module 'hono' {
   interface ContextVariableMap {

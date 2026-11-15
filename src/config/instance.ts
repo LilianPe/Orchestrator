@@ -161,10 +161,6 @@ export function secretValues(s: Secrets): string[] {
 }
 
 /**
- * The instance as the daemon runs it: `config.yaml`, its GitHub App taken from `factory.yml` (read once, at the
- * daemon's start) when declared there (ORC-209). Never saved: `saveInstance` takes `loadInstance`, so a secret of the environment never reaches the file.
- */
-/**
  * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
  * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
  * under any name, the interface does not. A rebound name is never one of these.
@@ -174,6 +170,10 @@ export function isLoopbackHost(host: string): boolean {
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
+/**
+ * The instance as the daemon runs it: `config.yaml`, its GitHub App taken from `factory.yml` (read once, at the
+ * daemon's start) when declared there (ORC-209). Never saved: `saveInstance` takes `loadInstance`, so a secret of the environment never reaches the file.
+ */
 export function effectiveInstance(home: string, yml: FactoryYml | undefined): InstanceConfig {
   const cfg = loadInstance(home);
   // Field by field: an installation id or webhook secret left in config.yaml stays.
