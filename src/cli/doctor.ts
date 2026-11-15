@@ -10,6 +10,7 @@ import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -460,18 +461,22 @@ function errorMessage(error: unknown): string {
 
 export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { repoPath, api, out } = options;
+  // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
+  const ignored = ignoredWorkflowFiles(repoPath);
+  if (!options.json) for (const file of ignored) out(ignoredWorkflowWarning(file));
+  const failure = (message: string) => doctorFailure(options, message, ignored);
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
   } catch (error) {
-    return doctorFailure(options, `Cannot read the workflows: ${errorMessage(error)}`);
+    return failure(`Cannot read the workflows: ${errorMessage(error)}`);
   }
   let environments: EnvironmentProtection[] = [];
   if (workflows.length > 0) {
     try {
       environments = await api.listEnvironments(repoPath);
     } catch (error) {
-      return doctorFailure(options, `Cannot read the environments: ${errorMessage(error)}`);
+      return failure(`Cannot read the environments: ${errorMessage(error)}`);
     }
   }
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
@@ -481,7 +486,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}) }, null, 2));
   } else {
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
@@ -516,9 +521,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'>, message: string): number {
+function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'>, message: string, ignored: string[] = []): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}) }, null, 2));
   } else {
     options.out(message);
   }

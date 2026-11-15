@@ -1048,9 +1048,11 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   }
 
   /** The base has a page; the agent's branch changes it (`page`), or touches only a file outside `visual_paths`. */
-  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; start?: string | null; commands?: string[]; learned?: PreviewRecipe; found?: PreviewRecipe } = {}) {
+  /** `preview`: the base's in `.factory/config.yml`, `npm start` by default, none with `null`. */
+  function visual(opts: { page?: string; intake?: boolean; config?: string; shooter?: VisualShooter | null; preview?: string | null; commands?: string[]; learned?: PreviewRecipe; found?: PreviewRecipe } = {}) {
     const shooter = new ReadingShooter();
-    const s = setup({ commands: opts.commands ?? [] }, opts.config ?? VISUAL);
+    const preview = opts.preview === null ? '' : `preview: ${opts.preview ?? 'npm start'}\n`;
+    const s = setup({ commands: opts.commands ?? [] }, (opts.config ?? VISUAL) + preview);
     write(s.origin, 'app/page.txt', 'old page\n');
     commit(s.origin, 'page');
     git(s.repo, 'pull', '-q', '--no-rebase', 'origin', 'main');
@@ -1062,7 +1064,6 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     s.req.visual = {
       intake: opts.intake ?? false,
       ...(opts.shooter === null ? {} : { shooter: opts.shooter ?? shooter }),
-      ...(opts.start === null ? {} : { start: opts.start ?? 'npm start' }),
       port: 4201,
       path: '/',
       gate,
@@ -1138,7 +1139,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
   });
 
   it('without a browser or a start command, a required proof is unavailable: indicative, the commit stays green (ORC-397 criterion 2)', async () => {
-    for (const [opts, why] of [[{ shooter: null }, 'browser'], [{ start: null }, '`preview` in .factory/config.yml']] as const) {
+    for (const [opts, why] of [[{ shooter: null }, 'browser'], [{ preview: null }, '`preview` in .factory/config.yml']] as const) {
       const { req } = visual({ page: 'new page\n', ...opts });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
@@ -1147,13 +1148,11 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     }
   });
 
-  it("ORC-397 criterion 1: the base's `preview` in .factory/config.yml starts the application, before workspace.preview", async () => {
-    for (const start of [null, 'npm start'] as const) {
-      const { req, shooter } = visual({ page: 'new page\n', config: `${VISUAL}preview: npm run dev\n`, start });
-      const res = await runCleanVerify(req);
-      expect(res.visual?.proof.captures).toHaveLength(6);
-      expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
-    }
+  it("ORC-397 criterion 1: the base's `preview` in .factory/config.yml starts the application, the only place it is declared (ORC-388)", async () => {
+    const { req, shooter } = visual({ page: 'new page\n', preview: 'npm run dev' });
+    const res = await runCleanVerify(req);
+    expect(res.visual?.proof.captures).toHaveLength(6);
+    expect(shooter.calls.map((c) => c.start)).toEqual(['npm run dev', 'npm run dev']);
   });
 
   describe('the start recipe learned in the knowledge base, or found by the agent (ORC-386)', () => {
@@ -1164,7 +1163,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     };
 
     it('a learned recipe starts the application when none is declared, and the proof says so', async () => {
-      const { req, shooter } = visual({ page: 'new page\n', start: null, learned: LEARNED });
+      const { req, shooter } = visual({ page: 'new page\n', preview: null, learned: LEARNED });
       const res = await runCleanVerify(req);
       expect(res.visual?.proof).toMatchObject({ decision: 'required', start: 'learned' });
       expect(res.visual?.proof.captures).toHaveLength(6);
@@ -1173,7 +1172,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('criterion 3: a declared start wins over the learned recipe and the found one, which is not even probed', async () => {
-      const { req, shooter, sandboxes } = visual({ page: 'new page\n', config: `${VISUAL}preview: npm start\n`, start: null, learned: LEARNED, found: FOUND });
+      const { req, shooter, sandboxes } = visual({ page: 'new page\n', learned: LEARNED, found: FOUND });
       const res = await runCleanVerify(req);
       expect(res.visual?.proof).toMatchObject({ start: 'declared' });
       expect(shooter.calls.map((c) => c.start)).toEqual(['npm start', 'npm start']);
@@ -1182,7 +1181,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('criterion 1: a found recipe the proof needs is tried by the captures themselves: started on the commit, it answered', async () => {
-      const { req, shooter, sandboxes } = visual({ page: 'new page\n', start: null, found: FOUND });
+      const { req, shooter, sandboxes } = visual({ page: 'new page\n', preview: null, found: FOUND });
       const res = await runCleanVerify(req);
       expect(res.preview).toEqual({ of: 'found', answered: true });
       expect(res.visual?.proof).toMatchObject({ start: 'found' });
@@ -1193,7 +1192,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('a found recipe is probed even when this diff needs no proof, so the next ticket has it', async () => {
-      const { req, shooter, sandboxes } = visual({ start: null, found: FOUND });
+      const { req, shooter, sandboxes } = visual({ preview: null, found: FOUND });
       answers(sandboxes, 0, 'answered\n');
       const res = await runCleanVerify(req);
       expect(res.preview).toEqual({ of: 'found', answered: true });
@@ -1205,7 +1204,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('a found recipe probed with no proof to take that does not answer: said, with what it printed', async () => {
-      const { req, sandboxes } = visual({ start: null, found: FOUND });
+      const { req, sandboxes } = visual({ preview: null, found: FOUND });
       answers(sandboxes, 1, 'nothing answers on port 4201 after 60 s\nError: Cannot find module vite\n');
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
@@ -1213,7 +1212,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('criterion 5: a found recipe that starts the application neither on the commit nor on the base: unavailable with why, the commit green', async () => {
-      const { req, shooter } = visual({ page: 'new page\n', start: null, found: FOUND });
+      const { req, shooter } = visual({ page: 'new page\n', preview: null, found: FOUND });
       shooter.answer = () => ({ started: false, detail: 'Error: Cannot find module vite' });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
@@ -1223,7 +1222,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('criterion 4: a learned recipe that starts the application neither on the commit nor on the base is stale, no failure of the branch', async () => {
-      const { req, shooter } = visual({ page: 'new page\n', start: null, learned: LEARNED });
+      const { req, shooter } = visual({ page: 'new page\n', preview: null, learned: LEARNED });
       shooter.answer = () => ({ started: false, detail: 'nothing answers on port 4201' });
       const res = await runCleanVerify(req);
       expect(res.ok).toBe(true);
@@ -1234,7 +1233,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('a learned recipe the base still starts with, which the commit does not: the branch broke the application, the check fails', async () => {
-      const { req, repo, shooter } = visual({ page: 'new page\n', start: null, learned: LEARNED });
+      const { req, repo, shooter } = visual({ page: 'new page\n', preview: null, learned: LEARNED });
       const head = git(repo, 'rev-parse', BRANCH);
       shooter.answer = ({ sha }) => (sha === head ? { started: false, detail: 'TypeError at boot' } : undefined);
       const res = await runCleanVerify(req);
@@ -1246,14 +1245,14 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('a repository with services: the found recipe is not probed, as the captures could not run it either', async () => {
-      const { req, sandboxes } = visual({ page: 'new page\n', start: null, found: FOUND, config: `${VISUAL}services: [postgres]\n` });
+      const { req, sandboxes } = visual({ page: 'new page\n', preview: null, found: FOUND, config: `${VISUAL}services: [postgres]\n` });
       const res = await runCleanVerify(req);
       expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
       expect(res.preview).toBeUndefined();
     });
 
     it('a commit whose commands fail probes nothing', async () => {
-      const { req, sandboxes } = visual({ page: 'new page\n', start: null, found: FOUND, commands: ['false'] });
+      const { req, sandboxes } = visual({ page: 'new page\n', preview: null, found: FOUND, commands: ['false'] });
       const res = await runCleanVerify(req);
       expect(res.failures.map((f) => f.command)).toEqual(['false']);
       expect(sandboxes.created.map((c) => c.runId)).not.toContain('r1-preview');
@@ -1261,7 +1260,7 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
     });
 
     it('none declared, learned nor found: unavailable, saying where to declare one', async () => {
-      const { req } = visual({ page: 'new page\n', start: null });
+      const { req } = visual({ page: 'new page\n', preview: null });
       const res = await runCleanVerify(req);
       expect(res.visual?.proof).toMatchObject({ start: 'none', unavailable: expect.stringContaining('`preview` in .factory/config.yml') });
     });

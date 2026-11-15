@@ -28,7 +28,7 @@ If the prompt carries a "Spec under review" block and a "Feedback to address" bl
 
 ## Forbidden
 
-Write nothing in the worktree, commit nothing, push nothing. Do not ask with `factory-agent ask`: a question the ticket leaves open goes in `risks`, or in `assumed` with the reading you chose.
+Write nothing in the worktree, commit nothing, push nothing. Ask no question: one the ticket leaves open goes in `risks`, or in `assumed` with the reading you chose.
 
 ## End of turn: `submit_result`
 

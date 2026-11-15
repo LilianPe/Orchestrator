@@ -14,9 +14,11 @@ import type { RunHandle, RunRequest, RunResult, RunStreamEvent } from '../../src
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
 import type { Publication, Publisher } from '../../src/adapters/publisher/types.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
+import { FakeSecretSource, fakeSecretKind } from '../../src/adapters/secrets/fake.js';
+import type { SecretSource } from '../../src/adapters/secrets/types.js';
 import type { Sandbox, SandboxRequest, SandboxRequirements } from '../../src/adapters/sandbox/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
-import type { TrackerIssue } from '../../src/adapters/tracker/types.js';
+import type { LabelsWritten, TrackerIssue } from '../../src/adapters/tracker/types.js';
 import { FakeClock } from '../../src/core/clock.js';
 import type { RunOutcome, VerifyFailure } from '../../src/core/types.js';
 import { runVerify, type VerifyResult } from '../../src/core/verify.js';
@@ -26,6 +28,7 @@ import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-ru
 import { describeForgeContract, type ForgeSubject } from './forge.contract.js';
 import { describePublisherContract, type PublisherSubject } from './publisher.contract.js';
 import { describeSandboxContract, EXEC_PROBE, type SandboxSubject } from './sandbox.contract.js';
+import { describeSecretSourceContract, type SecretSourceSubject } from './secret-source.contract.js';
 import { describeTrackerContract, type TrackerSubject } from './tracker.contract.js';
 
 // Each subject breaks one guarantee on purpose: the case that checks it must fail against it.
@@ -575,8 +578,8 @@ describeTrackerContract(
   'a tracker whose setLabels ignores an unknown issue',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
-        if (this.issues.has(identifier)) await super.setLabels(identifier, add, remove);
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
+        return this.issues.has(identifier) ? super.setLabels(identifier, add, remove) : { added: [], removed: [], at: 0 };
       }
     },
   ),
@@ -700,8 +703,8 @@ describeTrackerContract(
   'a tracker whose setLabels ignores the removals',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[]): Promise<void> {
-        await super.setLabels(identifier, add, []);
+      override async setLabels(identifier: string, add: string[]): Promise<LabelsWritten> {
+        return super.setLabels(identifier, add, []);
       }
     },
   ),
@@ -712,11 +715,11 @@ describeTrackerContract(
   'a tracker whose setLabels rejects the removal of a label the issue does not have',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
         const { labels } = await this.getIssue(identifier);
         const absent = remove.find((l) => !labels.includes(l));
         if (absent) throw new Error(`label ${absent} is not on ${identifier}`);
-        await super.setLabels(identifier, add, remove);
+        return super.setLabels(identifier, add, remove);
       }
     },
   ),
@@ -727,9 +730,9 @@ describeTrackerContract(
   'a tracker whose setLabels drops the labels the team does not have yet',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
         const known = new Set([...this.issues.values()].flatMap((i) => i.labels));
-        await super.setLabels(identifier, add.filter((l) => known.has(l)), remove);
+        return super.setLabels(identifier, add.filter((l) => known.has(l)), remove);
       }
     },
   ),
@@ -740,9 +743,9 @@ describeTrackerContract(
   'a tracker whose replayed setLabels takes off the labels it adds again',
   trackerThat(
     class extends FakeTracker {
-      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<void> {
+      override async setLabels(identifier: string, add: string[], remove: string[]): Promise<LabelsWritten> {
         const { labels } = await this.getIssue(identifier);
-        await super.setLabels(identifier, add.filter((l) => !labels.includes(l)), [...remove, ...add.filter((l) => labels.includes(l))]);
+        return super.setLabels(identifier, add.filter((l) => !labels.includes(l)), [...remove, ...add.filter((l) => labels.includes(l))]);
       }
     },
   ),
@@ -1034,3 +1037,65 @@ describe('contractCases', () => {
     expect(skipped).toBe(false);
   });
 });
+
+const SECRET_MISSING = 'a path it does not hold rejects, without any value';
+const SECRET_DOWN = 'a source out of service rejects, without any value';
+const SECRET_PATH = 'its kind checks a path without reading it';
+const SECRET_REPLAY = 'a read is replayed with the same value';
+const SECRET_VALUE = 'seed-secret-value';
+
+function secretsThat(patch: Partial<SecretSourceSubject>): () => SecretSourceSubject {
+  return () => ({
+    source: new FakeSecretSource({ 'kv/app#seed': SECRET_VALUE }),
+    present: { path: 'kv/app#seed', value: SECRET_VALUE },
+    missing: 'kv/app#absent',
+    down: new FakeSecretSource({ 'kv/app#seed': SECRET_VALUE }, { down: true }),
+    syntax: { kind: fakeSecretKind({}), valid: 'kv/app#seed', invalid: 'no-hash' },
+    ...patch,
+  });
+}
+
+const emptyForMissing: SecretSource = { read: async (path) => (path === 'kv/app#seed' ? SECRET_VALUE : '') };
+describeSecretSourceContract('a secret source that answers an empty value for a path it does not hold', secretsThat({ source: emptyForMissing }), { violates: [SECRET_MISSING] });
+
+const tellsTheValue: SecretSource = {
+  read: async (path) => {
+    if (path === 'kv/app#seed') return SECRET_VALUE;
+    throw new Error(`no secret at ${path}; the keys of kv/app are seed (${SECRET_VALUE})`);
+  },
+};
+describeSecretSourceContract('a secret source whose error tells a value it holds', secretsThat({ source: tellsTheValue }), { violates: [SECRET_MISSING] });
+
+const causeTellsTheValue: SecretSource = {
+  read: async (path) => {
+    if (path === 'kv/app#seed') return SECRET_VALUE;
+    throw new Error(`no secret at ${path}`, { cause: { body: `{"keys":{"seed":"${SECRET_VALUE}"}}` } });
+  },
+};
+describeSecretSourceContract('a secret source whose error cause tells a value it holds', secretsThat({ source: causeTellsTheValue }), { violates: [SECRET_MISSING] });
+
+describeSecretSourceContract(
+  'a secret source whose error cause, out of service, is an error telling the value',
+  secretsThat({ down: { read: async () => Promise.reject(new Error('unreachable', { cause: new Error(`last value ${SECRET_VALUE}`) })) } }),
+  { violates: [SECRET_DOWN] },
+);
+
+describeSecretSourceContract('a secret source that answers from a stale copy when it is out of service', secretsThat({ down: { read: async () => SECRET_VALUE } }), { violates: [SECRET_DOWN] });
+
+describeSecretSourceContract(
+  'a secret source whose error, out of service, tells the value it last read',
+  secretsThat({ down: { read: async () => Promise.reject(new Error(`unreachable; last value ${SECRET_VALUE}`)) } }),
+  { violates: [SECRET_DOWN] },
+);
+
+function changesAtTheSecondRead(): SecretSource {
+  let reads = 0;
+  return { read: async (path) => (path === 'kv/app#seed' ? (reads++ === 0 ? SECRET_VALUE : 'another-secret-value') : Promise.reject(new Error('no secret'))) };
+}
+describeSecretSourceContract('a secret source that answers another value at the second read', () => secretsThat({ source: changesAtTheSecondRead() })(), { violates: [SECRET_REPLAY] });
+
+describeSecretSourceContract(
+  'a secret source kind that accepts any path',
+  secretsThat({ syntax: { kind: { ...fakeSecretKind({}), checkPath: () => undefined }, valid: 'kv/app#seed', invalid: 'no-hash' } }),
+  { violates: [SECRET_PATH] },
+);

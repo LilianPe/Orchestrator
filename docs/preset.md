@@ -1,8 +1,8 @@
 # The `factory/default` preset
 
-The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules of [`workflow.yml`](workflow.md) (ORC-187). The `on` rules of `workflow.yml` still drive the runs, but the engine already takes its bounds from the preset, compiled each time the workflow is loaded (see "What the engine already reads").
+The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules of [`workflow.yml`](workflow.md) (ORC-187). The `on` rules and the jobs still drive the runs, but the engine already takes its bounds from the preset, compiled each time the workflow is built (see "What the engine already reads"). Since ORC-388 they are built in TypeScript, `defaultWorkflow()` in `src/presets/workflow.ts`, the same as the standard pack's `workflow.yml` (a test checks it, hash included); a repository's `.factory/workflow.yml` is ignored: `factory doctor` says so, and the daemon logs it at each start.
 
-Code: `src/presets/preset.ts` (types and compiler), `src/presets/factory-default.ts` (the definition).
+Code: `src/presets/preset.ts` (types and compiler), `src/presets/factory-default.ts` (the definition), `src/presets/workflow.ts` (the workflow the engine runs).
 
 ## Sequence
 
@@ -79,7 +79,7 @@ Each agent step has a list of built-in tools, passed to `claude --tools` and enf
 | `counters.red` (2) | `jobs.<job>.red.attempts` = 3 | in blocking mode, 2 returns to `tests` after an unverified red; the 3rd blocks. A human retry resets the count to zero |
 | `counters.human_review` (3) | `limits.humanReviewRounds` = 3 | 3 rounds of human review feedback (`fix-human`, the job with `counter: human_review`, ORC-190), apart from `ciFixAttempts`; the 4th feedback blocks |
 
-`verify_attempts`, `ci_fix_attempts` and `human_review_rounds` in `workflow.yml` still override them, until the YAML is removed (ORC-177).
+A repository no longer overrides them: its `.factory/workflow.yml`, where `verify_attempts`, `ci_fix_attempts` and `human_review_rounds` did, is ignored since ORC-388.
 
 ## Resuming the blocked step (ORC-196)
 
@@ -89,14 +89,14 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 
 | Blocked at | A reply relaunches |
 | -- | -- |
-| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including via `relais-agent ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply. `fix-review` resumes itself on the reply, then goes back through the review (ORC-184) |
+| `build`, `tests`, `fix`, `review`, `rebase` (end of run, cap, loop, lease, interruption, question, a conflict the rebase stops on, including the MCP's `ask`) | that step's job: `dev`, `tests`, `dev-feedback`, `review` (its first lens: the review starts over, ORC-183), `rebase`. `fix-ci` goes through `dev-feedback`, same step: it reads its red checks, not a reply. `fix-review` resumes itself on the reply, then goes back through the review (ORC-184) |
 | pickup, launch | the job being launched, its checks included |
 | `verify`, `verify_fix`, `verify_rebase`, `red` (failure at the cap, loop, failure) | the job the check judges: that is the preset's step back. Not the check alone: `run_verify` needs the agent's output, which `verify.errored` does not carry |
 | `verify` of a job that does not fix (`verify_failure: block`, the review of a version frozen before ORC-183) | `dev-feedback`, which writes |
 | `publish` refused | `dev-feedback`: it writes, goes through `verify` then `publish` again, and the owed move follows (`owedMove`) |
 | dead-letter, dead effect, `stop` | `dev-feedback`, these blocks have no step of their own |
 
-**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the `human_review` gate: this needs an engine that executes the steps (ORC-177). `clarify` does not have a job yet; `after_merge` has none either, the factory carries it out itself without an agent (`do: after_merge` on `pr.merged`, ORC-197, [workflow.md](workflow.md#after-the-merge-orc-197)); `intake` and `spec_draft` have one, which a repository turns on ([intake](#intake-step-and-the-guard-before-in-progress-orc-206), [spec](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)); `spec_check` and `spec_review` are decided at its end and on the gate's commands. A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the `human_review` gate: this needs an engine that executes the steps (ORC-177). `clarify` does not have a job yet; `after_merge` has none either, the factory carries it out itself without an agent (`do: after_merge` on `pr.merged`, ORC-197, [workflow.md](workflow.md#after-the-merge-orc-197)); `intake` and `spec_draft` have one, which the scenarios turn on, a repository no longer since ORC-388 ([intake](#intake-step-and-the-guard-before-in-progress-orc-206), [spec](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)); `spec_check` and `spec_review` are decided at its end and on the gate's commands. A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
 
 ## `factory/fantome` (ORC-231)
 
@@ -127,7 +127,7 @@ The ticket is then Blocked, kind `conflict`, with the standard comment (step `re
 
 ## `intake` step and the guard before In Progress (ORC-206)
 
-The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job) reads the ticket, the repository's architecture docs and decisions and the code it touches. It writes nothing and does not move the ticket: since ORC-367 the run itself holds it to that. It runs on a fresh clone of the default branch (workspace `trunk-readonly`, `_trunk/<runId>/`, gone with the run), never in the ticket's worktree, so a ticket found incomplete keeps no worktree made for nothing; and like the AI review's lenses it has the `Read`, `Grep` and `Glob` tools only (`claude --tools`), no write tool and no shell, whatever its skill says. A read-only step of the preset (`readOnly`: `intake`, `clarify`, `spec_draft`; not `after_merge`, which writes no code but keeps its shell) gives its job these tools ([tools per step](#the-agents-tools-per-step-orc-383)), and a job of a read-only step that writes nothing (`intake`, `clarify`) anywhere but a clone of its own (`trunk-readonly`) is refused when the workflow loads. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands back, in the `intake` field of `submit_result`:
+The `intake` job (agent, skill `factory:intake`, Sonnet, effort low, the repository's network, in the runner like any dev job) reads the ticket, the repository's architecture docs and decisions and the code it touches. It writes nothing and does not move the ticket: since ORC-367 the run itself holds it to that. It runs on a fresh clone of the default branch (workspace `trunk-readonly`, `_trunk/<runId>/`, gone with the run), never in the ticket's worktree, so a ticket found incomplete keeps no worktree made for nothing; and like the AI review's lenses it has the `Read`, `Grep` and `Glob` tools only (`claude --tools`), no write tool and no shell, whatever its skill says. A read-only step of the preset (`readOnly`: `intake`, `clarify`, `spec_draft`; not `after_merge`, which writes no code but keeps its shell) gives its job these tools ([tools per step](#the-agents-tools-per-step-orc-383)), and a job of a read-only step that writes nothing (`intake`, `clarify`) anywhere but a clone of its own (`trunk-readonly`) is refused when the workflow loads. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands back, in the `intake` field of `submit_result`:
 
 | Field | Values |
 | -- | -- |
@@ -154,7 +154,7 @@ Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226
 
 Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev` (`on_success.run`), which moves it to In Progress. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
 
-`intake` is off in the pack: a repository turns it on by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: intake }`). Without it, `dev`'s pickup checks block directly, as before.
+`intake` is off in the factory's workflow: delegation starts `dev`, until ORC-395 makes it start at the preset's entry. A repository can no longer turn it on, as its `.factory/workflow.yml` is ignored since ORC-388; the scenarios and `factory/fantome` do. Without it, `dev`'s pickup checks block directly, as before.
 
 ### Waiting on a blocked-by ticket (ORC-363)
 
@@ -201,7 +201,7 @@ A timer only acts on the round that armed it (`at`): a round answered, asked aga
 
 ## `spec_draft`, `spec_check` and the `spec_review` gate (ORC-212)
 
-The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. With no shell, it no longer reads the linked tickets (`factory-agent issue`): it judges from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
+The `spec` job (agent, skill `factory:spec`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
 
 | Section | What it holds |
 | -- | -- |
@@ -235,7 +235,7 @@ A command with no spec waiting (none yet, a ticket blocked or undelegated), on a
 
 **After approval.** Every later step of the ticket's dev queue reads the approved spec in its prompt (« Approved spec »): `tests` writes its criteria as the acceptance tests, the build works within it. The freeze after `red` (ORC-131) keeps the approved criteria with the frozen tests (`frozenTests.criteria`); like its files, a later freeze adds the criteria of a version approved since to those already frozen, and the tests of a changed criterion stay frozen until `/refreeze`, which keeps the criteria approved then. A new delegation clears the ticket's spec: the work starts afresh. A redraft reads its last version (« Spec under review »).
 
-`spec` is off in the pack: a repository turns it on by running it after `intake` (`jobs.intake.on_success: { run: spec }`) or at delegation.
+`spec` is off in the factory's workflow, until ORC-395: the scenarios and `factory/fantome` run it after `intake` (`jobs.intake.on_success: { run: spec }`); a repository no longer can (ORC-388).
 
 **Not yet**: the « Spec » status or the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); the properties frozen as tests (ORC-261); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
 
@@ -330,9 +330,9 @@ The verdict comes back like the result of `verify`: `verify.passed` or `verify.f
 
 **Failure.** A check that could not run (`infra`) blocks the ticket in both modes, without relaunching the agent: it is not a verdict on its tests. It does not enter the measurements.
 
-The flag lives in the job, frozen with each ticket's workflow version: `jobs.tests.red.mode: measure | blocking` (`measure` by default). Switch it to `blocking` in `.factory/workflow.yml`, after validation on the golden tickets (ORC-236).
+The flag lives in the job, frozen with each ticket's workflow version: `jobs.tests.red.mode: measure | blocking` (`measure` by default). Switching it to `blocking`, after validation on the golden tickets (ORC-236), is a change of the factory's workflow (`src/presets/workflow.ts`): a repository's `.factory/workflow.yml` is ignored since ORC-388.
 
-The pack's `tests` job is inactive as long as no rule launches it: a repository enables it by making delegation start with it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: tests }`). Jobs without `red` keep the former `dev` flow.
+The workflow's `tests` job is inactive as long as no rule launches it, until ORC-395: the scenarios and `factory/fantome` start it (`ticket.delegated: - { when: "state in [todo, dev] && !blocked", run: tests }`); a repository no longer can (ORC-388). Jobs without `red` keep the former `dev` flow.
 
 ## Freezing the tests and the harness (ORC-131)
 

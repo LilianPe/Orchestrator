@@ -1,8 +1,9 @@
 import type { Store } from '../../../store/types.js';
+import type { LabelsWritten } from '../types.js';
 
 /**
  * The labels of a ticket as the factory last read them in Linear (ORC-185): by the reconciliation, or by
- * an issue webhook once its events are in the inbox, the factory's own echoes included. A label change
+ * an issue webhook once its events are in the inbox, the factory's own writes included (ORC-346). A label change
  * is reported only when it differs from them, whichever source sees it first, so a rule under
  * `label.changed` is not run twice for one change. `at` is the issue's `updatedAt` in Linear when read:
  * a reading older than the one kept (a pass that read Linear before a webhook came, a webhook out of
@@ -31,6 +32,26 @@ export async function recordLabels(store: Pick<Store, 'getMeta' | 'setMeta'>, pr
   const sorted = [...new Set(labels)].sort();
   if (kept && (kept.at > at || (kept.at === at && kept.labels.join('\n') === sorted.join('\n')))) return;
   await store.setMeta(key(projectId, ticketId), JSON.stringify({ labels: sorted, at }));
+}
+
+/**
+ * The factory's own label write, applied to the labels it knows at the issue's version after it (ORC-346): a pass that
+ * reads the ticket later, its webhook lost, finds no change. Only what the write changed: a label of a human's whose
+ * webhook was lost is still reported. A ticket never read keeps none: the first pass records its labels.
+ */
+export async function recordWrite(store: Pick<Store, 'getMeta' | 'setMeta'>, projectId: string, ticketId: string, written: LabelsWritten): Promise<void> {
+  const known = await knownLabels(store, projectId, ticketId);
+  if (!known) return;
+  const next = applyWrite(known, written);
+  await store.setMeta(key(projectId, ticketId), JSON.stringify({ labels: [...new Set(next.labels)].sort(), at: next.at }));
+}
+
+/**
+ * `known` with a write's labels applied, the factory's or an issue webhook's, at the newer date: a reading come late
+ * still adds what it reported, or its change would be reported again.
+ */
+export function applyWrite(known: KnownLabels, written: LabelsWritten): KnownLabels {
+  return { labels: [...known.labels.filter((l) => !written.removed.includes(l)), ...written.added], at: Math.max(written.at, known.at) };
 }
 
 /** What `known` lacks or has too, as label changes: what a webhook would have reported. */

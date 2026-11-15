@@ -48,7 +48,7 @@ Claude Code authentication is required: `ANTHROPIC_API_KEY`, or `CLAUDE_TOKEN_1`
 
 Then, by hand: `docker compose up -d` behind the host's reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or `docker compose --profile tls up -d`, UI at `https://<domain>`, same behavior as 3; a Linear webhook and a GitHub webhook delivered with a 200 (ORC-221). With `concurrency: 1`, delegate two tickets: only one runner runs (`docker ps --filter label=factory.attempt`).
 
-With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY_UI_PASSWORD`: the UI, `/api/*` and `/oauth/start` then require HTTP Basic authentication (any username, password = `FACTORY_UI_PASSWORD`). Still open: `POST /webhooks/linear` (signed), `GET /oauth/callback` and `/agent/*` (run token). Check: `curl -i https://<domain>/api/state` answers 401.
+With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY_UI_PASSWORD`: the UI, `/api/*` and `/oauth/start` then require HTTP Basic authentication (any username, password = `FACTORY_UI_PASSWORD`). Still open: `POST /webhooks/linear` and `POST /webhooks/github` (signed), `GET /oauth/callback`, and `POST /agent/mcp` (run token; every other `/agent` path answers 404, ORC-192). Check: `curl -i https://<domain>/api/state` answers 401.
 
 ## Optional live checks
 - `LINEAR_API_KEY=<personal key> npx vitest run src/adapters/tracker/linear/queries.live.test.ts`: all queries validate against the Linear schema.
@@ -70,5 +70,5 @@ With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY
 
 ## Security: known limits
 - At startup, Relais writes `<RELAIS_HOME>/run-settings.json` (the pack's settings + read refusals on `secrets.json`, `relais.db`, `transcripts/` and `logs/` of the real `RELAIS_HOME`) and passes it to each run via `--settings`. Check: the file exists and contains the real path (`/data/...` in Docker).
-- A run's environment contains neither `LINEAR_*` nor the daemon's `RELAIS_*` (only `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET`, `RELAIS_KNOWLEDGE`, `RELAIS_ROOT` are set).
+- A run's environment contains neither `LINEAR_*` nor the daemon's `RELAIS_*` (of the factory's, only `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET` and the pack hook's settings, see [`configuration.md`](configuration.md#environment-variables)).
 - Residual risk: the pack allows `Bash(node:*)`, `Bash(npx:*)`, `Bash(npm:*)`. An agent (or an injection in a ticket) can therefore read `secrets.json` through a script (`node -e "…readFileSync(…)"`): Claude Code's deny lists are advisory, not a security boundary. The agent runs as the same user as the daemon. Do not deploy Relais on tickets coming from untrusted people as long as runs do not run under a separate user.

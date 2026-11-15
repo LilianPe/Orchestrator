@@ -8,8 +8,7 @@
     "node": ">=24.22.1"
   },
   "bin": {
-    "factory": "bin/factory",
-    "factory-agent": "bin/factory-agent"
+    "factory": "bin/factory"
   },
   "scripts": {
     "dev": "tsx src/cli/factory.ts",

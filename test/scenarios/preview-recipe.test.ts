@@ -44,11 +44,11 @@ const required = (start: VisualProof['start'], unavailable?: string): CleanVerif
   files: [],
 });
 
-function preview(opts: { result?: (req: CleanVerifyRequest) => Partial<CleanVerifyResult>; output?: Partial<AgentOutput>; projectYaml?: string; tickets?: number } = {}) {
+function preview(opts: { result?: (req: CleanVerifyRequest) => Partial<CleanVerifyResult>; output?: Partial<AgentOutput>; config?: string; tickets?: number } = {}) {
   const kb = kbRepo();
   const asked: CleanVerifyRequest[] = [];
   const h = createHarness({
-    ...(opts.projectYaml ? { projectYaml: opts.projectYaml } : {}),
+    ...(opts.config ? { repoConfig: async () => parseRepoConfig(opts.config) } : {}),
     sandboxed: true,
     visualShooter: new FakeShooter(),
     previewRecipes: kb.recipes,
@@ -96,13 +96,12 @@ describe('the start recipe learned in the knowledge base (ORC-386)', () => {
   });
 
   it('criterion 3: a declared `preview` comes first: no search, and the learned recipe is no start of its own', async () => {
-    const { h, asked, recipes } = preview({ projectYaml: 'version: 1\nworkspace:\n  preview: npm start\n' });
+    const { h, recipes } = preview({ config: 'preview: npm start\n' });
     await recipes.record('p', { recipe: NPM_DEV, sha: SHA, port: 4200, runId: 'r0', ticket: 'REL-0', at: new Date() }, undefined, async () => {});
     h.runner.enqueue(dev());
     await delegate(h);
+    // verify reads the base's `preview` first (`planVisual`, `clean-verify.test.ts`): the learned one comes only after it.
     expect(h.runner.requests[0]!.prompt).not.toContain(SEARCH);
-    // verify reads the declared start first (`planVisual`): the learned one comes only after it.
-    expect(asked[0]!.visual).toMatchObject({ start: 'npm start' });
   });
 
   it('criterion 4: a learned recipe that no longer starts is invalidated, and the next build searches once more', async () => {

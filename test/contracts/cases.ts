@@ -16,6 +16,14 @@ export function resolved<T>(p: Promise<T>): Promise<T> {
   return p.catch((e: unknown) => expect.fail(`expected an answer, got a rejection: ${String(e)}`));
 }
 
+/** What `p` rejects with. A port call that must reject and answers instead fails the case on an assertion. */
+export function rejection(p: Promise<unknown>): Promise<unknown> {
+  return p.then(
+    () => expect.fail('expected a rejection'),
+    (e: unknown) => e,
+  );
+}
+
 export interface ContractOptions {
   /**
    * Turns the suite into a negative control: the subject breaks these cases on purpose, only they run,

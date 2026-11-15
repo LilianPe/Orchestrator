@@ -23,10 +23,10 @@ The exact Claude Code version is not pinned by Relais. It must accept the option
 git clone <relais repository url> && cd relais
 npm ci
 npm run build      # compiles dist/ and the web UI web/dist
-npm link           # makes `relais` and `relais-agent` available on the PATH
+npm link           # makes `relais` available on the PATH
 ```
 
-`npm link` exposes the two executables declared in `package.json` (`bin/relais`, `bin/relais-agent`). These scripts run `dist/src/cli/*.js` if it exists, otherwise the TypeScript sources via `tsx`: without `npm run build`, the CLI works but the web UI is not served (the `web/dist` directory is missing).
+`npm link` exposes the executable declared in `package.json` (`bin/relais`). This script runs `dist/src/cli/*.js` if it exists, otherwise the TypeScript sources via `tsx`: without `npm run build`, the CLI works but the web UI is not served (the `web/dist` directory is missing).
 
 Check:
 

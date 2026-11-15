@@ -82,19 +82,19 @@ Interface development: `npm run dev:web` starts Vite on port 5173 with a proxy f
 | `GET /oauth/callback` | Linear OAuth callback | random, single-use `state` parameter |
 | `POST /webhooks/linear` | Linear webhooks; the smee relay hands its messages to the same check | HMAC signature + 60 s freshness on the signed `webhookTimestamp`; 401 otherwise, nothing written |
 | `POST /webhooks/github` | GitHub webhooks | HMAC signature `X-Hub-Signature-256`; 401 otherwise, nothing written. GitHub dates no delivery, so no freshness: a replayed delivery is a duplicate by event id |
-| `/agent/*` | Agent API (`relais-agent`) | current run's token (`Authorization: Bearer`); `/agent/search` searches the Linear team of the run's ticket only, never the whole workspace the factory's token reads (ORC-349) |
+| `POST /agent/mcp` | The factory's MCP, the agents' only API (see [below](#factory-mcp)); any other `/agent/*` path returns 404, with or without a token (ORC-192) | current run's token (`Authorization: Bearer`) |
 
-With sandboxes (`FACTORY_CONTAINER_CLI`, see [`configuration.md`](configuration.md#environment-variables)), a **second server** serves only `/agent/*`, with the same routes and the same run token, on `FACTORY_AGENT_PORT` (interface port + 1) and `FACTORY_AGENT_HOST` (`127.0.0.1`): the containers, which have no network, reach it through the daemon's egress proxy (see [below](#sandbox-network)). Any other route returns 404 there. The interface stays at the `host` address.
+With sandboxes (`FACTORY_CONTAINER_CLI`, see [`configuration.md`](configuration.md#environment-variables)), a **second server** serves only `/agent/mcp`, with the same run token, on `FACTORY_AGENT_PORT` (interface port + 1) and `FACTORY_AGENT_HOST` (`127.0.0.1`): the containers, which have no network, reach it through the daemon's egress proxy (see [below](#sandbox-network)). Any other route returns 404 there. The interface stays at the `host` address.
 
 ## Network exposure and password
 
-By default Relais listens on `127.0.0.1`: only the local machine can access it, without a password. Without a password, the interface and `/api/*` answer only under a loopback name (`Host`: `localhost`, `127.x.x.x` or `[::1]`, any port) and refuse any other with 403 `Unknown host` (ORC-349): a web page whose name an attacker points at `127.0.0.1` (DNS rebinding) would otherwise be same-origin with Relais under that name, `Origin` and `Host` alike. The webhooks, the OAuth callback and `/agent/*` keep their own protection and answer under any name, so a tunnel to `publicUrl` still brings the webhooks; it no longer brings the interface, which would be on the Internet without a password: expose it with the password below.
+By default Relais listens on `127.0.0.1`: only the local machine can access it, without a password. Without a password, the interface and `/api/*` answer only under a loopback name (`Host`: `localhost`, `127.x.x.x` or `[::1]`, any port) and refuse any other with 403 `Unknown host` (ORC-349): a web page whose name an attacker points at `127.0.0.1` (DNS rebinding) would otherwise be same-origin with Relais under that name, `Origin` and `Host` alike. The webhooks, the OAuth callback and `/agent/mcp` keep their own protection and answer under any name, so a tunnel to `publicUrl` still brings the webhooks; it no longer brings the interface, which would be on the Internet without a password: expose it with the password below.
 
 To expose it (server, Docker), set `host: 0.0.0.0` (or a specific address) in `config.yaml`. Relais then **refuses to start** without the `RELAIS_UI_PASSWORD` variable:
 
 > host: 0.0.0.0 expose l'interface et l'API de Relais hors de cette machine. Définissez la variable d'environnement RELAIS_UI_PASSWORD (mot de passe de l'interface), ou remettez host: 127.0.0.1 dans config.yaml.
 
-With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except four routes that have their own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback` and `/agent/*`. Check: `curl -i https://<domain>/api/state` must return 401. A test lists the routes the password leaves open (ORC-222): a new inbound route fails it until it has a guard of its own; the tests of each guard are in [`threat-model.md`](threat-model.md).
+With the password, everything goes through **HTTP Basic** authentication (any username, password = `RELAIS_UI_PASSWORD`, compared in constant time), except what has its own protection: `POST /webhooks/linear`, `POST /webhooks/github`, `GET /oauth/callback`, and the `/agent` prefix, where `POST /agent/mcp` checks its run token and every other path answers 404 (ORC-192). Check: `curl -i https://<domain>/api/state` must return 401. A test lists the routes the password leaves open (ORC-222): a new inbound route fails it until it has a guard of its own, and a new route under `/agent` fails it in any case, since nothing but the MCP is served there; the tests of each guard are in [`threat-model.md`](threat-model.md).
 
 The `relais status|pause|resume|stop` commands send `RELAIS_UI_PASSWORD` if the variable is set in the shell.
 
@@ -118,20 +118,20 @@ Behind a proxy, the `Host` header passed to Relais must be that of the public UR
 
 ## Agent tokens
 
-Each run receives a random `RELAIS_RUN_TOKEN`. The `/agent/*` API only accepts it while that run is `running`. This token:
+Each run receives a random `RELAIS_RUN_TOKEN`, the credential of the [factory MCP](#factory-mcp), which only accepts it while that run is `running`. This token:
 
-- only reads **the run's ticket** (`/agent/issue/<other ticket>` → 403);
-- can search tickets, search the knowledge base and ask a question in the ticket's session;
+- acts for **the run's ticket** alone: its result, its question, a search of the knowledge base; it reads no Linear ticket (the prompt carries the run's ticket);
 - appears neither in `/api/state`, nor in `/api/flow`, nor in `/api/measures`, nor in `/api/overview`, nor in `/api/runs/:id`, nor in `/api/security`, nor in `/api/events` and `/api/events/recent`.
 
-On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk to the daemon locally. In a sandbox, it points to `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (by default `host.docker.internal`): a name the container does not resolve, which the egress proxy recognizes and relays to the server dedicated to the agent API.
+On the host, `RELAIS_API` points to `http://127.0.0.1:<port>/agent`: agents talk to the daemon locally. In a sandbox, it points to `http://<FACTORY_SANDBOX_AGENT_HOST>:<FACTORY_AGENT_PORT>/agent` (by default `host.docker.internal`): a name the container does not resolve, which the egress proxy recognizes and relays to the server dedicated to the agent API. Both serve only the MCP at `<RELAIS_API>/mcp`: the `relais-agent` CLI and its routes (`issue`, `search`, `kb/search`, `ask`) are gone (ORC-192), and no run mounts or puts on its `PATH` anything of the factory's install.
 
 ## Factory MCP
 
-`POST /agent/mcp` is an MCP server ("Streamable" HTTP, JSON responses only, one message per request; any other method receives `405` with `Allow: POST`, no SSE stream), behind the same run token as the rest of `/agent/*`, also served by the server dedicated to sandboxes. Two tools (ORC-288):
+`POST /agent/mcp` is an MCP server ("Streamable" HTTP, JSON responses only, one message per request; any other method receives `405` with `Allow: POST`, no SSE stream), behind the run token, also served by the server dedicated to sandboxes. Three tools (ORC-288, ORC-232):
 
 - **`submit_result`**: the agent returns its result there, in the `agentOutputSchema` format (`src/core/agent-output.ts`), whose JSON schema is the tool's `inputSchema`. A valid result is stored for **the token's run** (meta `agent-output:<run>`), the last submission wins; an invalid result is refused (`isError`) with the offending fields, so the agent can fix it during its run. Its texts are capped (`OUTPUT_LIMITS` of `src/publish/output-limits.ts`): what Linear and GitHub show is composed from them by the factory and goes through its `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)).
-- **`ask`**: like `POST /agent/ask` (question in Linear, ticket blocked), which stays until ORC-192.
+- **`ask`**: a question in Linear, the ticket blocked, told by the standard block comment (ORC-196). The skills ask instead by ending the run with `submit_result`, `status: "blocked"` and the `question` (`needs_input`), which blocks the same way.
+- **`kb_search`**: searches the knowledge base's `notes/*.md` on the server's clone (words of 3 letters or more, ignoring accents and case) and answers `file:line: text` (ORC-232).
 
 `claude -p` receives it via `--mcp-config '{"mcpServers":{"factory":{"type":"http","url":"${FACTORY_API}/mcp","headers":{"Authorization":"Bearer ${FACTORY_RUN_TOKEN}"}}}}'`: Claude Code replaces the `${…}` with the variables from its environment (verified on 2.1.316). The token is therefore never on the command line, which the host's process list shows; it arrives through the run's environment, as before.
 

@@ -14,6 +14,7 @@ import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets } from '../config/instance.js';
 import { posixPath } from '../config/run-settings.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { startFactory } from './bootstrap.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { TrackerSwitch } from './tracker-switch.js';
@@ -117,6 +118,28 @@ describe('bootstrap', () => {
       expect(fullReadPaths!({ frozenTests: frozen } as Partial<TicketState> as TicketState)).toEqual(['src/export.test.ts', 'vitest.config.ts']);
       expect(fullReadPaths!({} as TicketState)).toEqual([]);
     });
+  });
+
+  it("runs a project on the factory/default workflow, its repository's .factory/workflow.yml ignored (ORC-388)", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-boot-repo-'));
+    mkdirSync(join(repo, '.factory'));
+    writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n');
+    saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }], limits: {} });
+    writeFileSync(join(home, 'factory.yml'), 'budgets: { max_turns: { build: 40 } }\n');
+    let deps: OrchestratorDeps | undefined;
+    const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockImplementation(async function (this: Orchestrator) {
+      deps = (this as unknown as { d: OrchestratorDeps }).d;
+    });
+    const logs: string[] = [];
+    try {
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+      await app.stop();
+    } finally {
+      recover.mockRestore();
+    }
+    expect(deps!.projects[0]!.workflow).toEqual(defaultWorkflow({ budgets: { maxTurns: { build: 40 } } }));
+    expect(logs).toContain('p: Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
   });
 
   it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {

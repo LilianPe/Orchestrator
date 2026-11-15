@@ -4,9 +4,8 @@ import { parse } from 'yaml';
 import { parseCondition } from '../core/conditions.js';
 import { parseDuration } from '../core/duration.js';
 import { RENAMED_V1, type EventType, type LogicalState } from '../core/types.js';
-import { factoryDefault } from '../presets/factory-default.js';
-import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from '../presets/preset.js';
-import { perStepToolViolations, READ_TOOLS, stepTools } from '../presets/tools.js';
+import { READ_TOOLS } from '../presets/tools.js';
+import { agentStep, checkStepSettings, fromStep, PER_RUN, preset, presetBound, WorkflowError, type StepSettings } from '../presets/workflow.js';
 import {
   rawWorkflowSchema,
   type JobSpec,
@@ -17,7 +16,8 @@ import {
   type Workflow,
 } from './workflow-schema.js';
 
-export class WorkflowError extends Error {}
+// Its tests still import these from here, until this loader goes (ORC-389).
+export { presetBound, WorkflowError };
 
 const EVENT_TYPES: readonly string[] = [
   'ticket.delegated', 'session.mentioned', 'session.prompted', 'session.stopped', 'status.changed', 'label.changed',
@@ -84,19 +84,6 @@ function resolveJob(name: string, jobs: Record<string, RawJob>, seen: string[] =
   return merged;
 }
 
-/** What `factory.yml` says of the agent steps (ORC-136), by step name. */
-export interface StepSettings {
-  effort?: { default?: Effort; perStep?: Record<string, Effort> | undefined } | undefined;
-  budgets?: { maxTurns?: Record<string, number> | undefined; perStepTokens?: Record<string, number> | undefined } | undefined;
-  /** The built-in tools of a step, in place of its default (ORC-383): never more than the step and its network allow. */
-  tools?: { perStep?: Record<string, readonly string[]> | undefined } | undefined;
-}
-
-const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefined => {
-  const step = preset.steps.find((s) => s.id === name);
-  return step && isAgentStep(step) ? step : undefined;
-};
-
 /**
  * The job's effort and caps. Its step sets the effort, `factory.yml` may change it; the step's turns are a ceiling that a
  * project or `factory.yml` only lowers, as a step only narrows the network. A job out of the preset keeps its own limits.
@@ -113,16 +100,9 @@ function stepFields(job: string, raw: RawJob, own: RunLimits, settings: StepSett
   if (raw.limits?.tokens !== undefined) throw new WorkflowError(`jobs.${job}.limits.tokens: a job of the step ${name} takes it from budgets.per_step_tokens`);
   const step = agentStep(name);
   if (!step) throw new WorkflowError(`jobs.${job}.step: ${name} is not an agent step of ${preset.name}`);
-  const tools = settings.tools?.perStep?.[name] ?? stepTools(step);
   // Its own clone, gone with its run (ORC-367): a ticket that does not start keeps no worktree made for nothing. Not spec_draft, past that start.
   if (step.type === 'agent_step' && step.readOnly && step.writes === 'nothing' && raw.workspace !== 'trunk-readonly' && raw.workspace !== 'published') throw new WorkflowError(`jobs.${job}.workspace: the ${name} step is read-only, it runs on a clone of its own (trunk-readonly)`);
-  const tokens = settings.budgets?.perStepTokens?.[name];
-  return {
-    network: step.network,
-    ...(tools ? { tools } : {}),
-    effort: settings.effort?.perStep?.[name] ?? step.effort,
-    limits: { ...own, turns: Math.min(own.turns, step.maxTurns, settings.budgets?.maxTurns?.[name] ?? Infinity), ...(tokens !== undefined ? { tokens } : {}) },
-  };
+  return fromStep(step, own, settings);
 }
 
 /**
@@ -139,19 +119,6 @@ function ownFields(job: string, raw: RawJob, own: RunLimits, settings: StepSetti
     ...(raw.read_only ? { tools: READ_TOOLS } : {}),
     limits: raw.limits?.tokens !== undefined ? { ...own, tokens: raw.limits.tokens } : own,
   };
-}
-
-/** A step named in `factory.yml` that the preset does not have would silently cap nothing. */
-function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
-  const named = { 'claude.effort.per_step': effort?.perStep, 'budgets.max_turns': budgets?.maxTurns, 'budgets.per_step_tokens': budgets?.perStepTokens, 'tools.per_step': tools?.perStep };
-  for (const [where, steps] of Object.entries(named)) {
-    for (const name of Object.keys(steps ?? {})) {
-      if (!agentStep(name)) throw new WorkflowError(`factory.yml: ${where}.${name}: not an agent step of ${preset.name}`);
-    }
-  }
-  // Refused at load, as a network wider than the repository's: a list never gives a step more than it may have (ORC-383).
-  const refused = perStepToolViolations(tools?.perStep ?? {}, preset.steps, preset.name);
-  if (refused.length) throw new WorkflowError(refused.map((r) => `factory.yml: ${r}`).join('\n'));
 }
 
 function limits(raw: { turns?: number; duration?: string | number } | undefined, base: RunLimits): RunLimits {
@@ -199,15 +166,6 @@ function buildJob(name: string, raw: RawJob, perRun: RunLimits, settings: StepSe
   };
 }
 
-// Compiled once, at load: a preset that breaks an invariant of the core never reaches the engine.
-const preset = compilePreset(factoryDefault).preset;
-
-/** The limit of a counter of the preset, which the engine still reads through `limits` (ORC-187). */
-export function presetBound(p: Preset, counter: string): number {
-  const found = Object.hasOwn(p.counters, counter) ? p.counters[counter] : undefined;
-  if (!found) throw new WorkflowError(`preset ${p.name}: counter ${counter} is missing`);
-  return found.limit;
-}
 
 export function loadWorkflow(opts: { packDir: string; projectFile?: string | undefined; settings?: StepSettings | undefined }): Workflow {
   const pack = readRaw(join(opts.packDir, 'workflow.yml'));
@@ -216,7 +174,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
 
   const settings = opts.settings ?? {};
   checkStepSettings(settings);
-  const perRun = limits(raw.limits?.per_run, { turns: 150, durationMs: 90 * 60_000 });
+  const perRun = limits(raw.limits?.per_run, PER_RUN);
   const rawJobs = raw.jobs ?? {};
   const jobs: Record<string, JobSpec> = {};
   for (const name of Object.keys(rawJobs)) jobs[name] = buildJob(name, resolveJob(name, rawJobs), perRun, settings);
@@ -304,7 +262,7 @@ export function loadWorkflow(opts: { packDir: string; projectFile?: string | und
       specCheckReturns: presetBound(preset, 'spec_check'),
       specChanges: presetBound(preset, 'spec_review'),
     },
-    workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200, ...(raw.workspace?.preview ? { preview: raw.workspace.preview } : {}) },
+    workspace: { setup: raw.workspace?.setup ?? [], portBase: raw.workspace?.ports?.base ?? 4200 },
     commands: [...new Set((on.command ?? []).map((r) => r.say).filter((s): s is string => !!s))],
     on,
     jobs,

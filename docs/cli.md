@@ -1,9 +1,6 @@
 # Command line
 
-Relais provides two executables (installed by `npm link`, see [`installation.md`](installation.md)):
-
-- **`relais`**: for you, the operator;
-- **`relais-agent`**: for the agents, during a run. You do not call it yourself.
+Relais provides one executable, `relais`, for you, the operator (installed by `npm link`, see [`installation.md`](installation.md)). The agents have none: during a run they reach Relais through its MCP alone (`submit_result`, `ask`, `kb_search`, see [`interface-and-security.md`](interface-and-security.md#factory-mcp)); `relais-agent` is gone (ORC-192).
 
 All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`. An unknown or incomplete command prints the help and exits with code 1.
 
@@ -32,10 +29,10 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 2. Adds (or replaces) the project in `config.yaml`: `id` = name of the repository directory (slug, 30 characters max), `repoPath` = git root, `linearTeamKey`.
 3. Without `publicUrl` or a configured relay, creates a **smee.io channel** and records it in `relay`.
 4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty), recorded in `secrets.json`. Details: [`linear.md`](linear.md).
-5. If `.relais/workflow.yml` does not exist, creates it: asks for the verification commands, separated by `;`, suggested from what it detects (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: uv's commands when there are a `pyproject.toml` and a `uv.lock`, ORC-172), and sets `workspace.setup` and the red check's test command to match. Exact contents: [`workflow.md`](workflow.md#1-role-of-the-file-and-merging-with-the-pack).
+5. Prints a proposed [`.factory/config.yml`](repository-configuration.md) from what it detects, and writes nothing in the repository (ORC-388): `setup` (npm's `npm ci`, pnpm's `pnpm install --frozen-lockfile`, uv's `uv sync --frozen`) and `commands` (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: `ruff`, `mypy` and `pytest` through uv when there are a `pyproject.toml` and a `uv.lock`, ORC-172) and `preview`, what starts the application for the visual proof on `PORT` (the first of the `dev`, `start` and `preview` scripts in `package.json`, by the same package manager; none for Python, ORC-397), all in one proposal. A `package.json` that does not parse proposes nothing of Node. Nothing detected, or a `.factory/config.yml` already there, nothing proposed. Commit the file on the default branch: the factory reads it there. A `.factory/workflow.yml` or `.relais/workflow.yml` found is said to be ignored.
 6. Writes `config.yaml` and prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
 
-`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It never rewrites an existing `.relais/workflow.yml`. Remember to commit `.relais/workflow.yml` to the repository.
+`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. It no longer writes `.factory/workflow.yml`: the workflow is the `factory/default` preset, and a repository's `.factory/workflow.yml` is ignored (`factory doctor` says so, and the daemon logs it at each start).
 
 ### `relais up`
 
@@ -70,6 +67,7 @@ Check before entrusting a repository: refuses (exit code `1`) a CI that can expo
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
 - `--json`: machine report (workflows, triggers, secrets yes/no, environments, verdict).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
+- Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
 
 Full rule, examples and limits: [`github.md`](github.md).
 
@@ -186,20 +184,6 @@ changed after, ORC-385) and rebuilds each ticket at the parent of its PR's merge
 `factory/fantome` preset; the daemon then delegates each ticket to that project itself (ORC-376). It is refused when the daemon
 runs its agents on the host (no sandboxes), or has never started: the agent could push by itself. `collect`, `judge` (the blind screen, PR A and PR B on the grid mergeable as is / after edits / to reject) and `report` follow. See
 [the replay of closed tickets](ghost-replay.md). Like `flaky`, the command writes to the instance's database, without the daemon.
-
-## `relais-agent` (agent side)
-
-During a run, Relais adds Relais's `bin/` to the `PATH` and sets `RELAIS_API` and `RELAIS_RUN_TOKEN`. The agent then uses:
-
-| Command | Effect |
-|---|---|
-| `relais-agent issue <ID>` | Prints the ticket: identifier, title, status, URL, description. **Limited to the run's ticket** (403 otherwise). |
-| `relais-agent search <text>` | Searches the Linear tickets of the current ticket's team (ORC-349). |
-| `relais-agent ask <question>` | Posts the question in the ticket's block comment (ORC-196) and **blocks** the ticket. The agent must end its turn; the human reply restarts the work. |
-
-The knowledge base is no longer searched here: the factory MCP's `kb_search` tool searches `notes/*.md` (words of 3 letters or more, ignoring accents and case) and answers `file:line: text` (ORC-232).
-
-Launched outside a run, it answers `relais-agent must be started by Relais (RELAIS_API and RELAIS_RUN_TOKEN missing).` (code 2). The token is only accepted while the run is in progress. The pack allows `Bash(relais-agent:*)` and the startup hook reminds the agent of these commands ([`pack-and-skills.md`](pack-and-skills.md)).
 
 ## Development scripts
 

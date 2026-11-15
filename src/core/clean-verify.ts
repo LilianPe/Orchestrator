@@ -83,11 +83,6 @@ export interface VisualRequest {
   intake: boolean;
   /** The browser; absent (no sandbox with one), a required proof is unavailable. */
   shooter?: VisualShooter;
-  /**
-   * What starts the application by the workflow's `workspace.preview`, until it goes (ORC-388): the base's `preview` in
-   * `.factory/config.yml` comes first (ORC-397). Neither, a required proof is unavailable.
-   */
-  start?: string;
   /** The recipe the knowledge base learned for the repository (ORC-386): it starts the application when nothing is declared. */
   learned?: PreviewRecipe;
   /**
@@ -348,8 +343,11 @@ async function testRunners(git: CloneGit, sha: string, commands: readonly string
   return runners;
 }
 
-/** `recipe`: its start is a recipe, learned or found (ORC-386), not the repository's own: its shots are its probe. */
-type Shooting = VisualRequest & Required<Pick<VisualRequest, 'shooter' | 'start'>> & { recipe?: 'learned' | 'found' };
+/**
+ * A request to shoot: a browser, and what starts the application. `recipe`: that start is a recipe, learned or found (ORC-386),
+ * not the base's `preview`: its shots are its probe.
+ */
+type Shooting = VisualRequest & { shooter: VisualShooter; start: string; recipe?: 'learned' | 'found' };
 
 /**
  * The decision on the diff (ORC-176), and what takes a required proof, or why it cannot be taken: then indicative (ORC-152), no
@@ -364,7 +362,7 @@ async function planVisual(
   const proof = decideVisualProof({ intake: v.intake, changed, visualPaths: at.config.visualPaths });
   if (at.refused) return { proof };
   // Declared first, then learned (ORC-386); the recipe the agent found only when neither, tried even with no proof to take.
-  const declared = at.config.preview ?? v.start;
+  const declared = at.config.preview;
   const learned = declared ? undefined : v.learned;
   // The shots run without the repository's services (ORC-282), and so would the probe: no recipe to find there.
   const probe = declared || learned || at.config.services.length ? undefined : v.found;

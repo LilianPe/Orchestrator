@@ -24,19 +24,22 @@ import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
 import { buildAuthorizeUrl, exchangeCode, TokenManager } from '../adapters/tracker/linear/oauth.js';
 import { Q } from '../adapters/tracker/linear/queries.js';
-import { knownLabels, recordLabels, serial } from '../adapters/tracker/linear/labels.js';
+import { knownLabels, recordLabels, recordWrite, serial } from '../adapters/tracker/linear/labels.js';
 import { Reconciler, reconcileOnce } from '../adapters/tracker/linear/reconcile.js';
 import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
+import { SecretReader } from '../adapters/secrets/reader.js';
+import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
-import { loadWorkflow } from '../config/load-workflow.js';
 import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
@@ -68,9 +71,6 @@ export interface BootOptions {
 
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
-/** Where a sandbox sees the factory's install (ORC-204); its image puts `/factory/app/bin` on its PATH. No knowledge base: the server reads it (ORC-232). */
-const SANDBOX_ROOT = '/factory/app';
-
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
   const root = repoRoot();
@@ -81,6 +81,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // runs is never half-read by a request; config.yaml with what it declares over it.
   const yml = loadFactoryYml(o.home, env);
   const instance = effectiveInstance(o.home, yml);
+  // Opened now, read at each setup (ORC-308): only the references' syntax is checked at the start.
+  const repoSecrets = new SecretReader(openSecretSources(yml?.secretSources, SECRET_SOURCE_KINDS, env));
   const uiPassword = isLoopbackHost(instance.host) ? undefined : env['FACTORY_UI_PASSWORD'] || undefined;
   if (!isLoopbackHost(instance.host) && !uiPassword) {
     throw new Error(
@@ -102,18 +104,18 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const githubApp = resolveGithubApp(instance, env);
   const githubSecret = githubWebhookSecret(instance, env);
 
-  const projects: ProjectRuntime[] = instance.projects.map((p) => {
-    const projectFile = join(p.repoPath, '.factory/workflow.yml');
-    const workflow = loadWorkflow({ packDir, projectFile: existsSync(projectFile) ? projectFile : undefined, settings: stepSettings(yml) });
-    return {
-      id: p.id,
-      repoPath: p.repoPath,
-      teamKey: p.linearTeamKey,
-      // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
-      workflow: isFantome(p) ? asFantome(workflow) : workflow,
-      ...(projectEffects(p) ? { effects: 'none' as const } : {}),
-    };
-  });
+  // The workflow of factory/default for every project: a repository's `.factory/workflow.yml` is ignored (ORC-388).
+  const workflow = defaultWorkflow(stepSettings(yml));
+  const projects: ProjectRuntime[] = instance.projects.map((p) => ({
+    id: p.id,
+    repoPath: p.repoPath,
+    teamKey: p.linearTeamKey,
+    // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
+    workflow: isFantome(p) ? asFantome(workflow) : workflow,
+    ...(projectEffects(p) ? { effects: 'none' as const } : {}),
+  }));
+  // Said at each start, not only by `factory doctor`.
+  for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
@@ -167,7 +169,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       return a.name ? a.token : undefined;
     };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
-    const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : [])];
+    // A repository's secrets: its env ones from the start, the others by the values its setups read (ORC-308), a rotated one included.
+    const daemonSecrets = () => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
@@ -250,8 +253,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       accept: (e): Promise<boolean> => orchestrator.accept(e), now: () => clock.now(), log: (level, m) => log(`${level === 'warn' ? 'Warning: ' : ''}replay: ${m}`),
       startTime,
     });
+    // One turn for the webhook, the reconciliation and the factory's own label writes around the known labels (ORC-185, ORC-346).
+    const labelsTurn = serial();
     const orchestrator = new Orchestrator({
       replays,
+      labelsWritten: (projectId, ticketId, written) => labelsTurn(() => recordWrite(store, projectId, ticketId, written)),
       reconcile: (p) => reconcileProject(p),
       // The sources start before Linear is connected: their events wait in the inbox until replayInbox().
       holdInboxUntilReplay: true,
@@ -291,6 +297,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       claudeAccount: () => claudeAccount().name,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
+      readSecrets: (refs) => repoSecrets.read(refs),
       repoConfig: makeRepoConfig({ log }),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
@@ -301,34 +308,17 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             runsDir: paths.runs,
             egressJournal: (runId: string) => egress.journalPath(runId),
             registries: registriesViaEgress(egress),
-            // factory-agent runs from the factory's install, read-only: only what it needs, never the whole root,
-            // which can hold a `.env` or a dev FACTORY_HOME.
-            sandboxMounts: [
-              ...['bin', 'package.json', 'node_modules', existsSync(join(root, 'dist')) ? 'dist' : 'src'].map((p) => ({
-                host: join(root, p),
-                target: `${SANDBOX_ROOT}/${p}`,
-                readOnly: true,
-              })),
-            ],
           }
         : {}),
-      // In a sandbox, paths of the sandbox and the PATH of its image: no host path reaches it.
+      // In a sandbox, no host path: the agent reaches the factory through its MCP alone (ORC-192).
       agentEnv: (run) => ({
         FACTORY_RUN_TOKEN: run.token,
         FACTORY_TICKET: run.ticketId,
         // Read by the pack's PreToolUse hook (ORC-285); the runner keeps every other FACTORY_* in the daemon.
         ...(env['FACTORY_REFUSALS_LOG'] ? { FACTORY_REFUSALS_LOG: env['FACTORY_REFUSALS_LOG'] } : {}),
         ...(yml?.readGuard ? { FACTORY_READ_MAX_LINES: String(yml.readGuard.maxLines) } : {}),
-        ...(sandboxes
-          ? {
-              FACTORY_API: `http://${agentHostInSandbox}:${agentPort}/agent`,
-              FACTORY_ROOT: SANDBOX_ROOT,
-            }
-          : {
-              FACTORY_API: `http://127.0.0.1:${port}/agent`,
-              FACTORY_ROOT: root,
-              PATH: `${join(root, 'bin')}:${process.env['PATH'] ?? ''}`,
-            }),
+        // The factory MCP's address (ORC-288), the only thing of the factory a run reaches (ORC-192).
+        FACTORY_API: sandboxes ? `http://${agentHostInSandbox}:${agentPort}/agent` : `http://127.0.0.1:${port}/agent`,
       }),
     });
     await orchestrator.recover();
@@ -339,8 +329,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const accept = (e: FactoryEvent) => orchestrator.accept(e);
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
-    // One turn for the webhook and the reconciliation around the known labels (ORC-185).
-    const labelsTurn = serial();
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
     const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeTokenOf(), !sandboxes, log);
     const ingest = createLinearIngest({
@@ -364,7 +352,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         stateNameById: (t, id) => linearTracker?.stateNameById(t, id),
         stateTypeById: (t, id) => linearTracker?.stateTypeById(t, id),
         labelNameById: (t, id) => linearTracker?.labelNameById(t, id),
-        isEcho: (k) => store.isEcho(k, clock.now()),
+        // Read from the settings until Linear is connected: a webhook of the factory's write before a restart may come first.
+        factoryActor: () => linearTracker?.appUserId ?? linearSettings(o.home, yml)?.appUserId,
         commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
         now: () => clock.now(),
         knownLabels: (pid, id) => knownLabels(store, pid, id),
@@ -411,7 +400,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       linearWebhook: ingest,
       githubWebhook: githubIngest,
       linearConnected: () => !!trackerSwitch.current,
-      tracker: trackerSwitch,
       capacity: () => ({
         dev: { used: scheduler.inUse('dev'), total: capacity.dev },
         questions: { used: scheduler.inUse('questions'), total: capacity.questions },
