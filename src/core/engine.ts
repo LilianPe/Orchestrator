@@ -980,6 +980,12 @@ export function formatFailuresShort(failures: VerifyFailure[]): string {
  * and nothing a human does on the real one starts any job of its run. The trace names a reaction as the journals recorded
  * its rule (`on.<event>[<index>]`), and an event no reaction answers as `no rule for <event>`.
  */
+/**
+ * The jobs the reactions start, by their runtime names as the rules named them: every workflow but one at the Rapide level
+ * has them (`workflowViolations`), or a reaction would start nothing in silence.
+ */
+export const REACTION_JOBS: readonly string[] = ['dev-feedback', 'fix-human', 'review', 'ask', 'fix-ci', 'rebase'];
+
 interface Reaction {
   /** The position of the former pack's rule, in the trace. */
   index: number;
@@ -1061,11 +1067,11 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
   const state = ticket?.logical ?? 'todo';
   const conflict = event.type === 'pr.conflicted';
   if (rapide(workflow) || ticket?.blocked || !(state === 'human_review' || state === 'ai_review' || (conflict && state === 'dev'))) return undefined;
-  return reaction(0, conflict ? 'rebase' : 'fix-ci', event, ticket, workflow);
+  return reaction(0, conflict ? REBASE : 'fix-ci', event, ticket, workflow);
 }
 
 /** The label `agent:stop` stops the ticket's work, as the stop of its session does (until ORC-201 removes the `agent:*` labels). */
-export const STOP_LABEL = 'agent:stop';
+const STOP_LABEL = 'agent:stop';
 
 /** The stop of the ticket's session in Linear, or the label `agent:stop` added: the work stops, the ticket blocked until a reply. */
 function stopped(out: Decision, event: FactoryEvent<'label.changed' | 'session.stopped'>, workflow: Workflow): Decision {
@@ -1102,20 +1108,18 @@ function merged(out: Decision, event: FactoryEvent<'pr.merged'>, ticket: TicketS
  * (the review again) is a human action on the run, checked by the matrix.
  */
 function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
-  const start = (r: Reaction | undefined): Decision => {
+  const start = (r: Reaction | undefined, run: (r: Reaction) => Decision = (x) => startReaction(out, event, ticket, workflow, x)): Decision => {
     if (!r) return noReaction(out, event.type);
     reacted(out, event.type, r.index);
-    return startReaction(out, event, ticket, workflow, r);
+    return run(r);
   };
   switch (event.type) {
     case 'ticket.delegated':
       return start(onDelegated(event, ticket, workflow));
-    case 'status.changed': {
-      const r = event.payload.to === 'ai_review' ? reviewAgain(event, ticket, workflow) : undefined;
-      if (!r) return noReaction(out, event.type);
-      reacted(out, event.type);
-      return authorize(out, event, ticket, ruleAction(ticket), 'linear', matrix) ? startReaction(out, event, ticket, workflow, r) : out;
-    }
+    case 'status.changed':
+      return start(event.payload.to === 'ai_review' ? reviewAgain(event, ticket, workflow) : undefined, (r) =>
+        authorize(out, event, ticket, ruleAction(ticket), 'linear', matrix) ? startReaction(out, event, ticket, workflow, r) : out,
+      );
     case 'session.prompted':
       return start(replyReaction(event, ticket, workflow));
     case 'ticket.commented':
@@ -1126,12 +1130,8 @@ function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefin
     case 'session.stopped':
       return stopped(out, event, workflow);
     case 'pr.checks_failed':
-    case 'pr.conflicted': {
-      const r = prFailed(event, ticket, workflow);
-      if (!r) return noReaction(out, event.type);
-      reacted(out, event.type);
-      return reviewCiLoop(out, r, event, ticket, workflow);
-    }
+    case 'pr.conflicted':
+      return start(prFailed(event, ticket, workflow), (r) => reviewCiLoop(out, r, event, ticket, workflow));
     case 'pr.merged':
       return rapide(workflow) ? noReaction(out, event.type) : merged(out, event, ticket);
     default:

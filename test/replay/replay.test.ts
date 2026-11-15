@@ -203,6 +203,28 @@ describe('recorded journals (test/replay/journals)', () => {
     expect(new Set(replayJournal(journal).divergences.map((d) => d.eventId))).toEqual(new Set([delegations[0]!.event.id]));
   });
 
+  it('reads a decision recorded before ORC-180 through the ticket upcaster: its pendingFeedback is the human inbox', () => {
+    // A journal of today, its projections written as before ORC-180 (`pendingFeedback`): the replay reads them back through `upcastTicket`.
+    const journal = readJournal(readFileSync(join(dir, 'human-reply-during-run.json'), 'utf8'));
+    const old = (t: unknown) => {
+      if (!t || typeof t !== 'object' || !('humanInbox' in t)) return;
+      const { humanInbox, ...rest } = t as { humanInbox: unknown };
+      for (const k of Object.keys(t)) delete (t as Record<string, unknown>)[k];
+      Object.assign(t, rest, { pendingFeedback: humanInbox });
+    };
+    for (const e of journal.entries) {
+      old(e.decision?.before);
+      old(e.decision?.ticket);
+    }
+    const tickets = journal.entries.flatMap((e) => [e.decision?.before, e.decision?.ticket]).filter((t) => t !== undefined && t !== null);
+    expect(tickets.length).toBeGreaterThan(0);
+    expect(tickets.every((t) => 'pendingFeedback' in t && !('humanInbox' in t))).toBe(true);
+    expect(replayJournal(journal).divergences).toEqual([]);
+    // Upcast, not ignored: a value that differs is still caught.
+    (journal.entries.find((e) => e.decision?.ticket)!.decision!.ticket as unknown as { pendingFeedback: unknown[] }).pendingFeedback = [{ body: 'x' }];
+    expect(replayJournal(journal).divergences.map((d) => d.field)).toContain('ticket');
+  });
+
   it('a message of today, classified and acked, replays bit for bit: instruction held at the regrouping, handed over at the end of the step (ORC-180)', () => {
     const journal = readJournal(readFileSync(join(dir, 'human-reply-during-run.json'), 'utf8'));
     const prompted = journal.entries.filter((e) => e.event.type === 'session.prompted');

@@ -1,5 +1,6 @@
 import type { JobSpec, Limits, RunLimits, Workflow } from '../core/workflow.js';
 import { blockingFix, nextOf, startingJob } from '../core/chain.js';
+import { REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, isAgentStep, type AgentStep, type Effort, type Preset } from './preset.js';
 import { BINDINGS, type Binding } from './runtime-bindings.js';
@@ -101,7 +102,8 @@ function jobOf(p: Preset, name: string, b: Binding, perRun: RunLimits, settings:
 
 /**
  * What the loader of the former pack refused in a workflow, now that none goes through it: a job or the relayed answer that
- * names nothing, a job whose step the preset lacks, a review whose fix does not read the findings.
+ * names nothing, a job whose step the preset lacks, a review whose fix does not read the findings; and a job a reaction of
+ * `decide` starts that the workflow lacks (but at the Rapide level, where only the delegation reacts).
  */
 export function workflowViolations(wf: Workflow): string[] {
   const out: string[] = [];
@@ -120,6 +122,7 @@ export function workflowViolations(wf: Workflow): string[] {
   if (wf.entry !== undefined && !steps.has(wf.entry)) out.push(`entry: ${wf.entry} is not a step of ${wf.preset?.name ?? 'the workflow'}`);
   job('relayJob', wf.relayJob);
   job('delegated', wf.delegated);
+  if (wf.level !== 'rapide') for (const name of REACTION_JOBS) job('reactions', name);
   return out;
 }
 
