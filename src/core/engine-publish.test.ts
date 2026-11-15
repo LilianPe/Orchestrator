@@ -195,8 +195,8 @@ describe('the publish effect (ORC-125)', () => {
 
 describe('mayPublish, at the push too', () => {
   it('says no for a commit that is not the one last found green', () => {
-    expect(mayPublish({ verifiedSha: 'abc' }, 'abc', workflow)).toBe(true);
-    expect(mayPublish({ verifiedSha: 'abc' }, 'def', workflow)).toBe(false);
-    expect(mayPublish({}, 'abc', workflow)).toBe(false);
+    expect(mayPublish({ verifiedSha: 'abc' }, 'abc')).toBe(true);
+    expect(mayPublish({ verifiedSha: 'abc' }, 'def')).toBe(false);
+    expect(mayPublish({}, 'abc')).toBe(false);
   });
 });

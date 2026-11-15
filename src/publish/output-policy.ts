@@ -102,11 +102,11 @@ const withheld = (refusals: readonly Refusal[]): string =>
 
 /**
  * The comment of a run's end, composed by the factory from what the agent submitted (ORC-289, ORC-214), never from its last
- * text: a build's recap, with the work of the ticket's attempts `runs` (`formatRecap`, ORC-195), a reply's or a synthesis's
+ * text: a build's recap, with the work of the ticket's attempts `runs` (`formatRecap`, ORC-195), a reply's
  * summary alone. A run that submitted nothing has `NO_RESULT`; a result its schema refuses today (a row older than the caps)
  * has the notice that it is withheld.
  */
-export function composeResult(o: AgentOutput | undefined, style: 'summary' | 'reply' | 'synthesis', runs: readonly RecapRun[] = []): string {
+export function composeResult(o: AgentOutput | undefined, style: 'summary' | 'reply', runs: readonly RecapRun[] = []): string {
   if (!o) return NO_RESULT;
   const valid = agentOutputSchema.safeParse(o);
   if (!valid.success) return withheld(zodRefusals('result', valid.error));

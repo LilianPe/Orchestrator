@@ -23,7 +23,7 @@ import { ExecFailure } from '../adapters/exec.js';
 import { ActivityRelay, composedActivity } from '../adapters/tracker/activity-relay.js';
 import { IssueNotFoundError, type ActivityInput, type LabelsWritten, type Tracker, type TrackerIssue } from '../adapters/tracker/types.js';
 import type { ReplayedTicket, ReplaySource } from '../ghost/delegate.js';
-import type { Workspace, WorkspaceKind, WorkspaceManager } from '../adapters/workspace/types.js';
+import type { Workspace, WorkspaceManager } from '../adapters/workspace/types.js';
 import { NO_REPO_VARIABLES, type RepoVariables } from '../config/repo-variables.js';
 import { parseRepoConfig, RepoConfigError, ticketTokenCap, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import type { JobSpec, Workflow } from './workflow.js';
@@ -31,13 +31,12 @@ import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
-import { workflowVersion } from '../runtime/workflow-version.js';
+import { FrozenFormatError, frozenWorkflow, workflowVersion } from '../runtime/workflow-version.js';
 import {
   KEPT_PR,
   LEASE_MS,
   PAUSE_ACCEPTED,
   RUN_LEASE_MS,
-  RUN_SILENT_MS,
   type DecisionOutcome,
   type DecisionRequest,
   type EffectOutcome,
@@ -115,7 +114,6 @@ import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { READ_TOOLS } from '../presets/tools.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from './block-cause.js';
 import { DECLARED_READS, declaredReads, type DeclaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
@@ -193,15 +191,11 @@ const causeChain = (err: unknown): string => {
 };
 
 /**
- * What a run's stagnation is watched against (ORC-136). `silentAfterMs` tells a version frozen since: one before it has
- * `repeatedFailures` too (ORC-187), for its checks only, and keeps running as it did. Only a dev job has its worktree read
- * for a loop: `decide` blocks no ticket on a question, whose checkout stays out of it.
+ * What a run's stagnation is watched against (ORC-136, ORC-187). Only a dev job has its worktree read for a loop: `decide`
+ * blocks no ticket on a question, whose checkout stays out of it.
  */
-function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation?: StagnationBounds } {
-  const silentMs = wf.limits.silentAfterMs;
-  if (!silentMs) return {};
-  const repeats = job.queue === 'dev' ? wf.limits.repeatedFailures : undefined;
-  return { stagnation: { silentMs, ...(repeats ? { repeats } : {}) } };
+function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation: StagnationBounds & { silentMs: number } } {
+  return { stagnation: { silentMs: wf.limits.silentAfterMs, ...(job.queue === 'dev' ? { repeats: wf.limits.repeatedFailures } : {}) } };
 }
 
 export interface ProjectRuntime {
@@ -467,10 +461,6 @@ function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   return isAnswerer(job) ? 'answerer' : undefined;
 }
 
-/** A job the factory launches: not a `knowledge` one (`learn`, `remember`) of a version frozen before ORC-193. */
-type AwakeJob = JobSpec & { workspace: WorkspaceKind };
-const awake = (job: JobSpec): job is AwakeJob => job.workspace !== 'knowledge';
-
 /** Why the forge refused a check run, when it says so: the hint a 403 needs, nothing for any other failure. */
 function checksPermission(err: { status?: number }): string {
   return err.status === 403 ? ': the GitHub App lacks the Checks write permission (docs/github.md)' : '';
@@ -513,8 +503,8 @@ const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HO
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
 const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
-/** A block made out of a decision, its step to resume as the engine's `block` journals it: only where a reply resumes it (ORC-196). */
-const blockedOn = (workflow: Workflow, kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, ...(workflow.blockComment ? { job } : {}) });
+/** A block made out of a decision, its step to resume as the engine's `block` journals it (ORC-196). */
+const blockedOn = (kind: BlockKind, reason: string, job: string): InternalEvent => ({ type: 'ticket.blocked', reason, kind, job });
 
 /** The sandboxes of the take-overs (ORC-234): one per ticket, `take-over-<project>-<ticket>`, no attempt of an agent. */
 export const takeOverKey = (projectId: string, ticketId: string): string => `take-over-${projectId}-${ticketId}`;
@@ -554,6 +544,9 @@ export class Orchestrator {
   private readonly relayTracker: Tracker;
   /** Versions of the projects' workflows, by workflow object. */
   private versionOfWorkflow = new WeakMap<Workflow, WorkflowVersion>();
+  /** The frozen versions refused for their format (ORC-393), and the tickets whose refusal is logged, once each. */
+  private refusedVersions = new Map<string, FrozenFormatError>();
+  private refusedTickets = new Set<string>();
   /** Workflows by version hash: the current ones and those tickets are frozen on. */
   private workflows = new Map<string, Workflow>();
   /** Dequeued items whose start has not taken its slot yet, per queue: drain hands out no more than the free slots. */
@@ -800,7 +793,7 @@ export class Orchestrator {
       await store.renewRun(run.id, clock.now() + RUN_LEASE_MS, run.leaseToken);
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
-      this.follow(run.id, handle, run.leaseToken!, bounds.stagnation?.silentMs);
+      this.follow(run.id, handle, run.leaseToken!, bounds.stagnation.silentMs);
       this.liveRuns.add(run.id);
       this.track(this.pump(run, job.step ?? job.name, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
@@ -825,7 +818,7 @@ export class Orchestrator {
   }
 
   /** An attempt this process follows from now on (ORC-344): its handle, its lease token, its progress counted from now. */
-  private follow(runId: string, handle: RunHandle, token: number, silentMs = RUN_SILENT_MS): void {
+  private follow(runId: string, handle: RunHandle, token: number, silentMs: number): void {
     this.handles.set(runId, handle);
     this.held.set(runId, { token, seenAt: this.d.clock.now(), silentMs });
   }
@@ -1207,13 +1200,10 @@ export class Orchestrator {
    */
   private async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec, output?: AgentOutput): Promise<Verified> {
     const { sandboxes } = this.d;
-    // A job that checks what it did not write (a review) has nothing to add on a commit found green: one that wrote it asks again.
-    const green = job.verifyFailure === 'block' ? t.verifiedSha : undefined;
     if (!sandboxes) {
       if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
       // Read before the commands: what they would commit is not what they checked.
       const sha = await this.d.workspaces.head(run.cwd);
-      if (sha && sha === green) return { ok: true, failures: [], sha };
       // As on the clone, before any command: a refused branch runs nothing.
       const { failures: paths, diffClass } = await this.checkPathsOnHost(project, t, run);
       const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
@@ -1222,9 +1212,7 @@ export class Orchestrator {
       const blocking = [...paths, ...frozen];
       return { ...verified, ok: verified.ok && blocking.length === 0, failures: [...verified.failures, ...blocking], sha, commands: job.verify, diffClass };
     }
-    // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
-    // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
-    if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
+    // The commit a job writes, which it publishes (ORC-176).
     const recipe = await this.recipeOf(project, t);
     // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
     // The launch's own decision, kept on the run (ORC-406): another ticket's write to the note since then changes nothing of what was
@@ -1541,13 +1529,9 @@ export class Orchestrator {
     return { ...event, payload: { ...event.payload, frozen: await freezeTests(Object.keys(t.frozenTests?.files ?? {}), diff) } };
   }
 
-  /**
-   * A block made out of a decision (a launch that failed, a refused pickup): the same comment as
-   * any other, without an effect's key. A version frozen before ORC-196 says it the way it did (`frozen`).
-   */
-  private async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, frozen: (t: TicketState) => Promise<void>): Promise<void> {
+  /** A block made out of a decision (a launch that failed, a refused pickup): the same comment as any other, without an effect's key. */
+  private async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts): Promise<void> {
     if (this.silenced(project.id, `the block notice of ${t.ticketId}`)) return;
-    if (!project.workflow.blockComment) return frozen(t);
     // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
     await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), `block:${this.newId()}`);
   }
@@ -1699,13 +1683,28 @@ export class Orchestrator {
     return v;
   }
 
-  private workflowOf(version: WorkflowVersion): Workflow {
+  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket (ORC-393). */
+  private workflowOf(version: WorkflowVersion, ticketId: string | undefined): Workflow {
     let wf = this.workflows.get(version.hash);
     if (!wf) {
-      wf = version.definition as Workflow;
+      try {
+        wf = frozenWorkflow(version);
+      } catch (err) {
+        if (err instanceof FrozenFormatError) this.refuse(version.hash, ticketId, err);
+        throw err;
+      }
       this.workflows.set(version.hash, wf);
     }
     return wf;
+  }
+
+  /** A ticket refused for the format of its frozen version: in the daemon's log, once per ticket. */
+  private refuse(hash: string, ticketId: string | undefined, err: FrozenFormatError): void {
+    this.refusedVersions.set(hash, err);
+    const key = `${ticketId ?? ''}:${hash}`;
+    if (this.refusedTickets.has(key)) return;
+    this.refusedTickets.add(key);
+    this.log('error', `${ticketId ?? 'an event'} refused: ${err.message}`);
   }
 
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
@@ -1720,9 +1719,20 @@ export class Orchestrator {
     if (!hash || hash === this.currentVersion(project).hash) return project;
     let workflow = this.workflows.get(hash);
     if (!workflow) {
+      // A ticket refused for its version's format (ORC-393) has no runtime: nothing is launched, executed nor kept for it.
+      const refused = this.refusedVersions.get(hash);
+      if (refused) {
+        this.refuse(hash, ticketId, refused);
+        return undefined;
+      }
       const stored = await this.d.store.getWorkflowVersion(hash);
       if (!stored) throw new Error(`workflow version ${hash} of ${ticketId} is not stored`);
-      workflow = this.workflowOf(stored);
+      try {
+        workflow = this.workflowOf(stored, ticketId);
+      } catch (err) {
+        if (err instanceof FrozenFormatError) return undefined;
+        throw err;
+      }
     }
     return { ...project, workflow };
   }
@@ -1822,7 +1832,7 @@ export class Orchestrator {
       workflow: this.currentVersion(project),
       // By the ticket's team, not the event's project: a delegation may come here from a team believed to have no repo (ORC-171).
       peers: this.d.projects.filter((p) => p.id !== event.projectId && p.teamKey === event.ticketId?.split('-')[0]).map((p) => p.id),
-      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version), hash: version.hash, now }),
+      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version, event.ticketId), hash: version.hash, now }),
     };
   }
 
@@ -1944,7 +1954,7 @@ export class Orchestrator {
 
   /** Why a commit may not be published (ORC-125), whatever would publish it: it has no green verification. */
   private publishRefusal(project: ProjectRuntime, t: TicketState, sha: string): string | undefined {
-    if (mayPublish(t, sha, project.workflow)) return undefined;
+    if (mayPublish(t, sha)) return undefined;
     return `the commit ${sha.slice(0, 12)} has no green verification, the last one is on ${t.verifiedSha?.slice(0, 12) ?? 'no commit'}.`;
   }
 
@@ -2345,8 +2355,8 @@ export class Orchestrator {
 
   /** `state`: as `sessionFor`'s. */
   private async move(project: ProjectRuntime, t: TicketState, to: LogicalState, keepReviewSha?: boolean, state: StateIo = asIs): Promise<void> {
+    // `ready` and `cancelled` have no status (ORC-170): nothing moves a ticket to them.
     const stateName = project.workflow.states[to];
-    // The loader refuses a move to an undeclared status; a version frozen before it may still hold one.
     if (!stateName) throw new Error(`no status for "${to}" in the workflow of ${project.id}`);
     if (this.silenced(project.id, `the move of ${t.ticketId} to ${to}`)) return;
     // Only a move that concludes the factory's work records the commit shown; a move back keeps the reviewed one.
@@ -2714,12 +2724,6 @@ export class Orchestrator {
       this.log('error', `unknown job ${opts.job}`);
       return 'done';
     }
-    // The memory in writing sleeps (ORC-193): a version frozen before keeps its `learn` and `remember`, decided as they were,
-    // never launched. No command starts `remember` any more: only a start accepted before the upgrade gets here.
-    if (!awake(job)) {
-      this.log('info', `refused ${job.name} on ${ticketId}: the memory in writing sleeps`);
-      return 'done';
-    }
     const t = await this.ticket(project.id, ticketId);
     // As decide refuses it, also for the starts it does not see: the pending job by settle, the queue by drain.
     const refused = refusesDevWork(t, job);
@@ -2818,13 +2822,10 @@ export class Orchestrator {
       err instanceof RepoConfigError ? ['repo_config', `${REPO_CONFIG_REFUSED}${err.message}`] : err instanceof TicketBudgetError ? ['budget', err.message] : ['infra', `Launch error: ${launchErrorTold(err)}`];
     // The whole of it in the daemon's log, what each error wraps included: the ticket may have been told less.
     if (kind === 'infra') this.log('error', `launch of ${job.name} on ${ticketId}: ${causeChain(err)}`);
-    fresh = await this.apply(fresh, ...events, blockedOn(project.workflow, kind, reason, job.name));
+    fresh = await this.apply(fresh, ...events, blockedOn(kind, reason, job.name));
     // The ticket is blocked: a failed notice must not fail the effect, whose retry would start again.
     try {
-      await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`The launch of ${job.name}.`] }), async (failed) => {
-        const session = opts.linearSessionId ?? (await this.sessionFor(failed));
-        await this.d.tracker.activity(session, { type: 'error', body: reason });
-      });
+      await this.tellBlock(project, fresh, blockFacts({ reason, step: stepOf(project.workflow, job.name), tried: [`The launch of ${job.name}.`] }));
     } catch (e) {
       this.log('warn', `could not post the launch error of ${ticketId}: ${(e as Error).message}`);
     }
@@ -2863,7 +2864,7 @@ export class Orchestrator {
   private async launch(
     project: ProjectRuntime,
     ticketId: string,
-    job: AwakeJob,
+    job: JobSpec,
     opts: StartOpts,
     slot: number,
     key: string,
@@ -2908,7 +2909,7 @@ export class Orchestrator {
   private async launchRun(
     project: ProjectRuntime,
     ticketId: string,
-    job: AwakeJob,
+    job: JobSpec,
     opts: StartOpts,
     slot: number,
     key: string,
@@ -3016,15 +3017,9 @@ export class Orchestrator {
       if (!intake && failures.length) {
         this.d.scheduler.release(key);
         const reason = failures.join(' ');
-        const refused = await state(this.apply(t, blockedOn(project.workflow, 'pickup', reason, job.name)));
+        const refused = await state(this.apply(t, blockedOn('pickup', reason, job.name)));
         // The ticket is blocked: a failed notice must not make the block a launch error, nor its retry find the ticket blocked.
-        await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' }), async (blocked) => {
-          const session = await this.sessionFor(blocked);
-          await tracker.activity(session, {
-            type: 'elicitation',
-            body: `I cannot start this ticket:\n${failures.map((f) => `- ${f}`).join('\n')}\nFix it, then reply in this thread.`,
-          });
-        }).catch((err: Error) => this.log('warn', `could not post the refused pickup of ${ticketId}: ${err.message}`));
+        await this.tellBlock(project, refused, blockFacts({ reason, step: 'intake', tried: failures, question: 'Can you fix this, then reply here?' })).catch((err: Error) => this.log('warn', `could not post the refused pickup of ${ticketId}: ${err.message}`));
         return undefined;
       }
       if (!intake && blockers.length) {
@@ -3293,8 +3288,8 @@ export class Orchestrator {
       // Its lease starts here: until now the launch is alive by itself. A failure leaves it to the next beat.
       await store.renewRun(runId, clock.now() + RUN_LEASE_MS, run.leaseToken).catch((err: Error) => this.log('warn', `lease of run ${runId} not written: ${err.message}`));
       const bounds = stagnationBounds(wf, job);
-      // A review job of a version frozen before ORC-367 has its lens, not yet its tools. The repository's list only restricts them (ORC-383).
-      const tools = runTools(job.tools ?? (job.lens ? READ_TOOLS : undefined), config, job.step, job.network);
+      // The repository's list only restricts them (ORC-383).
+      const tools = runTools(job.tools, config, job.step, job.network);
       const handle = this.d.runner.start({
         runId,
         cwd: sandbox ? WORKSPACE_TARGET : ws.path,
@@ -3328,7 +3323,7 @@ export class Orchestrator {
         sensitivePaths,
         ...(sandbox ? { sandboxId: sandbox.id } : {}),
       });
-      this.follow(runId, handle, run.leaseToken!, bounds.stagnation?.silentMs);
+      this.follow(runId, handle, run.leaseToken!, bounds.stagnation.silentMs);
       this.liveRuns.add(runId);
       this.track(this.pump(run, job.step ?? job.name, handle, sandbox?.id), runId);
       handedOver = true;

@@ -84,14 +84,14 @@ export function runValidateCommand(opts: { repoPath: string; out: (line: string)
 function validateTools(config: RepoConfig, yml: FactoryLimits | undefined, out: (line: string) => void): number {
   const refused = perStepToolViolations(yml?.tools?.perStep ?? {}, factoryDefault.steps, factoryDefault.name);
   if (refused.length) return list(out, 'factory.yml refused:', refused);
-  const given = new Map(factoryDefault.steps.filter(isAgentStep).map((s) => [s, yml?.tools?.perStep?.[s.id] ?? stepTools(s)!]));
+  const given = new Map(factoryDefault.steps.filter(isAgentStep).map((s) => [s, yml?.tools?.perStep?.[s.id] ?? stepTools(s)]));
   const ignored = [...given].flatMap(([s, tools]) => {
     const extra = (config.tools?.perStep[s.id] ?? []).filter((t) => !tools.includes(t));
     return extra.length ? [`tools.per_step.${s.id}: ${extra.join(', ')}`] : [];
   });
   if (ignored.length) list(out, 'Warning, tools the repository names that factory.yml does not give the step (ignored):', ignored);
   out(`Tools of each agent step of ${factoryDefault.name}:`);
-  for (const [s, tools] of given) out(`- ${s.id}: ${runTools(tools, config, s.id, s.network)!.join(', ') || 'none'}`);
+  for (const [s, tools] of given) out(`- ${s.id}: ${runTools(tools, config, s.id, s.network).join(', ') || 'none'}`);
   return 0;
 }
 

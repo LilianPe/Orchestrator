@@ -5,16 +5,10 @@ import type { Effect } from './decision.js';
 import { decide, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type TicketState } from './types.js';
-import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
-import { beforeOrc391 } from '../../test/helpers/frozen-jobs.js';
 
 const workflow = defaultWorkflow();
-/** `workflow` as a version frozen before ORC-375 holds it: no relay job, the reply rule's job answers a relayed question. */
-const { relayJob: _relayJob, ...beforeOrc375 } = workflow;
 const withFeedback = (w: Workflow, patch: Partial<Workflow['jobs'][string]>): Workflow => ({ ...w, jobs: { ...w.jobs, 'dev-feedback': { ...w.jobs['dev-feedback']!, ...patch } } });
-/** A version frozen before ORC-170, whose `dev-feedback` moves nothing and starts no review. */
-const beforeOrc170 = withFeedback(beforeOrc391(workflow), { onSuccess: { post: 'reply' } });
-/** `dev-feedback` with no checks: its end applies its `on_success` at once. */
+/** `dev-feedback` with no checks: its end applies its step's end at once. */
 const quick = (w: Workflow) => withFeedback(w, { verify: [], repoChecks: false });
 const reviewing = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'move' || e.kind === 'start_run');
 
@@ -24,6 +18,10 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T], patch: Part
 function ticket(patch: Partial<TicketState> = {}): TicketState {
   return { ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, linearSessionId: 's1', ...patch };
 }
+/** The AI review's last lens at work on a published commit, and its end with no finding: the step that leaves for Human Review. */
+const lastLens = (runId: string, patch: Partial<TicketState> = {}) => ticket({ logical: 'ai_review', activeRunId: runId, activeJob: 'review-security', verifiedSha: 'abc', ...patch });
+const lensEnd = (runId: string) =>
+  ev('run.finished', { runId, job: 'review-security', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output: { status: 'done', summary: 'Rien.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], findings: [] } });
 /** A reply as the Linear webhook brings it (ORC-180): classified, to acknowledge. */
 const reply = (kind: 'question' | 'instruction' | 'command', body: string, session = 's1', patch: Partial<FactoryEvent> = {}) =>
   ev('session.prompted', { linearSessionId: session, body, author: 'Lilian', ack: true, kind }, patch);
@@ -152,7 +150,7 @@ describe('decide — a classified message (ORC-180)', () => {
     const untrusted = { taint: 'untrusted' as const };
     // A debounce armed before ORC-180 (no `inbox`): it starts its job whatever waits, as a move back to dev did before ORC-190.
     const moved = ev('timer.fired', { kind: 'debounce', payload: { job: 'fix-human' } });
-    const end = ev('verify.passed', { runId: 'r1', job: 'review' });
+    const end = lensEnd('r1');
     const starts = (d: ReturnType<typeof decide>) => d.effects.filter((e) => e.kind === 'start_run');
     const sandboxed = (job = 'fix-human') => [expect.objectContaining({ job, sensitivePaths: SENSITIVE_PATHS })];
 
@@ -170,7 +168,7 @@ describe('decide — a classified message (ORC-180)', () => {
       const humanInbox = [item(), item({ kind: 'command', ...untrusted })];
       expect(starts(decide(ticket({ logical: 'human_review', humanInbox }), timer, workflow))).toEqual(sandboxed('dev-feedback'));
       // Handed to the round of human feedback the end of the review leaves in Human Review (ORC-190).
-      expect(starts(decide(ticket({ logical: 'ai_review', verifyingRunId: 'r1', humanInbox }), end, beforeOrc183(workflow)))).toEqual(sandboxed());
+      expect(starts(decide(lastLens('r1', { humanInbox }), end, workflow))).toEqual(sandboxed());
     });
 
     it('all of it trusted, no sensitive path', () => {
@@ -276,14 +274,13 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
   const run = 'r1';
   const inReview = (patch: Partial<TicketState>) => ticket({ logical: 'ai_review', activeRunId: run, activeJob: 'review', ...patch });
 
-  // A `review` frozen before ORC-183 verifies, as it has repo checks: its success goes through its check, then publishes.
-  const frozen = beforeOrc183(workflow);
-  const passed = ev('verify.passed', { runId: run, job: 'review' });
-  const verifying = (patch: Partial<TicketState>) => ticket({ logical: 'ai_review', verifyingRunId: run, ...patch });
+  // The end of the AI review, its last lens finding nothing: the ticket goes to Human Review.
+  const passed = lensEnd(run);
+  const verifying = (patch: Partial<TicketState>) => lastLens(run, patch);
 
   it('the end of the work moves the ticket, then the agent is resumed on them', () => {
-    const out = decide(verifying({ humanInbox: [item()] }), passed, frozen);
-    expect(out.effects.map((e) => e.kind)).toEqual(['move', 'post_output', 'start_run']);
+    const out = decide(verifying({ humanInbox: [item()] }), passed, workflow);
+    expect(out.effects.map((e) => e.kind)).toEqual(['review', 'move', 'start_run']);
     // In Human Review, a round of human feedback (ORC-190).
     expect(out.effects.at(-1)).toMatchObject({ job: 'fix-human', input: 'feedback' });
   });
@@ -296,17 +293,16 @@ describe('decide — a step ends with messages waiting (ORC-180)', () => {
     ['a pending job comes next and reads them', { humanInbox: [item()], pendingJob: { job: 'dev-feedback' } }],
     ['it is no longer delegated', { humanInbox: [item()], delegated: false }],
   ])('no run when %s', (_what, patch) => {
-    expect(decide(verifying(patch), passed, frozen).effects.map((e) => e.kind)).not.toContain('start_run');
+    expect(decide(verifying(patch), passed, workflow).effects.map((e) => e.kind)).not.toContain('start_run');
   });
 
   it('the state it is read on is the one this end leaves, a move owed by a refused publication included', () => {
     const done = ev('publish.done', { runId: run, job: 'dev-feedback', sha: 'abc' });
     const t = ticket({ logical: 'dev', prNumber: 7, verifyingRunId: run, owedMove: 'ai_review', humanInbox: [item()] });
     // Owed to AI Review, where no reply rule applies: the messages wait; only the review the move came with starts (ORC-183).
-    const starts = decide(t, done, beforeOrc170).effects.filter((e) => e.kind === 'start_run');
+    const starts = decide(t, done, workflow).effects.filter((e) => e.kind === 'start_run');
     expect(starts).toEqual([expect.objectContaining({ job: 'review' })]);
-    expect(decide({ ...t, owedMove: 'human_review' }, done, beforeOrc170).effects.at(-1)).toMatchObject({ kind: 'start_run', job: 'fix-human' });
-    // Since ORC-170 the job's own move comes first: its commit is reviewed, the messages wait for the review's end.
+    // The job's own move comes first (ORC-170): its commit is reviewed, the messages wait for the review's end.
     expect(reviewing(decide({ ...t, owedMove: 'human_review' }, done, workflow))).toEqual([{ kind: 'move', to: 'ai_review' }, expect.objectContaining({ job: 'review' })]);
   });
 
@@ -357,13 +353,6 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
     // In In Progress with no step at work, the same job, where a reply starts one.
     expect(decide(ticket(), asked(), workflow).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
-  });
-
-  it('a version frozen before ORC-375, with no relay job, starts the reply rule\'s job as it did (ORC-374)', () => {
-    const out = decide(ticket({ logical: 'human_review', humanReviewRounds: workflow.limits.humanReviewRounds }), asked(), beforeOrc375);
-    expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
-    expect(out.events.map((e) => e.type)).not.toContain('ticket.patched');
-    expect(decide(ticket(), asked(), beforeOrc375).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
   });
 
   it('a human change request waiting beside it makes the start a round of human review: that job reads it (ORC-190)', () => {
@@ -443,15 +432,10 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
 
   it('the end of a step with no message waiting but a question relayed meanwhile resumes the agent, as no round (ORC-374)', () => {
     // The AI review was at work when the question came: its end, in Human Review, is the step boundary that asks it.
-    const frozen = beforeOrc183(workflow);
-    const passed = ev('verify.passed', { runId: 'r1', job: 'review' });
-    const t = ticket({ logical: 'ai_review', verifyingRunId: 'r1', relayed: [handed('q1')], humanReviewRounds: workflow.limits.humanReviewRounds });
-    const out = decide(t, passed, frozen);
+    const t = lastLens('r1', { relayed: [handed('q1')], humanReviewRounds: workflow.limits.humanReviewRounds });
+    const out = decide(t, lensEnd('r1'), workflow);
     expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed', input: 'feedback' })]);
     expect(out.events.map((e) => e.type)).not.toContain('ticket.blocked');
-    // Frozen before ORC-375: the reply rule's job, as it was.
-    const { relayJob: _r, ...older } = frozen;
-    expect(decide(t, passed, older).effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'fix-human', input: 'feedback' })]);
   });
 
   describe('the end of the relay job (ORC-375)', () => {
@@ -495,13 +479,10 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
 
   it('the end of the step the questions were handed to starts nothing for them: they are answered', () => {
     const end = ev('run.finished', { runId: 'r1', job: 'dev-feedback', outcome: 'success', costUsd: 0, turns: 1, lastText: '', output });
-    const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1')] }), end, quick(beforeOrc170));
+    const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1')] }), end, quick(workflow));
     expect(relays(out)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
     expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
-    // One relayed since that launch is still to ask.
-    const later = decide(ticket({ activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, quick(beforeOrc170));
-    expect(later.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'answer-relayed' })]);
-    // Since ORC-170 the end of `dev-feedback` starts the review: a question relayed since waits for the review's end.
+    // The end of `dev-feedback` starts the review (ORC-170): a question relayed since waits for the review's end.
     const reviewed = decide(ticket({ prNumber: 7, activeRunId: 'r1', activeJob: 'dev-feedback', relayed: [handed('q1', 'r1'), handed('q2')] }), end, quick(workflow));
     expect(relays(reviewed)).toEqual([{ type: 'relay.done', runId: 'r1' }]);
     expect(reviewed.effects.filter((e) => e.kind === 'start_run')).toEqual([expect.objectContaining({ job: 'review' })]);

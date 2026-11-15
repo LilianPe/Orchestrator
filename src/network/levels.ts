@@ -257,7 +257,7 @@ const READ = new Set(['GET', 'HEAD', 'OPTIONS']);
  * The built-in tools a run of `step` gets (ORC-383): `tools`, its job's, kept to the repository's list for the step and without
  * WebFetch where its network, narrowed by the repository's, does not reach. What the launch hands out and `factory validate` shows.
  */
-export function runTools(tools: readonly string[] | undefined, config: RepoConfig, step: string | undefined, network?: NetworkLevel): readonly string[] | undefined {
+export function runTools(tools: readonly string[], config: RepoConfig, step: string | undefined, network?: NetworkLevel): readonly string[] {
   return narrowTools(tools, step === undefined ? undefined : config.tools?.perStep[step], stepPolicy(config, network).level);
 }
 

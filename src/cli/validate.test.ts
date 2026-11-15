@@ -13,7 +13,7 @@ const AGENTS = factoryDefault.steps.filter(isAgentStep).map((s) => s.id);
 const budgeted = (perTicketTokens = 40_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
 const WITHIN = 'Worst case of factory/default: 40000 tokens and 3450 turns per ticket, within budgets.per_ticket_tokens 40000.';
 /** What it shows of the default tools of each agent step (ORC-383). */
-const TOOLS = ['Tools of each agent step of factory/default:', ...factoryDefault.steps.filter(isAgentStep).map((s) => `- ${s.id}: ${stepTools(s)!.join(', ')}`)];
+const TOOLS = ['Tools of each agent step of factory/default:', ...factoryDefault.steps.filter(isAgentStep).map((s) => `- ${s.id}: ${stepTools(s).join(', ')}`)];
 
 function repo(config?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'factory-validate-'));

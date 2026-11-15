@@ -242,7 +242,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           const after = out.events.reduce<TicketState | undefined>((s, ev) => reduce(s, ev), reduce(t, e));
           const published = out.effects.filter((x) => x.kind === 'publish');
           expect(published).toEqual(sha ? [expect.objectContaining({ sha })] : []);
-          for (const p of published) expect(mayPublish(after, (p as { sha: string }).sha, wf)).toBe(true);
+          for (const p of published) expect(mayPublish(after, (p as { sha: string }).sha)).toBe(true);
         }),
         params(),
       );

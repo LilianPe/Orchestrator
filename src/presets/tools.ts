@@ -1,5 +1,5 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
-import type { Step } from './preset.js';
+import type { AgentStep, Step } from './preset.js';
 
 /** The built-in tools of a read-only step (`claude --tools`): it reads and searches, it writes nothing and runs no command (ORC-183, ORC-367). */
 export const READ_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob'];
@@ -21,6 +21,8 @@ const isReadOnly = (s: Step): boolean => (s.type === 'agent_step' || s.type === 
 const reachesWeb = (network: NetworkLevel): boolean => network === 'limited';
 
 /** The default tools of an agent step: the read tools when it is read-only, the write tools otherwise; none for a step with no agent. */
+export function stepTools(s: AgentStep): readonly string[];
+export function stepTools(s: Step): readonly string[] | undefined;
 export function stepTools(s: Step): readonly string[] | undefined {
   if (s.type !== 'agent_step' && s.type !== 'fix' && s.type !== 'review') return undefined;
   return isReadOnly(s) ? READ_TOOLS : WRITE_TOOLS;
@@ -52,9 +54,9 @@ export function perStepToolViolations(perStep: Record<string, readonly string[]>
 
 /**
  * The tools a run gets (ORC-383): its job's, kept to the repository's list for its step, which only restricts, and without WebFetch
- * where the run's network does not reach. A job without tools (every tool: a version frozen before ORC-383) takes the repository's list.
+ * where the run's network does not reach.
  */
-export function narrowTools(tools: readonly string[] | undefined, repo: readonly string[] | undefined, network: NetworkLevel): readonly string[] | undefined {
-  const kept = tools && repo ? tools.filter((t) => repo.includes(t)) : (tools ?? repo);
-  return kept && !reachesWeb(network) ? kept.filter((t) => t !== WEB_FETCH) : kept;
+export function narrowTools(tools: readonly string[], repo: readonly string[] | undefined, network: NetworkLevel): readonly string[] {
+  const kept = repo ? tools.filter((t) => repo.includes(t)) : tools;
+  return reachesWeb(network) ? kept : kept.filter((t) => t !== WEB_FETCH);
 }
