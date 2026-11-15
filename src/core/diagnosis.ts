@@ -34,7 +34,7 @@ export interface TicketDiagnosis {
 
 export interface DiagnosisDeps {
   store: Store;
-  /** The rows this process's worker holds for a ticket (`Orchestrator.heldRows`); none without it. */
+  /** The rows this process's worker holds for a ticket (`Daemon.heldRows`); none without it. */
   held?: (ticketId: string) => HeldRow[];
   /** Masks the secrets an error or a block reason may carry (a token in a URL, a key): every text passes through it. */
   mask: (text: string) => string;
