@@ -7,11 +7,10 @@ import { PRODUCT_NAME } from '../product.js';
 /**
  * The factory's MCP server (ORC-188): Streamable HTTP, JSON answers only, one message per request
  * (no batch, no SSE: no tool streams nor calls back). Served at `POST /agent/mcp`, behind the run token.
+ * No `ask` (ORC-400): a question ends the run, a blocked `submit_result`, so that no result comes after the ticket is blocked.
  */
 export interface McpDeps {
   store: Pick<Store, 'setMeta'>;
-  /** The question journaled (`agent.asked`): told in Linear, the ticket blocked. */
-  ask: (run: RunRecord, text: string) => Promise<void>;
   /** The knowledge base's search, on the server's clone (ORC-232): the runner reads no repository. Absent: no knowledge base. */
   kbSearch?: (query: string) => Promise<KbHit[]>;
 }
@@ -28,11 +27,6 @@ const TOOLS = [
     inputSchema: z.toJSONSchema(agentOutputSchema),
   },
   {
-    name: 'ask',
-    description: 'Asks a human a question in Linear and blocks the ticket until they answer.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1 } }, required: ['text'], additionalProperties: false },
-  },
-  {
     name: 'kb_search',
     description: "Searches the notes of the team's knowledge base (its index is in your system prompt) for words: the matching lines, as `notes/<file>.md:<line>: <text>`, best first.",
     inputSchema: { type: 'object', properties: { query: { type: 'string', minLength: 1 } }, required: ['query'], additionalProperties: false },
@@ -47,11 +41,6 @@ async function callTool(name: unknown, args: Record<string, unknown>, run: RunRe
     if (!parsed.ok) return text(`Result refused, to fix: ${parsed.error}`, true);
     await saveAgentOutput(d.store, run.id, parsed.output);
     return text('Result recorded.');
-  }
-  if (name === 'ask') {
-    if (typeof args['text'] !== 'string' || !args['text']) return text('text: required', true);
-    await d.ask(run, args['text']);
-    return text('Question asked: the ticket waits for the answer.');
   }
   if (name === 'kb_search') {
     if (typeof args['query'] !== 'string' || !args['query']) return text('query: required', true);

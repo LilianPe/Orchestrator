@@ -22,7 +22,6 @@ const TOOL_LABELS: Record<string, string> = {
   WebFetch: 'Reading the web',
   WebSearch: 'Reading the web',
   mcp__factory__submit_result: 'Submitting its result',
-  mcp__factory__ask: 'Asking a question',
 };
 const OTHER_TOOL = 'Using a tool';
 
