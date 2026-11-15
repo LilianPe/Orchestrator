@@ -3,7 +3,8 @@ import { parseArgs } from 'node:util';
 import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { repoRoot } from '../app/root.js';
-import { FactoryYmlError, loadFactoryYml } from '../config/factory-yml.js';
+import { FactoryYmlError } from '../config/factory-yml.js';
+import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { effectiveInstance, homePaths } from '../config/instance.js';
 import { BASELINE_DAYS, BASELINE_MEASURES, DAY_MS, baselinePeriod, computeBaseline, type BaselineMeasure, type BaselineValue, type CompletedIssue, type MergedPr } from '../core/baseline.js';
@@ -92,7 +93,7 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
   }
   let yml;
   try {
-    yml = loadFactoryYml(home);
+    ({ yml } = await loadSealedFactoryYml(home, process.env, { only: [...LINEAR_SECRETS, ...GITHUB_APP_SECRETS] }));
   } catch (err) {
     if (!(err instanceof FactoryYmlError)) throw err;
     console.log(`${err.message}\n(baseline reads the Linear and GitHub credentials from factory.yml: run it with the daemon's environment.)`);

@@ -60,7 +60,7 @@ describe('openSecretSources', () => {
     expect(() => openSecretSources({ a: { kind: 'toString', options: {} } })).toThrow('secret_sources.a: no adapter toString');
   });
 
-  it('only env is registered: no real secret manager is shipped', () => {
-    expect(Object.keys(SECRET_SOURCE_KINDS)).toEqual(['env']);
+  it('only env and systemd-creds are registered: no adapter that needs a network credential before ORC-179', () => {
+    expect(Object.keys(SECRET_SOURCE_KINDS)).toEqual(['env', 'systemd-creds']);
   });
 });

@@ -38,6 +38,9 @@ services:
       # OAuth client, from factory.yml (github.client_id, client_secret: env:...) or from these. Unset here, unset in the container.
       GH_APP_CLIENT_ID:
       GH_APP_CLIENT_SECRET:
+      # The key of secrets.json at rest (ORC-398), required as factoryd listens beyond its loopback: `secrets_key: env:FACTORY_SECRETS_KEY`
+      # in factory.yml, at least 32 characters (`openssl rand -base64 32`). Unset here, unset in the container.
+      FACTORY_SECRETS_KEY:
       # Unset in the container when unset here, so the image identity (the product name) applies.
       GIT_AUTHOR_NAME:
       GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-factory@localhost}

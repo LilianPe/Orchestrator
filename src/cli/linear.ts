@@ -15,7 +15,7 @@ export function cliLinearTracker(home: string, yml: FactoryYml | undefined): Lin
     clientId: linear.clientId,
     clientSecret: linear.clientSecret,
     load: () => ({ accessToken: linear.accessToken!, refreshToken: linear.refreshToken, expiresAt: linear.expiresAt }),
-    save: (t) => saveLinearTokens(home, t),
+    save: (t) => saveLinearTokens(home, t, yml),
   });
   return new LinearTracker(new LinearApi(() => tm.get()), linear.appUserId);
 }

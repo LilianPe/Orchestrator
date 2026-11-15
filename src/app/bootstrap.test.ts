@@ -149,6 +149,37 @@ describe('bootstrap', () => {
     await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' } })).rejects.toThrow(/^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/);
   });
 
+  describe('the server secrets of a systemd credential (ORC-398)', () => {
+    const SEALED_YML = 'secret_sources: { creds: { kind: systemd-creds } }\ngithub: { app_id: 456, private_key: creds:github-key }\nsecrets_key: creds:secrets-key\n';
+
+    it('takes the GitHub App key from it, and encrypts a plaintext secrets.json at the start with its key', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      const credentials = mkdtempSync(join(tmpdir(), 'factory-creds-'));
+      const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      writeFileSync(join(credentials, 'github-key'), privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
+      writeFileSync(join(credentials, 'secrets-key'), 'a-secrets-key-of-at-least-32-characters\n');
+      saveInstance(home, { port: 4174, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      saveSecrets(home, { linear: { clientId: 'c', clientSecret: 'linear-client-secret', webhookSecret: 'linear-webhook-secret', accessToken: 'linear-access-token' } });
+      writeFileSync(join(home, 'factory.yml'), SEALED_YML);
+      const logs: string[] = [];
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { CREDENTIALS_DIRECTORY: credentials } });
+      await app.stop();
+      expect(logs.some((m) => m.includes('GitHub App 456'))).toBe(true);
+      expect(logs).toContain('secrets.json: encrypted at rest with secrets_key');
+      expect(readFileSync(join(home, 'secrets.json'), 'utf8')).not.toContain('linear-access-token');
+      expect(logs.join('\n')).not.toContain('PRIVATE KEY');
+    });
+
+    it('refuses to start when the credential cannot be read, naming the key and its reference', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4173, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      writeFileSync(join(home, 'factory.yml'), SEALED_YML);
+      await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(
+        /the secret github\.private_key \(creds:github-key\) could not be read: CREDENTIALS_DIRECTORY is not set/,
+      );
+    });
+  });
+
   it('refuses to start on an invalid factory.yml, naming the key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
@@ -305,6 +336,18 @@ describe('bootstrap', () => {
     await expect(start(client)).rejects.toThrow(/publicUrl.*https/);
   });
 
+  // ORC-398: exposed, secrets.json must be encrypted at rest; on the loopback, secrets_key stays optional.
+  it('refuses a non-loopback host without secrets_key, naming it; starts on the loopback without it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
+    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
+    saveInstance(home, { port: 4197, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env })).rejects.toThrow(/outside this machine.*: set secrets_key in factory\.yml/);
+    saveInstance(home, { port: 4197, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env });
+    await app.stop();
+  });
+
   it('refuses to start real runs without a container engine or FACTORY_ALLOW_HOST_RUNS=1 (ORC-349)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4194, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
@@ -347,8 +390,10 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     // Written with its trailing slash: the callback URL is the one the App declares all the same.
     saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example/', relay: { kind: 'none' }, projects: [], limits: {} });
-    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
-    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw' } });
+    // secrets_key required off the loopback (ORC-398).
+    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\nsecrets_key: env:FACTORY_SECRETS_KEY\n');
+    const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRETS_KEY: 'k'.repeat(44) };
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env });
     try {
       expect((await fetch('http://127.0.0.1:4195/api/state')).status).toBe(401);
       // No password opens it any more.

@@ -1,13 +1,18 @@
-import type { SecretSource, SecretSourceKind } from './types.js';
+import type { SecretDescription, SecretSource, SecretSourceKind } from './types.js';
 
-/** The harness's secret manager (ORC-308): a table of values, out of service on demand. */
+/** The harness's secret manager (ORC-308): a table of values, out of service on demand, with the rotation dates it is given (ORC-398). */
 export class FakeSecretSource implements SecretSource {
   readonly reads: string[] = [];
 
   constructor(
     private readonly values: Record<string, string>,
-    private readonly o: { down?: boolean } = {},
+    private readonly o: { down?: boolean; rotatedAt?: Record<string, Date> } = {},
   ) {}
+
+  async describe(path: string): Promise<SecretDescription> {
+    const rotatedAt = this.o.rotatedAt?.[path];
+    return rotatedAt ? { rotatedAt } : {};
+  }
 
   async read(path: string): Promise<string> {
     this.reads.push(path);

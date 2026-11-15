@@ -7,7 +7,7 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { loadFactoryYml } from '../config/factory-yml.js';
+import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
@@ -58,10 +58,15 @@ export interface DoctorOptions {
    * never part of the verdict. In text, `runDoctorCommand` says it first.
    */
   visualProof?: { image?: string; detail: string };
+  /** The server secrets (ORC-398): where each is kept and its rotation, for the JSON report; never part of the verdict. In text, `runDoctorCommand` says it first. */
+  serverSecrets?: SecretReport[];
 }
 
-/** The visual proof (ORC-404) in the JSON report. */
-const visualProofOf = (v: DoctorOptions['visualProof']) => (v ? { visualProof: { available: !!v.image, detail: v.detail } } : {});
+/** The visual proof (ORC-404) and the server secrets (ORC-398) in the JSON report. */
+const instanceReportOf = (o: Pick<DoctorOptions, 'visualProof' | 'serverSecrets'>) => ({
+  ...(o.visualProof ? { visualProof: { available: !!o.visualProof.image, detail: o.visualProof.detail } } : {}),
+  ...(o.serverSecrets ? { serverSecrets: o.serverSecrets } : {}),
+});
 
 export interface WorkflowReport {
   path: string;
@@ -495,7 +500,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}), ...visualProofOf(options.visualProof) }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}), ...instanceReportOf(options) }, null, 2));
   } else {
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
@@ -530,9 +535,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof'>, message: string, ignored: string[] = []): number {
+function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>, message: string, ignored: string[] = []): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}), ...visualProofOf(options.visualProof) }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}), ...instanceReportOf(options) }, null, 2));
   } else {
     options.out(message);
   }
@@ -557,11 +562,20 @@ export interface DoctorCommandOptions {
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
   // Of the instance, not of the repository: said first, whatever stops the check after.
-  const visualProof = await browserImage(options.env ?? process.env, options.exec);
+  const env = options.env ?? process.env;
+  const visualProof = await browserImage(env, options.exec);
   if (!options.json) out(visualProofLine(visualProof));
+  // Where each server secret is kept and its rotation (ORC-398), without reading a value: a warning, never the verdict.
+  let serverSecrets: SecretReport[] | undefined;
+  try {
+    serverSecrets = await serverSecretReport(options.home, env, options.now ? { now: options.now() } : {});
+  } catch {
+    // An invalid factory.yml: said just below, by the load the check needs.
+  }
+  if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
   try {
-    githubApp = resolveGithubApp(effectiveInstance(options.home, loadFactoryYml(options.home, options.env)), options.env);
+    githubApp = resolveGithubApp(effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml), env);
   } catch (error) {
     out(errorMessage(error));
     return 1;
@@ -583,7 +597,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   try {
     naming = (await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false })).branches;
   } catch (error) {
-    return doctorFailure({ repoPath: options.repoPath, out, visualProof, ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
+    return doctorFailure({ repoPath: options.repoPath, out, visualProof, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
   return runDoctor({
     repoPath: options.repoPath,
@@ -591,6 +605,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     out,
     naming,
     visualProof,
+    ...(serverSecrets ? { serverSecrets } : {}),
     ...(options.json ? { json: true } : {}),
   });
 }
