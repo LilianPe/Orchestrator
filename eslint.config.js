@@ -9,6 +9,8 @@ const movedOutOfCore = (prefixes) => [
   // The YAML workflow is gone (ORC-389): the workflow is built by defaultWorkflow, its types are core/workflow's.
   { group: ['**/config/load-workflow', '**/config/load-workflow.js'], message: 'The YAML loader is gone: defaultWorkflow() in src/presets/workflow.ts (ORC-389).' },
   { group: ['**/config/workflow-schema', '**/config/workflow-schema.js'], message: 'The workflow types are in src/core/workflow.ts (ORC-389).' },
+  // The `when` grammar of the rules is gone (ORC-392, ORC-177 AC3): the reactions are coded in decide.
+  { group: prefixes.flatMap((p) => [`${p}conditions`, `${p}conditions.js`]), message: 'The `when` grammar is gone: the default reactions are coded in decide (ORC-392).' },
 ];
 
 export default tseslint.config(

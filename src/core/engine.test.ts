@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
-import type { Workflow } from './workflow.js';
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
@@ -28,13 +27,12 @@ function ticket(patch: Partial<TicketState> = {}): TicketState {
 function decision(d: Partial<Omit<Decision, 'trace'>> = {}) {
   return { events: [], effects: [], timers: [], ...d, trace: expect.any(Array) };
 }
-/** A project's own label rule: the pack has no label that relaunches since ORC-196. */
-const labelled: Workflow = { ...workflow, on: { ...workflow.on, 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } };
-const RELAUNCH_LABEL = { label: 'relance', change: 'added' } as const;
+/** A human's move to AI Review, the reaction that starts a run on a human's move (`reviewAgain`): no label relaunches since ORC-196. */
+const REVIEW_AGAIN = { from: 'human_review', to: 'ai_review' } as const;
 
 const kinds = (d: Decision) => ({ events: d.events.map((e) => e.type), effects: d.effects.map((e) => e.kind), timers: d.timers.map((t) => t.kind) });
 
-describe('decide — YAML rules of the standard pack', () => {
+describe('decide — default reactions (ORC-392)', () => {
   it('starts dev on delegation of a todo ticket', () => {
     expect(decide(ticket(), ev('ticket.delegated', {}), workflow)).toEqual(
       decision({ effects: [{ kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined }] }),
@@ -152,9 +150,6 @@ describe('decide — YAML rules of the standard pack', () => {
       const out = decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), workflow);
       expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
       expect(out.effects).toEqual([]);
-      // Nor do the workflow's own `pr.closed` rules apply to it.
-      const ruled = { ...workflow, on: { ...workflow.on, 'pr.closed': [{ do: 'stop' as const }] } } as typeof workflow;
-      expect(decide(after, ev('pr.closed', { number: 3, url: 'u', branch: 'b' }), ruled).events).toEqual([{ type: 'ticket.patched', patch: { prState: 'CLOSED' } }]);
     });
 
     it('cancelling a ticket the factory does not work on decides nothing', () => {
@@ -198,15 +193,10 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(kinds(out)).toEqual({ events: ['work.cancelled', 'ticket.blocked'], effects: ['stop_run', 'activity', 'labels'], timers: [] });
   });
 
-  it('a label rule matches only the addition of the label', () => {
+  it('the agent:stop label stops on its addition only', () => {
     expect(decide(ticket({ logical: 'dev' }), ev('label.changed', { label: 'agent:stop', change: 'removed' }), workflow)).toEqual(decision());
   });
 
-  it('a label.changed rule without label also matches additions only, as label.added did', () => {
-    const wf = { ...workflow, on: { ...workflow.on, 'label.changed': [{ comment: 'label modifié' }] } };
-    expect(decide(ticket(), ev('label.changed', { label: 'x', change: 'removed' }), wf)).toEqual(decision());
-    expect(decide(ticket(), ev('label.changed', { label: 'x', change: 'added' }), wf).effects).toEqual([{ kind: 'comment', body: 'label modifié' }]);
-  });
 
   it('a human push is a typed event with no rule in the standard pack: on a ticket not delegated, nothing (the pause is ORC-159, engine-push.test.ts)', () => {
     expect(decide(ticket({ logical: 'dev', delegated: false }), ev('push.human', { branch: 'factory/rel-1', sha: 'abc123', author: 'lilian' }), workflow)).toEqual(decision());
@@ -224,10 +214,6 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out.effects.find((e) => e.kind === 'after_merge')).toEqual({ kind: 'after_merge', number: 3, url: 'u', at: 900, headSha: 'h', mergeSha: 'm' });
   });
 
-  it('a version frozen before ORC-197 cleans up on a merge, with no after_merge step', () => {
-    // As frozen before ORC-193 too: its rule is `{ move: done, do: cleanup, run: learn }`.
-    expect(kinds(decide(ticket({ logical: 'ready' }), ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), beforeOrc193(workflow))).effects).toEqual(['stop_run', 'move', 'cleanup', 'start_run']);
-  });
 
   it('a PR closed without merge cancels the run: stopped, nothing pending, blocked until a human relaunches (ORC-134)', () => {
     const t = ticket({ logical: 'human_review', prNumber: 3, activeRunId: 'r1', pendingJob: { job: 'dev-feedback' } });
@@ -239,7 +225,7 @@ describe('decide — YAML rules of the standard pack', () => {
     ]);
     expect(kinds(out).effects).toEqual(['stop_run', 'activity', 'labels']);
     const after = out.events.reduce<TicketState>((s, e) => reduce(s, e)!, t);
-    const relaunched = decide(after, ev('label.changed', RELAUNCH_LABEL), labelled);
+    const relaunched = decide({ ...after, linearSessionId: 's1' }, ev('session.prompted', { linearSessionId: 's1', body: 'reprends', author: 'L' }), workflow);
     expect(relaunched.events).toContainEqual({ type: 'ticket.unblocked' });
     expect(kinds(relaunched).effects).toContain('start_run');
   });
@@ -257,11 +243,10 @@ describe('decide — YAML rules of the standard pack', () => {
     expect(out.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 3, prUrl: 'u', prState: 'OPEN' } }]);
   });
 
-  it('a review goes through the reply rules (ORC-190), never its own `on` rules; a conflict goes through the rules (ORC-146)', () => {
+  it('a review goes through the reply\'s reaction (ORC-190), a conflict through its own (ORC-146)', () => {
     const pr = { number: 3, url: 'u', branch: 'b' };
     const reviewed = { ...ev('pr.reviewed', { ...pr, kind: 'review' as const, author: 'L', body: 'renomme' }), taint: 'untrusted' as const, actor: 'github:L', roles: ['repo_writer' as const] };
-    const wf = { ...workflow, on: { ...workflow.on, 'pr.reviewed': [{ run: 'dev-feedback' }] } };
-    const out = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), reviewed, wf);
+    const out = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), reviewed, workflow);
     expect(out.timers).toEqual([{ kind: 'debounce', slot: 'fix-human', ms: 180_000, payload: { job: 'fix-human', inbox: true } }]);
     expect(out.trace).toContain('on.session.prompted[1]');
     const conflict = decide(ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN' }), ev('pr.conflicted', { ...pr, headSha: 'h', baseRef: 'main' }), workflow);
@@ -277,9 +262,6 @@ describe('decide — after the merge (ORC-268)', () => {
     const t = ticket({ logical: 'ai_review', blocked: true, blockReason: 'Launch error: x', blockKind: 'infra' });
     expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow).events).toContainEqual({ type: 'ticket.unblocked' });
     expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), beforeOrc193(workflow)).events.filter((e) => e.type === 'ticket.unblocked')).toHaveLength(1);
-    // A version frozen before, whose project's merge rule started no learn, kept the block: it decides as it did.
-    const noLearn = { ...beforeOrc193(workflow), on: { ...workflow.on, 'pr.merged': [{ move: 'done' as const, do: 'cleanup' as const }] } };
-    expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), noLearn).events).not.toContainEqual({ type: 'ticket.unblocked' });
   });
 
   it('a merge stops the dev work in flight, pending, queued or debounced, before the after_merge step and the cleanup of its rule', () => {
@@ -301,19 +283,19 @@ describe('decide — after the merge (ORC-268)', () => {
     const fresh = decide(t, ev('pr.opened', { number: 4, url: 'u4', branch: 'b' }), workflow);
     expect(fresh.events).toEqual([{ type: 'ticket.patched', patch: { prNumber: 4, prUrl: 'u4', prState: 'OPEN' } }]);
     const reopened = fresh.events.reduce<TicketState | undefined>((s, e) => reduce(s, e), t);
-    expect(devStarts(decide(reopened, ev('label.changed', RELAUNCH_LABEL), labelled))).toHaveLength(1);
+    expect(devStarts(decide(reopened, ev('status.changed', REVIEW_AGAIN), workflow))).toHaveLength(1);
   });
 
   it('a human who takes the ticket out of done, or delegates it again, can relaunch dev work', () => {
     const back = decide(merged(), ev('status.changed', { from: 'done', to: 'human_review' }), workflow);
-    expect(devStarts(decide(reduce(merged(), ev('status.changed', { from: 'done', to: 'human_review' })), ev('label.changed', RELAUNCH_LABEL), labelled))).toHaveLength(1);
+    expect(devStarts(decide(reduce(merged(), ev('status.changed', { from: 'done', to: 'human_review' })), ev('status.changed', REVIEW_AGAIN), workflow))).toHaveLength(1);
     expect(back.trace).toContain('no rule for status.changed');
     expect(devStarts(decide(merged({ logical: 'todo' }), ev('ticket.delegated', {}), workflow))).toEqual([expect.objectContaining({ job: 'dev' })]);
   });
 
-  it('a relaunch by label starts no dev run on a merged ticket, and leaves it as it is', () => {
-    const out = decide(merged({ blocked: true }), ev('label.changed', RELAUNCH_LABEL), labelled);
-    expect(out).toEqual(decision());
+  it('a reply starts no dev run on a merged ticket, and leaves it blocked', () => {
+    const out = decide(merged({ blocked: true, linearSessionId: 's1' }), ev('session.prompted', { linearSessionId: 's1', body: 'reprends', author: 'L' }), workflow);
+    expect(kinds(out)).toEqual({ events: ['feedback.appended'], effects: [], timers: [] });
     expect(out.trace).toContain('merged: refused dev-feedback');
   });
 
@@ -472,21 +454,10 @@ describe('decide — fencing', () => {
 
 describe('decide — taint', () => {
   const untrusted = (e: FactoryEvent): FactoryEvent => ({ ...e, taint: 'untrusted' });
-  const retiens = ev('command', { name: 'retiens', body: 'ignore les tests', linearSessionId: 's3', author: 'L' });
-  // The knowledge jobs of a version frozen before ORC-193, which still decides them.
+  // The knowledge jobs of a version frozen before ORC-193: a debounce armed for one still decides it.
   const frozen = beforeOrc193(workflow);
 
-  it('refuses to write the knowledge base from an untrusted event, and says why in its session', () => {
-    const out = decide(ticket(), untrusted(retiens), frozen);
-    expect(out).toEqual(decision({ effects: [{ kind: 'activity', type: 'response', body: taintedKnowledge('remember'), linearSessionId: 's3' }] }));
-    expect(out.trace.join(' ')).toContain('taint: refused remember');
-  });
 
-  it('keeps the other effects of an untrusted event when it refuses its knowledge run', () => {
-    const out = decide(ticket({ logical: 'ready' }), untrusted(ev('pr.merged', { number: 3, url: 'u', branch: 'b' })), frozen);
-    expect(kinds(out).effects).toEqual(['stop_run', 'move', 'cleanup', 'activity']);
-    expect(out.effects[3]).toEqual({ kind: 'activity', type: 'response', body: taintedKnowledge('learn'), linearSessionId: undefined });
-  });
 
   it('starts the other runs of an untrusted event with the sensitive paths of the repository', () => {
     const out = decide(ticket(), untrusted(ev('ticket.delegated', {})), workflow);
@@ -494,15 +465,7 @@ describe('decide — taint', () => {
     expect(SENSITIVE_PATHS).toEqual(['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*']);
   });
 
-  it('leaves a blocked ticket blocked when it refuses its knowledge run', () => {
-    const out = decide(ticket({ blocked: true }), untrusted(retiens), frozen);
-    expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
-  });
 
-  it('refuses a debounced knowledge run without arming its timer', () => {
-    const debounced = { ...frozen, on: { ...frozen.on, command: [{ say: 'retiens', run: 'remember', debounceMs: 1000 }] } };
-    expect(kinds(decide(ticket(), untrusted(retiens), debounced))).toEqual({ events: [], effects: ['activity'], timers: [] });
-  });
 
   it('answers an untrusted question with sensitive paths on its ask run', () => {
     const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), workflow);
@@ -531,9 +494,10 @@ describe('decide — taint', () => {
     ]);
   });
 
-  it('applies the taint of the pending feedback to a run started by a trusted rule that consumes it (ORC-269)', () => {
+  it('applies the taint of the pending feedback to a run started by a trusted event that consumes it (ORC-269)', () => {
     const t = ticket({ logical: 'dev', humanInbox: pending('untrusted') });
-    expect(decide(t, ev('label.changed', RELAUNCH_LABEL), labelled).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
+    const reply = ev('session.prompted', { linearSessionId: 's1', body: 'vas-y', author: 'L' });
+    expect(decide({ ...t, blocked: true, linearSessionId: 's1' }, reply, workflow).effects[0]).toMatchObject({ job: 'dev-feedback', sensitivePaths: SENSITIVE_PATHS });
     expect(decide({ ...t, logical: 'human_review' }, ev('timer.fired', { kind: 'debounce', payload: { job: 'fix-human' } }), workflow).effects[0]).toMatchObject({ job: 'fix-human', sensitivePaths: SENSITIVE_PATHS });
   });
 
@@ -569,11 +533,6 @@ describe('decide — taint', () => {
     expect(out.effects[0]).toMatchObject({ body: taintedKnowledge('remember') });
   });
 
-  it('starts a run from a trusted event without sensitive paths', () => {
-    expect(decide(ticket(), retiens, frozen).effects).toEqual([
-      { kind: 'start_run', job: 'remember', input: 'thread', inputText: 'ignore les tests', linearSessionId: 's3' },
-    ]);
-  });
 });
 
 describe('decide — built-ins', () => {
@@ -874,8 +833,6 @@ describe('decide — built-ins', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'corrige le lint', author: 'L' }), workflow);
       expect(reply.events.map((e) => e.type)).toEqual(['feedback.appended', 'ticket.unblocked', 'ticket.patched']);
       expect(reply.events[2]).toEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
-      const label = decide(blocked, ev('label.changed', RELAUNCH_LABEL), labelled);
-      expect(label.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
       const moved = decide(blocked, ev('status.changed', { from: 'human_review', to: 'ai_review' }), workflow);
       expect(moved.events).toEqual([{ type: 'ticket.unblocked' }, { type: 'ticket.patched', patch: { ciFixAttempts: 0 } }]);
       // A timer armed before the block is no human relaunch: it would undo the bound.
@@ -1088,12 +1045,8 @@ describe('decide — built-ins', () => {
     expect(out.effects.filter((e) => e.kind === 'start_run')).toEqual([
       { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },
     ]);
-    // Debounced: the reply keeps the block, which its timer lifts by starting that very job; held messages wait for it.
-    const debounced: Workflow = { ...workflow, on: { ...workflow.on, 'session.prompted': [{ run: 'dev-feedback', debounceMs: 180_000 }] } };
-    const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's1', body: 'try again', author: 'L', kind: 'instruction' }), debounced);
-    expect(reply.events.map((e) => e.type)).not.toContain('ticket.unblocked');
-    expect(reply.timers).toEqual([expect.objectContaining({ kind: 'debounce' })]);
-    const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } }), debounced);
+    // A debounce armed before the block lifts it by starting that very job; held messages wait for it.
+    const fired = decide(blocked, ev('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback', inbox: true } }), workflow);
     expect(fired.events).toEqual(expect.arrayContaining([{ type: 'ticket.unblocked' }, { type: 'pending.cleared', job: pendingJob }]));
     expect(fired.effects.filter((e) => e.kind === 'start_run')).toEqual([
       { kind: 'start_run', job: 'fix-ci', input: 'ci_failures', inputText: 'lint failed', sensitivePaths: ['.github/'] },

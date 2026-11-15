@@ -139,7 +139,7 @@ describe('intake: duplicates, existing code and scope (ORC-207)', () => {
 
 describe('the run boundary of the risk (ORC-365)', () => {
   // Delegation starts with intake, as a repository turns it on.
-  const withIntake: Workflow = { ...workflow, on: { ...workflow.on, 'ticket.delegated': workflow.on['ticket.delegated']!.map((r) => ({ ...r, run: 'intake' })) } };
+  const withIntake: Workflow = { ...workflow, delegated: 'intake' };
   const delegation = (extra: Partial<FactoryEvent> = {}) =>
     ({ id: 'e-delegated', type: 'ticket.delegated', at: 5000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload: { linearSessionId: 's2', ack: true }, ...extra }) as FactoryEvent;
   /** A ticket whose last run was assessed `high` with a screen, then taken back: undelegated, no run. */

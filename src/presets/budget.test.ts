@@ -14,6 +14,7 @@ const loop: Preset = {
   sameFailure: { limit: 3, cause: 'boucle' },
   silentRun: { minutes: 30 },
   attempt: { minutes: 90 },
+  regroup: { minutes: 3 },
   guard: { checks: [] },
   redCi: { goto: 'fix', counter: 'r' },
   conflict: { goto: 'fix', counter: 'r' },

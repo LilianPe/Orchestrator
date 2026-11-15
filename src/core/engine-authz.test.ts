@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
-import type { Workflow } from './workflow.js';
 import { DEFAULT_MATRIX, type Role } from './authz.js';
 import { PAUSED, STOPPED } from './block-cause.js';
 import { AUTHZ_REFUSED, decide, mayCheck, settledTicket } from './engine.js';
@@ -9,7 +8,6 @@ import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, typ
 const workflow = defaultWorkflow();
 
 /** A project's own label rule: the pack has no label that relaunches since ORC-196. */
-const labelled: Workflow = { ...workflow, on: { ...workflow.on, 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } };
 
 const WRITER: Role[] = ['team_member', 'repo_writer'];
 
@@ -106,20 +104,20 @@ describe('decide — authorization matrix (ORC-186)', () => {
   describe('relaunch a blocked run', () => {
     const blocked = ticket({ logical: 'dev', blocked: true, blockReason: 'The run dev failed.', initiatorId: 'u-req' });
 
-    it('relaunches on a reply, or on the relaunch label of a project, of a team member', () => {
+    it('relaunches on a reply, or on a move to AI Review, of a team member', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'M' }, 'u-member', ['team_member']), workflow);
       expect(reply.events.map((e) => e.type)).toEqual(['feedback.appended', 'ticket.unblocked']);
-      const label = decide(blocked, ev('label.changed', { label: 'relance', change: 'added' }, 'u-member', ['team_member']), labelled);
-      expect(starts(label.effects)).toHaveLength(1);
+      const moved = decide(blocked, ev('status.changed', { from: 'dev', to: 'ai_review' }, 'u-member', ['team_member']), workflow);
+      expect(starts(moved.effects)).toHaveLength(1);
     });
 
-    it('refuses the requester outside the team, and a label set by someone outside it: the ticket stays blocked', () => {
+    it('refuses the requester outside the team, and a move by someone outside it: the ticket stays blocked', () => {
       const reply = decide(blocked, ev('session.prompted', { linearSessionId: 's-dev', body: 'vas-y', author: 'R' }, 'u-req', []), workflow);
       expect(reply.events).toEqual([]);
       expect(reply.effects).toEqual([expect.objectContaining({ kind: 'activity', body: expect.stringMatching(/relaunching a blocked run/) })]);
-      const label = decide(blocked, ev('label.changed', { label: 'relance', change: 'added' }, 'u-out', []), labelled);
-      expect(label.events).toEqual([]);
-      expect(label.effects).toEqual([{ kind: 'comment', body: expect.stringMatching(/^Refused: relaunching a blocked run/) }]);
+      const moved = decide(blocked, ev('status.changed', { from: 'dev', to: 'ai_review' }, 'u-out', []), workflow);
+      expect(moved.events).toEqual([]);
+      expect(moved.effects).toEqual([{ kind: 'comment', body: expect.stringMatching(/^Refused: relaunching a blocked run/) }]);
     });
   });
 
@@ -148,8 +146,8 @@ describe('decide — authorization matrix (ORC-186)', () => {
     const e = <T extends EventType>(type: T, payload: EventPayloads[T]) => ev(type, payload, 'u', undefined);
     expect(mayCheck(e('ticket.delegated', {}), workflow)).toBe(true);
     expect(mayCheck(e('session.prompted', { linearSessionId: 's', body: '', author: 'A' }), workflow)).toBe(true);
-    expect(mayCheck(e('label.changed', { label: 'relance', change: 'added' }), labelled)).toBe(true);
-    expect(mayCheck(e('label.changed', { label: 'relance', change: 'removed' }), labelled)).toBe(false);
+    // No label starts a run since ORC-196 and ORC-392.
+    expect(mayCheck(e('label.changed', { label: 'relance', change: 'added' }), workflow)).toBe(false);
     expect(mayCheck(e('label.changed', { label: 'agent:stop', change: 'added' }), workflow)).toBe(false);
     expect(mayCheck(e('status.changed', { from: 'human_review', to: 'ai_review' }), workflow)).toBe(true);
     // A move back to In Progress starts nothing since ORC-190: the feedback does, a review on the PR checked on its author.

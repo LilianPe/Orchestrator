@@ -28,7 +28,6 @@ function ctx(): MapContext {
     stateTypeById: (_t, id) => (id === 's-x' ? 'canceled' : 'started'),
     labelNameById: (_t, id) => ({ 'l-bug': 'bug', 'l-resume': 'agent:reprendre' })[id],
     factoryActor: () => 'app',
-    commands: () => ['retiens', 'fais-le'],
     now: () => 5000,
   };
 }
@@ -151,18 +150,12 @@ describe('mapLinearWebhook', () => {
       type: 'session.mentioned', payload: { linearSessionId: 'as-2', body: 'tu penses quoi de cette approche ?', author: 'Lilian' },
     });
   });
-  it('maps a command', async () => {
+  it('maps "retiens" as a mention, classified as any message: no command declares it (ORC-193, ORC-392)', async () => {
     expect((await mapLinearWebhook(fx('session-created-command'), 'd3', ctx()))[0]).toMatchObject({
-      type: 'command', payload: { name: 'retiens', body: 'les agrégats côté serveur', linearSessionId: 'as-3' },
-    });
-  });
-  it('maps "retiens" under the standard pack as a mention, classified as any message: no command declares it (ORC-193)', async () => {
-    const { commands } = defaultWorkflow();
-    expect((await mapLinearWebhook(fx('session-created-command'), 'd3', { ...ctx(), commands: () => commands }))[0]).toMatchObject({
       type: 'session.mentioned', payload: { body: 'Retiens les agrégats côté serveur', linearSessionId: 'as-3', kind: 'instruction' },
     });
   });
-  it('maps /refreeze as a command whatever the workflow declares (ORC-131)', async () => {
+  it('maps /refreeze as a command (ORC-131)', async () => {
     const body = fx('session-created-command');
     body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze le test de l’export était faux';
     expect((await mapLinearWebhook(body, 'd3', ctx()))[0]).toMatchObject({
@@ -185,7 +178,7 @@ describe('mapLinearWebhook', () => {
     expect(await reply('/approve')).toMatchObject({ type: 'command', payload: { name: '/approve', body: '', linearSessionId: 'as-1', author: 'Lilian', kind: 'command' } });
     expect(await reply('/changes Add the XLSX case.')).toMatchObject({ type: 'command', payload: { name: '/changes', body: 'Add the XLSX case.', linearSessionId: 'as-1' } });
     expect(await reply('[@factory](https://linear.app/x/profiles/factory) /REJECT not this')).toMatchObject({ type: 'command', payload: { name: '/reject', body: 'not this' } });
-    // After a mention too, whatever the workflow declares.
+    // After a mention too.
     const mention = fx('session-created-command');
     mention.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /approve';
     expect((await mapLinearWebhook(mention, 'd3', ctx()))[0]).toMatchObject({ type: 'command', payload: { name: '/approve', linearSessionId: 'as-3', ack: true } });
@@ -283,14 +276,11 @@ describe('mapLinearWebhook', () => {
       expect(m.asked).toEqual(['@bob /stop', '@bob /stop']);
     });
 
-    it('/stop, /status, /refreeze and a workflow command are commands, the model never asked', async () => {
+    it('/stop, /status and /refreeze are commands, the model never asked', async () => {
       const m = model('question');
       expect((await m.reply('/stop'))[0]).toMatchObject({ payload: { kind: 'command' } });
       expect((await m.reply('[@factory](https://linear.app/x/profiles/factory) /status'))[0]).toMatchObject({ payload: { kind: 'command' } });
       expect((await m.reply('/refreeze'))[0]).toMatchObject({ type: 'command' });
-      const body = fx('session-created-command');
-      body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) retiens ceci';
-      expect((await m.send(body))[0]).toMatchObject({ type: 'command', payload: { kind: 'command' } });
       expect(m.asked).toEqual([]);
     });
 
@@ -322,7 +312,7 @@ describe('mapLinearWebhook', () => {
 
     it('a command is one as well, kept apart', async () => {
       const body = fx('session-created-command');
-      body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) retiens ceci';
+      body.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze ceci';
       expect((await mapLinearWebhook(body, 'd', ctx()))[0]).toMatchObject({ type: 'command', payload: { kind: 'command' } });
     });
 
@@ -401,7 +391,8 @@ describe('mapLinearWebhook', () => {
     it.each([
       ['session-created-delegation', 'ticket.delegated'],
       ['session-created-mention', 'session.mentioned'],
-      ['session-created-command', 'command'],
+      // « Retiens … »: a mention since no workflow declares a command (ORC-193, ORC-392).
+      ['session-created-command', 'session.mentioned'],
       ['session-prompted', 'session.prompted'],
       ['session-stop', 'session.stopped'],
       ['issue-moved-labeled', 'status.changed'],
@@ -675,12 +666,12 @@ describe('ingest', () => {
       expect(logs).toEqual([expect.stringContaining('4 classifications already running')]);
     });
 
-    it('asks no model for a command, a routed project\'s own command, or a webhook no project takes', async () => {
+    it('asks no model for a command, in a reply or a mention, or a webhook no project takes', async () => {
       const asked: string[] = [];
       const { send, ingest, accepted } = setup(slow(10, asked));
       await send(reply('a1', '/status'));
       const command = fx('session-created-command');
-      command.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) retiens ceci';
+      command.agentSession.comment.body = '[@factory](https://linear.app/x/profiles/factory) /refreeze ceci';
       await send(signed({ ...command, webhookTimestamp: 5000 }));
       await send(reply('a3', 'pour une équipe sans projet', { id: 'z1', identifier: 'ZZZ-1' }));
       await ingest.settled();
