@@ -7,17 +7,14 @@ import { VISUAL_PROOF_CHECK, type VisualProof } from '../../src/checks/visual-pr
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean-verify.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts } from '../helpers/workflow-with.js';
 
 /**
  * ORC-176: the visual proof the factory takes in `verify`. The browser and the check itself are proved by `clean-verify.test.ts`;
  * here, what the orchestrator does with them: the decision's inputs, the journal, the artifacts kept out of the agent's reach, the check.
  */
 type Harness = ReturnType<typeof createHarness>;
-const INTAKE_FIRST = `version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", run: intake }
-`;
+const INTAKE_FIRST = delegationStarts('intake');
 const SHA = 'c0ffee'.padEnd(40, '0');
 const BASE = 'ba5e'.padEnd(40, '0');
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
@@ -45,7 +42,7 @@ function taken(): NonNullable<CleanVerifyResult['visual']> {
 function visual(result: (req: CleanVerifyRequest) => Partial<CleanVerifyResult> | Promise<Partial<CleanVerifyResult>>, screen = true) {
   const asked: CleanVerifyRequest[] = [];
   const h = createHarness({
-    projectYaml: INTAKE_FIRST,
+    workflow: INTAKE_FIRST,
     sandboxed: true,
     visualShooter: new FakeShooter(),
     cleanVerify: async (req) => {

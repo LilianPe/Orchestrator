@@ -10,9 +10,10 @@ import { causeOf } from '../../src/core/block-cause.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { WRITE_TOOLS } from '../../src/presets/tools.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
 
-const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
-const SETUP = 'version: 1\nworkspace:\n  setup: ["npm ci"]\n  ports: { base: 4200 }\n';
+const VERIFIED: WorkflowOverrides = { verify: ['npm test'] };
+const SETUP: WorkflowOverrides = { workspace: { setup: ['npm ci'] } };
 const BASE = 'setup: pnpm install\nnetwork: { level: custom, allow: [docs.exemple.com] }\nenv: [NODE_ENV]\n';
 
 /** The repository's own setup commands, without the rc file of Yarn 1 that comes before them. */
@@ -61,7 +62,7 @@ describe("the repository's config at the launch", () => {
   });
 
   it("runs the file's setup, not the workflow's", async () => {
-    const h = createHarness({ sandboxed: true, projectYaml: SETUP, ...onDefaultBranch(BASE) });
+    const h = createHarness({ sandboxed: true, workflow: SETUP, ...onDefaultBranch(BASE) });
     await delegate(h);
     expect(setups(h).map((e) => e.argv.at(-1))).toEqual(['pnpm install']);
   });
@@ -92,7 +93,7 @@ describe("the repository's config at the launch", () => {
     const repoConfig = async () => parseRepoConfig(reads++ === 0 ? before : merged);
     const given: string[][] = [];
     const repoVariables = async (_: unknown, config: RepoConfig): Promise<RepoVariables> => (given.push(config.env), { env: {}, setupSecrets: {}, missing: [] });
-    const h = createHarness({ sandboxed, repoConfig, repoVariables, projectYaml: 'version: 1\non:\n  ticket.delegated:\n    - { when: "state in [todo, dev] && !blocked", run: tests }\njobs:\n  tests:\n    red: { mode: measure }\n' });
+    const h = createHarness({ sandboxed, repoConfig, repoVariables, workflow: delegationStarts('tests') });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'base-sha');
     h.workspaces.steps.set('/tmp/factory-fake/p/REL-1', { changed: [{ path: 'src/export.test.ts', deleted: false }] });
@@ -187,7 +188,7 @@ describe("the repository's config at the launch", () => {
       const read = makeRepoConfig();
       const reads: { fetch: boolean }[] = [];
       const repoConfig = (_: unknown, o?: { fetch?: boolean }) => (reads.push({ fetch: o?.fetch ?? true }), read({ repoPath: repo }, o));
-      const h = createHarness({ sandboxed: true, projectYaml: VERIFIED, cleanVerify: async () => verdicts.shift()!, repoConfig });
+      const h = createHarness({ sandboxed: true, workflow: VERIFIED, cleanVerify: async () => verdicts.shift()!, repoConfig });
       h.runner.enqueue({});
       await delegate(h);
       expect(h.runner.requests).toHaveLength(2);
@@ -215,7 +216,7 @@ describe('the path rules of verify on the host', () => {
    * starts on) change `later.paths`. The default branch's config, as the clone would read it, declares `infra` sensitive.
    */
   function onHost(paths: string[], later?: { since: string; paths: string[] }) {
-    const h = createHarness({ projectYaml: VERIFIED });
+    const h = createHarness({ workflow: VERIFIED });
     const since = later ? { since: { [later.since]: later.paths } } : {};
     h.workspaces.branches.set(WORKTREE, { changed: paths.map((path) => ({ path, deleted: false })), baseConfig: 'sensitive_paths: [infra]\n', ...since });
     if (later) h.workspaces.heads.set(WORKTREE, later.since);

@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts } from '../helpers/workflow-with.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206). */
-const INTAKE_FIRST = `version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", run: intake }
-`;
+const INTAKE_FIRST = delegationStarts('intake');
 const DESCRIPTION = 'Export the audits as CSV from the audit list.\n\nAcceptance criteria:\n1. A CSV button downloads the list.';
 const PR = 'https://github.com/acme/app/pull/12';
 
@@ -22,7 +19,7 @@ const DEV = { events: [{ kind: 'text' as const, text: 'Done.' }] };
 const skills = (h: ReturnType<typeof createHarness>) => h.runner.requests.map((r) => r.prompt.split('\n')[0]);
 
 function harness() {
-  const h = createHarness({ projectYaml: INTAKE_FIRST });
+  const h = createHarness({ workflow: INTAKE_FIRST });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
   return h;
 }

@@ -40,7 +40,7 @@ const h = createHarness({
   clock,
   faults,
   // A delegation labels, comments and starts the run: a comment posted twice is the double the chaos looks for.
-  projectYaml: CRASH_WORKFLOW,
+  workflow: CRASH_WORKFLOW,
   effectLeaseMs: CHAOS_LEASE_MS,
   processRetry: { attempts: 5, baseMs: 20 },
   effectRetry: { attempts: 8, baseMs: 10, capMs: 100 },

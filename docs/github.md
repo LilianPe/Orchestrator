@@ -123,16 +123,16 @@ A **human push** whose webhook got lost is not caught up: polling reads the PR h
 
 At the time of a `dev-feedback` or `fix-human` run, **unresolved** review threads are read via GraphQL (`reviewThreads`) and turned into feedback for the agent: every comment of each thread, a reviewer's reply included, as its own item (ORC-347). A comment by a bot account (GitHub types an App, the CI or Dependabot as `Bot`) is dropped; the factory's own reviewer will be let through once ORC-183 exists. The feedback is capped at `REVIEW_FEEDBACK_MAX` characters as the prompt writes it (`review-threads.ts`): past it, the most recently active threads are kept whole, none older than one cut; the newest thread over the cap alone keeps its latest comments, the last one cut short if it is over on its own. A last item tells the agent what was left out and that it is still on the PR (ORC-366). A comment whose date does not parse fails the read. Every page of threads and of an unresolved thread's comments is read; a list GitHub answers without saying where it ends, or longer than 10 pages of 100, fails the read rather than reach the agent cut short. Linear lists follow the same rule: delegated tickets (10 pages of 100), a team's states, labels and members (10 pages of 250), and an issue's labels past Linear's default page.
 
-Events produced (see [`workflow.md`](workflow.md#3-the-on-rules)):
+Events produced (see [`preset.md`](preset.md#reactions)):
 
 | Observation | Event | Standard pack |
 |---|---|---|
 | New PR for the branch | `pr.opened` | URL added to the Linear session |
-| CI turning red | `pr.checks_failed` (with the list of failing checks) | `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (`limits.ci_fix_attempts`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`workflow.md`](workflow.md#limits)) |
+| CI turning red | `pr.checks_failed` (with the list of failing checks) | `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (`limits.ci_fix_attempts`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`preset.md`](preset.md#limits)) |
 | CI turning green | `pr.checks_passed` | lifts the block caused by the red-CI limit; the count of the loop stays, one per run (ORC-184) |
 | PR merged | `pr.merged` | *Done*, the `after_merge` step (the requester mentioned with the PR's link, the changelog entry, ORC-197), worktree deleted, no run (ORC-193); after that, no more code runs on the ticket |
 | Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |
-| PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`workflow.md`](workflow.md#configurable-events)) |
+| PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`preset.md`](preset.md#configurable-events)) |
 
 A CI state change is reported only once (not on every poll). The PR's **unresolved** review comments are re-read at the time of a `dev-feedback` or `fix-human` run (`feedback` input): resolve a thread on GitHub so it is no longer sent back to the agent. An inline comment that started a round of human feedback (ORC-190) reaches the agent through its thread only.
 
@@ -155,7 +155,7 @@ Without a GitHub webhook, it takes up to 30 s for a merge or CI to be taken into
 | `pull_request` open with `mergeable_state: dirty` | `pr.conflicted` (head and base) | the pack's: the rebase step, on the counter of red CI (ORC-146, [preset](preset.md#rebase-step-orc-146)) |
 | `check_run` / `check_suite` completed with failure (`failure`, `timed_out`, `cancelled`, `action_required`, `stale`, `startup_failure`) on the PR head | `pr.checks_failed`, with the list of failing checks the forge reads on that head; nothing if it reads that head as in progress or green (run cancelled then rerun); if it does not respond, the webhook's check alone | the pack's, bounded by `limits.ci_fix_attempts` |
 | `check_run` / `check_suite` completed green | `pr.checks_passed`, only when the forge then reads **all** checks of that head as green; if it does not respond, 500 | the pack's |
-| `push` on the ticket's branch by an account that is not a bot | `push.human` (untrusted) | the agent's work pauses and `verify` checks the pushed commit from the forge in a fresh clone; a push of the commit verified last is the factory's own (ORC-159, [`workflow.md`](workflow.md)) |
+| `push` on the ticket's branch by an account that is not a bot | `push.human` (untrusted) | the agent's work pauses and `verify` checks the pushed commit from the forge in a fresh clone; a push of the commit verified last is the factory's own (ORC-159, [`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389)) |
 | `pull_request_review` submitted, `pull_request_review_comment` created, by a human | `pr.reviewed` (untrusted), signed by the sender's login (`github:<login>`) | on the ticket's open PR, with words and not an approval, from a writer of the repository: kept for the agent, and in *Human Review* a round of human feedback, `fix-human` after 3 minutes, then `verify`, the AI review and *Human Review* again (ORC-190, [preset](preset.md#human-review-feedback-orc-190)) |
 | `push` on the repository's default branch (`repository.default_branch`) where a commit merges a PR of a tracked ticket, or reverts a merged PR of a ticket | `default_branch.pushed` (untrusted), one per ticket concerned, with only its relevant commits (SHA, message, author, `merges` or `reverts`: PR number) and the push time (`repository.pushed_at`) | none: read by the measurements (14-day revert, ORC-278) |
 | `workflow_run` completed (`completed`) on a tracked ticket's branch, in the project's repository (not a fork) | `ci.run_completed` (untrusted), one per run and per attempt (`ci:<ticket>:<run id>:<run_attempt>`), with the PR, the head, the conclusion and the duration | none: read by the measurements (CI cost, ORC-278) |
@@ -270,6 +270,6 @@ jobs:
 
 ## CI
 
-Relais does not impose a CI but makes use of it: `pr.checks_failed` triggers `fix-ci` (diagnosis, local reproduction, fix or question), and the `review` skill waits for a green CI. A CI that runs at least lint, types and tests is therefore recommended, in addition to the `verify` commands Relais runs itself after each run ([`workflow.md`](workflow.md#jobs)).
+Relais does not impose a CI but makes use of it: `pr.checks_failed` triggers `fix-ci` (diagnosis, local reproduction, fix or question), and the `review` skill waits for a green CI. A CI that runs at least lint, types and tests is therefore recommended, in addition to the `verify` commands Relais runs itself after each run ([`preset.md`](preset.md#jobs)).
 
 The Relais repository itself has a GitHub Actions CI (`.github/workflows/ci.yml`): on every PR and every push to `main`, Node 24, `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`.

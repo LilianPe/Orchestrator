@@ -40,7 +40,7 @@ export interface FactoryYml {
    * A token cap `off` is disabled (ORC-381), `budgets: off` both: unlike a cap left unset, `factory validate` accepts it. `on_usage_limit` is no cap of the factory's.
    */
   budgets?: { perStepTokens?: Record<string, number> | 'off'; perTicketTokens?: number | 'off'; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
-  /** The built-in tools of each agent step, in place of its preset default (ORC-383): checked against the step by `loadWorkflow`, applied by `stepSettings`. */
+  /** The built-in tools of each agent step, in place of its preset default (ORC-383): checked against the step by `defaultWorkflow`, applied by `stepSettings`. */
   tools?: { perStep?: Record<string, string[]> };
   /** `off` disables the baseline of `factory/taille-du-diff` (ORC-381): only a repository's own `max_diff` bounds its diffs. */
   maxDiff?: 'off';

@@ -34,7 +34,7 @@ const USAGE = `Usage: factory <command>
   status             state of the running instance
   pause | resume     suspend or resume the queue
   stop <ID>          stop a ticket's run
-  replay <journal>... replay exported journals (bit-for-bit regression, --what-if <workflow.yml>, --export <ID>)
+  replay <journal>... replay exported journals (bit-for-bit regression, --what-if <preset>, --export <ID>)
   run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
   flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
   baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub

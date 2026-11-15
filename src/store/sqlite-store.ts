@@ -9,7 +9,7 @@ import {
   type DeadLetterStatus,
   type RepairAction,
 } from '../core/dead-letter.js';
-import type { ReviewLens } from '../config/workflow-schema.js';
+import type { ReviewLens } from '../core/workflow.js';
 import type { Finding } from '../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline, BaselineMeasure, BaselineValue } from '../core/baseline.js';

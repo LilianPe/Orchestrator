@@ -1,6 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { causeOf } from './block-cause.js';
 import { deadLetterReason, liftDeadLetterBlock } from './dead-letter.js';
@@ -8,7 +7,7 @@ import { decide, settledTicket } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type FactoryEvent, type TicketState } from './types.js';
 import { MERGE_PUSHED, normalizeTicket, upcast, upcastMergeRefusal, upcastTicket, upcastTimer, type StoredEvent } from './upcast.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const ticket = { ...newTicketState('p', 'REL-1', 'T', 'human_review', 0), delegated: true };
 
 /** Journal rows as the factory wrote them before ORC-133: no version, no taint, former names. */

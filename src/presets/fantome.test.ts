@@ -1,10 +1,7 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from './workflow.js';
 import { asFantome, fantome, projectEffects } from './fantome.js';
 import { compilePreset, PresetError, type Preset } from './preset.js';
-
-const packDir = join(import.meta.dirname, '../../packs/standard');
 
 describe('the factory/fantome preset (ORC-231)', () => {
   it('compiles at the Rapide level: no human gate, no clarify, the run ends at its publication', () => {
@@ -22,7 +19,7 @@ describe('the factory/fantome preset (ORC-231)', () => {
   });
 
   it('the workflow it drives: delegation runs intake, intake the spec, the spec the tests, and dev ends at its publication', () => {
-    const wf = asFantome(loadWorkflow({ packDir }));
+    const wf = asFantome(defaultWorkflow());
     expect(wf.level).toBe('rapide');
     expect(wf.on['ticket.delegated']).toEqual([expect.objectContaining({ run: 'intake', whenSrc: '!blocked' })]);
     // Nothing else starts a job: a closed ticket's state, or a human on the real one, never does.

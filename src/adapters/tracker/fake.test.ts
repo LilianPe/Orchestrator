@@ -1,6 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../../config/load-workflow.js';
+import { defaultWorkflow } from '../../presets/workflow.js';
 import { describeTrackerContract } from '../../../test/contracts/tracker.contract.js';
 import { FakeTracker } from './fake.js';
 
@@ -59,7 +58,7 @@ describe('FakeTracker', () => {
   });
 
   it('knows the states of the standard workflow by default', () => {
-    const { states } = loadWorkflow({ packDir: join(import.meta.dirname, '../../../packs/standard') });
+    const { states } = defaultWorkflow();
     expect([...new FakeTracker().statesOf('REL')].sort()).toEqual(Object.values(states).sort());
   });
 

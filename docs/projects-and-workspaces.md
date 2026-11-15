@@ -48,7 +48,7 @@ Delete its entry from `config.yaml` and restart. The remaining directories under
 
 ## Per-ticket worktrees
 
-Each job declares a workspace type (`workspace` in [`workflow.md`](workflow.md#jobs)):
+Each job declares a workspace type (`workspace` in [`preset.md`](preset.md#jobs)):
 
 | Type | Location | Used by (pack) |
 |---|---|---|
@@ -73,7 +73,7 @@ What is **not** cleaned up automatically (to do by hand if disk space matters): 
 - `setup`: prepare a new worktree (dependencies, generated files). Run at creation only.
 - `jobs.<job>.verify`: checks run by **Relais** (not by the agent) after each successful run, 15 minutes maximum per command. On failure, Relais reruns the job with the error output, then blocks the ticket after `limits.verify_attempts` passes (4 by default, the preset's bound), or as soon as the third identical failure on an unchanged worktree (cause « Loop »).
 
-Details and examples: [`workflow.md`](workflow.md#workspace).
+Details and examples: [`preset.md`](preset.md#jobs).
 
 ### Ports
 

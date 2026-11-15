@@ -1,7 +1,6 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
-import type { Workflow } from '../config/workflow-schema.js';
+import { defaultWorkflow } from '../presets/workflow.js';
+import type { Workflow } from './workflow.js';
 import { causeOf, type BlockKind } from './block-cause.js';
 import type { Role } from './authz.js';
 import type { Decision } from './decision.js';
@@ -10,7 +9,7 @@ import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type MessageKind, type TicketState } from './types.js';
 import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 /** A version frozen before ORC-196, as a recorded journal holds it. */
 const frozen: Workflow = (() => {
   const { blockComment: _b, ...rest } = workflow;

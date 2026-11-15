@@ -1,4 +1,4 @@
-import type { Workflow } from '../../src/config/workflow-schema.js';
+import type { Workflow } from '../../src/core/workflow.js';
 
 /**
  * `workflow` as a version frozen before ORC-183 holds it: its `review` a session that fixed and pushed, its commit verified

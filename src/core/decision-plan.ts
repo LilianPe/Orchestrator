@@ -1,4 +1,4 @@
-import type { Workflow } from '../config/workflow-schema.js';
+import type { Workflow } from './workflow.js';
 import type { DecisionPlan, TimerRecord } from '../store/types.js';
 import { effectiveEvent } from './dead-letter.js';
 import type { OutboxEffect } from './decision.js';

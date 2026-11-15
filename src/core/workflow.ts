@@ -1,120 +1,12 @@
-import { z } from 'zod';
-import type { Condition } from '../core/conditions.js';
-import type { EventType, InputKind, LogicalState, QueueName } from '../core/types.js';
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import type { Effort } from '../presets/preset.js';
+import type { Condition } from './conditions.js';
+import type { EventType, InputKind, LogicalState, QueueName } from './types.js';
 
-const logical = z.enum(['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done']);
-const duration = z.union([z.string(), z.number()]);
-
-export const rawRuleSchema = z
-  .object({
-    from: logical.optional(),
-    to: logical.optional(),
-    label: z.string().optional(),
-    say: z.string().optional(),
-    when: z.string().optional(),
-    run: z.string().optional(),
-    debounce: duration.optional(),
-    move: logical.optional(),
-    labels: z.object({ add: z.array(z.string()).default([]), remove: z.array(z.string()).default([]) }).optional(),
-    comment: z.string().optional(),
-    do: z.enum(['stop', 'cleanup', 'after_merge']).optional(),
-  })
-  .strict();
-
-// No `usd` (ORC-216): a budget counts tokens and turns, `budgets` of factory.yml.
-const rawLimits = z.object({ turns: z.number().int().positive(), duration }).partial();
-/** A job's own: its tokens too, only for a job out of the preset (ORC-182); a step's come from `budgets.per_step_tokens`. */
-const rawJobLimits = rawLimits.extend({ tokens: z.number().int().positive() }).partial();
-
-export const rawJobSchema = z
-  .object({
-    extends: z.string().optional(),
-    step: z.string().optional(),
-    queue: z.enum(['dev', 'questions']).optional(),
-    model: z.string().optional(),
-    workspace: z.enum(['worktree', 'trunk-readonly', 'published']).optional(),
-    session: z.enum(['new', 'resume']).optional(),
-    skill: z.string().optional(),
-    lens: z.enum(['correctness', 'security']).optional(),
-    input: z.enum(['feedback', 'ci_failures', 'thread', 'verify_failures', 'findings']).optional(),
-    verify: z.array(z.string()).optional(),
-    pickup: z.boolean().optional(),
-    structured_output: z.boolean().optional(),
-    repo_checks: z.boolean().optional(),
-    verify_failure: z.literal('block').optional(),
-    red: z.object({ command: z.string().min(1), mode: z.enum(['measure', 'blocking']) }).partial().strict().optional(),
-    limits: rawJobLimits.optional(),
-    // A job out of the preset says these itself (ORC-182): a step's job takes them from its step.
-    effort: z.enum(['low', 'medium', 'high']).optional(),
-    network: z.enum(['none', 'claude-api', 'limited', 'full']).optional(),
-    read_only: z.boolean().optional(),
-    on_start: z.object({ move: logical.optional() }).strict().optional(),
-    on_success: z
-      .object({ move: logical.optional(), post: z.enum(['summary', 'reply', 'synthesis', 'review']).optional(), run: z.string().optional() })
-      .strict()
-      .optional(),
-    on_blocking: z.object({ run: z.string() }).strict().optional(),
-    counter: z.literal('human_review').optional(),
-  })
-  .strict();
-
-export const rawWorkflowSchema = z
-  .object({
-    version: z.literal(1),
-    extends: z.string().optional(),
-    tracker: z
-      .object({
-        kind: z.literal('linear').default('linear'),
-        team: z.string().optional(),
-        pickup: z
-          .object({ checks: z.array(z.enum(['has_description', 'not_started', 'has_acceptance_criteria'])).optional() })
-          .optional(),
-      })
-      .optional(),
-    states: z
-      .object({
-        todo: z.string(),
-        dev: z.string(),
-        human_review: z.string(),
-        ai_review: z.string(),
-        ready: z.string(),
-        done: z.string(),
-      })
-      .partial()
-      .strict()
-      .optional(),
-    limits: z
-      .object({
-        parallel_sessions: z.number().int().positive(),
-        question_sessions: z.number().int().positive(),
-        per_run: rawLimits,
-        verify_attempts: z.number().int().nonnegative(),
-        ci_fix_attempts: z.number().int().nonnegative(),
-        human_review_rounds: z.number().int().nonnegative(),
-        /** Read by nothing since ORC-183, accepted so a project file that still sets it loads. */
-        review_rounds: z.number().int().positive(),
-      })
-      .partial()
-      .optional(),
-    workspace: z
-      .object({
-        setup: z.array(z.string()),
-        ports: z.object({ base: z.number().int().positive() }),
-        /** Read by nothing since ORC-388 (`.factory/config.yml`'s `preview`, ORC-397), accepted so a project file that still sets it loads. */
-        preview: z.string().min(1),
-      })
-      .partial()
-      .optional(),
-    on: z.record(z.string(), z.array(rawRuleSchema)).optional(),
-    jobs: z.record(z.string(), rawJobSchema).optional(),
-    relay_job: z.string().optional(),
-  })
-  .strict();
-
-export type RawWorkflow = z.infer<typeof rawWorkflowSchema>;
-export type RawJob = z.infer<typeof rawJobSchema>;
+/**
+ * The workflow the engine decides on: built in TypeScript by `defaultWorkflow` (`src/presets/workflow.ts`), pinned by each
+ * ticket's frozen version and by the replay journals. The YAML pack and its loader are gone (ORC-389).
+ */
 
 export type PickupCheck = 'has_description' | 'not_started' | 'has_acceptance_criteria';
 
@@ -126,6 +18,7 @@ export interface RunLimits {
 }
 
 export interface Limits {
+  /** Read by nothing since ORC-390: the queues' capacities are `concurrency` of factory.yml and a fixed 2. Kept, as the journals hash them. */
   parallelSessions: number;
   questionSessions: number;
   perRun: RunLimits;

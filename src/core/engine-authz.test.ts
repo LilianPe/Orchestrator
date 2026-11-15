@@ -1,13 +1,12 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
-import type { Workflow } from '../config/workflow-schema.js';
+import { defaultWorkflow } from '../presets/workflow.js';
+import type { Workflow } from './workflow.js';
 import { DEFAULT_MATRIX, type Role } from './authz.js';
 import { PAUSED, STOPPED } from './block-cause.js';
 import { AUTHZ_REFUSED, decide, mayCheck, settledTicket } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 
 /** A project's own label rule: the pack has no label that relaunches since ORC-196. */
 const labelled: Workflow = { ...workflow, on: { ...workflow.on, 'label.changed': [{ label: 'relance', run: 'dev-feedback' }] } };
