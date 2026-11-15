@@ -259,7 +259,7 @@ function unreadable(method: string, path: string, what: string, data: unknown, s
 /** The repository's page: the root of a link to one of its files (ORC-407), and of its git URL. */
 const repoWebUrl = (repo: GitHubRepoRef): string => `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 
-function repoApi(repo: GitHubRepoRef): string {
+export function repoApi(repo: GitHubRepoRef): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 }
 

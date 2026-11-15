@@ -74,88 +74,74 @@ export function checkHost(read: (path: string) => string | undefined, uid: numbe
   try {
     return readHost(read, uid);
   } catch (error) {
-    return { cgroupV2: false, controllers: [], verdict: 'refused', reasons: [`cannot read the host's cgroups: ${errorMessage(error)}`] };
+    return refusedHost(`cannot read the host's cgroups: ${errorMessage(error)}`);
   }
 }
 
+const refusedHost = (reason: string): HostReport => ({ cgroupV2: false, controllers: [], verdict: 'refused', reasons: [reason] });
+
 function readHost(read: (path: string) => string | undefined, uid: number | undefined): HostReport {
+  const listOf = (text: string) => text.split(/\s+/).filter(Boolean);
+  const missing = (present: string[]) => REQUIRED_CONTROLLERS.filter((controller) => !present.includes(controller));
   const root = read(`${CGROUP_ROOT}/cgroup.controllers`);
   if (root === undefined) {
-    return {
-      cgroupV2: false,
-      controllers: [],
-      verdict: 'refused',
-      reasons: [`no cgroup v2: ${CGROUP_ROOT}/cgroup.controllers is absent (cgroups v1 or hybrid), the sandbox cannot limit processes, memory and CPUs`],
-    };
+    return refusedHost(`no cgroup v2: ${CGROUP_ROOT}/cgroup.controllers is absent (cgroups v1 or hybrid), the sandbox cannot limit processes, memory and CPUs`);
   }
-  const missing = (text: string) => {
-    const present = text.split(/\s+/);
-    return REQUIRED_CONTROLLERS.filter((controller) => !present.includes(controller));
-  };
-  const controllers = root.split(/\s+/).filter(Boolean);
+  const controllers = listOf(root);
   const reasons: string[] = [];
-  const absent = missing(root);
+  const absent = missing(controllers);
   if (absent.length > 0) reasons.push(`cgroup v2 without the ${absent.join(', ')} controller(s)`);
+  const rootless = uid !== undefined && uid !== 0;
   let delegated: string[] | undefined;
-  if (uid !== undefined && uid !== 0) {
+  if (rootless) {
     const text = read(`${CGROUP_ROOT}/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`);
     if (text === undefined) {
       reasons.push(`no cgroup delegated to user ${uid}: a rootless engine cannot set the limits (sudo loginctl enable-linger <user>, docs/tests.md)`);
     } else {
-      delegated = text.split(/\s+/).filter(Boolean);
-      const undelegated = missing(text);
+      delegated = listOf(text);
+      const undelegated = missing(delegated);
       if (undelegated.length > 0) reasons.push(`controller(s) not delegated to user ${uid}: ${undelegated.join(', ')}`);
     }
   }
-  const delegation = uid !== undefined && uid !== 0 ? `, delegated to user ${uid}` : '';
   return {
     cgroupV2: true,
     controllers,
     ...(delegated ? { delegated } : {}),
     verdict: reasons.length > 0 ? 'refused' : 'accepted',
-    reasons: reasons.length > 0 ? reasons : [`cgroup v2 with ${REQUIRED_CONTROLLERS.join(', ')}${delegation}`],
+    reasons: reasons.length > 0 ? reasons : [`cgroup v2 with ${REQUIRED_CONTROLLERS.join(', ')}${rootless ? `, delegated to user ${uid}` : ''}`],
   };
 }
 
-export interface BranchProtectionReport extends BranchProtection {
+/** The protection's verdict; what was read of it, absent when it could not be read. */
+export interface BranchProtectionReport extends Partial<BranchProtection> {
   verdict: Verdict;
   reasons: string[];
 }
 
 /**
- * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, or the
- * classic protection, whose rules the App cannot read (credited on its flag, docs/github.md says what it must hold).
+ * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, which the
+ * App cannot bypass, or the classic protection, whose rules the App cannot read (credited on its flag, docs/github.md
+ * says what it must hold).
  */
 function judgeProtection(protection: BranchProtection): BranchProtectionReport {
+  const report = (verdict: Verdict, reason: string): BranchProtectionReport => ({ ...protection, verdict, reasons: [reason] });
   const rules = protection.rules.join(', ');
-  const held = protection.pullRequestRulesets.filter((ruleset) => ruleset.bypass === 'never');
-  if (held.length > 0) {
-    return { ...protection, verdict: 'accepted', reasons: [`a ruleset the App cannot bypass requires a pull request (rules: ${rules})`] };
+  if (protection.pullRequestRulesets.some((ruleset) => ruleset.bypass === 'never')) {
+    return report('accepted', `a ruleset the App cannot bypass requires a pull request (rules: ${rules})`);
   }
   if (protection.pullRequestRulesets.length > 0) {
     const bypassed = protection.pullRequestRulesets.map((ruleset) => `ruleset ${ruleset.id} (${ruleset.bypass})`).join(', ');
-    return {
-      ...protection,
-      verdict: 'refused',
-      reasons: [`not protected from the factory: its App can bypass every ruleset that requires a pull request, ${bypassed}; remove it from their bypass list`],
-    };
+    return report('refused', `not protected from the factory: its App can bypass every ruleset that requires a pull request, ${bypassed}; remove it from their bypass list`);
   }
   if (protection.classic) {
-    return {
-      ...protection,
-      verdict: 'accepted',
-      reasons: ['branch protection on; its rules need the Administration permission, which the App does not have: check it requires a pull request (docs/github.md)'],
-    };
+    return report('accepted', 'branch protection on; its rules need the Administration permission, which the App does not have: check it requires a pull request (docs/github.md)');
   }
-  return {
-    ...protection,
-    verdict: 'refused',
-    reasons: [
-      protection.rules.length > 0
-        ? `not protected: its rulesets (${rules}) do not require a pull request (\`pull_request\` rule), a direct push still lands`
-        : 'not protected: no branch protection and no ruleset',
-    ],
-  };
+  return report(
+    'refused',
+    protection.rules.length > 0
+      ? `not protected: its rulesets (${rules}) do not require a pull request (\`pull_request\` rule), a direct push still lands`
+      : 'not protected: no branch protection and no ruleset',
+  );
 }
 
 export interface DoctorOptions {
@@ -597,6 +583,11 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const warnings = testCommandWarnings(options.commands);
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
   const failure = (message: string) => doctorFailure(options, message, ignored, warnings);
+  // Read beside the workflows; an unreadable protection is a refusal with its reason, the other verdicts still told.
+  const protectionRead = api.branchProtection(repoPath).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
+    verdict: 'refused',
+    reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
+  }));
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
@@ -611,24 +602,25 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
       return failure(`Cannot read the environments: ${errorMessage(error)}`);
     }
   }
-  let protection: BranchProtectionReport;
-  try {
-    protection = judgeProtection(await api.branchProtection(repoPath));
-  } catch (error) {
-    return failure(`Cannot read the protection of the default branch: ${errorMessage(error)}`);
-  }
+  const protection = await protectionRead;
   const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
   const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory));
   const refused = reports.filter((report) => report.verdict === 'refused').length;
-  const accepted = refused === 0 && host.verdict === 'accepted' && protection.verdict === 'accepted';
+  const branch = protection.branch ? ` ${protection.branch}` : '';
+  const refusals = [
+    ...(host.verdict === 'refused' ? ['the host cannot limit the sandbox'] : []),
+    ...(protection.verdict === 'refused' ? [`the default branch${branch} is not protected`] : []),
+    ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
+  ];
+  const accepted = refusals.length === 0;
 
   if (options.json) {
     out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
     out(`Host: ${host.verdict} — ${host.reasons.join(' ')}`);
-    out(`Default branch ${protection.branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`);
+    out(`Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`);
     out('');
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
@@ -654,11 +646,6 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
         out('');
       }
     }
-    const refusals = [
-      ...(host.verdict === 'refused' ? ['the host cannot limit the sandbox'] : []),
-      ...(protection.verdict === 'refused' ? [`the default branch ${protection.branch} is not protected`] : []),
-      ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
-    ];
     out(
       accepted
         ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."

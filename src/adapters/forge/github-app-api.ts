@@ -1,4 +1,4 @@
-import { GitHubApiError, GitHubAppAuth, isRecord } from './github-app.js';
+import { GitHubApiError, GitHubAppAuth, isRecord, repoApi } from './github-app.js';
 
 /** One workflow file, decoded from the Contents API. */
 export interface WorkflowSource {
@@ -136,7 +136,7 @@ export class GitHubAppApi extends GitHubAppAuth {
   async branchProtection(repoPath: string): Promise<BranchProtection> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
-    const base = `/repos/${segment(repo.owner)}/${segment(repo.name)}`;
+    const base = repoApi(repo);
     const { default_branch: branch } = await this.read('GET', base, token, isRepository, 'a repository with its default branch');
     const [{ protected: classic }, rules] = await Promise.all([
       this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its protection flag'),
