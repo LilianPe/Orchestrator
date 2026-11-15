@@ -813,6 +813,12 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
     expect((await doctor([], [], pullRequest('always', 'never'))).code).toBe(0);
   });
 
+  it('accepts a classic protection beside a pull request ruleset the App bypasses: that ruleset does not count, nor takes from it', async () => {
+    const result = await doctor([], [], protection({ classic: true, rules: ['pull_request'], pullRequestRulesets: [{ id: 4, bypass: 'always' }] }));
+    expect(result.code).toBe(0);
+    expect(result.text).toContain('Administration');
+  });
+
   it('fails closed when the protection cannot be read', async () => {
     const result = await doctor([], [], { fake: { failProtection: true } });
     expect(result.code).toBe(1);

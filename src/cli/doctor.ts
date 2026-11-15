@@ -129,12 +129,13 @@ function judgeProtection(protection: BranchProtection): BranchProtectionReport {
   if (protection.pullRequestRulesets.some((ruleset) => ruleset.bypass === 'never')) {
     return report('accepted', `a ruleset the App cannot bypass requires a pull request (rules: ${rules})`);
   }
-  if (protection.pullRequestRulesets.length > 0) {
-    const bypassed = protection.pullRequestRulesets.map((ruleset) => `ruleset ${ruleset.id} (${ruleset.bypass})`).join(', ');
-    return report('refused', `not protected from the factory: its App can bypass every ruleset that requires a pull request, ${bypassed}; remove it from their bypass list`);
-  }
+  const bypassed = protection.pullRequestRulesets.map((ruleset) => `ruleset ${ruleset.id} (${ruleset.bypass})`).join(', ');
+  // A ruleset the App bypasses does not count, and takes nothing from a classic protection.
   if (protection.classic) {
     return report('accepted', 'branch protection on; its rules need the Administration permission, which the App does not have: check it requires a pull request (docs/github.md)');
+  }
+  if (bypassed) {
+    return report('refused', `not protected from the factory: its App can bypass every ruleset that requires a pull request, ${bypassed}; remove it from their bypass list`);
   }
   return report(
     'refused',
