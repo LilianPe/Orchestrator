@@ -8,13 +8,20 @@ import type { EventPayloads, FactoryEvent, TicketState } from './types.js';
 /** What the `after_merge` step (ORC-197) is given of the merge. */
 export type MergedPr = Extract<Effect, { kind: 'after_merge' }>;
 
+/** The factory's last publication that reached the forge: an `empty` one pushed nothing (ORC-402). */
+export function lastPushed(events: readonly FactoryEvent[]): EventPayloads['publish.done'] | undefined {
+  return events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty)?.payload;
+}
+
 /**
  * The work the merged PR carries, as the ticket's journal has it: the green verdict of the merged head when GitHub names it
  * (a human's push verified since, ORC-159), else of the commit the factory published last (ORC-125), else the last green verdict.
+ * A run whose publication was `empty` pushed nothing: its verdict carries no work (ORC-402).
  */
 export function mergedWork(events: readonly FactoryEvent[], headSha?: string): EventPayloads['verify.passed'] | undefined {
-  const published = events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done')?.payload.runId;
-  const passed = events.filter((e): e is FactoryEvent<'verify.passed'> => e.type === 'verify.passed').map((e) => e.payload);
+  const nothingPushed = new Set(events.flatMap((e) => (e.type === 'publish.done' && e.payload.empty ? [e.payload.runId] : [])));
+  const published = lastPushed(events)?.runId;
+  const passed = events.filter((e): e is FactoryEvent<'verify.passed'> => e.type === 'verify.passed').map((e) => e.payload).filter((p) => !nothingPushed.has(p.runId));
   return (headSha ? passed.findLast((p) => p.sha === headSha) : undefined) ?? passed.findLast((p) => p.runId === published) ?? passed.at(-1);
 }
 
