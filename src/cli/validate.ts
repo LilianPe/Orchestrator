@@ -108,7 +108,7 @@ function validateBudgets(config: RepoConfig, yml: FactoryLimits | undefined, out
   // factory.yml's `off` (ORC-381) leaves the repository's own cap.
   const perTicketTokens = ticketTokenCap(ticketCapOf(yml), config);
   const caps = { ...budgets, ...(perTicketTokens !== undefined ? { perTicketTokens } : {}) };
-  // The preset's structure is compiled at load (`loadWorkflow`): only its budgets are left to check.
+  // The preset's structure is compiled at load (`defaultWorkflow`): only its budgets are left to check.
   const { violations, worst } = checkBudgets(factoryDefault, caps);
   if (violations.length) return list(out, `Budgets of ${factoryDefault.name} refused:`, violations);
   if (!worst) out(`No worst case of ${factoryDefault.name} in tokens: budgets.per_step_tokens is disabled.`);

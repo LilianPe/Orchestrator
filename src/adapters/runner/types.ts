@@ -1,4 +1,4 @@
-import type { RunLimits } from '../../config/workflow-schema.js';
+import type { RunLimits } from '../../core/workflow.js';
 import type { OverBudget, RunOutcome, Stagnation, TokenUsage } from '../../core/types.js';
 
 /** The bounds of the stagnation detector (ORC-136), of the frozen workflow: absent, a version without them, nothing is watched. */

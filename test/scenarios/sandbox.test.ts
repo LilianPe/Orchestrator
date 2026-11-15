@@ -12,10 +12,11 @@ import { causeOf } from '../../src/core/block-cause.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { FakeSecretSource } from '../../src/adapters/secrets/fake.js';
 import { createHarness, packDir } from '../helpers/harness.js';
+import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 const RUN_FLAGS = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
-const SETUP = 'version: 1\nworkspace:\n  setup: ["npm ci"]\n  ports: { base: 4200 }\n';
-const VERIFIED = 'version: 1\njobs:\n  dev: { verify: ["npm test"] }\n';
+const SETUP: WorkflowOverrides = { workspace: { setup: ['npm ci'] } };
+const VERIFIED: WorkflowOverrides = { verify: ['npm test'] };
 /** The repository's registry token, in the secret manager the tests register (ORC-308). */
 const REGISTRY = { source: 'coffre', path: 'kv/app#registry' };
 const vault = () => ({ coffre: new FakeSecretSource({ 'kv/app#registry': 'registry-secret' }) });
@@ -97,7 +98,7 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   it('runs setup in a sandbox of its own, gone before the agent gets its, for a fresh worktree only (ORC-211)', async () => {
-    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const h = createHarness({ sandboxed: true, workflow: SETUP });
     const create = h.sandboxes.create.bind(h.sandboxes);
     const aliveAtCreate: string[][] = [];
     h.sandboxes.create = async (req) => {
@@ -121,7 +122,7 @@ describe('a disposable sandbox per attempt', () => {
     const seen: CleanVerifyRequest[] = [];
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async (req) => {
         seen.push(req);
         return { ok: true, failures: [], sha: 'abc', tree: 'tree' };
@@ -141,7 +142,7 @@ describe('a disposable sandbox per attempt', () => {
     const h = createHarness({
       sandboxed: true,
       concurrency: 1,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async () => {
         entered();
         await gate;
@@ -166,7 +167,7 @@ describe('a disposable sandbox per attempt', () => {
     const flaky = [{ command: 'npm test', test: 'src/a.test.ts > cart total', file: 'src/a.test.ts', name: 'cart total', attempts: [{ on: 'head' as const, attempt: 1, outcome: 'failed' as const, output: 'boom' }], indicative: true as const }];
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async (req) => {
         seen.push(req);
         return { ok: true, failures: [], sha: 'abc', tree: 'tree', flaky };
@@ -185,7 +186,7 @@ describe('a disposable sandbox per attempt', () => {
     const seen: CleanVerifyRequest[] = [];
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async (req) => {
         seen.push(req);
         return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
@@ -219,7 +220,7 @@ describe('a disposable sandbox per attempt', () => {
     const seen: CleanVerifyRequest[] = [];
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async (req) => {
         seen.push(req);
         return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
@@ -241,7 +242,7 @@ describe('a disposable sandbox per attempt', () => {
     const seen: CleanVerifyRequest[] = [];
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async (req) => {
         seen.push(req);
         return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
@@ -263,7 +264,7 @@ describe('a disposable sandbox per attempt', () => {
     const seen: CleanVerifyRequest[] = [];
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async (req) => {
         seen.push(req);
         return { ok: true, failures: [], sha: `sha-${seen.length}`, tree: 'tree' };
@@ -283,7 +284,7 @@ describe('a disposable sandbox per attempt', () => {
     const output = `${'line\n'.repeat(5000)}Error: the cause\n${'line\n'.repeat(5000)}`;
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async () => ({ ok: false, failures: [{ command: 'npm test', exitCode: 1, output }], sha: 'abc', tree: 'tree' }),
     });
     h.runner.enqueue({});
@@ -298,7 +299,7 @@ describe('a disposable sandbox per attempt', () => {
   it('an engine down gives an infrastructure block: no fallback on the host, nothing sent to the agent (ORC-151)', async () => {
     const h = createHarness({
       sandboxed: true,
-      projectYaml: VERIFIED,
+      workflow: VERIFIED,
       cleanVerify: async () => {
         throw new Error('engine down');
       },
@@ -314,7 +315,7 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   it('without sandboxes and without the explicit flag, verify refuses to run the code on the host (ORC-151)', async () => {
-    const h = createHarness({ projectYaml: VERIFIED, hostChecks: false });
+    const h = createHarness({ workflow: VERIFIED, hostChecks: false });
     await delegate(h);
     expect(h.checks.calls).toEqual([]);
     expect(h.runner.requests).toHaveLength(1);
@@ -325,13 +326,13 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   it('the explicit flag keeps the host path, in the worktree (ORC-151)', async () => {
-    const h = createHarness({ projectYaml: VERIFIED, hostChecks: true });
+    const h = createHarness({ workflow: VERIFIED, hostChecks: true });
     await delegate(h);
     expect(h.checks.calls).toMatchObject([{ commands: ['npm test'] }]);
   });
 
   it('a failed setup destroys the sandbox, removes the worktree and blocks the ticket, without a run', async () => {
-    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const h = createHarness({ sandboxed: true, workflow: SETUP });
     h.sandboxes.execResult = (argv) => ({ stdout: '', stderr: 'boom', code: argv[0] === 'timeout' ? 1 : 0 });
     await delegate(h);
     expect(h.runner.requests).toEqual([]);
@@ -383,7 +384,7 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   it('a setup command over the verify timeout fails the setup as a timeout', async () => {
-    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const h = createHarness({ sandboxed: true, workflow: SETUP });
     // The factory's clock past the cap while the command runs: an expiry, as the factory sees one (ORC-348).
     h.sandboxes.execResult = (argv) => {
       if (argv[0] === 'timeout') vi.setSystemTime(Date.now() + VERIFY_TIMEOUT_MS);
@@ -407,7 +408,7 @@ describe('a disposable sandbox per attempt', () => {
       h.sandboxes.exec = async () => Promise.reject(new Error('exec refused'));
     }],
   ])('when %s, a fresh worktree is removed so the next attempt runs setup again', async (_, fault) => {
-    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const h = createHarness({ sandboxed: true, workflow: SETUP });
     const { create, exec } = h.sandboxes;
     fault(h);
     await delegate(h);
@@ -423,7 +424,7 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   it('opens no sandbox for a launch that ends before its run, and removes the fresh worktree it did not set up', async () => {
-    const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+    const h = createHarness({ sandboxed: true, workflow: SETUP });
     const moveTo = h.tracker.moveTo.bind(h.tracker);
     h.tracker.moveTo = async () => Promise.reject(new Error('linear down'));
     await delegate(h);
@@ -434,7 +435,7 @@ describe('a disposable sandbox per attempt', () => {
   });
 
   it('without a sandbox, setup runs on the host as before', async () => {
-    const h = createHarness({ projectYaml: SETUP });
+    const h = createHarness({ workflow: SETUP });
     await delegate(h);
     expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
     expect(h.runner.requests[0]!.sandboxId).toBeUndefined();
@@ -449,7 +450,7 @@ describe('a disposable sandbox per attempt', () => {
     const repoVariables = async () => VARS;
 
     it('gives the setup the secrets, and the agent only the declared variables', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoVariables });
       await delegate(h);
       expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test', REGISTRY_TOKEN: 'registry-secret', npm_config_ignore_scripts: 'true' });
       const env = h.runner.requests[0]!.env;
@@ -461,7 +462,7 @@ describe('a disposable sandbox per attempt', () => {
     it('reads the secret from its source at the setup, then masks and seals it as any other (ORC-308)', async () => {
       const sources = vault();
       const worktree = '/tmp/factory-fake/p/REL-1';
-      const h = createHarness({ sandboxed: true, secretSources: sources, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: sources, workflow: SETUP, repoVariables });
       expect(sources.coffre.reads).toEqual([]);
       // The setup leaves the token in the worktree, as an `.npmrc` would.
       h.sandboxes.execResult = (argv) => {
@@ -484,7 +485,7 @@ describe('a disposable sandbox per attempt', () => {
 
     it('a source that fails creates no setup container and blocks the ticket with the reference, never the value (ORC-308)', async () => {
       const down = { coffre: new FakeSecretSource({ 'kv/app#registry': 'registry-secret' }, { down: true }) };
-      const h = createHarness({ sandboxed: true, secretSources: down, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: down, workflow: SETUP, repoVariables });
       await delegate(h);
       expect(h.sandboxes.created).toEqual([]);
       expect(h.runner.requests).toEqual([]);
@@ -498,7 +499,7 @@ describe('a disposable sandbox per attempt', () => {
 
     it('reads an env: secret from the daemon environment at the setup, as in production (ORC-308)', async () => {
       const envVars = async () => ({ env: {}, setupSecrets: { NPM_TOKEN: { source: 'env', path: 'ORG_NPM_TOKEN' } }, missing: [] });
-      const h = createHarness({ sandboxed: true, secretEnv: { ORG_NPM_TOKEN: 'npm-secret-value' }, projectYaml: SETUP, repoVariables: envVars });
+      const h = createHarness({ sandboxed: true, secretEnv: { ORG_NPM_TOKEN: 'npm-secret-value' }, workflow: SETUP, repoVariables: envVars });
       await delegate(h);
       expect(setups(h)[0]!.opts!.env).toMatchObject({ NPM_TOKEN: 'npm-secret-value' });
       expect(h.secrets.values()).toEqual(['npm-secret-value']);
@@ -506,7 +507,7 @@ describe('a disposable sandbox per attempt', () => {
 
     it('reads no secret for a setup on work nobody reviewed (ORC-308)', async () => {
       const sources = vault();
-      const h = createHarness({ sandboxed: true, secretSources: sources, projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: sources, workflow: SETUP, repoVariables });
       h.workspaces.ahead.add('REL-1');
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
@@ -520,13 +521,13 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('no secret mounted for the setup: its sandbox has the git dir alone, read-only', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoVariables });
       await delegate(h);
       expect(h.sandboxes.created[0]!.mounts).toEqual([{ host: join('/tmp/factory-fake/p/REL-1', '.git'), target: `${WORKSPACE_TARGET}/.git`, readOnly: true }]);
     });
 
     it('a setup that fails with secrets removes the worktree and starts no run', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoVariables });
       h.sandboxes.execResult = () => ({ stdout: '', stderr: 'boom', code: 1 });
       await delegate(h);
       expect(h.runner.requests).toEqual([]);
@@ -535,7 +536,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a setup whose container cannot be destroyed starts no run: a process could still write the secret', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoVariables });
       h.sandboxes.destroy = async () => Promise.reject(new Error('engine down'));
       await delegate(h);
       expect(h.runner.requests).toEqual([]);
@@ -548,7 +549,7 @@ describe('a disposable sandbox per attempt', () => {
       ['the secrets are gone from the configuration', { env: {}, setupSecrets: {}, missing: [] }],
     ])('a worktree whose setup a crash cut is removed and made anew, when %s', async (_, after) => {
       let declared = VARS as typeof after;
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables: async () => declared });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoVariables: async () => declared });
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
       expect(h.workspaces.cleaned).toEqual([]);
@@ -567,7 +568,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('withholds the secrets from a setup on commits a previous agent wrote, and says so', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoVariables });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoVariables });
       h.workspaces.ahead.add('REL-1');
       await delegate(h);
       expect(setups(h)[0]!.opts!.env).toMatchObject({ NODE_ENV: 'test' });
@@ -576,7 +577,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('marks the worktree while its setup runs, with or without a secret, and lifts the mark at its end', async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP });
+      const h = createHarness({ sandboxed: true, workflow: SETUP });
       let during: string | undefined;
       const exec = h.sandboxes.exec.bind(h.sandboxes);
       h.sandboxes.exec = async (id, argv, opts) => {
@@ -596,7 +597,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('never gives the secrets to a setup on the host, without a sandbox', async () => {
-      const h = createHarness({ projectYaml: SETUP, repoVariables });
+      const h = createHarness({ workflow: SETUP, repoVariables });
       await delegate(h);
       expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
       expect(Object.values(h.runner.requests[0]!.env)).not.toContain('registry-secret');
@@ -616,7 +617,7 @@ describe('a disposable sandbox per attempt', () => {
     const VARS = { env: {}, setupSecrets: { REGISTRY_TOKEN: REGISTRY }, missing: [] };
 
     it("the attempt's setup and agent share its services, gone with the agent's sandbox", async () => {
-      const h = createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig });
+      const h = createHarness({ sandboxed: true, workflow: SETUP, repoConfig });
       h.runner.enqueue({ outcome: 'failure' });
       await delegate(h);
       const runId = h.runner.requests[0]!.runId;
@@ -629,7 +630,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a new attempt on the same worktree runs the setup again, for its new database, without the secrets; a failure there keeps the worktree', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoConfig, repoVariables: async () => VARS });
       await delegate(h);
       expect(setups(h)).toHaveLength(1);
       expect(setups(h)[0]!.opts!.env).toHaveProperty('REGISTRY_TOKEN');
@@ -645,7 +646,7 @@ describe('a disposable sandbox per attempt', () => {
     });
 
     it('a setup that writes a secret in its database blocks the ticket, without the value, and no agent starts', async () => {
-      const h = createHarness({ sandboxed: true, secretSources: vault(), projectYaml: SETUP, repoConfig, repoVariables: async () => VARS });
+      const h = createHarness({ sandboxed: true, secretSources: vault(), workflow: SETUP, repoConfig, repoVariables: async () => VARS });
       h.sandboxes.execResult = (argv) => ({ stdout: argv[0] === 'pg_dumpall' ? 'INSERT INTO t VALUES (\'registry-secret\');\n' : '', stderr: '', code: 0 });
       await delegate(h);
       expect(h.runner.requests).toEqual([]);
@@ -691,15 +692,15 @@ describe('a service nobody provides', () => {
   }
 
   it('no backend provides it: no sandbox, not even for the setup, and the ticket is blocked naming it', async () => {
-    await refused(createHarness({ sandboxed: true, projectYaml: SETUP, repoConfig: declares('postgres, redis') }), 'redis');
+    await refused(createHarness({ sandboxed: true, workflow: SETUP, repoConfig: declares('postgres, redis') }), 'redis');
   });
 
   it('without sandboxes, none is provided: no setup on the host, no run, the ticket blocked naming it', async () => {
-    await refused(createHarness({ projectYaml: SETUP, repoConfig: declares('postgres') }), 'postgres');
+    await refused(createHarness({ workflow: SETUP, repoConfig: declares('postgres') }), 'postgres');
   });
 
   it('without services, the run starts as before', async () => {
-    const h = createHarness({ projectYaml: SETUP, repoConfig: async () => parseRepoConfig('services: []\n') });
+    const h = createHarness({ workflow: SETUP, repoConfig: async () => parseRepoConfig('services: []\n') });
     await delegate(h);
     expect(h.checks.calls[0]).toEqual({ cwd: '/tmp/factory-fake/p/REL-1', commands: ['npm ci'] });
     expect(h.runner.requests).toHaveLength(1);

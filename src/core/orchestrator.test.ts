@@ -11,7 +11,7 @@ import type { ReplaySource } from '../ghost/delegate.js';
 import type { Verifier } from './verify.js';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
-import type { loadWorkflow } from '../config/load-workflow.js';
+import type { Workflow } from './workflow.js';
 import { loadTestWorkflow } from '../../test/helpers/harness.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { hashText } from './attempt-labels.js';
@@ -32,7 +32,7 @@ function setup(
     verify?: Verifier;
     hold?: boolean;
     settingsPath?: string;
-    tweak?: (w: ReturnType<typeof loadWorkflow>) => void;
+    tweak?: (w: Workflow) => void;
     effectRetry?: EffectRetry;
     workspaces?: FakeWorkspaces;
     processRetry?: { attempts: number; baseMs: number };
@@ -767,7 +767,7 @@ describe('Orchestrator', () => {
   describe('an event whose decision throws (ORC-175)', () => {
     /** A rule whose condition is broken (`when` not a parsed condition): `decide` throws on `label.changed`. */
     function broken() {
-      let workflow!: ReturnType<typeof loadWorkflow>;
+      let workflow!: Workflow;
       const s = setup({
         tweak: (w) => {
           workflow = w;

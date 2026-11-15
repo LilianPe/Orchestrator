@@ -1,6 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { blockPareto, causeOf, restatesCause, type BlockKind } from './block-cause.js';
 import { liftDeadLetterBlock } from './dead-letter.js';
@@ -9,7 +8,7 @@ import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type InternalEvent, type TicketState } from './types.js';
 import { legacyBlock } from './upcast.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const blocking = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { ...workflow.jobs['tests']!.red!, mode: 'blocking' as const } } } };
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], extra: Partial<FactoryEvent> = {}): FactoryEvent {

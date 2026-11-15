@@ -114,7 +114,7 @@ describe('the human inbox (ORC-180)', () => {
     });
 
     it('a command that came in behind a pending job: the launch takes its taint, not only the decision', async () => {
-      const h = createHarness({ projectYaml: withMoveBack() });
+      const h = createHarness({ workflow: withMoveBack() });
       const running = await atWork(h);
       // Out and back by a human: its own move to dev would be the echo of the factory's.
       await h.send('status.changed', { from: 'dev', to: 'human_review' });

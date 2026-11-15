@@ -1,12 +1,11 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import type { Role } from './authz.js';
 import { AUTHZ_REFUSED, decide } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const blocking = { ...workflow, jobs: { ...workflow.jobs, tests: { ...workflow.jobs['tests']!, red: { ...workflow.jobs['tests']!.red!, mode: 'blocking' as const } } } };
 
 const FROZEN: FrozenTests = { sha: 'sha-1', files: { 'src/export.test.ts': 'f1', 'vitest.config.ts': 'f2' } };

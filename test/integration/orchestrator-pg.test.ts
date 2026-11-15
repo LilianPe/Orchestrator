@@ -64,7 +64,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
   });
 
   it('starts a queued item whose holder died before its start, once its lease expired (ORC-150)', async () => {
-    const h = harness({ projectYaml: 'version: 1\n' });
+    const h = harness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
     await h.store.setMeta('paused', '1');
     await h.send('ticket.delegated', { linearSessionId: 'a' });
@@ -190,7 +190,7 @@ describe.skipIf(!PG_URL)('orchestrator on PgStore', () => {
     expect(journal.entries.length).toBe(Number(traced.rows[0]!.n));
     expect(journal.entries.every((e) => e.decision)).toBe(true);
     expect(replayJournal(journal)).toMatchObject({ replayed: journal.entries.length, divergences: [] });
-    const whatIf = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).yaml) });
+    const whatIf = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).workflow) });
     expect(whatIf.divergences[0]).toMatchObject({ eventType: 'verify.failed' });
   });
 });

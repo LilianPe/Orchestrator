@@ -1,6 +1,6 @@
 import type { VisualCapture } from '../checks/visual-proof.js';
 import type { RepoConfig } from '../config/repo-config.js';
-import type { ReviewLens, RunLimits } from '../config/workflow-schema.js';
+import type { ReviewLens, RunLimits } from '../core/workflow.js';
 import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';

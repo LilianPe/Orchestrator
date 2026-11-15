@@ -66,6 +66,11 @@ describe('describePr (ORC-195)', () => {
 
   it('criterion 3: an interface ticket without captures says so, and a ticket off the interface has no screen line', () => {
     expect(sections(describePr(full, facts({ visualProof: 'required' })).body).at(-1)!.text).toMatch(/visual proof is required.*no capture/i);
+    // ORC-386: where the start command came from, whenever verify found the proof required.
+    for (const [start, said] of [['declared', 'declared by the repository'], ['learned', 'learned in the knowledge base'], ['found', 'found by the build agent'], ['none', 'none: neither declared nor learned']] as const) {
+      expect(sections(describePr(full, facts({ visualProof: 'required', start })).body).at(-1)!.text).toContain(`**Start command**: ${said}`);
+    }
+    expect(describePr(full, facts()).body).not.toContain('Start command');
     expect(describePr(full, facts()).body).not.toMatch(/capture|visual proof/i);
   });
 

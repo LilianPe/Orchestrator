@@ -12,6 +12,7 @@ import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { EffectOutcome } from '../../src/store/types.js';
 import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
 import { createHarness } from '../helpers/harness.js';
+import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /**
  * The idempotency table of docs/idempotency.md (ORC-162), one test per row: the effect executed
@@ -41,7 +42,7 @@ class LosingStore extends SqliteStore {
 }
 
 /** A harness whose rows of `kind` are each executed twice, the second time once the first lease expired. */
-function replaying(kind: string, opts: { projectYaml?: string; acknowledge?: AckMode } = {}) {
+function replaying(kind: string, opts: { workflow?: WorkflowOverrides; acknowledge?: AckMode } = {}) {
   const store = new LosingStore(kind);
   const h = createHarness({ store, effectLeaseMs: LEASE_MS, ...opts });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -74,7 +75,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 
 describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
   it('Commentaire: a replayed comment finds its marker and writes no second comment', async () => {
-    const { h, settled, result } = replaying('comment', { projectYaml: CRASH_WORKFLOW });
+    const { h, settled, result } = replaying('comment', { workflow: CRASH_WORKFLOW });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await settled();
     expect(h.tracker.comments('REL-1')).toEqual(['Pris en charge.']);
@@ -116,7 +117,7 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
   });
 
   it('Labels: a replayed label change finds the final state already there and writes nothing', async () => {
-    const { h, settled, result } = replaying('labels', { projectYaml: CRASH_WORKFLOW });
+    const { h, settled, result } = replaying('labels', { workflow: CRASH_WORKFLOW });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await settled();
     expect(h.tracker.calls.filter((c) => c.method === 'setLabels')).toHaveLength(1);
@@ -215,7 +216,7 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
   });
 
   it('Appel au modèle: a replayed start of an attempt still running calls the model once', async () => {
-    const { h, settled, result } = replaying('start_run', { projectYaml: CRASH_WORKFLOW });
+    const { h, settled, result } = replaying('start_run', { workflow: CRASH_WORKFLOW });
     h.runner.enqueue({ hold: true });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await settled({ stop: false });

@@ -3,7 +3,7 @@ import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { runSettingsTemplate, type Settings } from '../config/run-settings.js';
-import type { JobSpec, Workflow } from '../config/workflow-schema.js';
+import type { JobSpec, Workflow } from './workflow.js';
 import { VERSION } from '../version.js';
 import { buildPrompt, type PromptInput } from './prompt.js';
 import type { QueueName } from './types.js';
