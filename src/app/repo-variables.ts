@@ -63,15 +63,24 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
       o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'ls-tree', ref], tree).message}`);
       return undefined;
     }
-    const parts: string[] = [];
-    for (const entry of zFields(tree.stdout)) {
+    const entries = zFields(tree.stdout).flatMap((entry) => {
       const m = /^\d+ \w+ ([0-9a-f]+)\t(.+)$/.exec(entry);
-      if (!m) continue;
-      const blob = m[1]!;
-      const path = m[2]!;
-      const part = START_PART[path];
-      parts.push(`${path}\0${part ? part((await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob])).stdout) : blob}`);
-    }
+      return m ? [{ blob: m[1]!, path: m[2]! }] : [];
+    });
+    // A file whose part counts read in parallel; one git could not read leaves the fingerprint unread, never another one.
+    const parts = await Promise.all(
+      entries.map(async ({ blob, path }) => {
+        const part = START_PART[path];
+        if (!part) return `${path}\0${blob}`;
+        const r = await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob]);
+        if (r.code !== 0) {
+          o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'cat-file', 'blob', blob], r).message}`);
+          return undefined;
+        }
+        return `${path}\0${part(r.stdout)}`;
+      }),
+    );
+    if (parts.includes(undefined)) return undefined;
     return createHash('sha256').update(parts.sort().join('\n')).digest('hex');
   };
 }
@@ -85,15 +94,20 @@ function packageScripts(text: string): string {
   }
 }
 
-/** The tables of a pyproject.toml that say how it starts: PEP 621's scripts and entry points, Poetry's scripts and plugins. */
-const PYPROJECT_START = /^(project\.(scripts|gui-scripts|entry-points(\..+)?)|tool\.poetry\.(scripts|plugins(\..+)?))$/;
-/** A key that would set one of them from elsewhere: an inline or dotted table. */
-const PYPROJECT_START_KEY = /^(project\.|tool\.poetry\.)?(scripts|gui-scripts|entry-points|plugins)(\.|\s*=)/;
+/**
+ * The tables of a pyproject.toml that say how it starts, and all under them: PEP 621's scripts and entry points, Poetry's scripts
+ * and plugins, and the task runners' (PDM, Hatch, Rye, poethepoet, taskipy).
+ */
+const PYPROJECT_START = /^(project\.(scripts|gui-scripts|entry-points)|tool\.poetry\.(scripts|plugins)|tool\.(pdm|rye)\.scripts|tool\.hatch\.envs\.[^.]+\.scripts|tool\.(poe|taskipy)\.tasks)(\.|$)/;
+
+/** A dotted key or table name as one path: its quotes and the spaces around its dots out. */
+const tomlPath = (name: string): string => name.replace(/["']/g, '').replace(/\s*\.\s*/g, '.').trim();
 
 /**
- * The lines of `PYPROJECT_START`'s tables, each under its table, comments and blank lines out (ORC-406): the version and the
+ * What of a pyproject.toml says how it starts (ORC-406): each line of `PYPROJECT_START`'s tables, and each key that sets them from
+ * another table (inline, dotted or quoted), by its full path, sorted, comments and blank lines out; the version and the
  * dependencies change nothing of it. With no TOML parser, the whole text where it cannot tell them apart surely: a multi-line
- * string, or a key that sets them from another table.
+ * string, or such a key whose value goes on past its line.
  */
 export function pyprojectStart(text: string): string {
   if (text.includes('"'.repeat(3)) || text.includes("'".repeat(3))) return text;
@@ -104,13 +118,21 @@ export function pyprojectStart(text: string): string {
     if (!line || line.startsWith('#')) continue;
     const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
     if (header) {
-      table = header[1]!.replace(/\s*\.\s*/g, '.');
+      table = tomlPath(header[1]!);
       continue;
     }
-    if (PYPROJECT_START.test(table)) kept.push(`[${table}] ${line}`);
-    else if (PYPROJECT_START_KEY.test(line)) return text;
+    if (PYPROJECT_START.test(table)) {
+      kept.push(`[${table}] ${line}`);
+      continue;
+    }
+    const key = /^([^=]+?)\s*=\s*(.*)$/.exec(line);
+    const path = key && tomlPath(table ? `${table}.${key[1]}` : key[1]!);
+    if (!path || !PYPROJECT_START.test(path)) continue;
+    const value = key[2]!;
+    if (value.split('[').length !== value.split(']').length || value.split('{').length !== value.split('}').length) return text;
+    kept.push(`${path} = ${value}`);
   }
-  return kept.join('\n');
+  return kept.sort().join('\n');
 }
 
 /** What of a start file counts in the fingerprint, where not its whole blob. */

@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { FakeShooter } from '../../src/adapters/browser/fake.js';
 import { VISUAL_PROOF_CHECK, type VisualProof } from '../../src/checks/visual-proof.js';
 import type { AgentOutput, PreviewRecipe } from '../../src/core/agent-output.js';
@@ -225,6 +225,7 @@ describe('a search bounded at three failures (ORC-406)', () => {
   it('a lockfile change does not reopen the search; a change of the scripts does (the real fingerprint, on a real default branch)', async () => {
     // The project's repository: a forge and the factory's clone, whose default branch the fingerprint reads.
     const base = mkdtempSync(join(tmpdir(), 'factory-start-files-'));
+    onTestFinished(() => rmSync(base, { recursive: true, force: true }));
     const forge = join(base, 'forge.git');
     git(base, 'init', '--bare', '-q', '-b', 'main', forge);
     const clone = join(base, 'repo');

@@ -331,6 +331,17 @@ describe('makeStartFingerprint (ORC-406)', () => {
     }
   });
 
+  it('is undefined, logged, when git cannot read a start file it needs: a passing failure resets nothing', async () => {
+    const logged: string[] = [];
+    const exec: Exec = async (_, args) => {
+      if (args.includes('symbolic-ref')) return { stdout: 'refs/remotes/origin/main\n', stderr: '', code: 0 };
+      if (args.includes('ls-tree')) return { stdout: '100644 blob abc123\tpyproject.toml\0', stderr: '', code: 0 };
+      return { stdout: '', stderr: 'fatal: unable to read abc123', code: 128 };
+    };
+    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
+    expect(logged).toHaveLength(1);
+  });
+
   it('is undefined, logged, when git cannot read the default branch', async () => {
     const logged: string[] = [];
     const exec: Exec = async () => ({ stdout: '', stderr: 'fatal', code: 128 });
@@ -354,8 +365,29 @@ describe('pyprojectStart (ORC-406)', () => {
     expect(pyprojectStart(base)).toBe('');
   });
 
-  it('reads the whole file where it cannot tell the scripts apart: an inline or dotted table, a multi-line string', () => {
-    for (const toml of [`${base}scripts = { shop = "shop.cli:main" }\n`, `${base}scripts.shop = "shop.cli:main"\n`, `project.scripts.shop = "shop.cli:main"\n${base}`, `${base}description = ${Q}\nmany\nlines\n${Q}\n`]) {
+  it('keeps the task runners: PDM, Hatch, Rye, poethepoet, taskipy', () => {
+    for (const table of ['tool.pdm.scripts', 'tool.hatch.envs.default.scripts', 'tool.rye.scripts', 'tool.poe.tasks', 'tool.taskipy.tasks']) {
+      const toml = `${base}\n[${table}]\ndev = "flask run"\n`;
+      expect(pyprojectStart(toml), table).toContain('dev = "flask run"');
+      expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"')), table).toBe(pyprojectStart(toml));
+    }
+  });
+
+  it('keeps scripts set by an inline, dotted or quoted key, wherever their table is; never a key of the same name in another tool', () => {
+    for (const toml of [`${base}scripts = { shop = "shop.cli:main" }\n`, `${base}scripts.shop = "shop.cli:main"\n`, `project.scripts.shop = "shop.cli:main"\n${base}`, `${base}"scripts" = { shop = "shop.cli:main" }\n`, `${base}[tool]\npoetry.scripts.shop = "shop.cli:main"\n`, `${base}["project"."scripts"]\nshop = "shop.cli:main"\n`]) {
+      expect(pyprojectStart(toml), toml).toContain('shop.cli:main');
+      expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"')), toml).toBe(pyprojectStart(toml));
+    }
+    const mypy = `${base}\n[tool.mypy]\nplugins = ["pydantic.mypy"]\n\n[tool.coverage.run]\nplugins = ["x"]\n`;
+    expect(pyprojectStart(mypy)).toBe('');
+  });
+
+  it('does not count the order of the scripts', () => {
+    expect(pyprojectStart(`${base}\n[project.scripts]\na = "m:a"\nb = "m:b"\n`)).toBe(pyprojectStart(`${base}\n[project.scripts]\nb = "m:b"\na = "m:a"\n`));
+  });
+
+  it('reads the whole file where it cannot tell the scripts apart: a multi-line string, a script value over several lines out of its table', () => {
+    for (const toml of [`${base}description = ${Q}\nmany\nlines\n${Q}\n`, `${base}scripts.dev = [\n  "a",\n]\n`]) {
       expect(pyprojectStart(toml), toml).toBe(toml);
     }
   });
