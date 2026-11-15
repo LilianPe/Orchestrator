@@ -193,7 +193,9 @@ function isPositiveInt(n: number): boolean {
 }
 
 /** A step an agent runs: it has a model, an effort and a cap of turns. */
-export function isAgentStep(s: Step): s is Extract<Step, { maxTurns: number }> {
+export type AgentStep = Extract<Step, { maxTurns: number }>;
+
+export function isAgentStep(s: Step): s is AgentStep {
   return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
 }
 

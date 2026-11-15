@@ -1,5 +1,4 @@
-import type { JobSpec, ReviewLens } from '../core/workflow.js';
-import type { FixCause } from './preset.js';
+import type { JobSpec } from '../core/workflow.js';
 
 /**
  * How each step of a preset runs (ORC-391): the queue its runs wait in, the workspace and the session they get, what they
@@ -11,12 +10,8 @@ import type { FixCause } from './preset.js';
  * A preset gets the jobs of the steps it has, of the lenses its review lists. `model` is the alias the launch passes to
  * `claude --model`.
  */
-export interface Binding extends Pick<JobSpec, 'queue' | 'model' | 'workspace' | 'session' | 'input' | 'repoChecks' | 'pickup' | 'structuredOutput'> {
+export interface Binding extends Pick<JobSpec, 'queue' | 'model' | 'workspace' | 'session' | 'input' | 'repoChecks' | 'pickup' | 'structuredOutput' | 'cause' | 'lens'> {
   step: string;
-  /** The cause of a `fix` job: it picks the step's skill, and the counter of the edge that sent the run there. */
-  cause?: FixCause;
-  /** The angle of a `review` job. */
-  lens?: ReviewLens;
 }
 
 /** A run in the ticket's worktree, whose commits go through `verify` and the checks of the diff in a fresh clone (ORC-151). */

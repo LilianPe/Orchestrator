@@ -58,7 +58,7 @@ export function workflowWith(o: WorkflowOverrides = {}, wf: Workflow = defaultWo
  * its run (`publish_fix`), its reply posted and the ticket left where it is, as before ORC-184. The review step stays: a human's
  * move to AI Review still starts it.
  */
-export const withoutAiReview: Preset = compilePreset({
+const withoutAiReview: Preset = compilePreset({
   ...preset,
   name: 'test/without-ai-review',
   steps: [

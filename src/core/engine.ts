@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Rule, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { blockingFix, hasReviewLoop, humanRoundJob, jobEntering, nextOf } from './chain.js';
+import { blockingFix, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview } from './chain.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
@@ -338,7 +338,7 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     const reason = sha ? `The AI review ${job.name} returned no findings list.` : `The AI review ${job.name} has no published commit to review.`;
     return block(out, workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
   }
-  const publishes = nextOf(workflow, job).post === 'review';
+  const publishes = publishesReview(workflow, job);
   out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(publishes ? { publish: true as const } : {}) });
   if (!hasReviewLoop(workflow)) return success(out, at, job, p.runId, p.output);
   // Each lens's count on the commit, the lens that publishes reading their sum.

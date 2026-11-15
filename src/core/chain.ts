@@ -10,10 +10,10 @@ import type { JobSpec, Post, Workflow } from './workflow.js';
  */
 
 /** The status the ticket shows while a step works or waits (ORC-170's names). ORC-382 makes it configurable. */
-export const STEP_STATUS: Readonly<Partial<Record<string, LogicalState>>> = { build: 'dev', review: 'ai_review', human_review: 'human_review' };
+const STEP_STATUS: Readonly<Partial<Record<string, LogicalState>>> = { build: 'dev', review: 'ai_review', human_review: 'human_review' };
 
 /** What the end of a step posts in the ticket's session: the build's summary, a fix's reply, the review (published by its last lens). */
-export const STEP_POST: Readonly<Partial<Record<string, Post>>> = { build: 'summary', fix: 'reply', review: 'review' };
+const STEP_POST: Readonly<Partial<Record<string, Post>>> = { build: 'summary', fix: 'reply', review: 'review' };
 
 /** What the end of a job does: the job it starts, the move it makes, what it posts. */
 export interface JobEnd {
@@ -30,10 +30,10 @@ const ranByEngine = (s: Step): boolean => s.type === 'verify' || s.type === 'spe
 const stepById = (wf: Workflow, id: string | null | undefined): Step | undefined => (id ? wf.preset?.steps.find((s) => s.id === id) : undefined);
 
 /** The step `job` runs, in the workflow's preset. */
-export const stepOfJob = (wf: Workflow, job: Pick<JobSpec, 'step'>): Step | undefined => stepById(wf, job.step);
+const stepOfJob = (wf: Workflow, job: Pick<JobSpec, 'step'>): Step | undefined => stepById(wf, job.step);
 
 /** An optional step with no job of its own is passed: `clarify` asks the guard's questions with no run (ORC-210). */
-const passed = (wf: Workflow, s: Step): boolean => ranByEngine(s) || (s.type === 'agent_step' && !!s.optional && !jobStarting(wf, s));
+const passed = (wf: Workflow, s: Step): boolean => ranByEngine(s) || (s.type === 'agent_step' && !!s.optional && !startingJob(Object.values(wf.jobs), s));
 
 /**
  * The step after `from` that waits, past the engine's own. The preset's entry, run before the chain's entry (`intake`
@@ -45,11 +45,22 @@ function reached(wf: Workflow, from: Step): Step | null {
   return null;
 }
 
+/** The job of step `id` (and lens `lens`, for a review) that no cause starts. */
+const jobOf = (jobs: readonly JobSpec[], id: string, lens?: string): JobSpec | undefined => jobs.find((j) => j.step === id && j.lens === lens && !j.cause);
+
 /** The job that starts `step`: the first lens of a review, the only job of any other agent step. A fix only starts by its cause. */
-function jobStarting(wf: Workflow, step: Step): JobSpec | undefined {
+export function startingJob(jobs: readonly JobSpec[], step: Step): JobSpec | undefined {
   if (!isAgentStep(step) || step.type === 'fix') return undefined;
-  const lens = step.type === 'review' ? step.lenses[0] : undefined;
-  return Object.values(wf.jobs).find((j) => j.step === step.id && j.lens === lens && !j.cause);
+  return jobOf(jobs, step.id, step.type === 'review' ? step.lenses[0] : undefined);
+}
+
+const jobStarting = (wf: Workflow, step: Step): JobSpec | undefined => startingJob(Object.values(wf.jobs), step);
+
+/** `job` is the last lens of its review: it publishes the findings of every lens (ORC-183), and only it has the review's fix (ORC-184). */
+export function publishesReview(wf: Workflow, job: JobSpec): boolean {
+  if (!wf.preset) return job.onSuccess?.post === 'review';
+  const step = stepOfJob(wf, job);
+  return step?.type === 'review' && !!job.lens && job.lens === step.lenses.at(-1);
 }
 
 /**
@@ -69,7 +80,7 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
   if (job.cause === 'relay') return { step: null };
   if (step.type === 'review' && job.lens) {
     const lens = step.lenses[step.lenses.indexOf(job.lens) + 1];
-    const run = lens && Object.values(wf.jobs).find((j) => j.step === step.id && j.lens === lens);
+    const run = lens && jobOf(Object.values(wf.jobs), step.id, lens);
     if (run) return { run, step };
   }
   let next = reached(wf, step);
@@ -108,7 +119,7 @@ export function hasReviewLoop(wf: Workflow): boolean {
 export function blockingFix(wf: Workflow, job: JobSpec): JobSpec | undefined {
   if (!wf.preset) return job.onBlocking ? wf.jobs[job.onBlocking.run] : undefined;
   const step = stepOfJob(wf, job);
-  if (step?.type !== 'review' || !step.onFailure || nextOf(wf, job).post !== 'review') return undefined;
+  if (step?.type !== 'review' || !step.onFailure || !publishesReview(wf, job)) return undefined;
   const to = step.onFailure.goto;
   return Object.values(wf.jobs).find((j) => j.step === to && j.cause === 'review');
 }

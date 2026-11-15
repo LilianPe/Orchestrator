@@ -1,8 +1,8 @@
 import type { JobSpec, Limits, RunLimits, Workflow } from '../core/workflow.js';
 import type { Condition } from '../core/conditions.js';
-import { blockingFix, nextOf } from '../core/chain.js';
+import { blockingFix, nextOf, startingJob } from '../core/chain.js';
 import { factoryDefault } from './factory-default.js';
-import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from './preset.js';
+import { compilePreset, isAgentStep, type AgentStep, type Effort, type Preset } from './preset.js';
 import { BINDINGS, type Binding } from './runtime-bindings.js';
 import { perStepToolViolations, READ_TOOLS, stepTools } from './tools.js';
 
@@ -26,15 +26,13 @@ export interface StepSettings {
 export const preset = compilePreset(factoryDefault).preset;
 
 /** The limit of a counter of the preset, which the engine still reads through `limits` (ORC-187). */
-export function presetBound(p: Preset, counter: string): number {
+function presetBound(p: Preset, counter: string): number {
   const found = boundOf(p, counter);
   if (found === undefined) throw new WorkflowError(`preset ${p.name}: counter ${counter} is missing`);
   return found;
 }
 
 const boundOf = (p: Preset, counter: string): number | undefined => (Object.hasOwn(p.counters, counter) ? p.counters[counter]!.limit : undefined);
-
-type AgentStep = Extract<Step, { maxTurns: number }>;
 
 const agentStepOf = (p: Preset, name: string): AgentStep | undefined => {
   const step = p.steps.find((s) => s.id === name);
@@ -199,17 +197,19 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
   checkStepSettings(settings);
   const perRun: RunLimits = { turns: PER_RUN_TURNS, durationMs: p.attempt.minutes * 60_000 };
   const jobs = Object.entries(BINDINGS).flatMap(([name, b]) => jobOf(p, name, b, perRun, settings) ?? []);
-  const entryJob = jobs.find((j) => j.step === entry && !j.cause && !j.lens);
+  const entryStep = p.steps.find((s) => s.id === entry);
+  const entryJob = entryStep && startingJob(jobs, entryStep);
   if (!entryJob) throw new WorkflowError(`preset ${p.name}: its entry ${entry} has no job`);
   const rapide = p.level === 'rapide';
-  const humanRounds = boundOf(p, 'human_review');
+  // The bounds of the loops, read on the edges that take them: red CI's (the review and CI loop), the merge gate's (human review).
+  const merge = p.steps.find((s) => s.type === 'human_gate' && s.gate === 'merge');
+  const humanRounds = merge?.onFailure && boundOf(p, merge.onFailure.counter);
   const specChanges = boundOf(p, 'spec_review');
   const limits: Limits = {
     perRun,
     // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
     verifyAttempts: presetBound(p, 'verify') + 1,
-    // A preset with no review and CI loop (the fantome) never reaches it: the first red CI would block.
-    ciFixAttempts: boundOf(p, 'review_ci') ?? 0,
+    ciFixAttempts: presetBound(p, p.redCi.counter),
     ...(humanRounds !== undefined ? { humanReviewRounds: humanRounds } : {}),
     repeatedFailures: p.sameFailure.limit,
     silentAfterMs: p.silentRun.minutes * 60_000,
