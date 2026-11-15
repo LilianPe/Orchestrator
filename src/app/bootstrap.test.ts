@@ -149,6 +149,37 @@ describe('bootstrap', () => {
     await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' } })).rejects.toThrow(/^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/);
   });
 
+  describe('the server secrets of a systemd credential (ORC-398)', () => {
+    const SEALED_YML = 'secret_sources: { creds: { kind: systemd-creds } }\ngithub: { app_id: 456, private_key: creds:github-key }\nsecrets_key: creds:secrets-key\n';
+
+    it('takes the GitHub App key from it, and encrypts a plaintext secrets.json at the start with its key', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      const credentials = mkdtempSync(join(tmpdir(), 'factory-creds-'));
+      const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      writeFileSync(join(credentials, 'github-key'), privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
+      writeFileSync(join(credentials, 'secrets-key'), 'a-secrets-key-of-at-least-32-characters\n');
+      saveInstance(home, { port: 4174, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      saveSecrets(home, { linear: { clientId: 'c', clientSecret: 'linear-client-secret', webhookSecret: 'linear-webhook-secret', accessToken: 'linear-access-token' } });
+      writeFileSync(join(home, 'factory.yml'), SEALED_YML);
+      const logs: string[] = [];
+      const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { CREDENTIALS_DIRECTORY: credentials } });
+      await app.stop();
+      expect(logs.some((m) => m.includes('GitHub App 456'))).toBe(true);
+      expect(logs).toContain('secrets.json: encrypted at rest with secrets_key');
+      expect(readFileSync(join(home, 'secrets.json'), 'utf8')).not.toContain('linear-access-token');
+      expect(logs.join('\n')).not.toContain('PRIVATE KEY');
+    });
+
+    it('refuses to start when the credential cannot be read, naming the key and its reference', async () => {
+      const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+      saveInstance(home, { port: 4173, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      writeFileSync(join(home, 'factory.yml'), SEALED_YML);
+      await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(
+        /the secret github\.private_key \(creds:github-key\) could not be read: CREDENTIALS_DIRECTORY is not set/,
+      );
+    });
+  });
+
   it('refuses to start on an invalid factory.yml, naming the key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });

@@ -160,9 +160,11 @@ Written by `relais init` (application credentials) then by the OAuth connection 
 
 Rerunning `relais init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
 
+**Encrypted at rest (ORC-398).** With `secrets_key` in `factory.yml` (a reference, read at the start like the other server secrets, at least 32 characters: `openssl rand -base64 32`), the daemon encrypts `secrets.json` at its start if it is still in clear (`secrets.json: encrypted at rest with secrets_key` in its log), and at each write. Envelope encryption: a data key drawn at each write encrypts the JSON (AES-256-GCM), and is itself encrypted by a key derived from `secrets_key` (HKDF-SHA256). A sealed file without its key cannot be read: `relais init`, `plan` and `baseline` then need the daemon's environment, and `init` refuses (`secrets.json is encrypted at rest…`) once the file is sealed: write the Linear values in `factory.yml` instead. Losing `secrets_key` loses the Linear tokens: reconnect Linear.
+
 ## `factory.yml` (ORC-209)
 
-`<FACTORY_HOME>/factory.yml` is the factory's server configuration. It is **optional** and coexists with `config.yaml` and `secrets.json` until they are removed (ORC-199). Every secret is written there as `env:NAME` and read from the daemon's environment: a plaintext secret is refused. A repository's secrets (`repos[].secrets`) are references instead, read at each `setup` (see [Repository secrets](#repository-secrets-orc-308)). It is read **once, at startup**: an invalid file prevents `factory up` from starting, with the path of the offending key, and a change made while the daemon is running only counts at the next startup. Only `factory up`, `factory doctor` (GitHub App) and `factory plan` (Linear credentials) read it, with the daemon's environment; the other commands (`status`, `stop`, `init`…) do without it, and therefore work in a shell that does not have its variables.
+`<FACTORY_HOME>/factory.yml` is the factory's server configuration. It is **optional** and coexists with `config.yaml` and `secrets.json` until they are removed (ORC-199). Every secret is written there as a reference `<source>:<path>`: `env:NAME` reads the daemon's environment, another source is read at the start (see [Server secrets](#server-secrets-orc-398)); a plaintext secret is refused. A repository's secrets (`repos[].secrets`) are references too, read at each `setup` (see [Repository secrets](#repository-secrets-orc-308)). It is read **once, at startup**: an invalid file prevents `factory up` from starting, with the path of the offending key, and a change made while the daemon is running only counts at the next startup. Only `factory up`, `factory doctor` (GitHub App) and `factory plan` (Linear credentials) read it, with the daemon's environment; the other commands (`status`, `stop`, `init`…) do without it, and therefore work in a shell that does not have its variables.
 
 ```yaml
 linear:   { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }
@@ -221,14 +223,27 @@ repos:
       DB_SEED_KEY: coffre:kv/app#seed_key
 ```
 
-**No adapter of a real secret manager is shipped**: `env` is the only one registered, and the source `env` is built in: it is not declared under `secret_sources`. Until ORC-151 and ORC-179 take `verify` and the runs off the host, their code can read the daemon's environment, and with it a manager's credential, worth far more than one secret. The port and how to add an adapter: [`ports/secret-source.md`](ports/secret-source.md).
+**Adapters shipped**: `env`, built in (it is not declared under `secret_sources`), and `systemd-creds` (ORC-398, [below](#server-secrets-orc-398)). No adapter that needs a network credential (a cloud KMS, Vault) before ORC-151 and ORC-179 take `verify` and the runs off the host: their code can read the daemon's environment, and with it a manager's credential, worth far more than one secret. The port and how to add an adapter: [`ports/secret-source.md`](ports/secret-source.md).
 
 - **At startup**, only the syntax is checked: the source is `env` or declared under `secret_sources`, and its adapter accepts the path (for `env`, a variable name). Otherwise the daemon does not start, with the path of the key (`repos[0].secrets.DB_SEED_KEY: its source is neither `env` nor declared under secret_sources`). An unknown `kind`, or options its adapter refuses, are refused the same way. A variable that is not set is **not** refused at startup any more.
 - **At each `setup`** that gets the repository's secrets, the daemon reads the values of the names `.factory/config.yml` declares under `setup_secrets`, and of those only, before the setup's container exists. A value shorter than 8 characters is refused there: sealing it would purge every file holding those letters.
 - **A source that fails**, a variable not set or a path it does not hold: no setup container is created, the worktree is removed and the ticket is blocked as a launch error, with `The worktree setup failed: the secret DB_SEED_KEY (coffre:kv/app#seed_key) could not be read: <why>`. The message names the reference, never the value. There is no fallback. The reference is told to the ticket as written: a value pasted in place of a variable name (`env:ghp_…`) passes the syntax check and is then shown on the Linear ticket, so check the references before the first launch.
 - The values read are sealed as before (ORC-211), with the values of this launch. The `env:` values are masked in the transcripts from the daemon's start, as before; those of another source once a setup read them. The daemon's environment is fixed at its start: an `env:` secret rotated counts after a restart. The journal only receives names, the references included when the ticket is blocked (above).
 
-The other sections' secrets (`linear`, `github`, `claude.accounts`) stay `env:NAME`, resolved at startup: the daemon needs a first credential to start.
+### Server secrets (ORC-398)
+
+`linear.client_secret`, `linear.webhook_secret`, `github.private_key`, `github.webhook_secret`, `github.client_secret`, `claude.accounts[].token` and `secrets_key` are references `<source>:<path>`, like a repository's. `env:NAME` is resolved as before; another source is read **once, at the start**: one that fails, or a credential it does not hold, prevents the start with `the secret github.private_key (creds:github-app-key) could not be read: <why>`, never the value. To keep the GitHub App's key off the disk, use `systemd-creds` ([its options](ports/secret-source.md#systemd-creds)):
+
+```yaml
+secret_sources:
+  creds: { kind: systemd-creds, store: /etc/credstore.encrypted }
+github: { app_id: 123456, private_key: creds:github-app-key, webhook_secret: creds:github-webhook }
+secrets_key: creds:factory-secrets-key
+```
+
+- Switching sources is a change of `factory.yml`, not of the code. An option of a source written `env:NAME` is resolved at the start and masked.
+- A Claude account read from another source than `env` keeps the value read at the start; one added since waits for the next start.
+- `factory doctor` says, before the workflows, each server secret in clear (`env`, a GitHub key in `config.yaml` or `GH_APP_KEY`, `secrets.json` without `secrets_key`) and the rotation date of the sealed ones (a warning past 180 days, or when unknown). Never part of its verdict.
 
 `factory.yml` is only ever read: `init` and token writing never copy any of its values into `config.yaml` or `secrets.json`. Its secrets are masked in the runs' transcripts, like those of `secrets.json`.
 

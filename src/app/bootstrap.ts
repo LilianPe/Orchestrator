@@ -32,12 +32,11 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { SecretReader } from '../adapters/secrets/reader.js';
-import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
-import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
+import { claudeAccountReader, disabledControls, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
+import { loadSealedFactoryYml } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, type InstanceConfig } from '../config/instance.js';
+import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
@@ -99,11 +98,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const webDir = join(root, 'web/dist');
   const env = o.env ?? process.env;
   // factory.yml read once (ORC-209): an invalid file stops the start here, and an edit made while the daemon
-  // runs is never half-read by a request; config.yaml with what it declares over it.
-  const yml = loadFactoryYml(o.home, env);
+  // runs is never half-read by a request; config.yaml with what it declares over it. Its server secrets are read now from
+  // their sources (ORC-398): one that fails stops the start. The sources stay open for the repositories' secrets, read at
+  // each setup (ORC-308), whose references' syntax alone is checked here.
+  const { yml, sealed, reader: repoSecrets } = await loadSealedFactoryYml(o.home, env);
   const instance = effectiveInstance(o.home, yml);
-  // Opened now, read at each setup (ORC-308): only the references' syntax is checked at the start.
-  const repoSecrets = new SecretReader(openSecretSources(yml?.secretSources, SECRET_SOURCE_KINDS, env));
+  // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398).
+  const secretsKey = yml?.secretsKey;
+  if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   const oauthClient = githubOAuthClient(instance, env);
   const githubLogin = dashboardLogin(instance, yml, oauthClient);
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
@@ -162,7 +164,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           const l = linearSettings(o.home, yml);
           return l?.accessToken ? { accessToken: l.accessToken, refreshToken: l.refreshToken, expiresAt: l.expiresAt } : undefined;
         },
-        save: (t) => saveLinearTokens(o.home, t),
+        save: (t) => saveLinearTokens(o.home, t, secretsKey),
       });
     };
     const connectLinear = async () => {
@@ -181,7 +183,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // The chosen account replaces a host run's login (ORC-211). The sandboxes' token goes to the proxy alone (ORC-337):
     // it sets it on their model calls, which hold a placeholder; the runner only asks whether there is one. factory.yml's `claude`
     // section is read again at each launch: a change of `active` counts from the next run, without a restart (ORC-215).
-    const claudeAccount = claudeAccountReader(o.home, env, log);
+    const claudeAccount = claudeAccountReader(o.home, env, log, sealed);
     const claudeTokenOf = () => claudeAccount().token;
     const chosenClaudeToken = () => {
       const a = claudeAccount();
@@ -445,10 +447,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
               if (!oauthStates.delete(state)) throw new Error('unknown OAuth state, start the connection again');
               const s = linearSettings(o.home, yml)!;
               const tokens = await exchangeCode({ clientId: s.clientId, clientSecret: s.clientSecret, code, redirectUri: `${baseUrl}/oauth/callback` });
-              saveLinearTokens(o.home, tokens);
+              saveLinearTokens(o.home, tokens, secretsKey);
               const api = new LinearApi(async () => tokens.accessToken);
               const who = await api.gql<{ viewer: { id: string }; organization: { id: string } }>(Q.viewer);
-              saveLinearTokens(o.home, { appUserId: who.viewer.id, organizationId: who.organization.id });
+              saveLinearTokens(o.home, { appUserId: who.viewer.id, organizationId: who.organization.id }, secretsKey);
               await connectLinear();
               for (const p of projects) {
                 const created = await linearTracker!.ensureSetup(p.teamKey, p.workflow.states, FACTORY_LABELS);

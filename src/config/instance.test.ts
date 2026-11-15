@@ -14,8 +14,10 @@ import {
   saveInstance,
   saveLinearTokens,
   saveSecrets,
+  sealSecretsAtRest,
   secretValues,
 } from './instance.js';
+import { isSealed } from './secrets-file.js';
 
 describe('instance config', () => {
   it('resolves home', () => {
@@ -123,5 +125,50 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
     expect(values).toEqual(expect.arrayContaining(['npm-secret-value', 'seed-secret-value']));
     expect(values).not.toContain('test-value');
     expect(values).not.toContain(undefined);
+  });
+});
+
+describe('secrets.json encrypted at rest (ORC-398)', () => {
+  const KEY = 'secrets-key-of-at-least-32-characters!';
+  const home = () => mkdtempSync(join(tmpdir(), 'factory-sealed-'));
+  const linear = { clientId: 'c', clientSecret: 'client-secret-value', webhookSecret: 'webhook-secret-value', accessToken: 'access-token-value' };
+
+  it('with its key, writes nothing of the file in clear, and reads it back', () => {
+    const h = home();
+    saveSecrets(h, { linear }, KEY);
+    const text = readFileSync(homePaths(h).secrets, 'utf8');
+    expect(isSealed(text)).toBe(true);
+    expect(text).not.toContain('access-token-value');
+    expect(loadSecrets(h, KEY)).toEqual({ linear });
+  });
+
+  it('refuses to read a sealed file without its key, naming secrets_key', () => {
+    const h = home();
+    saveSecrets(h, { linear }, KEY);
+    expect(() => loadSecrets(h)).toThrow('secrets.json is encrypted at rest: it is read with the key secrets_key of factory.yml names');
+  });
+
+  it('Linear tokens saved and read through factory.yml\'s key stay sealed', () => {
+    const h = home();
+    saveLinearTokens(h, { accessToken: 'refreshed-token-value' }, KEY);
+    expect(readFileSync(homePaths(h).secrets, 'utf8')).not.toContain('refreshed-token-value');
+    expect(linearSettings(h, { secretsKey: KEY })?.accessToken).toBe('refreshed-token-value');
+  });
+
+  it('seals a plaintext file at the start, once, and leaves a home without one alone', () => {
+    const h = home();
+    expect(sealSecretsAtRest(h, KEY)).toBe(false);
+    saveSecrets(h, { linear });
+    expect(sealSecretsAtRest(h, KEY)).toBe(true);
+    expect(readFileSync(homePaths(h).secrets, 'utf8')).not.toContain('access-token-value');
+    expect(sealSecretsAtRest(h, KEY)).toBe(false);
+    expect(loadSecrets(h, KEY)).toEqual({ linear });
+  });
+
+  it('masks the key, and an option of a source resolved from the environment', () => {
+    const h = home();
+    writeFileSync(join(h, 'factory.yml'), 'secrets_key: env:SECRETS_KEY\nsecret_sources: { creds: { kind: systemd-creds, store: env:CRED_STORE } }\n');
+    const daemonEnv = { SECRETS_KEY: KEY, CRED_STORE: '/etc/credstore.encrypted' };
+    expect(daemonSecretValues(h, loadFactoryYml(h, daemonEnv), daemonEnv)).toEqual(expect.arrayContaining([KEY, '/etc/credstore.encrypted']));
   });
 });
