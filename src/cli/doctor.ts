@@ -583,12 +583,14 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   // Neither is part of the verdict: said whatever it is.
   const warnings = testCommandWarnings(options.commands);
   if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
-  const failure = (message: string) => doctorFailure(options, message, ignored, warnings);
   // Read beside the workflows; an unreadable protection is a refusal with its reason, the other verdicts still told.
   const protectionRead = api.branchProtection(repoPath).then(judgeProtection, (error: unknown): BranchProtectionReport => ({
     verdict: 'refused',
     reasons: [`Cannot read the protection of the default branch: ${errorMessage(error)}`],
   }));
+  // Unreadable workflows or environments still tell the host's and the protection's verdicts.
+  const failure = async (message: string) =>
+    doctorFailure(options, message, ignored, warnings, { host: options.host, branchProtection: await protectionRead });
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
@@ -623,9 +625,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   if (options.json) {
     out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
-    out(`Host: ${host.verdict} — ${host.reasons.join(' ')}`);
-    out(`Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`);
-    out('');
+    for (const line of verdictLines({ host, branchProtection: protection })) out(line);
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
       out(`GitHub Actions workflows: ${reports.length}`);
@@ -662,10 +662,28 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
 /** The ignored workflow files and the warnings in the JSON report, each only when there is one. */
 const notes = (ignored: string[], warnings: string[]) => ({ ...(ignored.length ? { ignored } : {}), ...(warnings.length ? { warnings } : {}) });
 
-function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>, message: string, ignored: string[] = [], warnings: string[] = []): number {
+interface Verdicts {
+  host: HostReport;
+  branchProtection: BranchProtectionReport;
+}
+
+/** The host's and the default branch's verdicts, in text, then a blank line. */
+function verdictLines({ host, branchProtection: protection }: Verdicts): string[] {
+  const branch = protection.branch ? ` ${protection.branch}` : '';
+  return [`Host: ${host.verdict} — ${host.reasons.join(' ')}`, `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`, ''];
+}
+
+function doctorFailure(
+  options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>,
+  message: string,
+  ignored: string[] = [],
+  warnings: string[] = [],
+  verdicts?: Verdicts,
+): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...verdicts, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
+    if (verdicts) for (const line of verdictLines(verdicts)) options.out(line);
     options.out(message);
   }
   return 1;

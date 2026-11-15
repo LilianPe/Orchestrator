@@ -339,6 +339,14 @@ jobs:
     expect(envFailure.text).toContain('Cannot read the environments');
   });
 
+  it("still tells the host's and the protection's verdicts when the workflows cannot be read, in text and JSON", async () => {
+    const text = await doctor([], [], { fake: { failWorkflows: true } });
+    expect(text.text).toMatch(/^Host: accepted/m);
+    expect(text.text).toMatch(/^Default branch main: accepted/m);
+    const json = await doctor([], [], { json: true, fake: { failWorkflows: true } });
+    expect(JSON.parse(json.text)).toMatchObject({ accepted: false, host: { verdict: 'accepted' }, branchProtection: { branch: 'main', verdict: 'accepted' } });
+  });
+
   it('emits a JSON report with the verdict and no secret value', async () => {
     const ci = `on: pull_request
 jobs:
