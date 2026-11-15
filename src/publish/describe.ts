@@ -1,4 +1,5 @@
 import { mdCode } from '../checks/markdown.js';
+import type { VisualProof } from '../checks/visual-proof.js';
 import type { AgentOutput } from '../core/agent-output.js';
 import type { RunMeasure } from '../core/measures.js';
 import { spentTokens } from '../core/types.js';
@@ -24,6 +25,8 @@ export interface PrFacts {
   commands?: readonly string[];
   /** The ticket touches the interface (ORC-206): its evidence must hold captures. */
   visualProof?: 'required';
+  /** Where `verify` took the command that starts the application from (ORC-386), for a proof it found required. */
+  start?: VisualProof['start'];
   captures?: readonly PublishedCapture[];
 }
 
@@ -79,6 +82,14 @@ export function verifySummary(sha: string, commands: readonly string[] | undefin
   return { conclusion: 'success', summary: `Green on ${sha.slice(0, 12)}, in a fresh clone, without network:\n${commands.map((c) => `- ${mdCode(c)}`).join('\n')}` };
 }
 
+/** Where the start command came from (ORC-386), the same words in the PR and on `factory/preuve-visuelle`. */
+export const START_SAID = {
+  declared: 'declared by the repository (`preview` in `.factory/config.yml`).',
+  learned: 'learned in the knowledge base (`notes/preview/`).',
+  found: 'found by the build agent on this ticket, and started by the factory, which saw it answer on `PORT` before using it.',
+  none: 'none: neither declared nor learned, so no capture could be taken.',
+} as const;
+
 function evidence(o: AgentOutput | undefined, f: PrFacts): string {
   const parts = [`**Checked by the factory**: ${verifySummary(f.sha, f.commands).summary}`];
   if (o) parts.push(`**Tests added**, as stated by the agent:\n${testsList(o)}`);
@@ -90,6 +101,8 @@ function evidence(o: AgentOutput | undefined, f: PrFacts): string {
         : '**Screens**: the visual proof is required for this ticket, and no capture was taken.',
     );
   }
+  // Set by `verify` whenever the proof was required, by `visual_paths` as by intake.
+  if (f.start) parts.push(`**Start command**: ${START_SAID[f.start]}`);
   return parts.join('\n\n');
 }
 

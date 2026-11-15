@@ -1,8 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { FakeShooter } from '../../src/adapters/browser/fake.js';
 import { runGhost, type GhostOptions } from '../../src/cli/ghost.js';
+import type { CleanVerifyRequest } from '../../src/core/clean-verify.js';
+import { KnowledgeBase } from '../../src/knowledge/kb.js';
+import { formatRecipeNote, PreviewRecipes, type RecipeNote } from '../../src/knowledge/preview-recipe.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { Spec } from '../../src/core/spec.js';
 import { NO_CHANGE } from '../../src/core/review.js';
@@ -101,9 +106,9 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
   const SPEC: Spec = { goal: 'Export the audits as CSV.', out_of_scope: [], criteria: ['Given 2 audits, when I click CSV, then 3 lines.'], files: ['src/export.ts'], architecture: 'None.', risks: [], assumed: [] };
   const out = (extra: Partial<AgentOutput> = {}) => ({ output: { status: 'done', summary: 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...extra } satisfies AgentOutput });
 
-  function replayed() {
+  function replayed(over: Parameters<typeof createHarness>[0] = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'factory-ghost-'));
-    const h = createHarness({ fantome: true, sandboxed: true, replays: { dir, startTime: START } });
+    const h = createHarness({ fantome: true, sandboxed: true, replays: { dir, startTime: START }, ...over });
     const CLONE = join(dir, 'pilot', 'REL-1', 'repo');
     // REL-1 is Done on Linear, its PR merged: what came after its start is there too, and must not reach the run.
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from the audit list.', stateName: 'Done', stateType: 'completed', createdAt: START - 86_400_000 });
@@ -165,6 +170,50 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
 
     expect(await ghost(['collect', 'pilot'])).toBe(0);
     expect(await h.store.ghostTickets('pilot')).toEqual([expect.objectContaining({ ticketId: 'REL-1', outcome: 'pr', factoryPr: expect.stringMatching(/^kept:/) })]);
+  });
+
+  it('ORC-386: a replayed ticket starts by the recipe of the knowledge base at its start, never searches one, never writes one', async () => {
+    // A live knowledge base a write would succeed in: a clone without a remote, which commits locally.
+    const live = mkdtempSync(join(tmpdir(), 'factory-ghost-kb-'));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: live, encoding: 'utf8' }).trim();
+    git('init', '-q', '-b', 'main');
+    writeFileSync(join(live, 'INDEX.md'), '- none\n');
+    git('add', '.');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
+    const recipes = new PreviewRecipes(new KnowledgeBase(live));
+    const asked: CleanVerifyRequest[] = [];
+    const { h, ghost } = replayed({
+      visualShooter: new FakeShooter(),
+      previewRecipes: recipes,
+      // The learned recipe no longer starts: a live ticket would invalidate it.
+      cleanVerify: async (req) => {
+        asked.push(req);
+        return { ok: true, failures: [], sha: 'sha-dev', tree: 't', commands: [], preview: { of: 'learned', answered: false, detail: 'gone' } };
+      },
+    });
+    const old: RecipeNote = { scope: 'repo:p', recipe: { command: 'npm start', setup: [] }, sha: 'a'.repeat(40), port: 4200, checkedAt: '2026-08-01', origin: 'agent:build@r0', ticket: 'REL-0', status: 'valid', research: false };
+    expect(await ghost(['start', 'p', '--threshold', '0.6', '--as-is', '0.3', '--tickets', 'REL-1=12'], {
+      environment: async ({ dir: at }) => {
+        mkdirSync(join(at, 'repo'), { recursive: true });
+        mkdirSync(join(at, 'knowledge', 'notes', 'preview'), { recursive: true });
+        writeFileSync(join(at, 'knowledge', 'notes', 'preview', 'p.md'), formatRecipeNote(old));
+        return { start: 'start-sha' };
+      },
+    })).toBe(0);
+    h.checks.failNext('AssertionError: expected 1 to be 2');
+    h.runner.enqueue(out({ intake: { size: 's', risk: 'low', complete: true, missing: [], screen: true } }), out({ spec: SPEC }), {}, out({ summary: 'Done.', preview: { command: 'make serve', setup: [] } }));
+    await h.delegateReplays();
+    const dev = h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!;
+    expect(dev.prompt).not.toContain('## Find how to start the application');
+    const visual = asked.map((r) => r.visual).filter(Boolean);
+    expect(visual.length).toBeGreaterThan(0);
+    for (const v of visual) {
+      expect(v).toMatchObject({ learned: old.recipe });
+      expect(v!.found).toBeUndefined();
+    }
+    // Nothing written to the live knowledge base: neither the invalidation nor any recipe.
+    expect(recipes.read('p')).toBeUndefined();
+    expect(git('log', '--format=%s')).toBe('init');
   });
 
   it('criterion 2: a daemon without sandboxes, the replay is refused with the reason', async () => {

@@ -48,8 +48,8 @@ import {
   type Store,
   type WorkflowVersion,
 } from '../store/types.js';
-import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput } from './agent-output.js';
-import { describePr, verifySummary } from '../publish/describe.js';
+import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from './agent-output.js';
+import { describePr, START_SAID, verifySummary } from '../publish/describe.js';
 import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
 import type { EventBus } from '../server/live-feed.js';
 import type { Clock } from './clock.js';
@@ -66,6 +66,7 @@ import { branchName, namesTicket } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
+import { isNote, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -274,6 +275,11 @@ export interface OrchestratorDeps {
    */
   visualProof?: { shooter: VisualShooter; artifactsDir: string };
   /**
+   * The start recipes the factory validated (ORC-386), in the knowledge base: `verify` starts the application by the repository's
+   * recipe when nothing is declared, and without one the `build` agent is asked to find it. Absent: none learned nor searched.
+   */
+  previewRecipes?: PreviewRecipes;
+  /**
    * Where the effects of a project without effects are kept (ORC-231), `<keptEffectsDir>/<ticket>/<row>.json`, each with its row in
    * `artifacts`. Absent, such an effect fails: its ticket is blocked, nothing goes out.
    */
@@ -414,6 +420,7 @@ const INSTANCE_KEY = 'instance-id';
 /** What the PR's description is composed from (`describePr`), published or kept (ORC-231). */
 const publishFacts = (t: TicketState, c: Extract<Effect, { kind: 'publish' }>) => ({
   ticketId: t.ticketId, title: t.title, sha: c.sha, ...(c.commands ? { commands: c.commands } : {}), ...(t.visualProof ? { visualProof: t.visualProof } : {}),
+  ...(c.visualProof?.start ? { start: c.visualProof.start } : {}),
 });
 
 /** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
@@ -477,6 +484,7 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
   const why = [
     ...(p.intake ? ['Asked for at intake.'] : []),
     ...(p.triggers.length ? [`Changed under \`visual_paths\`:\n${p.triggers.map((t) => `- ${mdCode(t)}`).join('\n')}`] : []),
+    ...(p.start ? [`Start command: ${START_SAID[p.start]}`] : []),
   ].join('\n');
   if (!p.captures?.length) return { conclusion: 'neutral', summary: `Visual proof required, not taken: ${p.unavailable ?? 'no capture'}. Indicative until the application starts reliably in the sandbox (ORC-152).\n${why}` };
   const lines = p.captures.map((c) => `- ${captureLabel(c)}: sha256 ${c.sha256}`);
@@ -1198,8 +1206,51 @@ export class Orchestrator {
     }
     // The commits a human pushed (ORC-159) must be under what the agent wrote, or nothing of it is published.
     // The commit a job writes, which it publishes (ORC-176): a review, which writes nothing, shoots nothing.
-    const visual = job.verifyFailure === 'block' ? {} : { visual: this.visualRequest(project, t, output) };
-    return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}), ...visual });
+    if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
+    const recipe = await this.recipeOf(project, t);
+    // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
+    const asked = !!recipe && searchAsked(this.searchContext(project, job, run.repoConfig), recipe.note);
+    const found = asked ? output?.preview : undefined;
+    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, output, recipe?.note, found) });
+    // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push. Never a replayed ticket's.
+    const recipes = this.d.previewRecipes;
+    if (recipe && recipes && !project.replayed) {
+      const settled = recipes.settle(recipe.repo, recipe.note, { asked, found, outcome: res.preview, sha: res.sha, port: project.workflow.workspace.portBase, runId: run.id, ticket: t.ticketId, at: new Date(this.d.clock.now()) }, (text) => this.policy.vet(text, 'start recipe'));
+      this.track(settled.then(
+        (said) => void (said && this.log('warn', `${t.ticketId}: ${said}`)),
+        (err: Error) => this.log('warn', `${t.ticketId}: start recipe of ${recipe.repo} not written to the knowledge base: ${err.message}`),
+      ));
+    }
+    return res;
+  }
+
+  /**
+   * The repository's start recipe as the knowledge base holds it (ORC-386), by the name its origin gives it: a replayed ticket's in
+   * the knowledge base at its start (ORC-376), none with `--memory off`. Undefined without a knowledge base; a note it cannot read
+   * is logged and read as none to search for, never written over.
+   */
+  private async recipeOf(project: ProjectRuntime, t: TicketState): Promise<{ repo: string; note: ReadNote } | undefined> {
+    const recipes = this.d.previewRecipes;
+    const replayed = project.replayed;
+    if (!recipes || (replayed && replayed.knowledge === undefined)) return undefined;
+    const repo = repoNameOf(await this.d.originUrl?.(project).catch(() => undefined), project.id);
+    try {
+      return { repo, note: recipes.read(repo, replayed?.knowledge) };
+    } catch (err) {
+      this.log('warn', `${t.ticketId}: start recipe of ${repo} not read from the knowledge base: ${(err as Error).message}`);
+      return { repo, note: 'unreadable' };
+    }
+  }
+
+  /** What decides, at a `build` launch and at its check alike, whether its agent searches a start recipe (ORC-386). */
+  private searchContext(project: ProjectRuntime, job: JobSpec, config: RepoConfig | undefined): SearchContext {
+    return {
+      step: job.step,
+      canShoot: !!this.d.visualProof,
+      replayed: !!project.replayed,
+      declared: !!config?.preview,
+      services: !!config?.services.length,
+    };
   }
 
   /**
@@ -1243,10 +1294,13 @@ export class Orchestrator {
   }
 
   /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
-  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined): VisualRequest {
+  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined, note: ReadNote, found: PreviewRecipe | undefined): VisualRequest {
     return {
       intake: t.visualProof === 'required',
       ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
+      // ORC-386: the learned recipe; the one the agent found only where it was asked to search.
+      ...(isNote(note) && note.status === 'valid' ? { learned: note.recipe } : {}),
+      ...(found ? { found } : {}),
       port: project.workflow.workspace.portBase,
       path: scenarioPath(output?.visual_scenario?.url),
       gate: (c) => this.policy.capture(c),
@@ -3054,6 +3108,9 @@ export class Orchestrator {
 
       // The approved spec for the steps after its gate, the version not approved for the step that rewrites it (ORC-212).
       const specShown = !!t.spec && job.queue === 'dev' && (job.step === 'spec_draft' ? !t.spec.approval : !!t.spec.approval);
+      // Nothing declares how to start the application, nothing learned it (ORC-386): the build agent finds it.
+      const recipe = job.step === 'build' ? await this.recipeOf(project, t) : undefined;
+      const previewSearch = !!recipe && searchAsked(this.searchContext(project, job, config), recipe.note);
       const promptInput = {
         skill: job.skill,
         issue: { identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url },
@@ -3073,6 +3130,7 @@ export class Orchestrator {
         resumedAfterCut: !!opts.relaunchOf && resume,
         ...(runContext ? { run: runContext } : {}),
         ...(relayed.length ? { relayed } : {}),
+        ...(previewSearch ? { previewSearch: true } : {}),
       };
       const prompt = buildPrompt(promptInput);
       const systemPrompt = knowledge && this.knowledgePromptOf(await knowledge, ticketId, job.name);
