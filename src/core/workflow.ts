@@ -1,7 +1,6 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import type { Effort, FixCause, Preset } from '../presets/preset.js';
-import type { Condition } from './conditions.js';
-import type { EventType, InputKind, LogicalState, QueueName } from './types.js';
+import type { InputKind, LogicalState, QueueName } from './types.js';
 
 /**
  * The workflow the engine decides on: built in TypeScript from a preset by `presetWorkflow` (`src/presets/workflow.ts`), pinned
@@ -38,25 +37,6 @@ export interface Limits {
   specCheckReturns?: number;
   /** `/changes` rounds of the spec review, one more blocks (ORC-212). Absent from versions frozen before it. */
   specChanges?: number;
-}
-
-export interface Rule {
-  from?: LogicalState;
-  to?: LogicalState;
-  label?: string;
-  say?: string;
-  when?: Condition;
-  whenSrc?: string;
-  run?: string;
-  debounceMs?: number;
-  move?: LogicalState;
-  labels?: { add: string[]; remove: string[] };
-  comment?: string;
-  /**
-   * `after_merge` (ORC-197): the step of a merged PR, on `pr.merged` only: the requester told, the changelog entry, then `cleanup`.
-   * `propose_delegate`: the answer to `fais-le`, only in versions frozen before ORC-193, which decide as they did.
-   */
-  do?: 'stop' | 'cleanup' | 'propose_delegate' | 'after_merge';
 }
 
 export interface JobSpec {
@@ -140,14 +120,12 @@ export interface Workflow {
   tracker: { kind: 'linear'; team?: string; pickup: { checks: PickupCheck[] } };
   /**
    * `ready` (« Ready to Merge ») is gone from the pack (ORC-170): optional, for the versions frozen with it. `cancelled` has no
-   * status of its own: it is read on the Linear type, so a move or a rule to it is refused at load.
+   * status of its own: it is read on the Linear type, and nothing moves a ticket to it.
    */
   states: Record<Exclude<LogicalState, 'ready' | 'cancelled'>, string> & { ready?: string; cancelled?: never };
   limits: Limits;
   /** `portBase`: the `PORT` the visual proof's application listens on (ORC-176); what starts it is `.factory/config.yml`'s `preview`. */
   workspace: { setup: string[]; portBase: number };
-  commands: string[];
-  on: Partial<Record<EventType, Rule[]>>;
   jobs: Record<string, JobSpec>;
   /**
    * The job a question relayed to the agent that implements starts, with no human feedback beside it, where a reply would
@@ -162,4 +140,9 @@ export interface Workflow {
   preset?: Preset;
   /** The step the chain starts at: `build` for `factory/default` until ORC-395, the preset's entry otherwise. */
   entry?: string;
+  /**
+   * The job a delegation starts in place of the entry's (ORC-392): only tests set it, to start at `intake`, `spec` or `tests`
+   * while `factory/default`'s chain starts at `build`. Goes when the delegation starts at the preset's entry (ORC-395).
+   */
+  delegated?: string;
 }

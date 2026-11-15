@@ -21,6 +21,8 @@ function finished(job: string, out: AgentOutput, extra: Partial<EventPayloads['r
   const payload: EventPayloads['run.finished'] = { runId: 'r1', job, outcome: 'success', costUsd: 0.1, turns: 3, lastText: 'ok', attempt: 'succeeded', output: out, ...extra };
   return { id: `e-${++seq}`, type: 'run.finished', at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;
 }
+const ev = <T extends keyof EventPayloads>(type: T, payload: EventPayloads[T]): FactoryEvent =>
+  ({ id: `e-${++seq}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload }) as FactoryEvent;
 const ticket = (job: string, patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'todo', 0), delegated: true, activeRunId: 'r1', activeJob: job, linearSessionId: 's1', ...patch });
 const after = (t: TicketState, e: FactoryEvent) => decide(t, e, workflow).events.reduce<TicketState | undefined>((s, x) => reduce(s, x), reduce(t, e))!;
 const incomplete = output({ intake: { size: 'm', risk: 'medium', complete: false, missing: [{ question: 'Which format: CSV or XLSX?', options: ['CSV', 'XLSX'] }, 'Who may export?'], screen: false } });
@@ -52,6 +54,26 @@ describe('the Rapide level of factory/fantome (ORC-231)', () => {
   it('a spec that fails spec_check still goes back to spec_draft, as at any level', () => {
     const out = decide(ticket('spec'), finished('spec', output({ spec: { ...SPEC, criteria: [] } })), workflow);
     expect(out.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'spec', input: 'spec_check' })]);
+  });
+
+  it('reacts to its delegation alone, whatever the state of the closed ticket: a human on the real one starts nothing (ORC-392)', () => {
+    const delegated = (logical: TicketState['logical']) => decide(ticket('intake', { logical, activeRunId: undefined, activeJob: undefined }), ev('ticket.delegated', {}), workflow);
+    for (const logical of ['todo', 'human_review', 'done'] as const) expect(delegated(logical).effects, logical).toEqual([expect.objectContaining({ kind: 'start_run', job: 'intake' })]);
+    const idle = ticket('dev', { logical: 'human_review', activeRunId: undefined, activeJob: undefined, prNumber: 3, prState: 'OPEN' });
+    const events: FactoryEvent[] = [
+      ev('session.prompted', { linearSessionId: 's1', body: 'encore', author: 'L' }),
+      ev('session.mentioned', { linearSessionId: 's2', body: 'pourquoi ?', author: 'L' }),
+      ev('status.changed', { from: 'human_review', to: 'ai_review' }),
+      ev('label.changed', { label: 'agent:stop', change: 'added' }),
+      ev('session.stopped', { linearSessionId: 's1' }),
+      ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }),
+      ev('pr.conflicted', { number: 3, url: 'u', branch: 'b', headSha: 'h', baseRef: 'main' }),
+    ];
+    for (const e of events) expect(decide(idle, e, workflow).trace, e.type).toContain(`no rule for ${e.type}`);
+    const blocked = { ...idle, blocked: true };
+    expect(decide(blocked, ev('ticket.commented', { body: 'reprends', author: 'L', kind: 'instruction' }), workflow).trace).toContain('no rule for ticket.commented');
+    // A merge records the delivery, with no move nor step after it.
+    expect(decide(idle, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow).effects).toEqual([{ kind: 'stop_run' }]);
   });
 
   it('factory/default asks its questions as before', () => {

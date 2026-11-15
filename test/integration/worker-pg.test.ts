@@ -11,7 +11,9 @@ import { createTestSchema, EMPTY_ALL, type TestSchema, PG_URL } from '../helpers
 import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /** Each event of a ticket decides one comment; a prompt appends its body to the ticket's feedback. */
-const COMMENTS: WorkflowOverrides = { on: { 'ticket.delegated': [{ comment: 'délégué' }], 'session.prompted': [{ comment: 'noté' }] } };
+const COMMENTS: WorkflowOverrides = {
+  effects: { 'ticket.delegated': { effects: [{ kind: 'comment', body: 'délégué' }], only: true }, 'session.prompted': { effects: [{ kind: 'comment', body: 'noté' }], only: true } },
+};
 
 // ORC-149 on Postgres: the decision transaction under the ticket's advisory lock, a crash after the
 // commit, and two workers (two daemons) on the same database.

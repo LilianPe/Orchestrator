@@ -91,7 +91,6 @@ export function linearIngest(accept: (e: FactoryEvent) => Promise<boolean>, opts
       stateNameById: () => undefined,
       stateTypeById: () => undefined,
       labelNameById: () => undefined,
-      commands: () => [],
       now: opts.now ?? (() => NOW),
       ...opts.ctx,
     },

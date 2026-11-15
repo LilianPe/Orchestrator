@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { hashText } from '../core/attempt-labels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
-import { blockingFix, nextOf } from '../core/chain.js';
+import { blockingFix, delegatedJob, nextOf } from '../core/chain.js';
 import { agentStep, defaultWorkflow, workflowViolations, type StepSettings } from './workflow.js';
 
 /**
  * The hashes of the workflow of `factory/default`: the canonical one, which each ticket's frozen version and the replay
  * journals carry, and the one of its JSON text, keys in their order, which the journals hold. A change of either changes the
- * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-391, the preset in it).
+ * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-392, the rules gone, the regrouping in the preset).
  */
-const CANONICAL = 'ceded6bae18e3e9a32cf4c448a50ee9e0c7e86d5a7555a1d8d5978a51eb369ee';
-const TEXT = 'sha256:abc3a9dcc5228d543266fb823b2199ef66a26936efdafee32326d11d02794e28';
+const CANONICAL = '239e866b7e62842dd633372fc213b86d2958da24fa819c47e143eb7715650485';
+const TEXT = 'sha256:15a44c974d6d7da2353a8de4abd62723d727fab9abd5be25f5a141dffe8f672f';
 
 describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
   // The safety net of ORC-177's later parts: a change of the workflow is a change of the journals, seen in their diff.
@@ -43,13 +43,8 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback', cause: 'relay' });
     const wrong = defaultWorkflow();
     wrong.jobs['answer-relayed']!.step = 'fxi';
-    wrong.on['pr.merged']![0]!.move = 'ready';
-    wrong.on['label.changed']![0]!.do = 'after_merge';
-    expect(workflowViolations(wrong)).toEqual([
-      'on.label.changed[0].do: after_merge is the step of a merged PR, on pr.merged only',
-      'on.pr.merged[0].move: no status for "ready"',
-      'jobs.answer-relayed.step: fxi is not a step of factory/default',
-    ]);
+    wrong.delegated = 'intak';
+    expect(workflowViolations(wrong)).toEqual(['jobs.answer-relayed.step: fxi is not a step of factory/default', 'delegated: unknown job "intak"']);
   });
 
   // What the loader refused in a job or a rule of the pack, checked on the table now that no file goes through it.
@@ -67,16 +62,16 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     }
   });
 
-  it('gives each call a workflow of its own: a test that changes a job, a step, a rule or a limit changes no other workflow', () => {
+  it('gives each call a workflow of its own: a test that changes a job, a step, the delegation or a limit changes no other workflow', () => {
     const a = defaultWorkflow();
     a.jobs.dev!.skill = 'x';
     a.preset!.steps.find((s) => s.id === 'review')!.next = null;
-    a.on['ticket.delegated']![0]!.run = 'intake';
+    a.delegated = 'intake';
     a.limits.verifyAttempts = 1;
     a.limits.perRun.turns = 1;
     expect(defaultWorkflow().jobs.dev!.skill).toBe('factory:dev');
     expect(defaultWorkflow().preset!.steps.find((s) => s.id === 'review')!.next).toBe('human_review');
-    expect(defaultWorkflow().on['ticket.delegated']![0]!.run).toBe('dev');
+    expect(delegatedJob(defaultWorkflow())).toBe('dev');
     expect(defaultWorkflow().limits).toMatchObject({ verifyAttempts: 4, perRun: { turns: 150 } });
   });
 
