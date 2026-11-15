@@ -6,7 +6,8 @@ import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { startFactory } from '../app/bootstrap.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { repoRoot } from '../app/root.js';
-import { FactoryYmlError, loadFactoryLimits, loadFactoryYml } from '../config/factory-yml.js';
+import { FactoryYmlError, loadFactoryLimits } from '../config/factory-yml.js';
+import { LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import { createSmeeChannel } from '../relay/smee.js';
 import { defaultWorkflow } from '../presets/workflow.js';
@@ -95,7 +96,7 @@ async function main(): Promise<number> {
     case 'plan': {
       let tracker;
       try {
-        tracker = cliLinearTracker(home, loadFactoryYml(home));
+        tracker = cliLinearTracker(home, (await loadSealedFactoryYml(home, process.env, { only: LINEAR_SECRETS })).yml);
       } catch (err) {
         if (!(err instanceof FactoryYmlError)) throw err;
         console.log(`${err.message}\n(plan reads the Linear credentials from factory.yml: run it with the daemon's environment.)`);

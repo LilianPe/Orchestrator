@@ -445,6 +445,11 @@ jobs:
     // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
     expect(lines).toContain(MISSING_TEST_COMMAND);
     expect(gitCalls.some((a) => a.includes('fetch'))).toBe(false);
+    // The App's key in a file config.yaml names (ORC-398): said after the visual proof, never part of the verdict.
+    expect(lines.slice(1, 3)).toEqual([
+      'Server secrets:',
+      '  github.privateKey (config.yaml): in clear — warning: in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)',
+    ]);
   });
 
   describe("the factory's real branch names (ORC-353)", () => {

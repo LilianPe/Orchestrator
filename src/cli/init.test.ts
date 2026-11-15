@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
-import { loadInstance, loadSecrets, saveInstance } from '../config/instance.js';
+import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig } from '../config/repo-config.js';
 import { PROPOSAL_HEADER, runInit, type InitIO } from './init.js';
 
@@ -133,6 +133,19 @@ describe('factory init', () => {
     expect((await initProposal({ '.factory/config.yml': 'commands: [\n' })).printed).not.toContain(MISSING_TEST_COMMAND);
     // Read where the daemon reads it: one not committed on the default branch yet is not there.
     expect((await initProposal({ '.factory/config.yml': 'commands: { test: npm test }\n' }, { uncommitted: true })).printed).toContain(MISSING_TEST_COMMAND);
+  });
+
+  it('stops before asking anything when secrets.json is encrypted at rest (ORC-398)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    saveSecrets(home, {}, 'k'.repeat(32));
+    const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
+    const asked: string[] = [];
+    await expect(runInit({ io: { ...io, ask: async (q) => {
+      asked.push(q);
+      return '';
+    } }, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) })).rejects.toThrow('secrets.json is encrypted at rest');
+    expect(asked).toEqual([]);
   });
 
   it('asks the webhook signing secret again until it is not empty', async () => {

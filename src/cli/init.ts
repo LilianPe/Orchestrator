@@ -108,6 +108,8 @@ export async function runInit(d: InitDeps): Promise<void> {
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
   // One form whatever gave the path: git writes `C:/x` on Windows, a typed one may be relative or end with `/`.
   const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
+  // Read first: a secrets.json encrypted at rest (ORC-398) stops init before it asks anything.
+  const secrets = loadSecrets(d.home);
   const teamKey = (await io.ask('Linear team key (e.g. REL)')).toUpperCase();
 
   const cfg = loadInstance(d.home);
@@ -138,7 +140,6 @@ export async function runInit(d: InitDeps): Promise<void> {
     if (isUsableWebhookSecret(webhookSecret)) break;
     io.print(`The webhook signing secret is required: without it, ${PRODUCT_NAME} refuses every webhook.`);
   }
-  const secrets = loadSecrets(d.home);
   const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
 

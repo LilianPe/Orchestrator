@@ -6,10 +6,18 @@ export interface SecretRef {
 
 export const refText = (ref: SecretRef): string => `${ref.source}:${ref.path}`;
 
-/** Where the daemon reads a repository's secrets, at each `setup` (ORC-308). Docs: docs/ports/secret-source.md. */
+/** What a source knows of a secret besides its value (ORC-398). */
+export interface SecretDescription {
+  /** When the value now held was written: its last rotation. Absent when the source does not know. */
+  rotatedAt?: Date;
+}
+
+/** Where the daemon reads a secret: a repository's at each `setup` (ORC-308), the server's at its start (ORC-398). Docs: docs/ports/secret-source.md. */
 export interface SecretSource {
   /** The value at `path`. Rejects when the source does not hold it or is out of service; its error never carries a value. */
   read(path: string): Promise<string>;
+  /** What it knows of `path` without reading its value, for `doctor`; optional, a source without it knows no rotation date. */
+  describe?(path: string): Promise<SecretDescription>;
 }
 
 /** An adapter, as `secret_sources.<name>.kind` names it: registered in `registry.ts`. */

@@ -152,7 +152,11 @@ On the server, with the user's rootless engine running:
    concurrency: 1
    # who may sign in to the dashboard with GitHub (ORC-399): logins, or an org, or a team
    dashboard: { logins: [armand] }
+   # the key of secrets.json at rest (ORC-398), required off the loopback: FACTORY_SECRETS_KEY in .env, `openssl rand -base64 32`
+   secrets_key: env:FACTORY_SECRETS_KEY
    ```
+
+   **Upgrading an exposed server (ORC-398).** Without `secrets_key`, `factoryd` no longer starts off the loopback: add `FACTORY_SECRETS_KEY` to `.env` and the line above to `data/factory.yml`. At its next start, it encrypts `secrets.json` in place. Keep the key: without it, the Linear tokens are lost (reconnect Linear).
 
    The App's *Callback URL* is `https://usine.exemple.fr/auth/github/callback` ([`github.md`](github.md#creating-the-app)).
 
