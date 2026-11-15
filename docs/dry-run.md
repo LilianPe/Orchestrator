@@ -24,7 +24,9 @@ result in the store:
    test that the runner's report names (vitest, jest, pytest) is run again once, as in `verify`.
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
-no sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required).
+a `setup` that fails because a registry or the egress proxy did not answer (a connection refused or timed out, a 502), the
+repository's variables that cannot be read from `factory.yml`, no sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`
+are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
 ## What breaks
 
@@ -33,14 +35,18 @@ command, an excerpt of its output, and a detail line, classified as:
 
 | Kind | Read from | Example |
 |---|---|---|
-| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module`, `No module named`, a lockfile out of sync; in the `setup`, a registry that does not answer or that the egress proxy refuses | `No matching version found for left-pad@9.9.9` |
-| `service` | a service declared under `services` that no sandbox backend provides, or a connection refused on the loopback | `connect ECONNREFUSED 127.0.0.1:5432` |
-| `variable` | a variable the code asks for that `.factory/config.yml` does not declare under `env` | `Missing environment variable: STRIPE_KEY` |
+| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (not of a path), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (403) | `No matching version found for left-pad@9.9.9` |
+| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but the egress proxy's relay, `:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
+| `variable` | a variable the code asks for that `.factory/config.yml` does not declare under `env`. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
-| `failure` | anything else: a `.factory/config.yml` refused, a command that times out, a test that fails again | its first error line |
+| `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap, a test that fails again | its first error line |
 
-The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A command that
-failed on its flaky tests alone has only `flaky` breaks; one that failed on more has a classified break besides.
+The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
+command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only
+`flaky` breaks; one that failed on more has a classified break besides.
+
+The connections of the `setup` go through the egress proxy and its journal, but no run owns them: they are not in a run's
+security log.
 
 A flaky test makes the dry run red: the same flake would fail a ticket's `verify`. Put it on the repository's known flaky list
 (`factory flaky`) to make it indicative.

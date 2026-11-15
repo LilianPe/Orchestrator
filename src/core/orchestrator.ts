@@ -2367,7 +2367,8 @@ export class Orchestrator {
         // The commands `verify` runs on a ticket's code when `.factory/config.yml` declares none: the `dev` job's.
         commands: project.workflow.jobs['dev']?.verify ?? [],
         image: runnerImage,
-        env: async (config) => (await this.repoVariablesOf(project, config)).env,
+        // Unreadable, it rejects: a dry run without the repository's variables would record the factory's breakdown as red.
+        env: async (config) => (this.d.repoVariables ? (await this.d.repoVariables(project, config)).env : {}),
         knownFlaky: await this.d.store.knownFlakyTests(projectId),
         now: () => this.d.clock.now(),
         log: (message) => this.log('warn', `dry run of ${projectId}: ${message}`),

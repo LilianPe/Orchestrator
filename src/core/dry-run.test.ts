@@ -7,7 +7,7 @@ import type { ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import type { CommandRun } from '../checks/flaky.js';
-import { breaksOfRuns, classifyBreak, dryRunFingerprint, runDryRun, type DryRunRequest } from './dry-run.js';
+import { breaksOfRuns, classifyBreak, dryRunFingerprint, runDryRun, unreachable, type DryRunRequest } from './dry-run.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -125,9 +125,42 @@ describe('runDryRun (ORC-408)', () => {
     commit(origin, { 'state.txt': 'red\n' }, 'main moved on');
     const run = await runDryRun({ ...req, sha: head });
     expect(run).toMatchObject({ sha: head, target: 'commit', ok: true });
-    const onMain = await runDryRun({ ...req, runId: 'dry-2', workDir: mkdtempSync(join(tmpdir(), 'factory-dry-w-')) });
+    const workDir = mkdtempSync(join(tmpdir(), 'factory-dry-w-'));
+    dirs.push(workDir);
+    const onMain = await runDryRun({ ...req, runId: 'dry-2', workDir });
     expect(onMain).toMatchObject({ sha: git(origin, 'rev-parse', 'HEAD'), target: 'main', ok: false });
     expect(onMain.breaks).toEqual([expect.objectContaining({ kind: 'failure', step: 'command', command: 'grep green state.txt' })]);
+  });
+
+  it('criterion 3: a commit off the default branch is fetched by its sha', async () => {
+    const { req, origin } = forge();
+    git(origin, 'checkout', '-q', '-b', 'side');
+    const side = commit(origin, { 'state.txt': 'green, on a side branch\n' }, 'side');
+    git(origin, 'checkout', '-q', 'main');
+    // Off every branch the forge has: only a fetch by its id brings it.
+    git(origin, 'branch', '-q', '-D', 'side');
+    const run = await runDryRun({ ...req, sha: side });
+    expect(run).toMatchObject({ sha: side, target: 'commit', ok: true });
+  });
+
+  it('a sha that is not a full commit id is refused before anything is fetched', async () => {
+    const { req, sandboxes } = forge();
+    for (const sha of ['main', 'abc1234', 'a:b']) await expect(runDryRun({ ...req, sha })).rejects.toThrow('a full commit sha expected');
+    expect(sandboxes.created).toEqual([]);
+  });
+
+  it('a setup that cannot reach a registry or the egress proxy rejects: a breakdown is not the repository\'s state', async () => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error code ECONNREFUSED\nnpm error FetchError: request to https://registry.npmjs.org/zod failed, reason: connect ECONNREFUSED 127.0.0.1:3128\n', code: 1 } : undefined);
+    await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
+    expect(sandboxes.active()).toEqual([]);
+  });
+
+  it('a registry the egress proxy refuses is the repository\'s: recorded red, as a dependency', async () => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error 403 Forbidden - GET https://npm.acme.internal/left-pad\n', code: 1 } : undefined);
+    const run = await runDryRun(req);
+    expect(run.breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup', detail: expect.stringContaining('egress proxy does not allow') })]);
   });
 
   it('a commit the forge does not hold rejects: no dry run is recorded on it', async () => {
@@ -140,7 +173,7 @@ describe('runDryRun (ORC-408)', () => {
     sandboxes.provides = [];
     const run = await runDryRun(req);
     expect(run.ok).toBe(false);
-    expect(run.breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'setup', detail: expect.stringContaining('postgres') })]);
+    expect(run.breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'config', detail: expect.stringContaining('postgres') })]);
     expect(sandboxes.ran).toEqual([]);
   });
 
@@ -202,6 +235,27 @@ describe('classifyBreak', () => {
     expect(classifyBreak('Error: DATABASE_URL is not set', 'command', declared).kind).toBe('failure');
   });
 
+  it('in a command\'s output, what only an installer means is not a dependency: the application\'s 404, a module of its own', () => {
+    expect(classifyBreak('expected 200 "OK", got 404 "Not Found"', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("Error: Cannot find module './dist/index.js'", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("Error: Cannot find module '/work/build/app.js'", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak('npm error code ETARGET', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak('npm error 403 Forbidden - GET https://npm.acme.internal/x', 'command', declared).kind).toBe('failure');
+  });
+
+  it('a global that is not defined is no variable of the environment', () => {
+    expect(classifyBreak('ReferenceError: URL is not defined', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("error  'JSX' is not defined  no-undef", 'command', declared).kind).toBe('failure');
+  });
+
+  it('the egress proxy\'s relay on the loopback is no service; a registry that does not answer is said apart', () => {
+    expect(classifyBreak('connect ECONNREFUSED 127.0.0.1:3128', 'setup', declared).kind).toBe('failure');
+    expect(unreachable('connect ECONNREFUSED 127.0.0.1:3128')).toContain('3128');
+    expect(unreachable('npm error code ETIMEDOUT')).toContain('ETIMEDOUT');
+    expect(unreachable('npm error 502 Bad Gateway - GET https://registry.npmjs.org/zod')).toContain('502');
+    expect(unreachable('AssertionError: expected 1 to be 2')).toBeUndefined();
+  });
+
   it('anything else is a failure, its first error line said', () => {
     expect(classifyBreak('ran 3 tests\nAssertionError: expected 1 to be 2\n', 'command', declared)).toMatchObject({ kind: 'failure', detail: expect.stringContaining('AssertionError') });
   });
@@ -223,6 +277,12 @@ describe('breaksOfRuns', () => {
   it('a test that failed again is the command\'s failure, the flaky ones beside it', () => {
     const breaks = breaksOfRuns([run({ tests: [test('races', 'passed'), test('broken', 'failed')] })], { known: [] }, { env: [] });
     expect(breaks.map((b) => b.kind)).toEqual(['flaky', 'failure']);
+  });
+
+  it('known flaky tests alone, but the command without them still not passing (cut by its cap), is the command\'s failure', () => {
+    const known = { known: [{ test: 'a.test.ts > races', coversFrozen: false }] };
+    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: null })], known, { env: [] }).map((b) => b.kind)).toEqual(['failure']);
+    expect(breaksOfRuns([run({ tests: [test('races', 'failed')], withoutIndicative: 1 })], known, { env: [] }).map((b) => b.kind)).toEqual(['failure']);
   });
 
   it('a known flaky test of the repository that alone failed the command is no break: it does not count', () => {
