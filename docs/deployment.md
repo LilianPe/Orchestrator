@@ -92,6 +92,7 @@ The engine reads a mount's paths **on the host**, not in the `factoryd` containe
 
 - **`Dockerfile`** (`factoryd` and `proxy`): Node 24, `git`, the `docker` CLI and `gh`. `gh` stays until ORC-181. Claude Code is no longer in it: the agent runs in the runner. User `node` (uid 1000).
 - **`docker/runner.Dockerfile`** (the runners): Node 24 with pnpm, Python 3 with uv and pip, `git`, Claude Code. Pinned versions. No `gh`, no engine CLI, no daemon code.
+- **`docker/browser.Dockerfile`** (the visual proof's captures, ORC-404, optional): the runner image plus Playwright (pinned) and its headless Chromium, built `FROM` the runner image so that the application starts with the same tools as its commands. Only the sandboxes that shoot run it, at network `none`, with nothing mounted but the checkout; every other sandbox stays on the runner image, which carries no browser. It weighs about 630 MB more than the runner image, uncompressed (measured on Docker Desktop: the Playwright layer is 626 MB, of which 278 MB of headless Chromium, the rest its system libraries and fonts); a capture at three widths takes about 3 s, the container's start included, for a page served by `node`. Without it, `FACTORY_BROWSER_IMAGE` unset, a required visual proof is unavailable and its check neutral: the daemon says so at its start, and `factory doctor` on every run.
 
 No image receives a secret at build time. Isolation test no. 7 looks for tokens in the history, the configuration and the files of every layer of the runner image.
 
@@ -113,6 +114,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |
+| `FACTORY_BROWSER_IMAGE` | no | The capture image of the visual proof (`docker/browser.Dockerfile`), built on the runner image. Unset, or absent from the engine, the visual proof is unavailable. |
 | `FACTORY_LOOPBACK_PORT` | no | Port of `factoryd` on the host's loopback, for its reverse proxy (4100 by default). |
 | `FACTORY_PUBLIC_HOST` | with the `tls` profile | Domain of `publicUrl`, for `caddy`'s certificate. |
 | `POSTGRES_PASSWORD` | yes | Database password, reused in a URL: letters and digits only. |
@@ -168,6 +170,12 @@ On the server, with the user's rootless engine running:
    FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
    ```
 
+   For the visual proof, the capture image too, on the runner image just built, then `FACTORY_BROWSER_IMAGE` in `.env`:
+
+   ```bash
+   docker build -f docker/browser.Dockerfile --build-arg RUNNER_IMAGE="$FACTORY_RUNNER_IMAGE" -t "$FACTORY_BROWSER_IMAGE" docker
+   ```
+
 4. Point the host's reverse proxy at `http://127.0.0.1:4100`, or the port of `FACTORY_LOOPBACK_PORT` ([TLS](#tls-and-webhooks)), then `docker compose up -d`. Without a reverse proxy on the server: `docker compose --profile tls up -d`, with `FACTORY_PUBLIC_HOST`.
 5. Open `https://usine.exemple.fr`, sign in with GitHub (a login of `dashboard`), click **Connect Linear**.
 
@@ -209,6 +217,8 @@ Under compose, this state is in Postgres, not in a file.
 ```bash
 git pull
 docker build -f docker/runner.Dockerfile -t "$FACTORY_RUNNER_IMAGE" docker
+# With the visual proof: the capture image again, on the new runner image.
+docker build -f docker/browser.Dockerfile --build-arg RUNNER_IMAGE="$FACTORY_RUNNER_IMAGE" -t "$FACTORY_BROWSER_IMAGE" docker
 FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
 docker compose up -d
 ```

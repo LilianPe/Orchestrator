@@ -1,4 +1,4 @@
-import { failureEdges, isAgentStep, type Preset, type Step } from './preset.js';
+import { failureEdges, isAgentStep, type AgentStep, type Preset, type Step } from './preset.js';
 
 /**
  * What bounds a ticket's spending (ORC-216): `budgets` of factory.yml, the repository's `per_ticket_tokens` already folded in.
@@ -21,7 +21,6 @@ export interface WorstCase {
   attempts: Record<string, number>;
 }
 
-type AgentStep = Extract<Step, { maxTurns: number }>;
 interface Heaviest {
   total: number;
   attempts: Map<string, number>;

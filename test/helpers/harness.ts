@@ -14,13 +14,15 @@ import type { SecretSource } from '../../src/adapters/secrets/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
 import type { Workflow } from '../../src/core/workflow.js';
+import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.js';
 import { saveAgentOutput } from '../../src/core/agent-output.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { FakeClock } from '../../src/core/clock.js';
 import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../src/core/orchestrator.js';
 import { queueCapacity, Scheduler } from '../../src/runtime/capacity.js';
 import { TimerService } from '../../src/runtime/timers.js';
-import { asFantome } from '../../src/presets/fantome.js';
+import { fantome } from '../../src/presets/fantome.js';
+import { presetWorkflow } from '../../src/presets/workflow.js';
 import { Replays } from '../../src/ghost/delegate.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { VisualShooter } from '../../src/adapters/browser/types.js';
@@ -32,7 +34,7 @@ import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
 import type { Faults } from './faults.js';
 import type { TestPreset } from './test-preset.js';
-import { workflowWith, type WorkflowOverrides } from './workflow-with.js';
+import { workflowWith, workflowWithoutAiReview, type WorkflowOverrides } from './workflow-with.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
@@ -43,16 +45,17 @@ export const packDir = join(import.meta.dirname, '../../packs/standard');
  * recorded journals run on, their runs and moves counted without the review's. The review's own scenarios
  * (`test/scenarios/review.test.ts`), the review loop's property and the golden replay run the workflow as it ships.
  */
-export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean } = {}): Workflow {
-  const wf = workflowWith(overrides);
-  if (o.aiReview) return wf;
-  // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before.
-  for (const job of Object.values(wf.jobs)) {
-    if (job.onSuccess.run !== 'review') continue;
-    job.onSuccess = job.name === 'dev' ? { move: 'human_review', post: 'summary' } : { ...(job.onSuccess.post ? { post: job.onSuccess.post } : {}) };
-  }
-  return wf;
+export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean; fantome?: boolean } = {}): Workflow {
+  // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before (`withoutAiReview`).
+  const base = o.fantome ? presetWorkflow(fantome) : o.aiReview ? undefined : workflowWithoutAiReview();
+  return workflowWith(overrides, base);
 }
+
+/** `.factory/config.yml` with the repository's test command, the one the red check runs (ORC-391). */
+export const withTestCommand =
+  (command = 'npm test --') =>
+  async (): Promise<RepoConfig> =>
+    parseRepoConfig(`commands:\n  test: ${JSON.stringify(command)}\n`);
 
 /**
  * A move from Human Review back to In Progress starts `dev-feedback`, as the pack did before ORC-190: a start a human makes at
@@ -266,7 +269,7 @@ export function createHarness(
     transcriptsDir?: string;
     /** The project without effects (ORC-231), its effects kept in a temporary dir (`keptEffectsDir`): or `{ keptEffectsDir: false }`, nowhere. */
     noEffect?: boolean | { keptEffectsDir: false };
-    /** The `factory/fantome` preset's workflow (ORC-231): `asFantome`, and no effects, as the preset always has none. */
+    /** The `factory/fantome` preset's workflow (ORC-231), driven by its steps, and no effects, as the preset always has none. */
     fantome?: boolean;
     /**
      * The replay of closed tickets (ORC-376): each life delegates the replays of the store's `ghost_*` tables kept under `dir` to the
@@ -278,8 +281,7 @@ export function createHarness(
 ) {
   if (opts.workflow !== undefined && opts.preset) throw new Error('createHarness: pass workflow or preset, not both');
   const pack = opts.packDir ?? packDir;
-  const loaded = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview });
-  const workflow = opts.fantome ? asFantome(loaded) : loaded;
+  const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();

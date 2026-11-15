@@ -3,12 +3,12 @@ import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { measureTicket } from '../../src/core/measures.js';
 import { exportJournal } from '../../src/runtime/replay.js';
 import { defaultWorkflow } from '../../src/presets/workflow.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, withTestCommand } from '../helpers/harness.js';
 import { pythonRepoFiles } from '../helpers/python-repo.js';
 import { delegationStarts } from '../helpers/workflow-with.js';
 
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
-/** The `tests` job's red check, as `factory/default` has it: `npm test --` in measure mode. */
+/** The `tests` job's red check, as `factory/default` has it: in measure mode, with the repository's `commands.test`. */
 const RED = defaultWorkflow().jobs.tests!.red!;
 const SYNTAX = 'FAIL src/export.test.ts\nError: Transform failed with 1 error';
 
@@ -17,6 +17,7 @@ function harness(mode: 'measure' | 'blocking' = 'measure', sandboxed = false, re
   const h = createHarness({
     sandboxed,
     repoVariables,
+    repoConfig: withTestCommand(),
     workflow: delegationStarts('tests', { jobs: { tests: { red: { ...RED, mode } } } }),
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
@@ -123,7 +124,8 @@ ERROR tests/test_audit.py
   /** The fixture repository at baseSha, its tests step adding `tests/test_audit.py`, the red command `init` proposes for it. */
   function python() {
     const h = createHarness({
-      workflow: delegationStarts('tests', { jobs: { tests: { red: { ...RED, command: 'uv run --frozen pytest' } } } }),
+      repoConfig: withTestCommand('uv run --frozen pytest'),
+      workflow: delegationStarts('tests'),
     });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Audit summary', description: 'Résumer les scores des audits par identifiant dans un module à part.' });
     h.workspaces.heads.set(WORKTREE, 'base-sha');

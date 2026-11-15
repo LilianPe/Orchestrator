@@ -1,14 +1,15 @@
-import type { JobSpec, RunLimits, Workflow } from '../core/workflow.js';
+import type { JobSpec, Limits, RunLimits, Workflow } from '../core/workflow.js';
 import type { Condition } from '../core/conditions.js';
+import { blockingFix, nextOf, startingJob } from '../core/chain.js';
 import { factoryDefault } from './factory-default.js';
-import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from './preset.js';
+import { compilePreset, isAgentStep, type AgentStep, type Effort, type Preset } from './preset.js';
+import { BINDINGS, type Binding } from './runtime-bindings.js';
 import { perStepToolViolations, READ_TOOLS, stepTools } from './tools.js';
 
 /**
- * The workflow of `factory/default`, built in TypeScript (ORC-388): its jobs and its rules are the ones the standard pack
- * held until ORC-389 removed it, its bounds and each job's effort, turns, network and tools are the preset's. A repository no longer overrides any
- * of it: `.factory/workflow.yml` is ignored, and `factory doctor` says so. The engine still runs jobs and rules, until it
- * walks the preset's steps itself (ORC-391, ORC-392).
+ * The workflow of a preset, built in TypeScript (ORC-388, ORC-391): the preset itself, which `decide` walks (`step.next`),
+ * the jobs that run its agent steps (`BINDINGS`), and the rules a human's event follows until they are coded in `decide`
+ * (ORC-392). A repository no longer overrides any of it: `.factory/workflow.yml` is ignored, and `factory doctor` says so.
  */
 
 class WorkflowError extends Error {}
@@ -25,16 +26,21 @@ export interface StepSettings {
 export const preset = compilePreset(factoryDefault).preset;
 
 /** The limit of a counter of the preset, which the engine still reads through `limits` (ORC-187). */
-export function presetBound(p: Preset, counter: string): number {
-  const found = Object.hasOwn(p.counters, counter) ? p.counters[counter] : undefined;
-  if (!found) throw new WorkflowError(`preset ${p.name}: counter ${counter} is missing`);
-  return found.limit;
+function presetBound(p: Preset, counter: string): number {
+  const found = boundOf(p, counter);
+  if (found === undefined) throw new WorkflowError(`preset ${p.name}: counter ${counter} is missing`);
+  return found;
 }
 
-export const agentStep = (name: string): Extract<Step, { maxTurns: number }> | undefined => {
-  const step = preset.steps.find((s) => s.id === name);
+const boundOf = (p: Preset, counter: string): number | undefined => (Object.hasOwn(p.counters, counter) ? p.counters[counter]!.limit : undefined);
+
+const agentStepOf = (p: Preset, name: string): AgentStep | undefined => {
+  const step = p.steps.find((s) => s.id === name);
   return step && isAgentStep(step) ? step : undefined;
 };
+
+/** An agent step of `factory/default`, the instance's preset, whose steps `factory.yml` names. */
+export const agentStep = (name: string): AgentStep | undefined => agentStepOf(preset, name);
 
 /** A step named in `factory.yml` that the preset does not have would silently cap nothing. */
 function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
@@ -53,7 +59,7 @@ function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
  * What a job takes from its agent step. The step sets the effort, `factory.yml` may change it; the step's turns are a
  * ceiling that `factory.yml` only lowers, as a step only narrows the network.
  */
-function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
+function fromStep(step: AgentStep, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
   const tools = settings.tools?.perStep?.[step.id] ?? stepTools(step);
   const tokens = settings.budgets?.perStepTokens?.[step.id];
   return {
@@ -64,29 +70,40 @@ function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimits, set
   };
 }
 
-/** The ceiling of a run with no limits of its own: the turns before the preset's, and its duration. */
-const PER_RUN: Readonly<RunLimits> = { turns: 150, durationMs: 90 * 60_000 };
+/** The turns of a run with no limits of its own, before its step's: the former `limits.per_run.turns` of the standard pack. */
+const PER_RUN_TURNS = 150;
 
-/** A job of an agent step, before what it takes from that step. */
-type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'verifyFailure' | 'pickup' | 'onStart' | 'onSuccess' | 'effort' | 'limits' | 'network' | 'tools'> &
-  Partial<Pick<JobSpec, 'pickup' | 'onStart' | 'onSuccess'>> & { step: string };
+/** The skill of a job: its step's, or the one of its cause for a fix. */
+function skillOf(step: AgentStep, b: Binding): string {
+  const skill = step.type === 'fix' ? (b.cause ? step.skills[b.cause] : undefined) : step.skill;
+  if (!skill) throw new WorkflowError(`step ${step.id}: no skill for ${b.cause ? `the cause ${b.cause}` : 'its job'}`);
+  return skill;
+}
 
-function stepJob(name: string, job: StepJob, settings: StepSettings): JobSpec {
-  const step = agentStep(job.step);
-  if (!step) throw new WorkflowError(`jobs.${name}.step: ${job.step} is not an agent step of ${preset.name}`);
-  const { step: _step, queue, model, workspace, session, skill, lens, input, repoChecks, pickup = false, structuredOutput, red, onStart = {}, onSuccess = {}, onBlocking, counter, ...rest } = job;
-  // Every field is named below, or a field added to `JobSpec` would be lost: none may be left over.
+/** The red check after a job (ORC-123): the `red` step its step leads to, its mode, and its checks (its counter's returns, plus the first). */
+function redOf(p: Preset, step: AgentStep): JobSpec['red'] {
+  const red = p.steps.find((s) => s.id === step.next);
+  if (red?.type !== 'verify' || red.mode !== 'red' || !red.red || !red.onFailure) return undefined;
+  return { mode: red.red, attempts: presetBound(p, red.onFailure.counter) + 1 };
+}
+
+function jobOf(p: Preset, name: string, b: Binding, perRun: RunLimits, settings: StepSettings): JobSpec | undefined {
+  const step = agentStepOf(p, b.step);
+  if (!step || (b.lens && (step.type !== 'review' || !step.lenses.includes(b.lens)))) return undefined;
+  const { step: _step, queue, model, workspace, session, lens, cause, input, repoChecks, pickup, structuredOutput, ...rest } = b;
+  // Every field is named above, or a field added to `Binding` would be lost: none may be left over.
   const _none: Record<string, never> = rest;
-  // In the order the pack's loader gave: a replay journal pins the workflow as JSON text, keys in their order (ORC-389).
+  const red = redOf(p, step);
   return {
-    name, step: job.step, queue, model, workspace, session, skill, lens, input, verify: [], repoChecks,
-    pickup, structuredOutput, red, ...fromStep(step, PER_RUN, settings), onStart, onSuccess, onBlocking, counter,
+    name, step: step.id, queue, model, workspace, session, skill: skillOf(step, b), lens, cause, input, verify: [], repoChecks,
+    pickup, structuredOutput, red, ...fromStep(step, perRun, settings),
   };
 }
 
 /**
- * What the pack's loader refused in a workflow, now that none goes through it: a run, a move or the relayed answer that names
- * nothing, a blocking lens whose fix does not read the findings, `after_merge` on another event than `pr.merged`.
+ * What the loader of the former pack refused in a workflow, now that none goes through it: a rule, a job or the relayed
+ * answer that names nothing, a job whose step the preset lacks, a review whose fix does not read the findings,
+ * `after_merge` on another event than `pr.merged`.
  */
 export function workflowViolations(wf: Workflow): string[] {
   const out: string[] = [];
@@ -104,12 +121,16 @@ export function workflowViolations(wf: Workflow): string[] {
       if (r.do === 'after_merge' && type !== 'pr.merged') out.push(`${at}.do: after_merge is the step of a merged PR, on pr.merged only`);
     }
   }
+  const steps = new Set(wf.preset?.steps.map((s) => s.id));
   for (const j of Object.values(wf.jobs)) {
-    job(`jobs.${j.name}.onSuccess.run`, j.onSuccess.run);
-    state(`jobs.${j.name}.onStart.move`, j.onStart.move);
-    state(`jobs.${j.name}.onSuccess.move`, j.onSuccess.move);
-    if (j.onBlocking && wf.jobs[j.onBlocking.run]?.input !== 'findings') out.push(`jobs.${j.name}.onBlocking.run: "${j.onBlocking.run}" must be a job that reads the findings`);
+    if (j.step !== undefined && !steps.has(j.step)) out.push(`jobs.${j.name}.step: ${j.step} is not a step of ${wf.preset?.name ?? 'the workflow'}`);
+    // A step reached on the way that has no job starts nothing: the chain would stop there silently.
+    const next = nextOf(wf, j);
+    if (next.step && isAgentStep(next.step) && !next.run) out.push(`jobs.${j.name}: its end reaches ${next.step.id}, which has no job`);
+    const fix = blockingFix(wf, j);
+    if (fix && fix.input !== 'findings') out.push(`jobs.${j.name}: the review's fix "${fix.name}" must be a job that reads the findings`);
   }
+  if (wf.entry !== undefined && !steps.has(wf.entry)) out.push(`entry: ${wf.entry} is not a step of ${wf.preset?.name ?? 'the workflow'}`);
   job('relayJob', wf.relayJob);
   return out;
 }
@@ -125,7 +146,7 @@ const notBlocked = { kind: 'blocked', negate: true } as const;
  */
 const RULES: Workflow['on'] = {
   'ticket.delegated': [{ when: [{ kind: 'state_in', values: ['todo', 'dev'] }, notBlocked], whenSrc: 'state in [todo, dev] && !blocked', run: 'dev' }],
-  // The review starts once a job that writes is published (its `onSuccess`). This rule reviews the published commit again:
+  // The review starts once a step that writes is published (its `next`). This rule reviews the published commit again:
   // a merge refused for a push since the review starts its job (ORC-148), and so does a human's move to AI Review.
   'status.changed': [{ to: 'ai_review', run: 'review' }],
   // A reply in the ticket's session; a review written on the PR (`pr.reviewed`) goes through these rules too (ORC-190).
@@ -147,89 +168,81 @@ const RULES: Workflow['on'] = {
   // the rebase waits for that work to end: the agent at work never resolves the conflict.
   'pr.conflicted': [{ when: [{ kind: 'state_in', values: ['dev', 'human_review', 'ai_review'] }, notBlocked], whenSrc: 'state in [dev, human_review, ai_review] && !blocked', run: 'rebase' }],
   // The `after_merge` step (ORC-197): the requester mentioned with the merged PR's link, the changelog entry, then the cleanup.
-  // It starts no run: the memory in writing sleeps (ORC-193).
+  // A step of the factory, with no agent: the memory in writing sleeps (ORC-193).
   'pr.merged': [{ move: 'done', do: 'after_merge' }],
 };
 
-/** The jobs and the rules of `factory/default`, with `factory.yml`'s settings of its agent steps (ORC-136, ORC-383). */
-export function defaultWorkflow(settings: StepSettings = {}): Workflow {
+/**
+ * The rules of a preset at the Rapide level (ORC-231): its delegation alone. A replayed ticket is closed (Done), and nothing
+ * a human does on the real one starts any job of its run.
+ */
+const rapideRules = (entryJob: string): Workflow['on'] => ({ 'ticket.delegated': [{ when: [notBlocked], whenSrc: '!blocked', run: entryJob }] });
+
+/**
+ * The answer agent (ORC-182), out of the preset's steps: a question starts it at once in the questions queue. It reads, on a
+ * clone of the trunk, at network claude-api, and writes nothing; what it cannot answer, it relays.
+ */
+const ASK: JobSpec = {
+  name: 'ask', queue: 'questions', model: 'sonnet', workspace: 'trunk-readonly', session: 'new', skill: 'factory:ask', input: 'thread',
+  verify: [], pickup: false, effort: 'low', network: 'claude-api', tools: READ_TOOLS, limits: { turns: 30, durationMs: 5 * 60_000, tokens: 200_000 },
+};
+
+/**
+ * The workflow of preset `p`, with `factory.yml`'s settings of its agent steps (ORC-136, ORC-383), which name the steps of
+ * `factory/default`, the instance's preset. `entry`: the step the chain starts at, the preset's own by default.
+ */
+export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry: string = given.entry): Workflow {
+  // Compiled here too: the walk of its steps relies on the invariants of the core (no cycle of `next`, every edge to a step).
+  const p = compilePreset(given).preset;
   checkStepSettings(settings);
-  // The build: published, then the AI review (ORC-183), whose end shows the PR in Human Review. Every job that writes code
-  // runs the repository's commands and the checks of the diff in a fresh clone (ORC-151).
-  const dev: StepJob = {
-    step: 'build', queue: 'dev', model: 'sonnet', workspace: 'worktree', session: 'new', skill: 'factory:dev',
-    pickup: true, structuredOutput: true, repoChecks: true,
-    onStart: { move: 'dev' }, onSuccess: { move: 'ai_review', post: 'summary', run: 'review' },
+  const perRun: RunLimits = { turns: PER_RUN_TURNS, durationMs: p.attempt.minutes * 60_000 };
+  const jobs = Object.entries(BINDINGS).flatMap(([name, b]) => jobOf(p, name, b, perRun, settings) ?? []);
+  const entryStep = p.steps.find((s) => s.id === entry);
+  const entryJob = entryStep && startingJob(jobs, entryStep);
+  if (!entryJob) throw new WorkflowError(`preset ${p.name}: its entry ${entry} has no job`);
+  const rapide = p.level === 'rapide';
+  // The bounds of the loops, read on the edges that take them: red CI's (the review and CI loop), the merge gate's (human review).
+  const merge = p.steps.find((s) => s.type === 'human_gate' && s.gate === 'merge');
+  const humanRounds = merge?.onFailure && boundOf(p, merge.onFailure.counter);
+  const specChanges = boundOf(p, 'spec_review');
+  const limits: Limits = {
+    perRun,
+    // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
+    verifyAttempts: presetBound(p, 'verify') + 1,
+    ciFixAttempts: presetBound(p, p.redCi.counter),
+    ...(humanRounds !== undefined ? { humanReviewRounds: humanRounds } : {}),
+    repeatedFailures: p.sameFailure.limit,
+    silentAfterMs: p.silentRun.minutes * 60_000,
+    specCheckReturns: presetBound(p, 'spec_check'),
+    ...(specChanges !== undefined ? { specChanges } : {}),
   };
-  // A reply that resumes the ticket's session in its worktree. Its commit goes back through `verify`, `publish` and the AI
-  // review, as every fix of the loop (ORC-184, ORC-190): no work of the factory waits for a human move (ORC-170).
-  const feedback: StepJob = {
-    ...dev, step: 'fix', structuredOutput: false, session: 'resume', skill: 'factory:feedback', input: 'feedback',
-    pickup: false, onStart: {}, onSuccess: { move: 'ai_review', post: 'reply', run: 'review' },
-  };
-  const { repoChecks: _checks, ...answer } = feedback;
-  const review: StepJob = {
-    step: 'review', queue: 'dev', model: 'opus', workspace: 'published', session: 'new', skill: 'factory:review',
-    lens: 'correctness', structuredOutput: true, onSuccess: { run: 'review-security' },
-  };
-  const jobs: Record<string, StepJob> = {
-    // `intake` (ORC-206), on a fresh clone of the trunk; off until a rule runs it.
-    intake: { step: 'intake', queue: 'dev', model: 'sonnet', workspace: 'trunk-readonly', session: 'new', skill: 'factory:intake', structuredOutput: true, onSuccess: { run: 'dev' } },
-    dev,
-    // `spec_draft` (ORC-212): the spec through `submit_result`; off until a rule runs it.
-    spec: { step: 'spec_draft', queue: 'dev', model: 'sonnet', workspace: 'worktree', session: 'new', skill: 'factory:spec', structuredOutput: true, onSuccess: { run: 'tests' } },
-    // `tests` (ORC-123), then the `red` check in measure mode; the ticket session starts here (ORC-217). Off until a rule runs it.
-    tests: {
-      ...dev, step: 'tests', structuredOutput: false, skill: 'factory:tests', session: 'resume', pickup: false,
-      red: { command: 'npm test --', mode: 'measure', attempts: presetBound(preset, 'red') + 1 }, onSuccess: { run: 'dev' },
-    },
-    'dev-feedback': feedback,
-    'fix-ci': { ...feedback, skill: 'factory:fix-ci', input: 'ci_failures' },
-    // The blocking findings of the last review, each fixed or contested (`submit_result`'s `fixed` and `contested`).
-    'fix-review': { ...feedback, input: 'findings', structuredOutput: true },
-    // Human review feedback: each start is a round of the preset's `human_review` (ORC-190).
-    'fix-human': { ...feedback, counter: 'human_review' },
-    // The answer to questions relayed to the agent that implements (ORC-375): no round, no check, nothing moved or posted.
-    'answer-relayed': { ...answer, onSuccess: {} },
-    // The rebase (ORC-146): its commit goes through `verify`, then over the head the factory published. It moves and posts nothing.
-    rebase: { ...dev, step: 'rebase', session: 'resume', skill: 'factory:rebase', pickup: false, onStart: {}, onSuccess: {} },
-    // Two read-only lenses (ORC-183); a blocking finding starts `fix-review` instead of the move (ORC-184).
-    review,
-    'review-security': { ...review, lens: 'security', onSuccess: { move: 'human_review', post: 'review' }, onBlocking: { run: 'fix-review' } },
-  };
-  // A copy of its own on each call, its rules, limits and jobs included: a test that changes one changes no other (ORC-389).
-  return structuredClone<Workflow>({
+  const relay = jobs.find((j) => j.cause === 'relay');
+  const wf: Workflow = {
     version: 1,
     blockComment: true,
-    tracker: { kind: 'linear', pickup: { checks: ['has_description', 'not_started'] } },
+    ...(p.level ? { level: p.level } : {}),
+    tracker: { kind: 'linear', pickup: { checks: p.guard.checks } },
     states: { todo: 'Todo', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' },
-    limits: {
-      // Read by nothing since ORC-390 (`concurrency` of factory.yml, a fixed 2 for the questions): kept, as hashed in the journals.
-      parallelSessions: 3,
-      questionSessions: 2,
-      perRun: PER_RUN,
-      // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
-      verifyAttempts: presetBound(preset, 'verify') + 1,
-      ciFixAttempts: presetBound(preset, 'review_ci'),
-      humanReviewRounds: presetBound(preset, 'human_review'),
-      repeatedFailures: preset.sameFailure.limit,
-      silentAfterMs: preset.silentRun.minutes * 60_000,
-      specCheckReturns: presetBound(preset, 'spec_check'),
-      specChanges: presetBound(preset, 'spec_review'),
-    },
+    limits,
     workspace: { setup: [], portBase: 4200 },
     commands: [],
-    on: RULES,
-    jobs: {
-      ...Object.fromEntries(Object.entries(jobs).map(([name, job]) => [name, stepJob(name, job, settings)])),
-      // The answer agent (ORC-182), out of the preset's steps: a question starts it at once in the questions queue. It reads,
-      // on a clone of the trunk, at network claude-api, and writes nothing; what it cannot answer, it relays.
-      ask: {
-        name: 'ask', queue: 'questions', model: 'sonnet', workspace: 'trunk-readonly', session: 'new', skill: 'factory:ask', input: 'thread',
-        verify: [], pickup: false, effort: 'low', network: 'claude-api', tools: READ_TOOLS,
-        limits: { turns: 30, durationMs: 5 * 60_000, tokens: 200_000 }, onStart: {}, onSuccess: { post: 'reply' },
-      },
-    },
-    relayJob: 'answer-relayed',
-  });
+    on: rapide ? rapideRules(entryJob.name) : RULES,
+    // The answer agent at every level: a question in a ticket's thread starts it directly, with no rule (`askInThread`).
+    jobs: Object.fromEntries([...jobs, ASK].map((j) => [j.name, j])),
+    ...(relay ? { relayJob: relay.name } : {}),
+    preset: p,
+    entry,
+  };
+  const refused = workflowViolations(wf);
+  if (refused.length) throw new WorkflowError(`preset ${p.name}: ${refused.join('; ')}`);
+  // A copy of its own on each call, its preset, rules, limits and jobs included: a test that changes one changes no other (ORC-389).
+  return structuredClone(wf);
+}
+
+/**
+ * The workflow of `factory/default`. Its chain starts at `build` until the delegation starts at the preset's entry (ORC-395):
+ * `intake`, when a test or a project runs it, is the guard before `build` (ORC-206) and hands over to it.
+ */
+export function defaultWorkflow(settings: StepSettings = {}): Workflow {
+  return presetWorkflow(preset, settings, 'build');
 }

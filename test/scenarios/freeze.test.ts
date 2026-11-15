@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fingerprint, FREEZE_CHECK, REFREEZE } from '../../src/checks/freeze.js';
 import type { EventPayloads } from '../../src/core/types.js';
 import { exportJournal } from '../../src/runtime/replay.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, withTestCommand } from '../helpers/harness.js';
 import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /**
@@ -23,6 +23,7 @@ type Harness = ReturnType<typeof createHarness>;
 function ticketWithBranch(workflow?: WorkflowOverrides): Harness {
   const h = createHarness({
     authz: { maintainers: [LEAD], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } },
+    repoConfig: withTestCommand(),
     ...(workflow ? { workflow } : {}),
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });

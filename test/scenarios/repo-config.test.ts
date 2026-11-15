@@ -87,8 +87,9 @@ describe("the repository's config at the launch", () => {
   });
 
   it.each([false, true])('checks a run with the config its launch read, kept on the run: a merge on the default branch meanwhile changes nothing (sandboxed: %s)', async (sandboxed) => {
-    const before = 'env: [NODE_ENV]\n';
-    const merged = 'env: [API_URL]\n';
+    // The test command the red check runs (ORC-391).
+    const before = 'env: [NODE_ENV]\ncommands: { test: npm test -- }\n';
+    const merged = 'env: [API_URL]\ncommands: { test: npm test -- }\n';
     let reads = 0;
     const repoConfig = async () => parseRepoConfig(reads++ === 0 ? before : merged);
     const given: string[][] = [];

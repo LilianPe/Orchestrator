@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
 
 const statuses = (plan: readonly PlanStep[]) => plan.map((s) => s.status);
@@ -36,13 +37,16 @@ describe('session plan (ORC-171)', () => {
   });
 
   it('reads the step of a job from its shape: reviews, questions and runs that hand nothing over are not steps of the plan', () => {
-    const toReview = { move: 'human_review' as const };
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:dev', onSuccess: toReview })).toBe('Build');
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:tests', onSuccess: { run: 'dev' }, red: { command: 'npm test --', mode: 'measure', attempts: 3 } })).toBe('Tests');
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:feedback', onSuccess: { post: 'reply' } })).toBeUndefined();
-    expect(planStepOfJob({ queue: 'dev', skill: 'factory:review', onSuccess: toReview })).toBeUndefined();
-    expect(planStepOfJob({ queue: 'questions', skill: 'factory:ask', onSuccess: { post: 'reply' } })).toBeUndefined();
+    const wf = defaultWorkflow();
+    const of = (job: string) => planStepOfJob(wf.jobs[job]!, wf);
+    expect(of('dev')).toBe('Build');
+    expect(of('tests')).toBe('Tests');
+    // The relayed answer and the rebase hand nothing over: their end moves nothing.
+    expect(of('answer-relayed')).toBeUndefined();
+    expect(of('rebase')).toBeUndefined();
+    expect(of('review-security')).toBeUndefined();
+    expect(of('ask')).toBeUndefined();
     // The spec step (ORC-212): the tests step after its gate takes the plan on.
-    expect(planStepOfJob({ queue: 'dev', step: 'spec_draft', skill: 'factory:spec', onSuccess: { run: 'tests' } })).toBe('Spec');
+    expect(of('spec')).toBe('Spec');
   });
 });

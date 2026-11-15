@@ -1,11 +1,11 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
-import type { Effort } from '../presets/preset.js';
+import type { Effort, FixCause, Preset } from '../presets/preset.js';
 import type { Condition } from './conditions.js';
 import type { EventType, InputKind, LogicalState, QueueName } from './types.js';
 
 /**
- * The workflow the engine decides on: built in TypeScript by `defaultWorkflow` (`src/presets/workflow.ts`), pinned by each
- * ticket's frozen version and by the replay journals. The YAML pack and its loader are gone (ORC-389).
+ * The workflow the engine decides on: built in TypeScript from a preset by `presetWorkflow` (`src/presets/workflow.ts`), pinned
+ * by each ticket's frozen version and by the replay journals. The YAML pack and its loader are gone (ORC-389).
  */
 
 export type PickupCheck = 'has_description' | 'not_started' | 'has_acceptance_criteria';
@@ -18,9 +18,6 @@ export interface RunLimits {
 }
 
 export interface Limits {
-  /** Read by nothing since ORC-390: the queues' capacities are `concurrency` of factory.yml and a fixed 2. Kept, as the journals hash them. */
-  parallelSessions: number;
-  questionSessions: number;
   perRun: RunLimits;
   verifyAttempts: number;
   /** Runs red CI and conflicts may start, together, before the next one blocks the ticket (I5, ORC-270, ORC-146); 0 blocks at the first. */
@@ -68,6 +65,8 @@ export interface JobSpec {
   model: string;
   /** The preset step the job runs (`step`, ORC-136), named by its block's comment (ORC-196). Absent from the jobs out of the preset and from versions frozen before it. */
   step?: string;
+  /** The cause of a job of the `fix` step (ORC-391): it picks the step's skill and the counter of the edge that sends the run there. */
+  cause?: FixCause;
   /** `claude --effort`, of the preset step the job names (`step`, ORC-136), or the job's own out of the preset (ORC-182). Absent: the CLI's default. */
   effort?: Effort;
   /**
@@ -106,28 +105,26 @@ export interface JobSpec {
    */
   structuredOutput?: boolean;
   /**
-   * The `red` factory check after the job (ORC-123) instead of `verify`: its added tests must fail for the right
-   * reason. `measure` records what it would have blocked and goes on; `blocking` sends the job back, `attempts`
-   * checks at most (the preset counter `red` + 1), then blocks; a check that could not run blocks in both. Absent from the jobs and versions without it.
+   * The `red` factory check after the job (ORC-123) instead of `verify`, the preset's `red` step: its added tests must fail for
+   * the right reason, run with the repository's `commands.test`. `measure` records what it would have blocked and goes on;
+   * `blocking` sends the job back, `attempts` checks at most (the preset counter `red` + 1), then blocks; a check that could
+   * not run blocks in both. Absent from the jobs and versions without it.
    */
-  red?: { command: string; mode: 'measure' | 'blocking'; attempts: number };
+  red?: { mode: 'measure' | 'blocking'; attempts: number };
   limits: RunLimits;
-  onStart: { move?: LogicalState };
-  /** `run`: the job started once this one succeeded (ORC-123: `tests` then `dev`). */
-  /** `post: review`: the findings of the ticket's AI review lenses, on the published commit, as a GitHub review and `factory/review` (ORC-183). */
-  onSuccess: { move?: LogicalState; post?: 'summary' | 'reply' | 'synthesis' | 'review'; run?: string };
   /**
-   * The lens that publishes the review (ORC-184): a blocking finding on the commit starts `run`, the fix of the review loop, in
-   * place of `on_success`, on the counter of the review and CI loop; past it, the ticket is blocked. Absent from versions frozen
-   * before it, whose review goes to Human Review whatever it found.
+   * What the job's start and end did in a version frozen before ORC-391, which has no preset: its move at the launch, its end's
+   * move, post and next job, the fix of a blocking finding, its round of human review. A version with a preset reads them in
+   * its steps (`src/core/chain.ts`). Removed with the frozen versions (ORC-392, ORC-393).
    */
+  onStart?: { move?: LogicalState };
+  onSuccess?: { move?: LogicalState; post?: Post; run?: string };
   onBlocking?: { run: string };
-  /**
-   * `human_review`: each start of the job, a relaunch of a lost attempt and a return of `verify` aside, is a round of human review feedback (ORC-190),
-   * counted on the ticket's `humanReviewRounds` up to `limits.humanReviewRounds`; past it, the ticket is blocked instead.
-   */
   counter?: 'human_review';
 }
+
+/** What the end of a step posts: `review` is the findings of the AI review's lenses, published as a GitHub review and `factory/review` (ORC-183). */
+export type Post = 'summary' | 'reply' | 'synthesis' | 'review';
 
 export type ReviewLens = 'correctness' | 'security';
 
@@ -138,7 +135,7 @@ export interface Workflow {
    * Absent from versions frozen before it, whose tickets keep the free text of their session: a replay decides as they did.
    */
   blockComment?: true;
-  /** `rapide` (ORC-231): the level of `factory/fantome`, no question asked and the spec approved by the preset (`asFantome`). */
+  /** `rapide` (ORC-231): the level of `factory/fantome`, no question asked and the spec approved by the preset. */
   level?: 'rapide';
   tracker: { kind: 'linear'; team?: string; pickup: { checks: PickupCheck[] } };
   /**
@@ -158,4 +155,11 @@ export interface Workflow {
    * Absent from versions frozen before it, whose relay starts the reply rules' job (ORC-374): a replay decides as they did.
    */
   relayJob?: string;
+  /**
+   * The preset the workflow runs (ORC-391): the end of each job walks its steps (`step.next`). Absent from versions frozen
+   * before it, whose jobs chain by their own `onSuccess`.
+   */
+  preset?: Preset;
+  /** The step the chain starts at: `build` for `factory/default` until ORC-395, the preset's entry otherwise. */
+  entry?: string;
 }

@@ -364,6 +364,20 @@ describe('ContainerSandboxProvider.create', () => {
     await expect(p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, services: ['redis'] } }))).rejects.toThrow(/redis/);
   });
 
+  it('runs a sandbox that asks for a browser on the capture image, with nothing more than another (ORC-404)', async () => {
+    const e = empty();
+    const p = new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec, browserImage: 'factory-browser:1' });
+    await p.create(req({ requirements: { ...DEFAULT_REQUIREMENTS, browser: true } }));
+    const shot = runArgs(e.calls);
+    expect(shot.slice(-3)).toEqual(['factory-browser:1', 'sleep', 'infinity']);
+    expect(shot.slice(shot.indexOf('--network'), shot.indexOf('--network') + 2)).toEqual(['--network', 'none']);
+    expect(shot.filter((x, i) => shot[i - 1] === '--mount')).toEqual(['type=bind,source=/home/d/wt/orc-1,target=/work']);
+    // Every other sandbox stays on the runner's image.
+    const plain = empty();
+    await new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: plain.exec, browserImage: 'factory-browser:1' }).create(req());
+    expect(runArgs(plain.calls).slice(-3)).toEqual(['factory-runner:1', 'sleep', 'infinity']);
+  });
+
   it('rejects when the engine fails to run the container', async () => {
     const e = engine((a) => (a[0] === 'run' ? { stdout: '', stderr: 'no such image', code: 125 } : ok()));
     await expect(new ContainerSandboxProvider({ ...opts, cli: 'docker', exec: e.exec }).create(req())).rejects.toThrow(/no such image/);
