@@ -334,9 +334,18 @@ describe('bootstrap', () => {
     writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
     saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'http://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
     await expect(start(client)).rejects.toThrow(/publicUrl.*https/);
-    // ORC-398: the sign-in set, secrets.json must be encrypted at rest; the message names the key.
-    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
-    await expect(start(client)).rejects.toThrow(/exposes .* outside this machine: set secrets_key in factory\.yml/);
+  });
+
+  // ORC-398: exposed, secrets.json must be encrypted at rest; on the loopback, secrets_key stays optional.
+  it('refuses a non-loopback host without secrets_key, naming it; starts on the loopback without it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
+    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
+    saveInstance(home, { port: 4197, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    await expect(startFactory({ home, fakeRunner: true, log: () => {}, env })).rejects.toThrow(/outside this machine.*: set secrets_key in factory\.yml/);
+    saveInstance(home, { port: 4197, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    const app = await startFactory({ home, fakeRunner: true, log: () => {}, env });
+    await app.stop();
   });
 
   it('refuses to start real runs without a container engine or FACTORY_ALLOW_HOST_RUNS=1 (ORC-349)', async () => {

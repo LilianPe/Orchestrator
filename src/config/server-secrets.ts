@@ -3,11 +3,14 @@ import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/regi
 import { refText, type SecretRef, type SecretSource, type SecretSourceKind } from '../adapters/secrets/types.js';
 import { DAY_MS } from '../core/baseline.js';
 import { FactoryYmlError, factoryYmlText, parseFactoryYml, type FactoryYml } from './factory-yml.js';
-import { loadInstance, secretsText } from './instance.js';
 import { isSealed } from './secrets-file.js';
+import { isLoopbackHost, loadInstance, secretsText } from './instance.js';
 
 /** Past this, `doctor` says a secret's rotation is too old (ORC-398, ORC-222 criterion 4). */
 export const ROTATION_MAX_DAYS = 180;
+
+/** Why the daemon refuses to start exposed without `secrets_key` (ORC-398): the start and doctor say it alike. */
+export const SECRETS_KEY_REQUIRED = 'set secrets_key in factory.yml (a reference, at least 32 characters: openssl rand -base64 32), required off the loopback: it encrypts secrets.json at rest';
 
 const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk";
 
@@ -80,8 +83,14 @@ export async function serverSecretReport(
   const sources = openSecretSources(yml?.secretSources, kinds, env);
   const reports: SecretReport[] = [];
   for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) reports.push(await describeRef(key, ref, yml, sources, now));
+  const instance = loadInstance(home);
+  // Off the loopback, the daemon does not start without it: said whether or not secrets.json exists yet. Its reference,
+  // as a value read from a source is deferred here.
+  if (!yml?.secretRefs?.['secrets_key'] && !isLoopbackHost(instance.host)) {
+    reports.push({ key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (host: ${instance.host}): ${SECRETS_KEY_REQUIRED}`] });
+  }
   // A copy left in config.yaml is still on the disk, even when factory.yml's reference replaces it.
-  if (loadInstance(home).github?.privateKey) {
+  if (instance.github?.privateKey) {
     reports.push({ key: 'github.privateKey', reference: 'config.yaml', inClear: true, warnings: ['in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)'] });
   } else if (!yml?.secretRefs?.['github.private_key'] && env['GH_APP_KEY']) {
     reports.push({ key: 'github.privateKey', reference: 'env:GH_APP_KEY', inClear: true, warnings: [IN_CLEAR_ENV] });
@@ -89,7 +98,7 @@ export async function serverSecretReport(
   const stored = secretsText(home);
   if (stored !== undefined) {
     const sealed = isSealed(stored);
-    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : ['in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)'] });
+    reports.push({ key: 'secrets.json', inClear: !sealed, warnings: sealed ? [] : ['in clear on disk: set secrets_key in factory.yml to encrypt it'] });
   }
   return reports;
 }

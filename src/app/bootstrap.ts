@@ -33,10 +33,10 @@ import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { claudeAccountReader, disabledControls, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
-import { loadSealedFactoryYml } from '../config/server-secrets.js';
+import { loadSealedFactoryYml, SECRETS_KEY_REQUIRED } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, type InstanceConfig } from '../config/instance.js';
+import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
@@ -53,7 +53,7 @@ import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
-import { agentOnly, createApp, GITHUB_CALLBACK_PATH, isLoopbackHost, type ServerDeps } from '../server/app.js';
+import { agentOnly, createApp, GITHUB_CALLBACK_PATH, type ServerDeps } from '../server/app.js';
 import { listenCliSocket } from '../server/cli-socket.js';
 import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
@@ -74,8 +74,10 @@ export interface BootOptions {
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
 
 /**
- * The dashboard's GitHub sign-in off the loopback (ORC-399): the factory App's OAuth client, who factory.yml lets in, and
- * the HTTPS public URL GitHub calls back to. Undefined on the loopback, where nobody signs in; one missing refuses the start.
+ * What exposing the daemon off the loopback requires, one missing refusing the start: the dashboard's GitHub sign-in
+ * (ORC-399), the factory App's OAuth client, who factory.yml lets in and the HTTPS public URL GitHub calls back to; and
+ * `secrets_key`, which encrypts secrets.json at rest (ORC-398). Undefined on the loopback, where nobody signs in and
+ * `secrets_key` stays optional (doctor warns of the file in clear).
  */
 function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, client: { clientId: string; clientSecret: string } | undefined): ServerDeps['githubLogin'] {
   if (isLoopbackHost(instance.host)) return undefined;
@@ -85,6 +87,7 @@ function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, c
   }
   if (!yml?.dashboard) throw new Error(`${exposed}: name who may sign in, dashboard: { logins, org, team } in factory.yml.`);
   if (!instance.publicUrl?.startsWith('https://')) throw new Error(`${exposed}: set publicUrl to its https:// address, where GitHub calls the sign-in back and the session cookie is sent.`);
+  if (!yml.secretsKey) throw new Error(`${exposed}: ${SECRETS_KEY_REQUIRED}.`);
   // A publicUrl written with its trailing slash must still give the callback URL the App declares.
   const redirectUri = `${instance.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
   const options = { ...client, redirectUri, access: yml.dashboard };
@@ -105,12 +108,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const instance = effectiveInstance(o.home, yml);
   const oauthClient = githubOAuthClient(instance, env);
   const githubLogin = dashboardLogin(instance, yml, oauthClient);
-  // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398); a key
-  // required off the loopback, as the sign-in is (ORC-399): optional on it, where doctor warns of the file in clear.
+  // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398), as it must off the loopback.
   const secretsKey = yml?.secretsKey;
-  if (!secretsKey && !isLoopbackHost(instance.host)) {
-    throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: set secrets_key in factory.yml (a reference, at least 32 characters: openssl rand -base64 32), which encrypts secrets.json at rest, or set host: 127.0.0.1 back in config.yaml.`);
-  }
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
   if (!o.fakeRunner) checkHostRuns(env);

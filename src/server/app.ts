@@ -31,6 +31,7 @@ import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readSession, signSession } from './session.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
+import { isLoopbackHost } from '../config/instance.js';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -92,16 +93,6 @@ const MAX_BUNDLE_BYTES = 100 * 2 ** 20;
 
 /** What each control of a run adds to its stop (ORC-301, ORC-234). */
 const RUN_CONTROL = { pause: { pause: true }, stop: {}, 'take-over': { takeOver: true } } as const;
-
-/**
- * A name of the loopback: `host` without a password listens there, and the interface without a password answers under
- * these names alone (ORC-349). Not `publicUrl`'s, which a tunnel brings here: the webhooks and the OAuth callback answer
- * under any name, the interface does not. A rebound name is never one of these.
- */
-export function isLoopbackHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
-  return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
-}
 
 /** Tickets `GET /api/measures` serves, the most recently updated: each costs a read of its journal. */
 const MEASURED_TICKETS = 50;

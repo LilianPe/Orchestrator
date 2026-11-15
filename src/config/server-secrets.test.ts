@@ -6,7 +6,7 @@ import { FakeSecretSource, fakeSecretKind } from '../adapters/secrets/fake.js';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { FactoryYmlError } from './factory-yml.js';
 import { saveSecrets } from './instance.js';
-import { loadSealedFactoryYml, ROTATION_MAX_DAYS, serverSecretLines, serverSecretReport } from './server-secrets.js';
+import { loadSealedFactoryYml, ROTATION_MAX_DAYS, SECRETS_KEY_REQUIRED, serverSecretLines, serverSecretReport } from './server-secrets.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\nsealed\n-----END RSA PRIVATE KEY-----\n';
 const NOW = Date.parse('2026-11-15T00:00:00Z');
@@ -85,9 +85,11 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
   it('never warns about the rotation of secrets_key: rotating it would leave secrets.json unreadable', async () => {
     const h = home('secret_sources: { coffre: { kind: fake, name: coffre } }\nsecrets_key: "coffre:factory#key"\n');
     const old = new Date(NOW - (ROTATION_MAX_DAYS + 30) * DAY);
-    expect(await serverSecretReport(h, {}, { now: NOW, kinds: kindsWith({ 'factory#key': old }) })).toEqual([
-      { key: 'secrets_key', reference: 'coffre:factory#key', inClear: false, rotatedAt: old.toISOString(), warnings: [] },
-    ]);
+    const expected = [{ key: 'secrets_key', reference: 'coffre:factory#key', inClear: false, rotatedAt: old.toISOString(), warnings: [] }];
+    expect(await serverSecretReport(h, {}, { now: NOW, kinds: kindsWith({ 'factory#key': old }) })).toEqual(expected);
+    // Off the loopback too: declared from a source, unread here, it is there all the same.
+    writeFileSync(join(h, 'config.yaml'), 'host: 0.0.0.0\n');
+    expect(await serverSecretReport(h, {}, { now: NOW, kinds: kindsWith({ 'factory#key': old }) })).toEqual(expected);
   });
 
   it('names a GitHub key left in config.yaml though factory.yml reads it from a source', async () => {
@@ -102,22 +104,33 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     saveSecrets(h, { linear: { clientId: 'c', clientSecret: 's', webhookSecret: 'w', accessToken: 'a' } });
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
       { key: 'github.privateKey', reference: 'config.yaml', inClear: true, warnings: ['in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)'] },
-      { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)'] },
+      { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it'] },
     ]);
     saveSecrets(h, {}, 'k'.repeat(32));
     expect((await serverSecretReport(h, {}, { now: NOW })).find((r) => r.key === 'secrets.json')).toEqual({ key: 'secrets.json', inClear: false, warnings: [] });
+  });
+
+  it('off the loopback, says a missing secrets_key stops the start, even before secrets.json exists', async () => {
+    const h = home('concurrency: 1\n');
+    writeFileSync(join(h, 'config.yaml'), 'host: 0.0.0.0\n');
+    expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
+      { key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (host: 0.0.0.0): ${SECRETS_KEY_REQUIRED}`] },
+    ]);
+    // On the loopback, it stays optional: nothing to say without secrets.json.
+    writeFileSync(join(h, 'config.yaml'), 'host: 127.0.0.1\n');
+    expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([]);
   });
 
   it('says it in lines, the date first, then each warning', () => {
     expect(
       serverSecretLines([
         { key: 'github.private_key', reference: 'coffre:gh#key', inClear: false, rotatedAt: '2026-11-05T00:00:00.000Z', warnings: [] },
-        { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)'] },
+        { key: 'secrets.json', inClear: true, warnings: ['in clear on disk: set secrets_key in factory.yml to encrypt it'] },
       ]),
     ).toEqual([
       'Server secrets:',
       '  github.private_key (coffre:gh#key): sealed, rotated 2026-11-05',
-      '  secrets.json: in clear — warning: in clear on disk: set secrets_key in factory.yml to encrypt it (required off the loopback)',
+      '  secrets.json: in clear — warning: in clear on disk: set secrets_key in factory.yml to encrypt it',
     ]);
   });
 });
