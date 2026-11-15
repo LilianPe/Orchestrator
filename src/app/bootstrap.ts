@@ -36,7 +36,7 @@ import { SecretReader } from '../adapters/secrets/reader.js';
 import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -288,7 +288,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
       // A replayed ticket's (ORC-376): its checkout at transaction time, read as it is, never pulled.
       // The factory's one write to it (ORC-386): the start recipes it validated, in the same clone, one git at a time with the pull.
-      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()), previewRecipes: new PreviewRecipes(kb) } : {}),
+      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()), previewRecipes: new PreviewRecipes(kb), startFingerprint: makeStartFingerprint({ log }) } : {}),
       store,
       clock,
       bus,

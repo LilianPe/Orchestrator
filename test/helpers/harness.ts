@@ -261,6 +261,8 @@ export function createHarness(
     visualShooter?: VisualShooter;
     /** The start recipes of the knowledge base (ORC-386). */
     previewRecipes?: OrchestratorDeps['previewRecipes'];
+    /** The fingerprint of the files that decide how the application starts (ORC-406); none by default. */
+    startFingerprint?: OrchestratorDeps['startFingerprint'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its skills and settings. */
@@ -327,6 +329,7 @@ export function createHarness(
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(visualProof ? { visualProof } : {}),
       ...(opts.previewRecipes ? { previewRecipes: opts.previewRecipes } : {}),
+      ...(opts.startFingerprint ? { startFingerprint: opts.startFingerprint } : {}),
       ...(keptEffectsDir ? { keptEffectsDir } : {}),
       ...(opts.transcriptsDir ? { transcriptsDir: opts.transcriptsDir } : {}),
     };

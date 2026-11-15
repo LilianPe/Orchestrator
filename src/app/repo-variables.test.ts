@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
 
 const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
@@ -281,5 +281,119 @@ describe('makeOriginUrl (ORC-151)', () => {
     expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
     expect(await url({ repoPath: '/r' })).toBe('https://forge/real.git');
     expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('makeStartFingerprint (ORC-406)', () => {
+  it('changes with what decides how the application starts on the default branch, and only with it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-start-fp-'));
+    try {
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
+      const fingerprint = makeStartFingerprint();
+      const commit = (path: string, text: string) => {
+        writeFileSync(join(repo, path), text);
+        run(repo, 'add', '.');
+        run(repo, 'commit', '--quiet', '-m', path);
+        run(repo, 'push', '--quiet', 'origin', 'main');
+        run(repo, 'fetch', '--quiet', 'origin');
+      };
+      commit('package.json', JSON.stringify({ name: 'shop', version: '1.0.0', scripts: { dev: 'vite' } }));
+      const first = await fingerprint({ repoPath: repo });
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+      // The README, the package's version: not how it starts.
+      commit('README.md', '# Shop\n');
+      commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite' } }));
+      expect(await fingerprint({ repoPath: repo })).toBe(first);
+      // Its scripts are.
+      commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite --host' } }));
+      const scripts = await fingerprint({ repoPath: repo });
+      expect(scripts).not.toBe(first);
+      // A dependency bump is not: no lockfile counts.
+      for (const lock of ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'uv.lock', 'go.sum', 'Cargo.lock']) commit(lock, `${lock} v2\n`);
+      expect(await fingerprint({ repoPath: repo })).toBe(scripts);
+      // A Makefile, the scripts of a pyproject.toml, a compose file are.
+      commit('pyproject.toml', '[project]\nname = "shop"\nversion = "1.0"\n\n[project.scripts]\nshop = "shop.cli:main"\n');
+      let last = await fingerprint({ repoPath: repo });
+      expect(last).not.toBe(scripts);
+      commit('pyproject.toml', '[project]\nname = "shop"\nversion = "1.1"\ndependencies = ["flask>=3"]\n\n[project.scripts]\nshop = "shop.cli:main"\n');
+      expect(await fingerprint({ repoPath: repo }), 'pyproject version and dependencies').toBe(last);
+      for (const [path, text] of [['pyproject.toml', '[project]\nname = "shop"\n\n[project.scripts]\nshop = "shop.app:serve"\n'], ['Makefile', 'serve:\n\tnpm run dev\n'], ['compose.yaml', 'services: {}\n']] as const) {
+        commit(path, text);
+        const now = await fingerprint({ repoPath: repo });
+        expect(now, path).not.toBe(last);
+        last = now;
+      }
+      // Never the agent's worktree: what is not on the default branch does not count.
+      writeFileSync(join(repo, 'Makefile'), 'serve:\n\tmake other\n');
+      expect(await fingerprint({ repoPath: repo })).toBe(last);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is undefined, logged, when git cannot read a start file it needs: a passing failure resets nothing', async () => {
+    const logged: string[] = [];
+    const exec: Exec = async (_, args) => {
+      if (args.includes('symbolic-ref')) return { stdout: 'refs/remotes/origin/main\n', stderr: '', code: 0 };
+      if (args.includes('ls-tree')) return { stdout: '100644 blob abc123\tpyproject.toml\0', stderr: '', code: 0 };
+      return { stdout: '', stderr: 'fatal: unable to read abc123', code: 128 };
+    };
+    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
+    expect(logged).toHaveLength(1);
+  });
+
+  it('is undefined, logged, when git cannot read the default branch', async () => {
+    const logged: string[] = [];
+    const exec: Exec = async () => ({ stdout: '', stderr: 'fatal', code: 128 });
+    expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
+    expect(logged).toHaveLength(1);
+  });
+});
+
+describe('pyprojectStart (ORC-406)', () => {
+  const base = '[project]\nname = "shop"\nversion = "1.0"\ndependencies = ["flask"]\n';
+  const Q = '"'.repeat(3);
+
+  it('keeps only the tables that say how it starts: scripts and entry points, of PEP 621 and of Poetry', () => {
+    const toml = `${base}\n[project.scripts]\nshop = "shop.cli:main" # the CLI\n\n[project.gui-scripts]\nshop-gui = "shop.gui:main"\n\n[project.entry-points."shop.plugins"]\nx = "shop.x"\n\n[tool.poetry.scripts]\nserve = "shop.app:serve"\n\n[tool.ruff]\nline-length = 100\n`;
+    const kept = pyprojectStart(toml);
+    for (const value of ['shop.cli:main', 'shop.gui:main', 'shop.x', 'shop.app:serve']) expect(kept).toContain(value);
+    expect(kept).not.toContain('version');
+    expect(kept).not.toContain('line-length');
+    expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"').replace('line-length = 100', 'line-length = 120'))).toBe(kept);
+    expect(pyprojectStart(toml.replace('shop.cli:main', 'shop.cli:run'))).not.toBe(kept);
+    expect(pyprojectStart(base)).toBe('');
+  });
+
+  it('keeps the task runners: PDM, Hatch, Rye, poethepoet, taskipy', () => {
+    for (const table of ['tool.pdm.scripts', 'tool.hatch.envs.default.scripts', 'tool.rye.scripts', 'tool.poe.tasks', 'tool.taskipy.tasks']) {
+      const toml = `${base}\n[${table}]\ndev = "flask run"\n`;
+      expect(pyprojectStart(toml), table).toContain('flask run');
+      expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"')), table).toBe(pyprojectStart(toml));
+    }
+  });
+
+  it('keeps scripts set by an inline, dotted or quoted key, wherever their table is; never a key of the same name in another tool', () => {
+    for (const toml of [`${base}scripts = { shop = "shop.cli:main" }\n`, `${base}scripts.shop = "shop.cli:main"\n`, `${base}"scripts" = { shop = "shop.cli:main" }\n`, `${base}[tool]\npoetry.scripts.shop = "shop.cli:main"\n`, `${base}["project"."scripts"]\nshop = "shop.cli:main"\n`]) {
+      expect(pyprojectStart(toml), toml).toContain('shop.cli:main');
+      expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"')), toml).toBe(pyprojectStart(toml));
+    }
+    const mypy = `${base}\n[tool.mypy]\nplugins = ["pydantic.mypy"]\n\n[tool.coverage.run]\nplugins = ["x"]\n`;
+    expect(pyprojectStart(mypy)).toBe('');
+  });
+
+  it('does not count the order of the scripts', () => {
+    expect(pyprojectStart(`${base}\n[project.scripts]\na = "m:a"\nb = "m:b"\n`)).toBe(pyprojectStart(`${base}\n[project.scripts]\nb = "m:b"\na = "m:a"\n`));
+  });
+
+  it('reads a multi-line string or a value over several lines as TOML does: a long description counts for nothing', () => {
+    expect(pyprojectStart(`${base}description = ${Q}\nmany\nlines\n${Q}\n`)).toBe('');
+    expect(pyprojectStart(`${base}description = ${Q}\nmany\nlines\n${Q}\n\n[project.scripts]\nshop = "shop.cli:main"\n`)).toBe(pyprojectStart(`${base}\n[project.scripts]\nshop = "shop.cli:main"\n`));
+    expect(pyprojectStart(`${base}scripts.dev = [\n  "a",\n]\n`)).toContain('"a"');
+  });
+
+  it('reads the whole file where it does not parse', () => {
+    const broken = `${base}[project.scripts\nshop = "shop.cli:main"\n`;
+    expect(pyprojectStart(broken)).toBe(broken);
   });
 });

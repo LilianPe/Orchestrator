@@ -90,6 +90,8 @@ export interface VisualRequest {
    * only a recipe that answered on `port` starts anything. Never a guess of `verify`'s.
    */
   found?: PreviewRecipe;
+  /** Why the knowledge base has no recipe and no search is asked for one any more (ORC-406), said where the proof is unavailable. */
+  noSearch?: string;
   port: number;
   /** The page shot: `visual_scenario.url` of `submit_result`, `/` without one. */
   path: string;
@@ -373,7 +375,7 @@ async function planVisual(
   const start = declared ?? (chosen && recipeStart(chosen));
   proof.start = declared ? 'declared' : (recipe ?? 'none');
   if (!v.shooter) proof.unavailable = 'this instance has no sandbox with a browser';
-  else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH}), and the knowledge base has learned none`;
+  else if (!start) proof.unavailable = `no command starts the application (\`preview\` in ${REPO_CONFIG_PATH}), and the knowledge base has learned none${v.noSearch ? `: ${v.noSearch}` : ''}`;
   else if (at.from === EMPTY_TREE) proof.unavailable = 'the branch shares no commit with the base, which has no page to compare';
   // The shots run the application without the repository's services (ORC-282): a page they show would not be the one it serves.
   else if (at.config.services.length) proof.unavailable = `the repository's services (${at.config.services.join(', ')}) are not provided to the captures`;

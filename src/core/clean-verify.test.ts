@@ -1264,6 +1264,13 @@ describe('the visual proof, taken by the factory in verify (ORC-176)', () => {
       const res = await runCleanVerify(req);
       expect(res.visual?.proof).toMatchObject({ start: 'none', unavailable: expect.stringContaining('`preview` in .factory/config.yml') });
     });
+
+    it('none, and no search asked any more (ORC-406): unavailable, saying why', async () => {
+      const { req } = visual({ page: 'new page\n', preview: null });
+      req.visual!.noSearch = 'the build agent searched 3 times without finding how to start it';
+      const res = await runCleanVerify(req);
+      expect(res.visual?.proof).toMatchObject({ start: 'none', unavailable: expect.stringMatching(/learned none: the build agent searched 3 times/) });
+    });
   });
 
   it('a commit that declares a service no sandbox provides is refused before any of its code runs, naming it (ORC-282)', async () => {

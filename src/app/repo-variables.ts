@@ -1,9 +1,14 @@
+import { createHash } from 'node:crypto';
 import { execCmd, execFailure, mustExec, type Exec } from '../adapters/exec.js';
 import { githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
+import { zFields } from '../core/clean-verify.js';
+import { START_FILES } from '../knowledge/preview-recipe.js';
+import { canonical } from '../runtime/workflow-version.js';
+import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/toml.js';
 
 /**
  * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
@@ -44,6 +49,87 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
     return config;
   };
 }
+
+/**
+ * The fingerprint of the files that decide how a project's application starts (ORC-406, `START_FILES`), on its default branch as
+ * `makeRepoConfig` reads it, with no fetch of its own: each file by its blob, package.json and pyproject.toml by what in them says
+ * how it starts (`START_PART`). Undefined, logged, where git cannot read the branch.
+ */
+export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { repoPath: string }) => Promise<string | undefined> {
+  const exec = o.exec ?? execCmd;
+  return async ({ repoPath }) => {
+    const { ref } = await originHeadOf(exec, repoPath);
+    const tree = await exec('git', ['-C', repoPath, '--literal-pathspecs', 'ls-tree', '-z', ref, '--', ...START_FILES]);
+    if (tree.code !== 0) {
+      o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'ls-tree', ref], tree).message}`);
+      return undefined;
+    }
+    const entries = zFields(tree.stdout).flatMap((entry) => {
+      const m = /^\d+ \w+ ([0-9a-f]+)\t(.+)$/.exec(entry);
+      return m ? [{ blob: m[1]!, path: m[2]! }] : [];
+    });
+    // A file whose part counts read in parallel; one git could not read leaves the fingerprint unread, never another one.
+    const parts = await Promise.all(
+      entries.map(async ({ blob, path }) => {
+        const part = START_PART[path];
+        if (!part) return `${path}\0${blob}`;
+        const args = ['-C', repoPath, 'cat-file', 'blob', blob];
+        const r = await exec('git', args);
+        if (r.code !== 0) {
+          o.log?.(`start fingerprint: ${execFailure('git', args, r).message}`);
+          return undefined;
+        }
+        return `${path}\0${part(r.stdout)}`;
+      }),
+    );
+    if (parts.includes(undefined)) return undefined;
+    return createHash('sha256').update(parts.sort().join('\n')).digest('hex');
+  };
+}
+
+/** The scripts of a package.json, in a stable form; the whole text where it does not parse, which a fix changes all the same. */
+function packageScripts(text: string): string {
+  try {
+    return canonical((JSON.parse(text) as { scripts?: unknown }).scripts ?? {});
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * The tables of a pyproject.toml that say how it starts: PEP 621's scripts and entry points, Poetry's scripts and plugins, and the
+ * task runners' (PDM, Rye, poethepoet, taskipy; Hatch's, in each of its environments).
+ */
+const PYPROJECT_START = ['project.scripts', 'project.gui-scripts', 'project.entry-points', 'tool.poetry.scripts', 'tool.poetry.plugins', 'tool.pdm.scripts', 'tool.rye.scripts', 'tool.poe.tasks', 'tool.taskipy.tasks'];
+
+const at = (t: TomlValue | undefined, dotted: string): TomlValue | undefined => dotted.split('.').reduce<TomlValue | undefined>((v, k) => (isTable(v) ? v[k] : undefined), t);
+
+/**
+ * What of a pyproject.toml says how it starts (ORC-406): `PYPROJECT_START`'s tables, in canonical JSON, so that neither the
+ * version, the dependencies nor the order of the scripts count; the whole text where it does not parse.
+ */
+export function pyprojectStart(text: string): string {
+  let toml: TomlTable;
+  try {
+    toml = parseToml(text);
+  } catch {
+    return text;
+  }
+  const picked: Record<string, TomlValue> = {};
+  for (const path of PYPROJECT_START) {
+    const v = at(toml, path);
+    if (v !== undefined) picked[path] = v;
+  }
+  const envs = at(toml, 'tool.hatch.envs');
+  for (const [name, env] of isTable(envs) ? Object.entries(envs) : []) {
+    const scripts = at(env, 'scripts');
+    if (scripts !== undefined) picked[`tool.hatch.envs.${name}.scripts`] = scripts;
+  }
+  return Object.keys(picked).length ? canonical(picked) : '';
+}
+
+/** What of a start file counts in the fingerprint, where not its whole blob. */
+const START_PART: Partial<Record<string, (text: string) => string>> = { 'package.json': packageScripts, 'pyproject.toml': pyprojectStart };
 
 /**
  * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts.
