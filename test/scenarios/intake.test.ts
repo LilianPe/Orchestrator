@@ -2,13 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import { WRITE_TOOLS } from '../../src/presets/tools.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts } from '../helpers/workflow-with.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206), as the pack's own comment says. */
-const INTAKE_FIRST = `version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", run: intake }
-`;
+const INTAKE_FIRST = delegationStarts('intake');
 const DESCRIPTION = 'Export the audits as CSV from the audit list.\n\nAcceptance criteria:\n1. A CSV button downloads the list.';
 
 /** What intake submits: a complete ticket of size `s`, low risk, no screen, unless `patch` says otherwise. */
@@ -23,7 +20,7 @@ const skills = (h: ReturnType<typeof createHarness>) => h.runner.requests.map((r
 
 describe('intake, the first step (ORC-206)', () => {
   it('records size and risk, plans the visual proof, then starts dev: only dev moves the ticket to In Progress', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    const h = createHarness({ workflow: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
     h.runner.enqueue(assessment({ risk: 'medium', screen: true }), DEV);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -39,7 +36,7 @@ describe('intake, the first step (ORC-206)', () => {
   });
 
   it('runs on a clone of its own with the read and search tools only: a write or a command is refused by the run, not the skill (ORC-367)', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    const h = createHarness({ workflow: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
     h.runner.enqueue(assessment(), DEV);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -55,7 +52,7 @@ describe('intake, the first step (ORC-206)', () => {
   });
 
   it('an incomplete ticket leaves no worktree behind: intake never made one (ORC-367)', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    const h = createHarness({ workflow: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export', description: DESCRIPTION });
     h.runner.enqueue(assessment({ complete: false, missing: ['CSV or XLSX?'] }));
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -66,7 +63,7 @@ describe('intake, the first step (ORC-206)', () => {
   });
 
   it('an incomplete ticket goes to clarify instead of starting: asked its questions, never moved to In Progress', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    const h = createHarness({ workflow: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export', description: DESCRIPTION });
     h.runner.enqueue(assessment({ complete: false, missing: ['CSV or XLSX?'] }));
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -84,7 +81,7 @@ describe('intake, the first step (ORC-206)', () => {
   });
 
   it('the deterministic checks no longer block directly: they are inputs of the guard, which asks after intake', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    const h = createHarness({ workflow: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Flou', description: 'trop court' });
     h.runner.enqueue(assessment({ size: 'xs' }));
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
@@ -95,7 +92,7 @@ describe('intake, the first step (ORC-206)', () => {
   });
 
   it('the checks hold before the first run only: a ticket delegated again after its dev run is not refused for its own branch', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST });
+    const h = createHarness({ workflow: INTAKE_FIRST });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
     h.runner.enqueue(assessment(), DEV);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });

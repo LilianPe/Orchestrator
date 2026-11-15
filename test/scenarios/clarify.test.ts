@@ -3,13 +3,10 @@ import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import { causeOf } from '../../src/core/block-cause.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts } from '../helpers/workflow-with.js';
 
 /** A repository that makes delegation start with `intake` (ORC-206). */
-const INTAKE_FIRST = `version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", run: intake }
-`;
+const INTAKE_FIRST = delegationStarts('intake');
 const DESCRIPTION = 'Rate-limit the public API.\n\nAcceptance criteria:\n1. More than 100 requests a minute get a 429.';
 const HOUR = 3_600_000;
 const RATE = { question: 'Does the rate limit apply to admin accounts too?', options: ['Yes, to everyone', 'No, admins are exempt'] };
@@ -24,7 +21,7 @@ const assessment = (patch: Partial<NonNullable<AgentOutput['intake']>> = {}) => 
 const DEV = { events: [{ kind: 'text' as const, text: 'Done.' }] };
 
 function setup() {
-  const h = createHarness({ projectYaml: INTAKE_FIRST, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+  const h = createHarness({ workflow: INTAKE_FIRST, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Rate limit', description: DESCRIPTION });
   h.tracker.setTeamMembers('REL', ['user-lilian', 'user-armand']);
   h.forge.setRepoPermission('lilian-gh', 'write');
@@ -98,7 +95,7 @@ describe('clarify, end to end (ORC-210)', () => {
 
 describe('clarify and the wait on a « blocked by » ticket (ORC-210, ORC-363)', () => {
   it('an incomplete ticket with an open blocker is asked its questions first, then waits for the blocker, then starts once it is Done', async () => {
-    const h = createHarness({ projectYaml: INTAKE_FIRST, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+    const h = createHarness({ workflow: INTAKE_FIRST, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'API gateway', stateName: 'In Progress', stateType: 'started' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Rate limit', description: DESCRIPTION, delegateId: 'app' });
     h.tracker.blocks('REL-2', 'REL-1');

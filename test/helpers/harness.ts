@@ -1,7 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parse, stringify } from 'yaml';
 import { FakeCheckRunner } from '../../src/adapters/checks/fake.js';
 import { FakeForge } from '../../src/adapters/forge/fake.js';
 import { FakePublisher } from '../../src/adapters/publisher/fake.js';
@@ -14,8 +13,7 @@ import { openSecretSources, SECRET_SOURCE_KINDS } from '../../src/adapters/secre
 import type { SecretSource } from '../../src/adapters/secrets/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
-import { loadWorkflow } from '../../src/config/load-workflow.js';
-import type { Workflow } from '../../src/config/workflow-schema.js';
+import type { Workflow } from '../../src/core/workflow.js';
 import { saveAgentOutput } from '../../src/core/agent-output.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { FakeClock } from '../../src/core/clock.js';
@@ -34,20 +32,19 @@ import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { Store } from '../../src/store/types.js';
 import type { Faults } from './faults.js';
 import type { TestPreset } from './test-preset.js';
+import { workflowWith, type WorkflowOverrides } from './workflow-with.js';
 
 export const packDir = join(import.meta.dirname, '../../packs/standard');
 
 /**
- * The standard pack (or `pack`, a copy a test changed: ORC-236) with `projectYaml` on top, as a project's workflow.yml; the
- * temporary file is removed once read.
+ * `factory/default`'s workflow with `overrides` on top (`workflowWith`).
  * Without `aiReview`, `dev`'s end goes straight to Human Review, as before ORC-183, instead of starting the AI review's two
  * lenses, and `fix-ci`'s end starts no review either (ORC-184): what the scenarios of the other steps, the properties and the
  * recorded journals run on, their runs and moves counted without the review's. The review's own scenarios
- * (`test/scenarios/review.test.ts`), the review loop's property and the golden replay run the pack as it ships.
+ * (`test/scenarios/review.test.ts`), the review loop's property and the golden replay run the workflow as it ships.
  */
-export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean; pack?: string } = {}): Workflow {
-  const pack = o.pack ?? packDir;
-  const wf = projectYaml ? withProjectFile(projectYaml, pack) : loadWorkflow({ packDir: pack });
+export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean } = {}): Workflow {
+  const wf = workflowWith(overrides);
   if (o.aiReview) return wf;
   // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before.
   for (const job of Object.values(wf.jobs)) {
@@ -58,23 +55,11 @@ export function loadTestWorkflow(projectYaml?: string, o: { aiReview?: boolean; 
 }
 
 /**
- * A project file whose move from Human Review back to In Progress starts `dev-feedback`, as the pack did before ORC-190: a start
- * a human makes at will, for the scenarios about what such a start reads or waits behind. Over `yaml` (a test preset's), if given.
+ * A move from Human Review back to In Progress starts `dev-feedback`, as the pack did before ORC-190: a start a human makes at
+ * will, for the scenarios about what such a start reads or waits behind. Over `o` (a test preset's), if given.
  */
-export function withMoveBack(yaml?: string): string {
-  const raw = (yaml ? parse(yaml) : { version: 1 }) as { on?: Record<string, unknown> };
-  return stringify({ ...raw, on: { ...raw.on, 'status.changed': [{ from: 'human_review', to: 'dev', run: 'dev-feedback' }, { to: 'ai_review', run: 'review' }] } });
-}
-
-function withProjectFile(projectYaml: string, pack: string): Workflow {
-  const dir = mkdtempSync(join(tmpdir(), 'factory-h-'));
-  try {
-    const projectFile = join(dir, 'workflow.yml');
-    writeFileSync(projectFile, projectYaml);
-    return loadWorkflow({ packDir: pack, projectFile });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+export function withMoveBack(o: WorkflowOverrides = {}): WorkflowOverrides {
+  return { ...o, on: { ...o.on, 'status.changed': [{ from: 'human_review', to: 'dev', run: 'dev-feedback' }, { to: 'ai_review', run: 'review' }] } };
 }
 
 /** REL-1 delegated, its dev run held by the runner: it stays `running` until released. */
@@ -208,7 +193,8 @@ export function trackHarnesses(): () => Promise<void> {
 
 export function createHarness(
   opts: {
-    projectYaml?: string;
+    /** What the test changes of `factory/default`'s workflow (`workflowWith`). */
+    workflow?: WorkflowOverrides;
     /** `concurrency` of factory.yml (ORC-203). */
     concurrency?: number;
     preset?: TestPreset;
@@ -274,7 +260,7 @@ export function createHarness(
     previewRecipes?: OrchestratorDeps['previewRecipes'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
-    /** Another pack than the standard one (a copy a test changed, ORC-236): its workflow, skills and settings. */
+    /** Another pack than the standard one (a copy a test changed, ORC-236): its skills and settings. */
     packDir?: string;
     /** Where the runs' transcripts are, as a test writes them: the answer agent reads the session at work there (ORC-182). */
     transcriptsDir?: string;
@@ -290,9 +276,9 @@ export function createHarness(
     replays?: { dir: string; startTime: number };
   } = {},
 ) {
-  if (opts.projectYaml !== undefined && opts.preset) throw new Error('createHarness: pass projectYaml or preset, not both');
+  if (opts.workflow !== undefined && opts.preset) throw new Error('createHarness: pass workflow or preset, not both');
   const pack = opts.packDir ?? packDir;
-  const loaded = loadTestWorkflow(opts.projectYaml ?? opts.preset?.yaml, { aiReview: opts.aiReview, pack });
+  const loaded = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview });
   const workflow = opts.fantome ? asFantome(loaded) : loaded;
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;

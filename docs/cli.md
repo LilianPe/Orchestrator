@@ -113,7 +113,7 @@ Stops the run of ticket `<ID>` (e.g. `REL-12`): SIGINT to the Claude Code proces
 Replays exported ticket journals, without an instance or network: each journal line goes through the upcasters (`schemaVersion`, and timers recorded before ORC-161 through `upcastTimer`), then its decision is redone (`decide`, then `reduce`) from what the decision transaction recorded (projection read under the lock, workflow version, clock). A directory is read in full (`*.json`, in name order).
 
 - **Regression** (default): the projection, the effects, the timers and the timer reset must come out **bit for bit** as recorded (canonical JSON, sorted keys). Each divergence is listed with the event that carries it. Exit code 0 without divergence, 1 if a journal diverges, 2 on an unknown option, an unreadable journal or one impossible to replay (missing workflow version) or a journal without any decision; the other journals in the directory are replayed anyway.
-- **What-if** (`--what-if <workflow.yml>`): the decisions run on this workflow, laid over the standard pack (`--pack <directory>` for another), instead of the versions the tickets were pinned to. The replay stops at the first divergence and reports it:
+- **What-if** (`--what-if <preset>`): the decisions run on the workflow of a preset compiled in the binary, `factory/default` or `factory/fantome` (ORC-389; a workflow file is refused, exit code 2), instead of the versions the tickets were pinned to. The replay stops at the first divergence and reports it:
 
 ```
 test/replay/journals/check-failed-then-feedback.json: p/REL-1: 4 decision(s) replayed — stopped at the first divergence
@@ -143,7 +143,7 @@ The ticket is unblocked and the repair logged (`dead_letter.repaired` event, wit
 
 ### `factory flaky <project>` (ORC-164)
 
-The repository's known flaky tests, which `verify` marks indicative: failing, they do not count, and the agent is not sent back for them ([`workflow.md`](workflow.md)). A test is named as `verify` names it: `<file> > <full name>` for vitest and jest, its node id for pytest, as the journal's `flaky` field shows them.
+The repository's known flaky tests, which `verify` marks indicative: failing, they do not count, and the agent is not sent back for them ([`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389)). A test is named as `verify` names it: `<file> > <full name>` for vitest and jest, its node id for pytest, as the journal's `flaky` field shows them.
 
 ```text
 $ factory flaky p add 'src/cart.test.ts > cart total' --reason 'times out under load'

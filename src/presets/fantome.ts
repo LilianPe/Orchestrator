@@ -1,4 +1,4 @@
-import type { Workflow } from '../config/workflow-schema.js';
+import type { Workflow } from '../core/workflow.js';
 import { parseCondition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, type Preset, type Step } from './preset.js';
@@ -74,7 +74,7 @@ export function asFantome(wf: Workflow): Workflow {
       tests: { ...job('tests'), onSuccess: { run: 'dev' } },
       dev: { ...job('dev'), onStart: {}, onSuccess: {} },
     },
-    // `verifyAttempts` counts every check: the preset's returns, plus the first one, as `loadWorkflow` counts them.
+    // `verifyAttempts` counts every check: the preset's returns, plus the first one, as `defaultWorkflow` counts them.
     limits: { ...wf.limits, verifyAttempts: presetBound(fantome, 'verify') + 1, specCheckReturns: presetBound(fantome, 'spec_check') },
   };
 }

@@ -1,8 +1,8 @@
-import { stringify } from 'yaml';
+import type { WorkflowOverrides } from './workflow-with.js';
 
 /**
  * Minimal test preset: one fake agent step, one fake check step, and the bounded counter between
- * them. It overlays the standard pack until `factory/default` (ORC-187) replaces the YAML workflow.
+ * them, over `factory/default`'s workflow (`workflowWith`).
  * `build` is the `dev` job and the jobs that extend it (`dev-feedback`, `fix-ci`): each of their runs
  * is followed by `verify`, as in the engine, so a resumed run after a block is checked again.
  */
@@ -17,13 +17,13 @@ export interface TestPreset {
    * `ciFixAttempts`: red CI starts `fix-ci` N times; the next red CI blocks the ticket (0 blocks at the first).
    */
   bounds: { verifyAttempts: number; ciFixAttempts: number };
-  yaml: string;
+  workflow: WorkflowOverrides;
 }
 
 export function testPreset(opts: { verifyAttempts?: number; ciFixAttempts?: number } = {}): TestPreset {
   const verifyAttempts = opts.verifyAttempts ?? 2;
   const ciFixAttempts = opts.ciFixAttempts ?? 2;
-  // The schema accepts 0, which the engine treats as 1: refused here so property tests see one meaning.
+  // The engine treats 0 as 1: refused here so property tests see one meaning.
   if (!Number.isInteger(verifyAttempts) || verifyAttempts < 1) throw new Error('verifyAttempts must be a positive integer');
   if (!Number.isInteger(ciFixAttempts) || ciFixAttempts < 0) throw new Error('ciFixAttempts must be a non-negative integer');
   const build: TestStep = { name: 'build', kind: 'agent', job: 'dev' };
@@ -31,6 +31,6 @@ export function testPreset(opts: { verifyAttempts?: number; ciFixAttempts?: numb
   return {
     steps: [build, verify],
     bounds: { verifyAttempts, ciFixAttempts },
-    yaml: stringify({ version: 1, limits: { verify_attempts: verifyAttempts, ci_fix_attempts: ciFixAttempts }, jobs: { [build.job]: { verify: verify.commands } } }),
+    workflow: { limits: { verifyAttempts, ciFixAttempts }, verify: verify.commands },
   };
 }

@@ -1,4 +1,4 @@
-import type { Workflow } from '../config/workflow-schema.js';
+import type { Workflow } from '../core/workflow.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
 import { SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
 import { upcast, upcastTicket, upcastTimer, type StoredTimer } from '../core/upcast.js';

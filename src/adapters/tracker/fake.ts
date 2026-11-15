@@ -2,7 +2,7 @@ import type { PlanStep } from '../../core/session-plan.js';
 import type { TeamDirectory } from '../roles/types.js';
 import { IssueNotFoundError, labelsWritten, type ActivityInput, type DatedIssue, type IssueHistory, type LabelsWritten, type SearchHit, type Tracker, type TrackerIssue } from './types.js';
 
-/** The states of packs/standard/workflow.yml, the catalogue every team has unless a test declares another. */
+/** The states of `defaultWorkflow()`, the catalogue every team has unless a test declares another. */
 export const STANDARD_STATES = ['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done'] as const;
 
 export class FakeTracker implements Tracker, TeamDirectory {

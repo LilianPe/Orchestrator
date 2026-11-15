@@ -21,7 +21,7 @@ const server = (title: string) => String.raw`require('http').createServer((q, r)
 `;
 
 /**
- * The visual proof in production (ORC-404, docs/workflow.md): the capture image of docker/browser.Dockerfile, served to a
+ * The visual proof in production (ORC-404, docs/preset.md): the capture image of docker/browser.Dockerfile, served to a
  * sandbox that asks for a browser, at network `none`, with nothing mounted but the checkout. Skipped without the image,
  * which only the CI's isolation job builds, on top of the runner's.
  */

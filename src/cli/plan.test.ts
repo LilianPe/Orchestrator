@@ -1,15 +1,14 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { newTicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { formatPlan, planRows } from './plan.js';
 
 describe('plan', () => {
   it('lists a ticket of a team with several repos once, under its repo, or as not taken when it names none (ORC-291)', async () => {
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const workflow = defaultWorkflow();
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'a', labels: ['repo:api'] });
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'a' });
@@ -27,7 +26,7 @@ describe('plan', () => {
   });
 
   it('classifies delegated tickets by priority', async () => {
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const workflow = defaultWorkflow();
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', title: 'Bas', delegateId: 'a', priority: 4 });
     tracker.addIssue({ identifier: 'REL-2', title: 'Urgent', delegateId: 'a', priority: 1 });
@@ -46,7 +45,7 @@ describe('plan', () => {
   });
 
   it('previews not_started on git, the daemon reading it on the forge (ORC-207)', async () => {
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const workflow = defaultWorkflow();
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'a' });
     const workspaces = new FakeWorkspaces();
@@ -56,7 +55,7 @@ describe('plan', () => {
   });
 
   it("previews by each repository's own branch naming, read once per project; an invalid one is that project's reason only (ORC-283)", async () => {
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const workflow = defaultWorkflow();
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'a' });
     tracker.addIssue({ identifier: 'REL-2', delegateId: 'a' });

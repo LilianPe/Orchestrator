@@ -1,6 +1,5 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { asFantome, FANTOME_APPROVER } from '../presets/fantome.js';
 import type { AgentOutput } from './agent-output.js';
 import { decide } from './engine.js';
@@ -12,7 +11,7 @@ import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState
  * The Rapide level of `factory/fantome` (ORC-231): a closed ticket has nobody to answer. What `clarify` would ask is assumed,
  * written in the spec and counted; the spec that passes `spec_check` is approved by the preset, and the tests start.
  */
-const workflow = asFantome(loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') }));
+const workflow = asFantome(defaultWorkflow());
 
 const SPEC: Spec = { goal: 'Export the audits as CSV.', out_of_scope: [], criteria: ['Given 2 audits, when I click CSV, then 3 lines.'], files: ['src/export.ts'], architecture: 'None.', risks: [], assumed: ['the CSV library escapes quotes'] };
 const output = (extra: Partial<AgentOutput>): AgentOutput => ({ status: 'done', summary: 'Done.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], ...extra });
@@ -56,7 +55,7 @@ describe('the Rapide level of factory/fantome (ORC-231)', () => {
   });
 
   it('factory/default asks its questions as before', () => {
-    const standard = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+    const standard = defaultWorkflow();
     const out = decide(ticket('intake'), finished('intake', incomplete), standard);
     expect(out.effects).toEqual([expect.objectContaining({ kind: 'activity', type: 'elicitation' })]);
   });
