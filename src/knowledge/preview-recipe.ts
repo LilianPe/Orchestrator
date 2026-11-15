@@ -82,14 +82,10 @@ const notFoundSchema = z
 
 /**
  * The files at the root of the default branch that decide how the application starts (ORC-406), whose fingerprint bounds the
- * search: the lockfiles, package.json (its scripts only), a Makefile, pyproject.toml, a compose file.
+ * search: package.json (its scripts only), a Makefile, pyproject.toml (its scripts and entry points), a compose file. No lockfile:
+ * a dependency bump does not change how the application starts, and would ask the three searches again at each bump.
  */
-export const START_FILES = [
-  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', 'deno.lock',
-  'Makefile', 'makefile', 'GNUmakefile', 'pyproject.toml', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'requirements.txt',
-  'Gemfile.lock', 'Cargo.lock', 'go.sum', 'composer.lock',
-  'compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml',
-] as const;
+export const START_FILES = ['package.json', 'Makefile', 'makefile', 'GNUmakefile', 'pyproject.toml', 'compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'] as const;
 
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
@@ -126,7 +122,7 @@ export const searchOwed = (n: ReadNote, fingerprint?: string): boolean =>
 /** Why no search is asked any more for a repository with no recipe (ORC-406), for the proof it leaves unavailable. */
 export function noSearchReason(n: ReadNote, fingerprint: string | undefined): string | undefined {
   if (!isNotFound(n) || !exhausted(n, fingerprint)) return undefined;
-  return `the build agent searched ${n.failures} times without finding how to start it (last on ${n.ticket}); no search until the files that decide how it starts change (lockfiles, package.json scripts, Makefile, pyproject.toml, compose)`;
+  return `the build agent searched ${n.failures} times without finding how to start it (last on ${n.ticket}); no search until the files that decide how it starts change (package.json scripts, Makefile, pyproject.toml scripts, compose)`;
 }
 
 /** What decides whether the `build` agent searches a recipe (ORC-386): the same inputs at its launch and at its check. */

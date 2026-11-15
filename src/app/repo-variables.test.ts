@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
 
 const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
@@ -308,9 +308,16 @@ describe('makeStartFingerprint (ORC-406)', () => {
       commit('package.json', JSON.stringify({ name: 'shop', version: '1.1.0', scripts: { dev: 'vite --host' } }));
       const scripts = await fingerprint({ repoPath: repo });
       expect(scripts).not.toBe(first);
-      // So are a lockfile, a Makefile, a pyproject.toml, a compose file.
-      let last = scripts;
-      for (const [path, text] of [['package-lock.json', '{}'], ['Makefile', 'serve:\n\tnpm run dev\n'], ['pyproject.toml', '[project]\nname = "shop"\n'], ['compose.yaml', 'services: {}\n']] as const) {
+      // A dependency bump is not: no lockfile counts.
+      for (const lock of ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'uv.lock', 'go.sum', 'Cargo.lock']) commit(lock, `${lock} v2\n`);
+      expect(await fingerprint({ repoPath: repo })).toBe(scripts);
+      // A Makefile, the scripts of a pyproject.toml, a compose file are.
+      commit('pyproject.toml', '[project]\nname = "shop"\nversion = "1.0"\n\n[project.scripts]\nshop = "shop.cli:main"\n');
+      let last = await fingerprint({ repoPath: repo });
+      expect(last).not.toBe(scripts);
+      commit('pyproject.toml', '[project]\nname = "shop"\nversion = "1.1"\ndependencies = ["flask>=3"]\n\n[project.scripts]\nshop = "shop.cli:main"\n');
+      expect(await fingerprint({ repoPath: repo }), 'pyproject version and dependencies').toBe(last);
+      for (const [path, text] of [['pyproject.toml', '[project]\nname = "shop"\n\n[project.scripts]\nshop = "shop.app:serve"\n'], ['Makefile', 'serve:\n\tnpm run dev\n'], ['compose.yaml', 'services: {}\n']] as const) {
         commit(path, text);
         const now = await fingerprint({ repoPath: repo });
         expect(now, path).not.toBe(last);
@@ -329,5 +336,27 @@ describe('makeStartFingerprint (ORC-406)', () => {
     const exec: Exec = async () => ({ stdout: '', stderr: 'fatal', code: 128 });
     expect(await makeStartFingerprint({ exec, log: (m) => logged.push(m) })({ repoPath: '/repo' })).toBeUndefined();
     expect(logged).toHaveLength(1);
+  });
+});
+
+describe('pyprojectStart (ORC-406)', () => {
+  const base = '[project]\nname = "shop"\nversion = "1.0"\ndependencies = ["flask"]\n';
+  const Q = '"'.repeat(3);
+
+  it('keeps only the tables that say how it starts: scripts and entry points, of PEP 621 and of Poetry', () => {
+    const toml = `${base}\n[project.scripts]\nshop = "shop.cli:main" # the CLI\n\n[project.gui-scripts]\nshop-gui = "shop.gui:main"\n\n[project.entry-points."shop.plugins"]\nx = "shop.x"\n\n[tool.poetry.scripts]\nserve = "shop.app:serve"\n\n[tool.ruff]\nline-length = 100\n`;
+    const kept = pyprojectStart(toml);
+    for (const line of ['shop = "shop.cli:main"', 'shop-gui = "shop.gui:main"', 'x = "shop.x"', 'serve = "shop.app:serve"']) expect(kept).toContain(line);
+    expect(kept).not.toContain('version');
+    expect(kept).not.toContain('line-length');
+    expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"').replace('line-length = 100', 'line-length = 120'))).toBe(kept);
+    expect(pyprojectStart(toml.replace('shop.cli:main', 'shop.cli:run'))).not.toBe(kept);
+    expect(pyprojectStart(base)).toBe('');
+  });
+
+  it('reads the whole file where it cannot tell the scripts apart: an inline or dotted table, a multi-line string', () => {
+    for (const toml of [`${base}scripts = { shop = "shop.cli:main" }\n`, `${base}scripts.shop = "shop.cli:main"\n`, `project.scripts.shop = "shop.cli:main"\n${base}`, `${base}description = ${Q}\nmany\nlines\n${Q}\n`]) {
+      expect(pyprojectStart(toml), toml).toBe(toml);
+    }
   });
 });

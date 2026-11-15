@@ -51,8 +51,8 @@ export function makeRepoConfig(o: { exec?: Exec; fetchDeadlineMs?: number; log?:
 
 /**
  * The fingerprint of the files that decide how a project's application starts (ORC-406, `START_FILES`), on its default branch as
- * `makeRepoConfig` reads it, with no fetch of its own: each file by its blob, package.json by its scripts only. Undefined, logged,
- * where git cannot read the branch.
+ * `makeRepoConfig` reads it, with no fetch of its own: each file by its blob, package.json and pyproject.toml by what in them says
+ * how it starts (`START_PART`). Undefined, logged, where git cannot read the branch.
  */
 export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { repoPath: string }) => Promise<string | undefined> {
   const exec = o.exec ?? execCmd;
@@ -69,21 +69,52 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
       if (!m) continue;
       const blob = m[1]!;
       const path = m[2]!;
-      parts.push(`${path}\0${path === 'package.json' ? await scriptsOf(exec, repoPath, blob) : blob}`);
+      const part = START_PART[path];
+      parts.push(`${path}\0${part ? part((await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob])).stdout) : blob}`);
     }
     return createHash('sha256').update(parts.sort().join('\n')).digest('hex');
   };
 }
 
-/** The scripts of a package.json, in a stable form; its blob where it does not parse, which a fix changes all the same. */
-async function scriptsOf(exec: Exec, repoPath: string, blob: string): Promise<string> {
-  const r = await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob]);
+/** The scripts of a package.json, in a stable form; the whole text where it does not parse, which a fix changes all the same. */
+function packageScripts(text: string): string {
   try {
-    return canonical((JSON.parse(r.stdout) as { scripts?: unknown }).scripts ?? {});
+    return canonical((JSON.parse(text) as { scripts?: unknown }).scripts ?? {});
   } catch {
-    return blob;
+    return text;
   }
 }
+
+/** The tables of a pyproject.toml that say how it starts: PEP 621's scripts and entry points, Poetry's scripts and plugins. */
+const PYPROJECT_START = /^(project\.(scripts|gui-scripts|entry-points(\..+)?)|tool\.poetry\.(scripts|plugins(\..+)?))$/;
+/** A key that would set one of them from elsewhere: an inline or dotted table. */
+const PYPROJECT_START_KEY = /^(project\.|tool\.poetry\.)?(scripts|gui-scripts|entry-points|plugins)(\.|\s*=)/;
+
+/**
+ * The lines of `PYPROJECT_START`'s tables, each under its table, comments and blank lines out (ORC-406): the version and the
+ * dependencies change nothing of it. With no TOML parser, the whole text where it cannot tell them apart surely: a multi-line
+ * string, or a key that sets them from another table.
+ */
+export function pyprojectStart(text: string): string {
+  if (text.includes('"'.repeat(3)) || text.includes("'".repeat(3))) return text;
+  const kept: string[] = [];
+  let table = '';
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
+    if (header) {
+      table = header[1]!.replace(/\s*\.\s*/g, '.');
+      continue;
+    }
+    if (PYPROJECT_START.test(table)) kept.push(`[${table}] ${line}`);
+    else if (PYPROJECT_START_KEY.test(line)) return text;
+  }
+  return kept.join('\n');
+}
+
+/** What of a start file counts in the fingerprint, where not its whole blob. */
+const START_PART: Partial<Record<string, (text: string) => string>> = { 'package.json': packageScripts, 'pyproject.toml': pyprojectStart };
 
 /**
  * Where a project's forge is, read once by process (ORC-151): `bootstrap` asks it before any run starts.

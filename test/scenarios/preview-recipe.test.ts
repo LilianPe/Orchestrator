@@ -10,6 +10,7 @@ import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { KnowledgeBase } from '../../src/knowledge/kb.js';
 import { PreviewRecipes, type RecipeNote } from '../../src/knowledge/preview-recipe.js';
+import { makeStartFingerprint } from '../../src/app/repo-variables.js';
 import { createHarness } from '../helpers/harness.js';
 
 /**
@@ -219,6 +220,41 @@ describe('a search bounded at three failures (ORC-406)', () => {
     expect(h.runner.requests[3]!.prompt).toContain(SEARCH);
     expect(asked.at(-1)!.visual?.noSearch).toBeUndefined();
     expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 1, fingerprint, ticket: 'REL-4' });
+  });
+
+  it('a lockfile change does not reopen the search; a change of the scripts does (the real fingerprint, on a real default branch)', async () => {
+    // The project's repository: a forge and the factory's clone, whose default branch the fingerprint reads.
+    const base = mkdtempSync(join(tmpdir(), 'factory-start-files-'));
+    const forge = join(base, 'forge.git');
+    git(base, 'init', '--bare', '-q', '-b', 'main', forge);
+    const clone = join(base, 'repo');
+    git(base, 'clone', '-q', forge, clone);
+    const commit = (path: string, text: string) => {
+      writeFileSync(join(clone, path), text);
+      git(clone, 'add', '.');
+      git(clone, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', path);
+      git(clone, 'push', '-q', 'origin', 'main');
+      git(clone, 'fetch', '-q', 'origin');
+    };
+    commit('package.json', JSON.stringify({ name: 'shop', version: '1.0.0', scripts: { dev: 'vite' } }));
+    commit('package-lock.json', '{"lockfileVersion":3}');
+    git(clone, 'remote', 'set-head', 'origin', 'main');
+    const read = makeStartFingerprint();
+    const { h, recipes } = preview({ tickets: 5, fingerprint: () => read({ repoPath: clone }) });
+    h.runner.enqueue(dev(), dev(), dev(), dev(), dev());
+    for (const i of [1, 2, 3]) await delegate(h, `REL-${i}`);
+    expect(recipes.read('p')).toMatchObject({ status: 'not_found', failures: 3 });
+    // A dependency bump, and the package's version with it: how the application starts has not changed.
+    commit('package-lock.json', '{"lockfileVersion":3,"packages":{"node_modules/vite":{"version":"6.0.1"}}}');
+    commit('package.json', JSON.stringify({ name: 'shop', version: '1.0.1', scripts: { dev: 'vite' } }));
+    await delegate(h, 'REL-4');
+    expect(h.runner.requests[3]!.prompt).not.toContain(SEARCH);
+    expect(recipes.read('p')).toMatchObject({ failures: 3, ticket: 'REL-3' });
+    // Its scripts changed: a search again, counted from one.
+    commit('package.json', JSON.stringify({ name: 'shop', version: '1.0.1', scripts: { dev: 'vite --host' } }));
+    await delegate(h, 'REL-5');
+    expect(h.runner.requests[4]!.prompt).toContain(SEARCH);
+    expect(recipes.read('p')).toMatchObject({ failures: 1, ticket: 'REL-5' });
   });
 
   it('a declared `preview` sets the count back to zero', async () => {
