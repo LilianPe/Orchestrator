@@ -3,7 +3,7 @@ import { NO_PLAN, planDecision } from '../core/decision-plan.js';
 import { SCHEMA_VERSION, type FactoryEvent } from '../core/types.js';
 import { upcast, upcastTicket, upcastTimer, type StoredTimer } from '../core/upcast.js';
 import type { DecisionPlan, DecisionRecord, JournalEntry, Store } from '../store/types.js';
-import { canonical } from './workflow-version.js';
+import { canonical, frozenWorkflow } from './workflow-version.js';
 
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -115,12 +115,12 @@ function rerun(event: FactoryEvent, decision: DecisionRecord, journal: ExportedJ
   if (event.id !== decision.eventId) throw new Error(`journal row ${event.id} carries the decision of ${decision.eventId}`);
   // Nothing was decided: an event of a project the instance did not know.
   if (!decision.workflowHash) return NO_PLAN;
-  const definition = workflow ?? journal.workflows[decision.workflowHash];
-  if (!definition) throw new Error(`workflow version ${decision.workflowHash} is not in the journal`);
+  const definition = journal.workflows[decision.workflowHash];
+  if (!workflow && !definition) throw new Error(`workflow version ${decision.workflowHash} is not in the journal`);
   return planDecision({
     event,
     known: decision.before && upcastTicket(decision.before),
-    workflow: definition as Workflow,
+    workflow: workflow ?? frozenWorkflow({ hash: decision.workflowHash, definition }),
     // What-if keeps the recorded hash: the ticket stays frozen on its version, only the definition changes.
     hash: decision.workflowHash,
     now: decision.at ?? 0,

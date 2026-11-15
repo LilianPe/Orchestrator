@@ -64,7 +64,9 @@ export interface Judged {
 export const captureArtifactId = (runId: string, c: Pick<VisualCapture, 'side' | 'width'>): string => `visual:${runId}:${c.side}:${c.width}`;
 
 /** A capture as the factory names it, in its caption and in the published check. */
-export const captureLabel = (c: Pick<VisualCapture, 'side' | 'sha' | 'width'>): string => `${c.side === 'before' ? 'Before' : 'After'}, ${c.sha.slice(0, 12)}, ${c.width} px`;
+export const captureLabel = (c: Pick<VisualCapture, 'side' | 'sha' | 'width'>): string => `${captureName(c)}, ${c.width} px`;
+/** A capture by its side and its commit, without its width: the PR's caption, which gives the width apart (ORC-407). */
+export const captureName = (c: Pick<VisualCapture, 'side' | 'sha'>): string => `${c.side === 'before' ? 'Before' : 'After'}, ${c.sha.slice(0, 12)}`;
 
 const sha256 = (png: Uint8Array): string => createHash('sha256').update(png).digest('hex');
 const fail = (output: string): VerifyFailure => ({ command: VISUAL_PROOF_CHECK, exitCode: 1, output });

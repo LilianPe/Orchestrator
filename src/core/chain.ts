@@ -1,4 +1,4 @@
-import { isAgentStep, type Step } from '../presets/preset.js';
+import { isAgentStep, mergeGate, type Step } from '../presets/preset.js';
 import type { LogicalState } from './types.js';
 import type { JobSpec, Post, Workflow } from './workflow.js';
 
@@ -6,7 +6,7 @@ import type { JobSpec, Post, Workflow } from './workflow.js';
  * The chain of a run (ORC-391): what the end of a job starts, moves and posts, read from the preset's steps the workflow
  * carries. A job runs a step; its end walks `step.next` past the steps the engine runs itself around a run (the checks,
  * `spec_check`, the publication of a push), to the next step that waits: an agent step, whose job starts; a human gate; the
- * merge; or the end of the run. A version frozen before it has no preset: its jobs chain by their own `onSuccess`.
+ * merge; or the end of the run.
  */
 
 /** The status the ticket shows while a step works or waits (ORC-170's names). ORC-382 makes it configurable. */
@@ -20,14 +20,14 @@ export interface JobEnd {
   run?: JobSpec;
   move?: LogicalState;
   post?: Post;
-  /** The step the walk stopped at; null at the end of the run, undefined for a job out of the preset or of a frozen version. */
+  /** The step the walk stopped at; null at the end of the run, undefined for a job out of the preset. */
   step?: Step | null;
 }
 
 /** The steps the engine runs itself around a job's run: its checks and the publication of its commit. */
 const ranByEngine = (s: Step): boolean => s.type === 'verify' || s.type === 'spec_check' || (s.type === 'publish' && s.mode === 'push');
 
-const stepById = (wf: Workflow, id: string | null | undefined): Step | undefined => (id ? wf.preset?.steps.find((s) => s.id === id) : undefined);
+const stepById = (wf: Workflow, id: string | null | undefined): Step | undefined => (id ? wf.preset.steps.find((s) => s.id === id) : undefined);
 
 /** The step `job` runs, in the workflow's preset. */
 const stepOfJob = (wf: Workflow, job: Pick<JobSpec, 'step'>): Step | undefined => stepById(wf, job.step);
@@ -40,7 +40,7 @@ const passed = (wf: Workflow, s: Step): boolean => ranByEngine(s) || (s.type ===
  * before `build` until ORC-395, ORC-206), is that entry's guard: it hands over to it.
  */
 function reached(wf: Workflow, from: Step): Step | null {
-  if (wf.preset && wf.entry && from.id === wf.preset.entry && wf.entry !== from.id) return stepById(wf, wf.entry) ?? null;
+  if (from.id === wf.preset.entry && wf.entry !== from.id) return stepById(wf, wf.entry) ?? null;
   for (let s = stepById(wf, from.next); s; s = stepById(wf, s.next)) if (!passed(wf, s)) return s;
   return null;
 }
@@ -58,7 +58,6 @@ const jobStarting = (wf: Workflow, step: Step): JobSpec | undefined => startingJ
 
 /** `job` is the last lens of its review: it publishes the findings of every lens (ORC-183), and only it has the review's fix (ORC-184). */
 export function publishesReview(wf: Workflow, job: JobSpec): boolean {
-  if (!wf.preset) return job.onSuccess?.post === 'review';
   const step = stepOfJob(wf, job);
   return step?.type === 'review' && !!job.lens && job.lens === step.lenses.at(-1);
 }
@@ -70,10 +69,6 @@ export function publishesReview(wf: Workflow, job: JobSpec): boolean {
  * stops at has passed (`/approve`), the walk goes on from it.
  */
 export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
-  if (!wf.preset) {
-    const s = job.onSuccess ?? {};
-    return { ...(s.run ? { run: wf.jobs[s.run] } : {}), ...(s.move ? { move: s.move } : {}), ...(s.post ? { post: s.post } : {}) };
-  }
   const step = stepOfJob(wf, job);
   // The answer agent (ORC-182), out of the preset's steps: its reply.
   if (!step) return job.queue === 'questions' ? { post: 'reply' } : {};
@@ -93,53 +88,47 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
   return { ...(run ? { run } : {}), ...(move ? { move } : {}), ...(post ? { post } : {}), step: next };
 }
 
-/**
- * The job a delegation starts (ORC-392): the one a test names (`delegated`), else the chain's entry's. A version frozen
- * with no preset starts `dev`.
- */
+/** The job a delegation starts (ORC-392): the one a test names (`delegated`), else the chain's entry's. */
 export function delegatedJob(wf: Workflow): string | undefined {
   if (wf.delegated) return wf.delegated;
-  if (!wf.preset) return 'dev';
   const entry = stepById(wf, wf.entry);
   return entry && jobStarting(wf, entry)?.name;
 }
 
 /** The move the launch of `job` makes: the chain's entry shows its status from its first run on. */
 export function startMove(wf: Workflow, job: JobSpec): LogicalState | undefined {
-  if (!wf.preset) return job.onStart?.move;
   return wf.level !== 'rapide' && job.step !== undefined && job.step === wf.entry ? STEP_STATUS[job.step] : undefined;
 }
 
 /**
  * The job a move owed by a refused publication came with (ORC-183): the job of the step whose status it is, the review's
- * first lens for AI Review. A version frozen before reads it on the job whose end made that move and started a job.
+ * first lens for AI Review.
  */
 export function jobEntering(wf: Workflow, status: LogicalState): JobSpec | undefined {
-  if (!wf.preset) return Object.values(wf.jobs).map((j) => nextOf(wf, j)).find((e) => e.move === status && e.run)?.run;
   const step = wf.preset.steps.find((s) => STEP_STATUS[s.id] === status && s.id !== wf.entry);
   return step && jobStarting(wf, step);
 }
 
 /** The workflow has a review loop (ORC-184): a review whose blocking findings send the run back to `fix`. */
 export function hasReviewLoop(wf: Workflow): boolean {
-  if (!wf.preset) return Object.values(wf.jobs).some((j) => j.onBlocking);
   return wf.preset.steps.some((s) => s.type === 'review' && !!s.onFailure);
 }
 
 /** The fix a blocking finding of `job` starts, on the review's failure edge: only the lens that publishes the review has one. */
 export function blockingFix(wf: Workflow, job: JobSpec): JobSpec | undefined {
-  if (!wf.preset) return job.onBlocking ? wf.jobs[job.onBlocking.run] : undefined;
   const step = stepOfJob(wf, job);
   if (step?.type !== 'review' || !step.onFailure || !publishesReview(wf, job)) return undefined;
   const to = step.onFailure.goto;
   return Object.values(wf.jobs).find((j) => j.step === to && j.cause === 'review');
 }
 
+/** The preset has rounds of human review feedback (ORC-190): its merge gate sends the run back to a fix. */
+export const hasHumanRounds = (wf: Workflow): boolean => !!mergeGate(wf.preset)?.onFailure;
+
 /**
  * Each start of `job` is a round of human review feedback (ORC-190): the fix the merge gate's failure edge sends the run to,
  * on its counter (`limits.humanReviewRounds`).
  */
 export function humanRoundJob(wf: Workflow, job: JobSpec): boolean {
-  if (!wf.preset) return job.counter === 'human_review';
-  return job.cause === 'human' && wf.preset.steps.some((s) => s.type === 'human_gate' && s.gate === 'merge' && s.onFailure?.goto === job.step);
+  return job.cause === 'human' && mergeGate(wf.preset)?.onFailure?.goto === job.step;
 }

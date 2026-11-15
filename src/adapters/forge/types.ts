@@ -124,6 +124,38 @@ export interface ReviewRequest {
 /** The forge cannot place a review's comment on its line (a line the PR's diff does not show): the review goes out without them. */
 export class ReviewLinesRefused extends Error {}
 
+/**
+ * The orphan branch the visual-proof captures are hosted on (ORC-407), in the ticket's repository: the one ref the factory writes
+ * besides a ticket's branch, and only forward. Never merged, never based on another branch.
+ */
+export const ARTIFACTS_BRANCH = 'factory/artifacts';
+
+/** A file hosted on `ARTIFACTS_BRANCH`: `path` is relative to its root, `<folder>/<name>`. */
+export interface HostedFile {
+  path: string;
+  content: Uint8Array;
+}
+
+/**
+ * The forge refuses to host (ORC-407): a protection rule on the branch, a permission the App lacks, an empty repository. An answer,
+ * not a breakdown: the PR says the captures are not shown and why, instead of retrying forever.
+ */
+export class ArtifactsRefused extends Error {}
+
+/**
+ * Where the visual proof's captures are shown from (ORC-407): files committed on `ARTIFACTS_BRANCH`, each cited by a link to the
+ * commit that holds it, which the forge shows to whoever reads the repository, and to no one else.
+ */
+export interface ArtifactHost {
+  /**
+   * Commits `files` on the branch, created as an orphan if absent, by a fast-forward only; a replay that finds them all writes
+   * nothing. Returns each file's link, in order. `ArtifactsRefused` when the forge refuses the write.
+   */
+  hostArtifacts(repoPath: string, files: readonly HostedFile[]): Promise<string[]>;
+  /** Removes the branch's top-level folders `expired` says yes to, in one commit, by a fast-forward only; returns them. */
+  pruneArtifacts(repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]>;
+}
+
 export interface ForgeWriter {
   /**
    * Merges the PR if its head is still `sha`, the commit shown to the human reviewer: GitHub checks it in the same

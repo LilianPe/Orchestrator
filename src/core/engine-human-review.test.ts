@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
+import { fantome } from '../presets/fantome.js';
 import type { Role } from './authz.js';
 import type { Decision, Effect } from './decision.js';
 import { nextOf } from './chain.js';
@@ -92,11 +93,10 @@ describe('human review feedback goes back through fix → verify → AI review �
     }
   });
 
-  it('a version frozen before ORC-190 only traces a review, as it did', () => {
-    const frozen = { ...workflow, limits: { ...workflow.limits, humanReviewRounds: undefined } };
-    const out = decide(inHumanReview(), reviewed('Rename it.'), frozen);
+  it('a preset with no round of human review only traces a review (`factory/fantome`, no merge gate)', () => {
+    const out = decide(inHumanReview(), reviewed('Rename it.'), presetWorkflow(fantome));
     expect(out).toMatchObject({ events: [], effects: [], timers: [] });
-    expect(out.trace).toContain('pr.reviewed: no reaction in a version frozen before ORC-190');
+    expect(out.trace).toContain('pr.reviewed: no reaction, the preset has no round of human review');
   });
 
   it('out of Human Review a review is kept and starts nothing: no uncounted fix, no fix that skips the AI review', () => {

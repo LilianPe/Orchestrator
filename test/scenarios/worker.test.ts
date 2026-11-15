@@ -117,6 +117,34 @@ describe('worker: per-ticket lock and decision transaction', () => {
     expect(h.runner.requests).toHaveLength(2);
   });
 
+  it('refuses a ticket frozen on a workflow of format 1, with a line in the daemon log, and decides the others (ORC-393)', async () => {
+    const h = createHarness();
+    const current = h.project.workflow;
+    // A version stored before ORC-393: its format, 1, is what this factory no longer reads.
+    h.project.workflow = { ...current, version: 1 } as unknown as typeof current;
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const frozen = (await h.ticket()).workflowHash;
+    h.project.workflow = current;
+    await h.restart();
+
+    await h.send('control.stop', {});
+    await h.orch.drained();
+    expect(h.logs).toContainEqual({ level: 'error', message: expect.stringMatching(new RegExp(`^REL-1 refused: workflow version ${frozen!.slice(0, 12)} is of format 1, not 2`)) });
+    // Each of its events is set aside, the stop and what the restart's recovery sent alike: none is decided.
+    const dead = await h.store.deadLetters('REL-1');
+    expect(dead.map((d) => d.event.type)).toContain('control.stop');
+    expect(dead.every((d) => d.error.includes('its ticket is refused (format 1: frozen before ORC-393)'))).toBe(true);
+    // Logged once, however many times its events read the version.
+    expect(h.logs.filter((l) => l.message.startsWith('REL-1 refused:'))).toHaveLength(1);
+    expect((await h.ticket()).workflowHash).toBe(frozen);
+    // A ticket started now is frozen on the current version, and decided on it.
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    expect((await h.ticket('REL-2')).workflowHash).not.toBe(frozen);
+    expect(await h.ticket('REL-2')).toMatchObject({ delegated: true, blocked: false });
+  });
+
   it('keeps a ticket on the workflow version it started with when the workflow changes (criterion 4)', async () => {
     const version = (comment: string): WorkflowOverrides => ({ effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'comment', body: comment }] } } });
     const h = createHarness({ workflow: version('ancienne version') });
@@ -1273,19 +1301,6 @@ describe('a start that must not run (ORC-150 review)', () => {
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: disk full' });
     expect((await h.store.listEffects('p', 'REL-1')).find((r) => r.effect.kind === 'start_run')).toMatchObject({ status: 'done', attempts: 1 });
     expect(h.runner.requests).toHaveLength(0);
-  });
-
-  it('a launch that fails on a version frozen before ORC-196 blocks with no step to resume, as the engine does there', async () => {
-    const h = createHarness();
-    const { blockComment: _b, ...frozen } = h.project.workflow;
-    h.project.workflow = frozen;
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    h.workspaces.prepare = async () => {
-      throw new Error('disk full');
-    };
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: disk full' });
-    expect((await h.ticket()).blockedJob).toBeUndefined();
   });
 
   it('drops a queued dev start of a ticket blocked meanwhile, without a run', async () => {

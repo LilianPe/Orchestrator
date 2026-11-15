@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { TRUSTED } from '../../src/core/types.js';
-import { beforeOrc193 } from '../helpers/frozen-memory.js';
 import { createHarness, withMoveBack } from '../helpers/harness.js';
 
 async function delegatedAndInReview(h: ReturnType<typeof createHarness>) {
@@ -546,20 +545,5 @@ describe('I12: the taint of a run is what it reads at its launch (ORC-274)', () 
       expect(req.sensitivePaths).toEqual(SENSITIVE_PATHS);
       expect((await h.store.getRun(req.runId))!.sensitivePaths).toEqual(SENSITIVE_PATHS);
     });
-  });
-});
-
-describe('the memory in writing sleeps, on a version frozen before it too (ORC-193)', () => {
-  it('decides learn and remember as the version did, and launches neither', async () => {
-    const h = createHarness();
-    h.project.workflow = beforeOrc193(h.project.workflow);
-    await h.restart();
-    await delegatedAndInReview(h);
-    await h.send('command', { name: 'retiens', body: 'les exports passent par le worker', linearSessionId: 'ls-10', author: 'L', kind: 'command' });
-    await h.send('pr.merged', { number: 3, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv' });
-    await h.orch.drained();
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev']);
-    expect(await h.ticket()).toMatchObject({ logical: 'done', blocked: false });
-    expect(h.workspaces.cleaned).toEqual(['REL-1']);
   });
 });

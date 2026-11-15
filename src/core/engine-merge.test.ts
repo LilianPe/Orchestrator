@@ -4,7 +4,6 @@ import type { Role } from './authz.js';
 import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
-import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 const workflow = defaultWorkflow();
 const MERGER: Role[] = ['team_member', 'repo_writer', 'repo_merger'];
@@ -101,16 +100,6 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
 
   const pushed = { number: 7, url: 'u', branch: 'b', reason: 'the branch received a push since the review', headMoved: true };
 
-  it('on a version frozen before ORC-183, a merge refused for a push since the review sends the new commits through its AI review, which took them in', () => {
-    // A move by the factory emits no status.changed, so the review is started here, not by the rule `to: ai_review`.
-    const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, beforeOrc183(workflow));
-    expect(out.effects).toEqual([
-      { kind: 'move', to: 'ai_review' },
-      { kind: 'comment', body: expect.stringMatching(/push since the review.*go through the AI review again/) },
-      { kind: 'start_run', job: 'review' },
-    ]);
-  });
-
   it('a merge refused for a push since the review goes back to Human Review, saying how the push reaches a merge: the AI review reads only what the factory published (ORC-183)', () => {
     const out = decide(inReview({ logical: 'done' }), { ...ev('pr.merge_refused', pushed), taint: 'trusted' }, workflow);
     expect(out.effects).toEqual([
@@ -153,12 +142,6 @@ describe('decide — Done by a human merges the PR (ORC-148)', () => {
     const moved = reduce(inReview({ logical: 'done' }), { type: 'status.recorded', to: 'ai_review' })!;
     expect(moved.recordedStatus).toBe('ai_review');
     expect(reduce(moved, ev('status.changed', { from: 'ai_review', to: 'dev' }, 'u-lead'))!.recordedStatus).toBeUndefined();
-  });
-
-  it('a merge refused for a push, in a workflow with no AI review, goes back to Human Review with the reason', () => {
-    const { review: _review, 'review-security': _security, ...jobs } = workflow.jobs;
-    const noReview = { ...workflow, jobs };
-    expect(decide(inReview({ logical: 'done' }), ev('pr.merge_refused', pushed), noReview).effects).toEqual(backToReview(/push since the review/));
   });
 
   it('a merge refused for a push on a blocked ticket goes back to Human Review: a blocked ticket waits for a human', () => {

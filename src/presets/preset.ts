@@ -201,6 +201,10 @@ function isPositiveInt(n: number): boolean {
 /** A step an agent runs: it has a model, an effort and a cap of turns. */
 export type AgentStep = Extract<Step, { maxTurns: number }>;
 
+/** The preset's merge gate (ORC-190): its failure edge, when it has one, is the round of human review feedback. */
+export const mergeGate = (preset: Preset): Extract<Step, { type: 'human_gate' }> | undefined =>
+  preset.steps.find((s): s is Extract<Step, { type: 'human_gate' }> => s.type === 'human_gate' && s.gate === 'merge');
+
 export function isAgentStep(s: Step): s is AgentStep {
   return s.type === 'agent_step' || s.type === 'fix' || s.type === 'review';
 }

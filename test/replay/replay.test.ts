@@ -162,6 +162,12 @@ describe('replay oracle (ORC-174)', () => {
     expect(() => replayJournal(journal)).toThrow(/is not in the journal/);
     expect(() => readJournal('{"format":2}', 'x.json')).toThrow(/x.json/);
   });
+
+  it('refuses a journal whose decisions ran on a workflow of format 1, frozen before ORC-393', async () => {
+    const journal = await record('review-merge-done');
+    for (const wf of Object.values(journal.workflows)) (wf as { version: number }).version = 1;
+    expect(() => replayJournal(journal)).toThrow(/is of format 1, not 2: its ticket is refused \(format 1: frozen before ORC-393\)/);
+  });
 });
 
 describe('recorded journals (test/replay/journals)', () => {

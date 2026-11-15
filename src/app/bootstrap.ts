@@ -310,7 +310,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       forge,
       // Only the GitHub App merges (ORC-148): with the gh CLI, a Done goes back to Human Review with the reason.
       // A fake run writes nothing real: its fake PR's number would be another one's on the forge.
-      ...(forge instanceof GitHubAppForge && !o.fakeRunner ? { forgeWriter: forge } : {}),
+      // The visual proof's captures shown in the PR from the repository's `factory/artifacts` branch, by the same App (ORC-407).
+      ...(forge instanceof GitHubAppForge && !o.fakeRunner ? { forgeWriter: forge, captureHost: forge } : {}),
       // Only the factory publishes (ORC-125), from its sandboxes and by the App: without them, a verified ticket is blocked and told why.
       ...(publisher ? { publisher } : {}),
       runner,
@@ -487,6 +488,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);
     const relay = instance.relay.kind === 'smee' ? startSmeeRelay({ url: instance.relay.url, onWebhook: ingest, log }) : undefined;
     let purgeInterval: NodeJS.Timeout | undefined;
+    /** The captures' prune under way (ORC-407): it reads the store, so a stop waits for it. */
+    let pruning: Promise<unknown> = Promise.resolve();
     let tickInterval: NodeJS.Timeout | undefined;
     let beatInterval: NodeJS.Timeout | undefined;
     // Everything but the store, which the caller closes after: by stop(), or by a start that fails from here on.
@@ -500,7 +503,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ingest.close();
       await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
-      await Promise.all([timers.stop(), poller.stop(), reconciler.stop(), replays.stop()]);
+      await Promise.all([timers.stop(), poller.stop(), reconciler.stop(), replays.stop(), pruning]);
       orchestrator.stopAll();
       await orchestrator.drained();
       // The sandboxes it let run on keep their socket folders: the next start listens in them again (ORC-344).
@@ -531,6 +534,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         );
         // The egress journals (ORC-213), `*.jsonl` too: the same 30 days.
         purgeTranscripts(paths.network, now);
+        // The captures of PRs merged or closed 30 days ago, off each repository's `factory/artifacts` (ORC-407).
+        pruning = orchestrator.pruneCaptures(now).then(
+          (folders) => folders.length && log(`captures: ${folders.length} folder(s) removed from factory/artifacts, PRs closed for 30 days (${folders.join(', ')})`),
+          (e: unknown) => log(`captures purge: ${(e as Error).message}`),
+        );
       };
       purge();
       purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
