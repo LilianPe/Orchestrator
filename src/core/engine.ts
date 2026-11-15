@@ -23,8 +23,8 @@ import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
-/** What a stop's answer says of the way back: versions frozen before ORC-196 keep their label. */
-const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply on this ticket to relaunch.' : 'Reply in this thread or add the agent:reprendre label to relaunch.');
+/** What a stop's answer says of the way back: a reply on the ticket (ORC-196). */
+const RELAUNCH = 'Reply on this ticket to relaunch.';
 
 /**
  * The mark of a run started from untrusted content (I12, ORC-274), carried by its `start_run` and its run record. Only its
@@ -32,14 +32,6 @@ const relaunch = (workflow: Workflow): string => (workflow.blockComment ? 'Reply
  * refused. What every run is refused is `FORBIDDEN_PATHS`. Kept a list, not a flag, as the journals record it in decisions.
  */
 export const SENSITIVE_PATHS: readonly string[] = ['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*'];
-
-/**
- * The refusal of a knowledge job (I12) whose event is untrusted. Only a version frozen before ORC-193 has one (`learn`,
- * `remember`): decided as it was, the launch refuses it anyway, as the memory in writing sleeps.
- */
-export function taintedKnowledge(job: string): string {
-  return `I am not starting ${job}: this job writes to the knowledge base, and the event comes from an untrusted source.`;
-}
 
 const BUILT_IN = new Set<EventType>([
   'control.pause', 'control.resume', 'control.stop', 'control.bundle', 'bundle.refused', 'run.finished', 'run.lost', 'verify.passed', 'verify.failed', 'verify.errored', 'verify.lost', 'publish.done', 'publish.refused', 'timer.fired', 'pr.opened',
@@ -59,7 +51,7 @@ function cancelWork(out: Decision, why: string): Decision {
 }
 
 /** The ticket's work stops and it is blocked for `reason` until a human relaunches it; `body` tells the session: a stop is an answer, not an escalation. */
-function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopped. ${relaunch(workflow)}`, kind: BlockKind = 'stopped'): Decision {
+function stop(out: Decision, reason = STOPPED, body = `Stopped. ${RELAUNCH}`, kind: BlockKind = 'stopped'): Decision {
   out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason, kind });
   out.effects.push({ kind: 'stop_run' }, { kind: 'activity', type: 'response', body });
   return out;
@@ -110,7 +102,7 @@ const NO_PR = 'no PR';
 function nothingDone(out: Decision, workflow: Workflow, job: string): Decision {
   const reason = `The run ${job} ended without a commit: there is no PR, and nothing to review.`;
   const question = 'What should I do: relaunch it with more detail, change the ticket, or close it?';
-  return block(out, workflow, { kind: 'question', reason, body: `${reason} ${question}\n\nReply in this thread and I will resume.`, job, tried: [`Started the run ${job}: it committed nothing.`], question });
+  return block(out, workflow, { kind: 'question', reason, job, tried: [`Started the run ${job}: it committed nothing.`], question });
 }
 
 /**
@@ -136,7 +128,7 @@ function handOver(out: Decision, at: { event: FactoryEvent; ticket: TicketState 
 /**
  * Starts `next` on what waits for the agent that implements: a round of human review when it reads human feedback
  * (`humanRound`, ORC-190), none for relayed questions alone, which it answers: no review (ORC-374). Those start the
- * workflow's relay job in its place, light (ORC-375); a version frozen before it has none, and starts `next` as it did.
+ * workflow's relay job in its place, light (ORC-375). Only the Rapide level has none, where nobody asks: `next` then.
  */
 function resume(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, next: JobSpec, feedback: boolean): void {
   if (feedback) return humanRound(out, ticket, workflow, next, () => startRun(out, event, ticket, next, { input: next.input }));
@@ -164,7 +156,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const a = p.output?.intake;
   if (!a) {
     const reason = NO_ASSESSMENT;
-    return block(out, at.workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
+    return block(out, at.workflow, { kind: 'failed', reason, job: job.name, tried: [`Started the run ${job.name}: its result has no \`intake\` field.`] });
   }
   // The code to reuse is the last assessment's (ORC-207): one that found none clears what an earlier one found.
   const reuse = a.reuse?.length || at.ticket?.reuse?.length ? { reuse: a.reuse ?? [] } : {};
@@ -285,7 +277,6 @@ function clarifyTimer(out: Decision, fired: { kind: 'clarify.remind' | 'clarify.
   return block(out, workflow, {
     kind: 'question',
     reason,
-    body: `${reason}\nReply in this thread and I will read the ticket again.`,
     job: c.job,
     step: 'clarify',
     tried: [`Asked ${c.questions.length} question(s) in the session, and again after 24 h.`],
@@ -326,7 +317,7 @@ function waitFor(out: Decision, blockers: readonly Blocker[], start: PendingJob)
  *
  * The review loop (ORC-184): each lens's blocking findings are counted on the commit, and once the lens that publishes ends
  * with one standing, its `on_blocking` fix starts in place of its `on_success`, one round of the review and CI loop; past
- * the bound, the ticket is blocked. A version frozen before it, with no `on_blocking`, goes to Human Review as it did.
+ * the bound, the ticket is blocked. A preset whose review has no failure edge goes on to Human Review.
  */
 function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, lens: ReviewLens, p: EventPayloads['run.finished']): Decision {
   const findings = p.output?.findings;
@@ -334,7 +325,7 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const sha = ticket?.verifiedSha;
   if (!findings || !sha) {
     const reason = sha ? `The AI review ${job.name} returned no findings list.` : `The AI review ${job.name} has no published commit to review.`;
-    return block(out, workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
+    return block(out, workflow, { kind: 'failed', reason, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
   }
   const publishes = publishesReview(workflow, job);
   out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(publishes ? { publish: true as const } : {}) });
@@ -346,7 +337,7 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const blocking = publishes ? blockingTotal(counts) : 0;
   const fix = blockingFix(workflow, job);
   if (!fix || !blocking) return success(out, at, job, p.runId, p.output);
-  if (refusal(at.event, ticket, fix)) {
+  if (refused(ticket, fix)) {
     out.trace.push(`review: ${fix.name} refused, the PR is merged`);
     return out;
   }
@@ -356,7 +347,6 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     return block(out, workflow, {
       kind: 'limit',
       reason,
-      body: `${reason}\nReply in this thread to relaunch.`,
       job: fix.name,
       attempts: bound,
       tried: [`${bound} run(s) of the review and CI loop (fix-ci, fix-review, rebase).`, `AI review of ${sha.slice(0, 12)}: ${blocking} blocking finding(s), published on the PR.`],
@@ -376,7 +366,7 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   if (!spec || problems.length) {
     const used = ticket?.specCheckReturns ?? 0;
     const listed = problems.map((x) => `- ${x}`).join('\n');
-    if (used < (workflow.limits.specCheckReturns ?? 0)) {
+    if (used < workflow.limits.specCheckReturns) {
       out.events.push({ type: 'ticket.patched', patch: { specCheckReturns: used + 1 } });
       // A session of its own (`session: new`): the refused draft goes with what is wrong, never the ticket's session.
       const inputText = spec ? `${listed}\n\nYour spec as it was refused:\n\n${formatSpec(spec)}` : listed;
@@ -384,7 +374,7 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
       return out;
     }
     const reason = `The spec does not pass spec_check after ${used + 1} draft(s) of ${job.name}.`;
-    return block(out, workflow, { kind: 'failed', reason, body: `${reason}\n${listed}\nReply in this thread and I will draft it again.`, job: job.name, step: 'spec_check', attempts: used + 1, tried: problems });
+    return block(out, workflow, { kind: 'failed', reason, job: job.name, step: 'spec_check', attempts: used + 1, tried: problems });
   }
   const version = (ticket?.spec?.version ?? 0) + 1;
   // Nobody reviews it at the Rapide level (ORC-231): the preset approves the version, with what the level assumed written in `assumed`.
@@ -443,7 +433,7 @@ function specCommand(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
   if (name === REJECT) {
     const reason = `Spec version ${spec.version} rejected by ${author}.`;
     answer(`${reason} I stop here; reply in this thread to have it drafted again.`);
-    return block(out, workflow, { kind: 'stopped', reason, body: `${reason} ${body}`.trim(), job: job.name, step: 'spec_review', tried: [`Published version ${spec.version} of the spec.`], question: 'What should the spec say instead? Reply here and I will draft it again.' });
+    return block(out, workflow, { kind: 'stopped', reason, job: job.name, step: 'spec_review', tried: [`Published version ${spec.version} of the spec.`], question: 'What should the spec say instead? Reply here and I will draft it again.' });
   }
   out.events.push({ type: 'ticket.patched', patch: { spec: { ...spec, approval: { author, ...(event.actor ? { authorId: event.actor } : {}), at: event.at } }, ...(ticket.specChanges ? { specChanges: 0 } : {}) } });
   out.trace.push(`spec_review: version ${spec.version} approved by ${event.actor}`);
@@ -461,10 +451,10 @@ function specChanges(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
     return out;
   }
   const used = ticket.specChanges ?? 0;
-  const bound = workflow.limits.specChanges ?? 0;
+  const bound = workflow.limits.specChanges;
   if (used >= bound) {
     const reason = `The spec was changed ${bound} times without approval.`;
-    return block(out, workflow, { kind: 'limit', reason, body: `${reason} Reply in this thread and I will draft it again.`, job: job.name, step: 'spec_review', attempts: bound, tried: [`${bound} rounds of /changes.`], question: 'Can the ticket be settled first? Reply here and I will draft the spec again.' });
+    return block(out, workflow, { kind: 'limit', reason, job: job.name, step: 'spec_review', attempts: bound, tried: [`${bound} rounds of /changes.`], question: 'Can the ticket be settled first? Reply here and I will draft the spec again.' });
   }
   keepMessage(out, event, 'session', { body: comment, kind: 'instruction' });
   // A change to the approved spec during the run (ORC-212): the work on it stops, a start still in the queue too
@@ -491,7 +481,7 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   const { red: cause = 'error', failures, runId } = at.event.payload;
   if (cause === 'infra') {
     const reason = `The red check of ${job.name} could not run: infrastructure failure, not the agent's fault.`;
-    return block(out, at.workflow, { kind: 'infra', reason, body: `${reason}\n${failures[0]?.output ?? ''}\nReply in this thread and I will resume.`, job: job.name, step: 'red', tried: triedFailures(failures) });
+    return block(out, at.workflow, { kind: 'infra', reason, job: job.name, step: 'red', tried: triedFailures(failures) });
   }
   if (red.mode === 'measure') {
     out.trace.push(`red: would have blocked (${cause}), measure mode: the run goes on`);
@@ -549,16 +539,15 @@ function unapprovedConfig(ticket: TicketState | undefined, diffClass: Classified
 }
 
 /** The block of a refused publication: no job of its own, what relaunches it is a job that writes (`owedMove`), the reaction's. */
-function publicationBlock(reason: string, job: string, relaunch = 'Reply in this thread to relaunch.'): Block {
-  return { kind: 'other', reason, body: `${reason}
-${relaunch}`, step: 'publish', tried: [`Publication of the commit of ${job}.`] };
+function publicationBlock(reason: string, job: string): Block {
+  return { kind: 'other', reason, step: 'publish', tried: [`Publication of the commit of ${job}.`] };
 }
 
 /** The block of a diff of the verification configuration held before publication (ORC-198): a refused publication, its relaunch the same. */
 function configGate(diffClass: ClassifiedDiff, job: string): Block {
   const named = diffClass.paths.slice(0, CLASS_PATHS).map(mdCode).join(', ') + (diffClass.paths.length > CLASS_PATHS ? `, and ${diffClass.paths.length - CLASS_PATHS} more` : '');
   const reason = `Publication held: this diff changes the verification configuration (${named}). A designated maintainer reviews it and sends ${REFREEZE}, which freezes it as it is.`;
-  return publicationBlock(reason, job, 'Then reply in this thread to relaunch.');
+  return publicationBlock(reason, job);
 }
 
 /**
@@ -582,23 +571,20 @@ function refreeze(out: Decision, event: FactoryEvent<'command'>, ticket: TicketS
   return out;
 }
 
-/**
- * A block, in fields. `body`: the free text a version frozen before ORC-196 posts instead. `job`: the step a reply
- * resumes, and the step the comment names unless `step` says otherwise.
- */
-type Block = Omit<Parameters<typeof blockFacts>[0], 'step'> & { kind: BlockKind; body: string; linearSessionId?: string | undefined } & ({ job: string; step?: string } | { job?: undefined; step: string });
+/** A block, in fields. `job`: the step a reply resumes, and the step the comment names unless `step` says otherwise. */
+type Block = Omit<Parameters<typeof blockFacts>[0], 'step'> & { kind: BlockKind } & ({ job: string; step?: string } | { job?: undefined; step: string });
 
 /** What a run's end says of its block: its job is the caller's. */
-type RunBlock = Pick<Block, 'kind' | 'reason' | 'body' | 'tried' | 'question'>;
+type RunBlock = Pick<Block, 'kind' | 'reason' | 'tried' | 'question'>;
 
-/** The one fork on how a block is told: a comment, or on a version frozen before ORC-196 what it posted. */
-function tell(out: Decision, workflow: Workflow, facts: BlockFacts, frozen: Effect): void {
-  out.effects.push(workflow.blockComment ? { kind: 'block_comment', block: facts } : frozen);
+/** A block is told by the standard comment (ORC-196). */
+function tell(out: Decision, facts: BlockFacts): void {
+  out.effects.push({ kind: 'block_comment', block: facts });
 }
 
 function block(out: Decision, workflow: Workflow, b: Block): Decision {
-  out.events.push({ type: 'ticket.blocked', reason: b.reason, kind: b.kind, ...(workflow.blockComment && b.job ? { job: b.job } : {}) });
-  tell(out, workflow, blockFacts({ ...b, step: b.step ?? stepOf(workflow, b.job!) }), { kind: 'activity', type: 'elicitation', body: b.body, ...(b.linearSessionId ? { linearSessionId: b.linearSessionId } : {}) });
+  out.events.push({ type: 'ticket.blocked', reason: b.reason, kind: b.kind, ...(b.job ? { job: b.job } : {}) });
+  tell(out, blockFacts({ ...b, step: b.step ?? stepOf(workflow, b.job!) }));
   return out;
 }
 
@@ -619,22 +605,19 @@ function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, { 
   return block(out, workflow, {
     kind: 'stuck',
     reason,
-    body: `${reason} Reply in this thread to start it again.`,
     job: pending.job,
     tried: [`Starting ${pending.job}, ${attempts} times.`],
     question: 'Can you reply here once the factory is healthy again?',
   });
 }
 
-/** A wait for a repo: only an action lifts it, no job of the ticket has started. Its reason is what a frozen version posts. */
-function askForRepo(out: Decision, workflow: Workflow, reason: string, question: string, tried: string, sessionId: string | undefined): void {
-  tell(out, workflow, { ...blockFacts({ reason, step: 'intake', tried: [tried], question }), waits: true }, { kind: 'activity', type: 'elicitation', body: reason, ...(sessionId ? { linearSessionId: sessionId } : {}) });
+/** A wait for a repo: only an action lifts it, no job of the ticket has started. */
+function askForRepo(out: Decision, reason: string, question: string, tried: string): void {
+  tell(out, { ...blockFacts({ reason, step: 'intake', tried: [tried], question }), waits: true });
 }
 
-/** Failed checks, the block's fields and what a frozen version posts. */
-const failedChecks = (reason: string, failures: VerifyFailure[]) => ({ reason, body: `${reason}
-${formatFailuresShort(failures)}
-Reply in this thread to relaunch.`, tried: triedFailures(failures) });
+/** Failed checks, the block's fields. */
+const failedChecks = (reason: string, failures: VerifyFailure[]) => ({ reason, tried: triedFailures(failures) });
 
 /** The preset step of a job, by its own name when it is out of the preset. */
 export const stepOf = (workflow: Workflow, job: string): string => workflow.jobs[job]?.step ?? job;
@@ -674,7 +657,7 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
       return 'limit';
     case 'errored': {
       const reason = `The run ${job.name} was interrupted: infrastructure failure, not the agent's fault.`;
-      return { kind: 'infra', reason, body: `${reason} Reply in this thread and I will resume.`, tried: [`Started the run ${job.name}: its process stopped without a result.`] };
+      return { kind: 'infra', reason, tried: [`Started the run ${job.name}: its process stopped without a result.`] };
     }
     case 'needs_input': {
       // A rebase the agent stops on one of the three conflicts a human decides (ORC-146): a block of its own kind.
@@ -682,15 +665,14 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
       const conflict = p.output?.reason === 'conflict' && job.step === REBASE ? p.output.conflict : undefined;
       if (conflict) {
         const reason = `Conflict with the default branch left to a human: ${CONFLICTS[conflict]}.`;
-        return { kind: 'conflict', reason, body: `${reason}\n${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent stops the rebase (\`${conflict}\`).`], question: question || undefined };
+        return { kind: 'conflict', reason, tried: [`Started the run ${job.name}: the agent stops the rebase (\`${conflict}\`).`], question: question || undefined };
       }
-      return { kind: 'question', reason: "Waiting for an answer to the agent's question.", body: `${question}\n\nReply in this thread and I will resume.`, tried: [`Started the run ${job.name}: the agent asks for a clarification.`], question: question || undefined };
+      return { kind: 'question', reason: "Waiting for an answer to the agent's question.", tried: [`Started the run ${job.name}: the agent asks for a clarification.`], question: question || undefined };
     }
     case 'spec_impossible':
       return {
         kind: 'contested',
         reason: 'The agent disputes the ticket: it cannot honestly be done as written.',
-        body: `I cannot do this ticket as written: ${question}\n\nFix the ticket or reply in this thread and I will resume.`,
         tried: [`Started the run ${job.name}: the agent returns \`spec_impossible\`.`],
         question: [question, 'Can you fix the ticket, or clarify what is expected?'].filter(Boolean).join(' '),
       };
@@ -701,20 +683,19 @@ function attemptDecision(p: EventPayloads['run.finished'], job: JobSpec): RunOut
 
 /**
  * The block of an attempt the detector stopped (ORC-136), judged on the fact journaled with its end against the
- * bound of the frozen workflow. An event without the fact (rows written before it), or a version without the bound, is
- * no stagnation: the attempt's outcome decides, so a replay decides as it did.
+ * bound of the frozen workflow. An event without the fact (rows written before it) is no stagnation: the attempt's
+ * outcome decides, so a replay decides as it did.
  */
 function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): RunBlock | undefined {
   const seen = p.stagnation;
   if (!seen) return undefined;
   if (seen.kind === 'silent') {
     const reason = `The run ${p.job} has written nothing for ${Math.round(seen.silentMs / 60_000)} min: the agent no longer responds, its container is still running.`;
-    return { kind: 'limit', reason, body: `${reason} Reply in this thread and I will resume.`, tried: [`Stopped the run ${p.job} after ${Math.round(seen.silentMs / 60_000)} min of silence.`] };
+    return { kind: 'limit', reason, tried: [`Stopped the run ${p.job} after ${Math.round(seen.silentMs / 60_000)} min of silence.`] };
   }
-  const bound = workflow.limits.repeatedFailures;
-  if (bound === undefined || seen.count < bound) return undefined;
+  if (seen.count < workflow.limits.repeatedFailures) return undefined;
   const reason = `Loop: same command, same failure, ${seen.count} times, with no code change.`;
-  return { kind: 'loop', reason, body: `${reason}\n- \`${seen.command}\`\nReply in this thread to relaunch.`, tried: [`\`${seen.command}\`, ${seen.count} times`] };
+  return { kind: 'loop', reason, tried: [`\`${seen.command}\`, ${seen.count} times`] };
 }
 
 /**
@@ -770,7 +751,6 @@ function blockOnCuts(out: Decision, workflow: Workflow, job: string, step = step
   return block(out, workflow, {
     kind: 'limit',
     reason,
-    body: `${reason} ${PRODUCT_NAME} or its runner keeps restarting: check the daemon, then reply in this thread and I will resume.`,
     job,
     step,
     attempts: CUT_RELAUNCHES,
@@ -804,7 +784,7 @@ function attemptLost(out: Decision, event: FactoryEvent<'run.lost'>, ticket: Tic
   const used = ticket.leaseRelaunches ?? 0;
   if (cause === 'lease' && used >= LEASE_RELAUNCHES) {
     const reason = `The lease of the run ${jobName} expired ${used + 1} times: the runner no longer responds.`;
-    return block(out, workflow, { kind: 'infra', reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, attempts: used + 1, tried: [`${used} relaunch(es) after an expired lease.`] });
+    return block(out, workflow, { kind: 'infra', reason, job: jobName, attempts: used + 1, tried: [`${used} relaunch(es) after an expired lease.`] });
   }
   const recent = recentCuts(ticket, event.at);
   if (recent.length >= CUT_RELAUNCHES) return blockOnCuts(out, workflow, jobName);
@@ -846,7 +826,7 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
   const count = ticket.usageRelaunches?.job === jobName ? ticket.usageRelaunches.count : 0;
   if (count >= USAGE_RELAUNCHES) {
     const reason = `The run ${jobName} reached a limit: the usage limit stopped it ${count + 1} times in a row.`;
-    return block(out, workflow, { kind: 'limit', reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, attempts: count + 1, tried: [`${count} relaunch(es) at a usage reset.`] });
+    return block(out, workflow, { kind: 'limit', reason, job: jobName, attempts: count + 1, tried: [`${count} relaunch(es) at a usage reset.`] });
   }
   out.events.push({ type: 'ticket.patched', patch: { usageRelaunches: { job: jobName, count: count + 1 } } });
   // A reset already past (a result recover() sends after a long stop) holds nothing: the relaunch goes now.
@@ -939,38 +919,21 @@ export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKin
   return input === 'verify_failures' && !job.red && !ticket.verifyAttempts;
 }
 
-/**
- * Why `job` must not start: the ticket's PR is merged (I8 b), or untrusted content would write the knowledge base (I12): a
- * `knowledge` job of a version frozen before ORC-193, decided as it was.
- */
-function refusal(event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, taint = runTaint(event, ticket, job.input)): 'merged' | 'taint' | undefined {
-  if (refusesDevWork(ticket, job) === 'merged') return 'merged';
-  return job.workspace === 'knowledge' && taint === 'untrusted' ? 'taint' : undefined;
-}
+/** `job` must not start: the ticket's PR is merged (I8 b). */
+const refused = (ticket: TicketState | undefined, job: JobSpec): boolean => refusesDevWork(ticket, job) === 'merged';
 
 /**
- * Starts `job`, unless the ticket is delivered (traced only) or untrusted content would write the knowledge
- * base (the refusal is explained). Every `start_run` of `decide` goes through here, so both rules apply
- * whatever branch starts the run.
+ * Starts `job`, unless the ticket is delivered (traced only). Every `start_run` of `decide` goes through here, so the rule
+ * applies whatever branch starts the run.
  */
 function startRun(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, job: JobSpec, run: Omit<StartRun, 'kind' | 'job'>): void {
-  const taint = runTaint(event, ticket, run.input ?? job.input);
-  const refused = refusal(event, ticket, job, taint);
-  if (refused === 'merged') {
+  if (refused(ticket, job)) {
     out.trace.push(`merged: refused ${job.name}`);
     return;
   }
-  if (refused === 'taint') {
-    out.trace.push(`taint: refused ${job.name}`);
-    out.effects.push({ kind: 'activity', type: 'response', body: taintedKnowledge(job.name), linearSessionId: run.linearSessionId });
-    return;
-  }
+  const taint = runTaint(event, ticket, run.input ?? job.input);
   const effect: StartRun = { kind: 'start_run', job: job.name, ...run };
   out.effects.push(taint === 'untrusted' ? { ...effect, sensitivePaths: SENSITIVE_PATHS } : effect);
-}
-
-export function formatFailuresShort(failures: VerifyFailure[]): string {
-  return triedFailures(failures).map((t) => `- ${t}`).join('\n');
 }
 
 /** The jobs the reactions start, by their runtime names as the rules named them. */
@@ -1000,16 +963,17 @@ interface Reaction {
 
 const rapide = (workflow: Workflow): boolean => workflow.level === 'rapide';
 
-/**
- * The regrouping of human messages before a round starts (ORC-180): the preset's, or 3 minutes, the debounce of the former
- * rules, in a version frozen without it (no preset, or one frozen before ORC-392).
- */
-const regroupMs = (workflow: Workflow): number => (workflow.preset?.regroup?.minutes ?? 3) * 60_000;
+/** The regrouping of human messages before a round starts (ORC-180): the preset's (ORC-392). */
+const regroupMs = (workflow: Workflow): number => workflow.preset.regroup.minutes * 60_000;
 
-/** A reaction that starts `name`: a ticket not delegated only ever gets the questions queue's work. */
+/**
+ * A reaction that starts `name`: a ticket not delegated only ever gets the questions queue's work. A workflow lacking the job
+ * is refused at its build (`workflowViolations`): deciding on one is a bug, not a version to honour.
+ */
 function reaction(index: number, name: string, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, debounceMs?: number): Reaction | undefined {
   const job = workflow.jobs[name];
-  if (!job || (ticket && !ticket.delegated && event.type !== 'ticket.delegated' && job.queue !== 'questions')) return undefined;
+  if (!job) throw new Error(`the workflow has no job ${name}, which a reaction starts`);
+  if (ticket && !ticket.delegated && event.type !== 'ticket.delegated' && job.queue !== 'questions') return undefined;
   return { index, job, debounceMs };
 }
 
@@ -1079,11 +1043,11 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
 export const STOP_LABEL = 'agent:stop';
 
 /** The stop of the ticket's session in Linear, or the label `agent:stop` added: the work stops, the ticket blocked until a reply. */
-function stopped(out: Decision, event: FactoryEvent<'label.changed' | 'session.stopped'>, workflow: Workflow): Decision {
+function stopped(out: Decision, event: FactoryEvent<'label.changed' | 'session.stopped'>): Decision {
   const label = event.type !== 'label.changed' || (event.payload.change === 'added' && event.payload.label === STOP_LABEL);
   if (!label) return noReaction(out, event.type);
   reacted(out, event.type);
-  return stop(out, workflow);
+  return stop(out);
 }
 
 /** The reaction traced, at the position of its rule in the former pack. */
@@ -1137,7 +1101,7 @@ function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefin
       return start(askQuestion(event, ticket, workflow));
     case 'label.changed':
     case 'session.stopped':
-      return stopped(out, event, workflow);
+      return stopped(out, event);
     case 'pr.checks_failed':
     case 'pr.conflicted':
       return start(prFailed(event, ticket, workflow), (r) => reviewCiLoop(out, r, event, ticket, workflow));
@@ -1189,12 +1153,12 @@ const asksForFix = (p: EventPayloads['pr.reviewed']): boolean => !!p.body.trim()
  * GitHub login; a review whose author was not resolved is not read, as a PR is open to anyone): kept in the inbox, untrusted
  * as GitHub's content is. In Human Review, its reaction (`replyReaction`): `fix-human`, debounced, a round of human
  * feedback. Elsewhere it waits for the end of the work in flight (`handOver`) or the next step's launch; a blocked ticket keeps
- * it, as only a reply in Linear relaunches. A version frozen before ORC-190, with no bound on these rounds, only traces it.
+ * it, as only a reply in Linear relaunches. At the Rapide level, nobody reviews: only traced.
  */
 function humanReview(out: Decision, event: FactoryEvent<'pr.reviewed'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
   const { number, kind, author, body } = event.payload;
-  if (workflow.limits.humanReviewRounds === undefined) {
-    out.trace.push('pr.reviewed: no reaction in a version frozen before ORC-190');
+  if (rapide(workflow)) {
+    out.trace.push('pr.reviewed: no reaction at the Rapide level');
     return out;
   }
   if (!ticket?.delegated || ticket.prNumber !== number || ticket.prState !== 'OPEN') {
@@ -1242,7 +1206,7 @@ function factoryCommand(out: Decision, event: FactoryEvent<'session.prompted' | 
   const session = event.type === 'session.mentioned' && ticket?.delegated ? undefined : linearSessionId;
   if (isQuestionSession(ticket, session)) return stopQuestion(out, session!);
   // As the stop of its session (`react`), with no trace of a reaction.
-  return rapide(workflow) ? out : stop(out, workflow);
+  return rapide(workflow) ? out : stop(out);
 }
 
 /** The stop of a question session: its answer, not the ticket's work. */
@@ -1408,7 +1372,7 @@ const REPLIES = new Set<EventType>(['session.prompted', 'ticket.commented']);
  * read something else (`fix-ci`, its red checks: `dev-feedback` is the same step).
  */
 function resumedJob(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): JobSpec | undefined {
-  if (!repliesToBlock(event, ticket, workflow) || !ticket?.blockedJob) return undefined;
+  if (!repliesToBlock(event, ticket) || !ticket?.blockedJob) return undefined;
   const job = workflow.jobs[ticket.blockedJob];
   // The fix of the review loop resumes itself on the reply, then goes back through the review (ORC-184): reading its findings
   // again, it would leave the reply aside.
@@ -1426,13 +1390,13 @@ function strandedPending(ticket: TicketState | undefined, workflow: Workflow): P
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
-/** A reply to a blocked ticket, in a version whose reply resumes the blocked step (ORC-196). */
-const repliesToBlock = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): boolean => !!workflow.blockComment && REPLIES.has(event.type) && !!ticket?.blocked;
+/** A reply to a blocked ticket: it resumes the blocked step (ORC-196). */
+const repliesToBlock = (event: FactoryEvent, ticket: TicketState | undefined): boolean => REPLIES.has(event.type) && !!ticket?.blocked;
 
 /** Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision. */
 function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
   const job = workflow.jobs[pending.job]!;
-  if (refusal(event, ticket, job, runTaint(event, ticket, pending.input ?? job.input))) return out;
+  if (refused(ticket, job)) return out;
   unblock(out, event, ticket);
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
@@ -1454,22 +1418,22 @@ function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: J
  */
 function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, r: Reaction): Decision {
   // The pending job a reply resumes, at once (a debounce armed before the block resumes it when it fires: `timer.fired`).
-  const pending = repliesToBlock(event, ticket, workflow) ? strandedPending(ticket, workflow) : undefined;
+  const pending = repliesToBlock(event, ticket) ? strandedPending(ticket, workflow) : undefined;
   if (pending) return startPending(out, event, ticket!, workflow, pending);
   const resumed = resumedJob(event, ticket, workflow);
   const job = resumed ?? r.job;
-  // A resumed job reads the inbox whatever its own input says: judged on the taint it will start with, or the ticket would lose its block for a run refused (I12).
-  const refused = !!refusal(event, ticket, job, runTaint(event, ticket, resumed ? 'feedback' : job.input));
-  if (!refused && ticket?.blocked) unblock(out, event, ticket);
+  // The ticket keeps its block for a run refused.
+  const no = refused(ticket, job);
+  if (!no && ticket?.blocked) unblock(out, event, ticket);
   // A human who starts work gives the review and CI loop its whole bound back, blocked or not (ORC-184): the count is the run's.
-  else if (!refused && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
+  else if (!no && !ticket?.blocked && HUMAN_RELAUNCH.has(event.type)) resetRedCi(out, ticket);
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363).
   const waits = heldByWait(ticket, job);
   if (waits) {
     out.trace.push(`${job.name} not started, ${waits}`);
     return out;
   }
-  if (r.debounceMs && !refusal(event, ticket, job)) {
+  if (r.debounceMs && !no) {
     const inbox = ((event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind) || event.type === 'pr.reviewed';
     out.timers.push({ kind: 'debounce', slot: job.name, ms: r.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
   } else {
@@ -1487,7 +1451,7 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
  * A start refused anyway (merged PR) is no round: `refusesDevWork`, the only refusal of a job that writes code.
  */
 function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, job: JobSpec, start: () => void): void {
-  if (!humanRoundJob(workflow, job) || workflow.limits.humanReviewRounds === undefined || refusesDevWork(ticket, job) === 'merged') {
+  if (!humanRoundJob(workflow, job) || refusesDevWork(ticket, job) === 'merged') {
     start();
     return;
   }
@@ -1497,7 +1461,6 @@ function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Wo
     return block(out, workflow, {
       kind: 'limit',
       reason,
-      body: `${reason}\nThe feedback is kept: reply in this thread to relaunch.`,
       job: job.name,
       attempts: bound,
       tried: [`${bound} round(s) of human review feedback (${job.name}), each through verify and the AI review.`],
@@ -1516,7 +1479,7 @@ function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Wo
 function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, key: 'ciFixAttempts' | 'humanReviewRounds', start: () => void, past: (bound: number) => Decision): Decision {
   const patched = out.events.findLast((e): e is Extract<DecidedEvent, { type: 'ticket.patched' }> => e.type === 'ticket.patched' && e.patch[key] !== undefined);
   const used = patched?.patch[key] ?? ticket?.[key] ?? 0;
-  const bound = workflow.limits[key] ?? 0;
+  const bound = workflow.limits[key];
   if (used >= bound) return past(bound);
   start();
   out.events.push({ type: 'ticket.patched', patch: { [key]: used + 1 } });
@@ -1530,7 +1493,7 @@ function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Wor
  */
 function reviewCiLoop(out: Decision, r: Reaction, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { job } = r;
-  if (refusal(event, ticket, job)) return startReaction(out, event, ticket, workflow, r);
+  if (refused(ticket, job)) return startReaction(out, event, ticket, workflow, r);
   return loopRound(out, ticket, workflow, 'ciFixAttempts', () => startReaction(out, event, ticket, workflow, r), (bound) => {
     const conflict = event.type === 'pr.conflicted';
     out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
@@ -1542,11 +1505,9 @@ function reviewCiLoop(out: Decision, r: Reaction, event: FactoryEvent<'pr.checks
 /** Red CI past the bound: `ci_bound`, which a green CI lifts. */
 function redCiBound(event: FactoryEvent<'pr.checks_failed'>, job: JobSpec, bound: number): RunBlock {
   const reason = `CI still failing after ${bound} attempts of ${job.name}.`;
-  const failures = event.payload.failures.map((f) => `- \`${f}\``);
   return {
     kind: 'ci_bound',
     reason,
-    body: [reason, ...failures, 'Reply in this thread to relaunch.'].join('\n'),
     tried: event.payload.failures.length ? event.payload.failures.map((f) => `\`${f}\``) : [`${bound} run(s) of ${job.name}.`],
   };
 }
@@ -1558,7 +1519,6 @@ function conflictBound(event: FactoryEvent<'pr.conflicted'>, bound: number): Run
   return {
     kind: 'conflict',
     reason,
-    body: `${reason}\nReply in this thread to relaunch.`,
     tried: [`PR #${number} conflicts with ${baseRef} at ${headSha.slice(0, 12)}.`, `${bound} run(s) of the review and CI loop (fix-ci, rebase).`],
   };
 }
@@ -1583,12 +1543,9 @@ export const isReconcileTicket = (ticketId: string | undefined): boolean => !!ti
 /** The reconciliation's cadence (ORC-185): a safety net behind the webhooks. */
 export const RECONCILE_MS = 5 * 60_000;
 
-/**
- * No publication without a green `verify` on the same commit (I1, ORC-151): a commit since asks for its own. A workflow
- * none of whose jobs goes through it (a version frozen before) merges as it did, and never pushes: only such a job writes a `publish` (ORC-125).
- */
-export function mayPublish(ticket: Pick<TicketState, 'verifiedSha'> | undefined, sha: string, workflow: Workflow): boolean {
-  return !Object.values(workflow.jobs).some((j) => j.repoChecks) || ticket?.verifiedSha === sha;
+/** No publication without a green `verify` on the same commit (I1, ORC-151): a commit since asks for its own. */
+export function mayPublish(ticket: Pick<TicketState, 'verifiedSha'> | undefined, sha: string): boolean {
+  return ticket?.verifiedSha === sha;
 }
 
 /** The factory publishes what a job wrote and `verify` found green (ORC-125). The tests step comes before the code: its commit waits for `dev`'s. */
@@ -1603,12 +1560,9 @@ export const pushCheckId = (sha: string, at: number): string => `push-${sha}-${a
 /** The commit a check of a human's push verifies; undefined for the check of a run. */
 const pushedHead = (runId: string): string | undefined => PUSH_CHECK.exec(runId)?.[1];
 
-/**
- * The job whose checks a human's push goes through (ORC-159): the first the factory publishes. None on a version whose
- * agents push themselves (frozen before ORC-125): their own pushes come in as `push.human`, and pause nothing.
- */
+/** The job whose checks a human's push goes through (ORC-159): the first the factory publishes. */
 function pushCheckJob(workflow: Workflow): JobSpec | undefined {
-  return Object.values(workflow.jobs).find((j) => publishes(j) && j.workspace === 'worktree' && j.verifyFailure !== 'block');
+  return Object.values(workflow.jobs).find((j) => publishes(j) && j.workspace === 'worktree');
 }
 
 /**
@@ -1637,7 +1591,7 @@ function humanPush(out: Decision, event: FactoryEvent<'push.human'>, state: Tick
     cancelWork(out, `push.human: ${author} pushed ${sha.slice(0, 12)}, the agent's work paused`);
     // A push on a paused ticket keeps the job the first one interrupted.
     const resumes = ticket.blockKind === 'human_push' ? ticket.blockedJob : state?.activeJob && workflow.jobs[state.activeJob]?.queue === 'dev' ? state.activeJob : (state?.pendingJob?.job ?? ticket.blockedJob);
-    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(workflow.blockComment && resumes ? { job: resumes } : {}) });
+    out.events.push({ type: 'ticket.blocked', reason: `${pushed(sha)}: the agent's work is paused while verify checks it.`, kind: 'human_push', ...(resumes ? { job: resumes } : {}) });
   } else {
     // Its block, and the pending job a reply to it resumes, stay: only the run in flight stops.
     out.trace.push(`push.human: ${author} pushed ${sha.slice(0, 12)}, the ticket stays blocked for its own reason`);
@@ -1668,14 +1622,14 @@ function pushChecked(out: Decision, event: FactoryEvent<'verify.passed' | 'verif
   if (event.type === 'verify.errored') {
     // Still the push's block: a next push replaces it, and its verdict is told.
     const reason = `The verification of ${head.slice(0, 12)}, pushed by a human, could not run: infrastructure failure.`;
-    return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
+    return block(out, workflow, { kind: 'human_push', reason, ...at, tried: [`Started the verification of the pushed commit: ${event.payload.error}`] });
   }
   if (event.type === 'verify.failed') {
     const reason = `${pushed(head)}: verify fails on it.`;
     return block(out, workflow, { kind: 'human_push', ...failedChecks(reason, event.payload.failures), ...at, question: `Push a fix (it is checked again), or have a designated maintainer send /refreeze if it changes a frozen test on purpose; then ${resume}` });
   }
   const reason = `${pushed(head)}: verify passed on it, in a fresh clone. The agent's work is paused.`;
-  return block(out, workflow, { kind: 'human_push', reason, body: `${reason}\nReply in this thread to resume the agent on top of it.`, ...at, tried: [`Checked the pushed commit ${head.slice(0, 12)} in a fresh clone of the forge: green.`], question: `Shall I go on? Move the ticket to AI Review to have your commits reviewed, or ${resume}` });
+  return block(out, workflow, { kind: 'human_push', reason, ...at, tried: [`Checked the pushed commit ${head.slice(0, 12)} in a fresh clone of the forge: green.`], question: `Shall I go on? Move the ticket to AI Review to have your commits reviewed, or ${resume}` });
 }
 
 /** The ticket goes back to Human Review (ORC-148): nothing merged, `reason` answered in the ticket. */
@@ -1707,7 +1661,7 @@ function doneMerge(out: Decision, event: FactoryEvent<'status.changed'>, state: 
     // Only the end of the factory's own work in Human Review records one (a review, a dev run): a reply, a refusal do not.
     return backToReview(out, 'I am not merging: no reviewed commit is recorded for this ticket (the factory records one only at the end of its own work, an AI review or a dev run that brings the ticket back to Human Review, and only if the head of the PR is the commit that work ended on; a move back to Human Review after a refusal records none). Move the ticket to AI Review: the AI review brings it back to Human Review on the head of the PR, which becomes the reviewed commit. Commits pushed by a human first need a reply in this thread, so that the agent takes them in and the factory verifies and publishes them: the AI review reads only what the factory published.');
   }
-  if (!mayPublish(state, state.reviewSha, workflow)) {
+  if (!mayPublish(state, state.reviewSha)) {
     return backThroughAiReview(out, event, state, workflow, `I am not merging: the reviewed commit (${state.reviewSha.slice(0, 12)}) has no green verification, the last one is on ${state.verifiedSha?.slice(0, 12) ?? 'no commit'}.`);
   }
   out.trace.push(`done: merge PR #${state.prNumber} on ${state.reviewSha}`);
@@ -1740,17 +1694,16 @@ function mergeRefused(out: Decision, event: FactoryEvent<'pr.merge_refused'>, ti
 }
 
 /**
- * New commits go through the AI review again, whose `verify` finds them green or not, and which shows the head in Human
- * Review. A blocked ticket (it waits for a human) or a workflow with no AI review goes back to Human Review. So does a push
- * since the review (`pushed`) when the review reads only what the factory published (ORC-183): it can neither take the push
- * in nor verify it, which the implementer's feedback run does.
+ * New commits go through the AI review again, which shows the head in Human Review. A blocked ticket (it waits for a human), or
+ * one at the Rapide level, goes back to Human Review. So does a push since the review (`pushed`): the review reads only what the
+ * factory published (ORC-183), it can neither take the push in nor verify it, which the implementer's feedback run does.
  */
 function backThroughAiReview(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, refused: string, o: { pushed?: true } = {}): Decision {
   // The reaction to a human's move from Done to AI Review, read on the ticket as it would then be.
   const moved: FactoryEvent<'status.changed'> = { ...event, type: 'status.changed', payload: { from: 'done', to: 'ai_review' } } as FactoryEvent<'status.changed'>;
-  const job = workflow.states.ai_review ? reviewAgain(moved, { ...ticket, logical: 'ai_review' }, workflow)?.job : undefined;
+  const job = reviewAgain(moved, { ...ticket, logical: 'ai_review' }, workflow)?.job;
   if (!job || ticket.blocked) return backToReview(out, refused);
-  if (o.pushed && job.lens) return backToReview(out, `${refused} ${PUSH_NOT_REVIEWED}`);
+  if (o.pushed) return backToReview(out, `${refused} ${PUSH_NOT_REVIEWED}`);
   out.trace.push(`not merged: ${refused}, back to the AI review`);
   out.effects.push({ kind: 'move', to: 'ai_review' }, { kind: 'comment', body: `${refused} The new commits go through the AI review again.` });
   startRun(out, event, ticket, job, { input: job.input });
@@ -1885,12 +1838,12 @@ function statusAnswer(ticket: TicketState | undefined): string {
 /**
  * A delegation on a Linear team no project takes (ORC-171): blocked, whoever delegated (no repo, no role to check),
  * or asked again when already waiting: a wait for a repo with none to choose from (`awaitingRepo: []`). Told by the
- * standard comment (ORC-196), which says that only an action lifts it; a version frozen before it, in the session.
+ * standard comment (ORC-196), which says that only an action lifts it.
  */
-function noRepoBlock(out: Decision, state: TicketState | undefined, event: FactoryEvent<'ticket.delegated'>, team: string, workflow: Workflow): Decision {
+function noRepoBlock(out: Decision, state: TicketState | undefined, event: FactoryEvent<'ticket.delegated'>, team: string): Decision {
   const reason = `No repository known for the Linear team ${team}: add a project for it to the configuration, restart, then delegate this ticket again.`;
   if (!isNoRepo(state)) out.events.push({ type: 'ticket.blocked', reason, kind: 'pickup' }, { type: 'ticket.patched', patch: { awaitingRepo: [] } });
-  askForRepo(out, workflow, reason, 'Can you add a project for this team, restart, then delegate this ticket again?', `Delegation on the team ${team}, which no project takes.`, event.payload.linearSessionId);
+  askForRepo(out, reason, 'Can you add a project for this team, restart, then delegate this ticket again?', `Delegation on the team ${team}, which no project takes.`);
   // A new ticket: `blockedLabel` sees no state before it and puts no label.
   if (!state) out.effects.push(blockedLabelChange(false, true)!);
   return out;
@@ -1984,7 +1937,7 @@ function unrouted(state: TicketState | undefined, event: FactoryEvent, workflow:
   if (event.type === 'ticket.delegated' && repos) {
     if (!isUnrouted(state)) out.events.push({ type: 'ticket.blocked', reason: body, kind: 'pickup' }, { type: 'ticket.patched', patch: { awaitingRepo: repos } });
     // In the session this delegation opened: the ticket keeps the first one it had.
-    askForRepo(out, workflow, body, `Which repository: ${choices.map((r) => `\`${repoLabel(r)}\``).join(' or ')}? Add its label to the ticket, then delegate it again.`, 'Delegation on a team with several repositories, without a label naming one.', sessionId);
+    askForRepo(out, body, `Which repository: ${choices.map((r) => `\`${repoLabel(r)}\``).join(' or ')}? Add its label to the ticket, then delegate it again.`, 'Delegation on a team with several repositories, without a label naming one.');
     // A new ticket: `blockedLabel` sees no state before it and puts no label.
     if (!state) out.effects.push(blockedLabelChange(false, true)!);
     return out;
@@ -2022,7 +1975,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
   const waiting = ticket && unrouted(state, event, workflow, matrix);
   if (waiting) return waiting;
   // Before the wait's end below: delegated again, a team with still no repo has chosen nothing.
-  if (event.type === 'ticket.delegated' && event.payload.noRepo) return noRepoBlock(out, state, event, event.payload.noRepo, workflow);
+  if (event.type === 'ticket.delegated' && event.payload.noRepo) return noRepoBlock(out, state, event, event.payload.noRepo);
   if (event.type === 'ticket.delegated' && isUnrouted(ticket)) {
     // Its repo chosen by this delegation, whose session is the ticket's from now on.
     const { linearSessionId } = event.payload;
@@ -2098,11 +2051,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (takeOver && runId) {
         // The stop first (ORC-234): the human's container opens on a worktree the agent no longer writes.
         out.events.push({ type: 'work.cancelled' }, { type: 'ticket.blocked', reason: TAKEN_OVER, kind: 'taken_over' });
-        const body = `Taken over from the dashboard: a human works on the branch in a container of their own, or hands back a bundle the factory checks before any push. ${relaunch(workflow)}`;
+        const body = `Taken over from the dashboard: a human works on the branch in a container of their own, or hands back a bundle the factory checks before any push. ${RELAUNCH}`;
         out.effects.push({ kind: 'stop_run' }, { kind: 'take_over', runId }, { kind: 'activity', type: 'response', body });
         return out;
       }
-      return pause ? stop(out, workflow, PAUSED, `Paused from the dashboard. ${relaunch(workflow)}`, 'paused') : stop(out, workflow);
+      return pause ? stop(out, PAUSED, `Paused from the dashboard. ${RELAUNCH}`, 'paused') : stop(out);
     }
     case 'control.bundle':
       if (!authorize(out, event, ticket, 'take_over', 'dashboard', matrix)) return out;
@@ -2114,7 +2067,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.effects.push({ kind: 'publish_bundle', file: event.payload.file, by: event.actor! });
       return out;
     case 'bundle.refused':
-      out.effects.push({ kind: 'activity', type: 'response', body: `The bundle handed back is refused, nothing was pushed: ${event.payload.reason}\nHand back another bundle, or ${relaunch(workflow).toLowerCase()}` });
+      out.effects.push({ kind: 'activity', type: 'response', body: `The bundle handed back is refused, nothing was pushed: ${event.payload.reason}\nHand back another bundle, or ${RELAUNCH.toLowerCase()}` });
       return out;
     case 'run.finished': {
       const { job: jobName, runId, output } = event.payload;
@@ -2170,13 +2123,13 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const over = outcome === 'limit' ? event.payload.overBudget : undefined;
       if (over) {
         const reason = over === 'tokens' ? `The run ${jobName} spent its token budget (budgets.per_step_tokens, or what the ticket had left).` : `The run ${jobName} spent its turn budget (max_turns of its step).`;
-        return block(out, workflow, { kind: 'budget', reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, tried: [`Started the run ${jobName}: stopped at its ${over === 'tokens' ? 'token' : 'turn'} budget.`] });
+        return block(out, workflow, { kind: 'budget', reason, job: jobName, tried: [`Started the run ${jobName}: stopped at its ${over === 'tokens' ? 'token' : 'turn'} budget.`] });
       }
       const reason =
         outcome === 'limit'
           ? `The run ${jobName} reached a limit (turns, duration or budget).`
           : `The run ${jobName} failed.`;
-      return block(out, workflow, { kind: outcome === 'limit' ? 'limit' : 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: jobName, tried: [`Started the run ${jobName}: ${outcome === 'limit' ? 'stopped at its limit' : 'it failed'}.`] });
+      return block(out, workflow, { kind: outcome === 'limit' ? 'limit' : 'failed', reason, job: jobName, tried: [`Started the run ${jobName}: ${outcome === 'limit' ? 'stopped at its limit' : 'it failed'}.`] });
     }
     case 'run.lost':
       return attemptLost(out, event, ticket, workflow);
@@ -2191,10 +2144,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return out;
       }
       // A question thread hears it where it was asked; the dev session by the comment only, the one channel of a block.
-      if (workflow.blockComment && linearSessionId && linearSessionId !== ticket.linearSessionId) out.effects.push(asker);
+      if (linearSessionId && linearSessionId !== ticket.linearSessionId) out.effects.push(asker);
       // The job at work is the step a reply resumes; a question run has none on the ticket.
       const at = ticket.activeJob ? { job: ticket.activeJob } : { step: job };
-      return block(out, workflow, { kind: 'asked', reason: AGENT_QUESTION, body: question, linearSessionId, ...at, tried: [`The run ${job} in progress: the agent asks for a clarification.`], question: question || undefined });
+      return block(out, workflow, { kind: 'asked', reason: AGENT_QUESTION, ...at, tried: [`The run ${job} in progress: the agent asks for a clarification.`], question: question || undefined });
     }
     case 'verify.lost': {
       const { runId, job, output } = event.payload;
@@ -2262,13 +2215,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const { failures, job } = event.payload;
       const checked = workflow.jobs[job];
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
-      if (checked?.verifyFailure === 'block') {
-        const reason = `Checks failing after ${job}: the commit cannot be published, and this job does not fix it.`;
-        // This job does not fix what it found: the reply goes to the reaction's job, which writes.
-        return block(out, workflow, { kind: 'failed', ...failedChecks(reason, failures), step: checkOf(workflow, job) });
-      }
       const repeated = repeatedFailure(ticket, event.payload);
-      if (repeated && repeated.count >= (workflow.limits.repeatedFailures ?? Infinity)) {
+      if (repeated && repeated.count >= workflow.limits.repeatedFailures) {
         out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });
         const reason = `Loop: same failure ${repeated.count} times in a row, with no code change.`;
         return block(out, workflow, { kind: 'loop', ...failedChecks(reason, failures), job, step: checkOf(workflow, job), attempts: repeated.count });
@@ -2285,7 +2233,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.errored': {
       // Not a failure of the work: no counter moves, and the agent gets nothing to fix. A human relaunch checks again.
       const reason = `The verification of ${event.payload.job} could not run: infrastructure failure, not the agent's fault.`;
-      return ticket?.blocked ? out : block(out, workflow, { kind: 'infra', reason, body: `${reason}\n${event.payload.error}\nReply in this thread and I will resume.`, job: event.payload.job, step: checkOf(workflow, event.payload.job), tried: [`Started the verification of ${event.payload.job}: ${event.payload.error}`] });
+      return ticket?.blocked ? out : block(out, workflow, { kind: 'infra', reason, job: event.payload.job, step: checkOf(workflow, event.payload.job), tried: [`Started the verification of ${event.payload.job}: ${event.payload.error}`] });
     }
     case 'timer.fired': {
       const fired = event.payload;
@@ -2332,7 +2280,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.trace.push(`timer.fired debounce: ${job.name} not started, the ticket left Human Review`);
         return out;
       }
-      if (ticket?.blocked && !refusal(event, ticket, job)) unblock(out, event, ticket);
+      if (ticket?.blocked && !refused(ticket, job)) unblock(out, event, ticket);
       humanRound(out, ticket, workflow, job, () => startRun(out, event, ticket, job, { input: job.input }));
       return out;
     }
@@ -2365,9 +2313,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       else out.events.push({ type: 'ticket.blocked', reason, kind: 'dead_letter', eventId: event.payload.eventId });
       tell(
         out,
-        workflow,
         blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? event.payload.eventType), attempts: event.payload.attempts ?? event.payload.failures, tried: [deadLetterTried(event.payload)], question: `Can a maintainer repair this event: \`factory run repair ${ticket.ticketId}\`?` }),
-        { kind: 'activity', type: 'error', body: `${reason} A maintainer can repair it: \`factory run repair ${ticket.ticketId}\`.` },
       );
       return out;
     }
@@ -2411,7 +2357,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const reason = `Error: ${error}`;
       out.events.push({ type: 'ticket.blocked', reason, kind: 'infra' });
       // The error notice of a failed effect is not noticed again when it fails too: the tracker may be what fails.
-      if (!eventId.startsWith('effect:')) tell(out, workflow, blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? kind), tried: [`The effect ${kind}, ${event.payload.attempts} times.`] }), { kind: 'activity', type: 'error', body: reason });
+      if (!eventId.startsWith('effect:')) tell(out, blockFacts({ reason, step: stepOf(workflow, ticket.activeJob ?? kind), tried: [`The effect ${kind}, ${event.payload.attempts} times.`] }));
       return out;
     }
     case 'pr.merged':
@@ -2438,7 +2384,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return out;
       }
       out.trace.push('built-in pr.closed: work cancelled');
-      stop(out, workflow, `PR #${n} closed without merge`, `PR #${n} was closed without merge: I am stopping work on this ticket. ${relaunch(workflow)}`, 'pr_closed');
+      stop(out, `PR #${n} closed without merge`, `PR #${n} was closed without merge: I am stopping work on this ticket. ${RELAUNCH}`, 'pr_closed');
       break;
     }
     case 'ticket.undelegated':
@@ -2513,8 +2459,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       break;
     }
     case 'ticket.commented':
-      // The reply to a block's comment (ORC-196). A ticket that waits for none, or a version that asks for it in its session: between humans.
-      if (!workflow.blockComment || !ticket?.blocked || !ticket.delegated) {
+      // The reply to a block's comment (ORC-196). A ticket that waits for none: between humans.
+      if (!ticket?.blocked || !ticket.delegated) {
         out.trace.push('ticket.commented: no reply awaited');
         return out;
       }

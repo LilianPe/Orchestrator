@@ -92,11 +92,10 @@ describe('human review feedback goes back through fix → verify → AI review �
     }
   });
 
-  it('a version frozen before ORC-190 only traces a review, as it did', () => {
-    const frozen = { ...workflow, limits: { ...workflow.limits, humanReviewRounds: undefined } };
-    const out = decide(inHumanReview(), reviewed('Rename it.'), frozen);
+  it('at the Rapide level, a review is only traced: nobody reviews a replayed ticket', () => {
+    const out = decide(inHumanReview(), reviewed('Rename it.'), { ...workflow, level: 'rapide' });
     expect(out).toMatchObject({ events: [], effects: [], timers: [] });
-    expect(out.trace).toContain('pr.reviewed: no reaction in a version frozen before ORC-190');
+    expect(out.trace).toContain('pr.reviewed: no reaction at the Rapide level');
   });
 
   it('out of Human Review a review is kept and starts nothing: no uncounted fix, no fix that skips the AI review', () => {

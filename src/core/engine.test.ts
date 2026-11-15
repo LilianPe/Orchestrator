@@ -3,14 +3,12 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
-import { USAGE_RELAUNCHES, decide, isFenced, mayPublish, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch, taintedKnowledge } from './engine.js';
+import { USAGE_RELAUNCHES, decide, isFenced, mayPublish, RECONCILE_MS, reconcileTicket, SENSITIVE_PATHS, sensitivePathsAtLaunch } from './engine.js';
 import { causeOf, type BlockKind } from './block-cause.js';
 import { reduce } from './reduce.js';
 import { holds, isUnrouted, unroutedReason } from './routing.js';
 import { upcastTicket } from './upcast.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
-import { beforeOrc193 } from '../../test/helpers/frozen-memory.js';
-import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
 /** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
 const CUT_BOUND = /^Too many relaunches after a cut: /;
@@ -260,8 +258,7 @@ describe('decide — after the merge (ORC-268)', () => {
 
   it('a merge lifts the block of a delivered ticket, as the learn run it started did before ORC-193', () => {
     const t = ticket({ logical: 'ai_review', blocked: true, blockReason: 'Launch error: x', blockKind: 'infra' });
-    expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow).events).toContainEqual({ type: 'ticket.unblocked' });
-    expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), beforeOrc193(workflow)).events.filter((e) => e.type === 'ticket.unblocked')).toHaveLength(1);
+    expect(decide(t, ev('pr.merged', { number: 3, url: 'u', branch: 'b' }), workflow).events.filter((e) => e.type === 'ticket.unblocked')).toHaveLength(1);
   });
 
   it('a merge stops the dev work in flight, pending, queued or debounced, before the after_merge step and the cleanup of its rule', () => {
@@ -343,16 +340,6 @@ describe('decide — verify on the same commit (ORC-151)', () => {
     expect(out.effects.some((e) => e.kind === 'move')).toBe(false);
   });
 
-  it('a review frozen before ORC-183 goes through it too, and a failure blocks: the review did not write the commit (a push since)', () => {
-    const frozen = beforeOrc183(workflow);
-    expect(frozen.jobs['review']!.repoChecks).toBe(true);
-    const t = { ...running(), verifyingRunId: 'r1', activeRunId: undefined };
-    const out = decide(t, event('verify.failed', { runId: 'r1', job: 'review', failures: [{ command: 'npm test', exitCode: 1, output: 'red' }] }), frozen);
-    expect(out.effects.some((e) => e.kind === 'start_run')).toBe(false);
-    expect(out.events).toContainEqual({ type: 'ticket.blocked', reason: expect.stringMatching(/^Checks failing after review/), kind: 'failed' });
-    expect(causeOf((out.events[0] as { kind: BlockKind }).kind)).toBe('failed');
-  });
-
   it('so do the jobs that fix what it wrote, and not those that only answer', () => {
     expect(workflow.jobs['dev-feedback']!.repoChecks).toBe(true);
     expect(workflow.jobs['fix-ci']!.repoChecks).toBe(true);
@@ -366,15 +353,9 @@ describe('decide — verify on the same commit (ORC-151)', () => {
   });
 
   it('a commit green once may be published, a new one asks for its own', () => {
-    expect(mayPublish({ verifiedSha: 'abc' }, 'abc', workflow)).toBe(true);
-    expect(mayPublish({ verifiedSha: 'abc' }, 'def', workflow)).toBe(false);
-    expect(mayPublish({}, 'abc', workflow)).toBe(false);
-  });
-
-  it('a workflow frozen before these checks publishes as it did', () => {
-    const before = structuredClone(workflow);
-    for (const job of Object.values(before.jobs)) delete job.repoChecks;
-    expect(mayPublish({}, 'abc', before)).toBe(true);
+    expect(mayPublish({ verifiedSha: 'abc' }, 'abc')).toBe(true);
+    expect(mayPublish({ verifiedSha: 'abc' }, 'def')).toBe(false);
+    expect(mayPublish({}, 'abc')).toBe(false);
   });
 
   it('the 3 returns of the default preset: the 4th failure blocks, the agent resumed three times with the logs', () => {
@@ -454,8 +435,6 @@ describe('decide — fencing', () => {
 
 describe('decide — taint', () => {
   const untrusted = (e: FactoryEvent): FactoryEvent => ({ ...e, taint: 'untrusted' });
-  // The knowledge jobs of a version frozen before ORC-193: a debounce armed for one still decides it.
-  const frozen = beforeOrc193(workflow);
 
 
 
@@ -470,12 +449,6 @@ describe('decide — taint', () => {
   it('answers an untrusted question with sensitive paths on its ask run', () => {
     const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), workflow);
     expect(out.effects).toEqual([{ kind: 'start_run', job: 'ask', input: 'thread', inputText: 'et pour mobile ?', linearSessionId: 's9', sensitivePaths: SENSITIVE_PATHS }]);
-  });
-
-  it('refuses an untrusted question when its ask job writes the knowledge base', () => {
-    const knowledgeAsk = { ...workflow, jobs: { ...workflow.jobs, ask: { ...workflow.jobs['ask']!, workspace: 'knowledge' as const } } };
-    const out = decide(ticket({ linearSessionId: 's1' }), untrusted(ev('session.prompted', { linearSessionId: 's9', body: 'et pour mobile ?', author: 'L' })), knowledgeAsk);
-    expect(out.effects).toEqual([{ kind: 'activity', type: 'response', body: taintedKnowledge('ask'), linearSessionId: 's9' }]);
   });
 
   const pending = (taint?: 'trusted' | 'untrusted'): TicketState['humanInbox'] => [
@@ -524,13 +497,6 @@ describe('decide — taint', () => {
   it('starts the verify relaunch through the taint rule (ORC-269)', () => {
     const failed = untrusted(ev('verify.failed', { runId: 'r1', job: 'dev', failures: [] }));
     expect(decide(ticket({ verifyingRunId: 'r1' }), failed, workflow).effects[0]).toMatchObject({ kind: 'start_run', input: 'verify_failures', sensitivePaths: SENSITIVE_PATHS });
-  });
-
-  it('refuses a debounced knowledge run that would consume untrusted feedback, and leaves the ticket blocked (ORC-269)', () => {
-    const wf = { ...frozen, jobs: { ...frozen.jobs, remember: { ...frozen.jobs['remember']!, input: 'feedback' as const } } };
-    const out = decide(ticket({ blocked: true, humanInbox: pending('untrusted') }), ev('timer.fired', { kind: 'debounce', payload: { job: 'remember' } }), wf);
-    expect(kinds(out)).toEqual({ events: [], effects: ['activity'], timers: [] });
-    expect(out.effects[0]).toMatchObject({ body: taintedKnowledge('remember') });
   });
 
 });
@@ -621,11 +587,9 @@ describe('decide — built-ins', () => {
       expect(out.effects[0]).toMatchObject({ kind: 'block_comment', block: { tried: [expect.stringContaining('`npm test`')] } });
     });
 
-    it('the bound is the frozen workflow\'s: under it, or on a version without it, the fact decides nothing and the cap speaks', () => {
+    it('the bound is the frozen workflow\'s: under it, the fact decides nothing and the cap speaks', () => {
       const cap = decide(dev, finished(), workflow);
       expect(decide(dev, finished({ ...loop, count: 2 }), workflow)).toEqual(cap);
-      const older = { ...workflow, limits: { ...workflow.limits, repeatedFailures: undefined } };
-      expect(decide(dev, finished(loop), older)).toEqual(decide(dev, finished(), older));
     });
 
     it('a silent agent blocks, on the cap cause, the minutes in the reason', () => {

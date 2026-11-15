@@ -1275,19 +1275,6 @@ describe('a start that must not run (ORC-150 review)', () => {
     expect(h.runner.requests).toHaveLength(0);
   });
 
-  it('a launch that fails on a version frozen before ORC-196 blocks with no step to resume, as the engine does there', async () => {
-    const h = createHarness();
-    const { blockComment: _b, ...frozen } = h.project.workflow;
-    h.project.workflow = frozen;
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    h.workspaces.prepare = async () => {
-      throw new Error('disk full');
-    };
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: disk full' });
-    expect((await h.ticket()).blockedJob).toBeUndefined();
-  });
-
   it('drops a queued dev start of a ticket blocked meanwhile, without a run', async () => {
     const h = createHarness({ concurrency: 1 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });

@@ -1,4 +1,4 @@
-import type { JobSpec, Limits, RunLimits, Workflow } from '../core/workflow.js';
+import { WORKFLOW_FORMAT, type JobSpec, type Limits, type RunLimits, type Workflow } from '../core/workflow.js';
 import { blockingFix, nextOf, startingJob } from '../core/chain.js';
 import { REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
@@ -60,11 +60,10 @@ function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
  * ceiling that `factory.yml` only lowers, as a step only narrows the network.
  */
 function fromStep(step: AgentStep, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
-  const tools = settings.tools?.perStep?.[step.id] ?? stepTools(step);
   const tokens = settings.budgets?.perStepTokens?.[step.id];
   return {
     network: step.network,
-    ...(tools ? { tools } : {}),
+    tools: settings.tools?.perStep?.[step.id] ?? stepTools(step),
     effort: settings.effort?.perStep?.[step.id] ?? step.effort,
     limits: { ...own, turns: Math.min(own.turns, step.maxTurns, settings.budgets?.maxTurns?.[step.id] ?? Infinity), ...(tokens !== undefined ? { tokens } : {}) },
   };
@@ -110,19 +109,23 @@ export function workflowViolations(wf: Workflow): string[] {
   const job = (where: string, name: string | undefined) => {
     if (name !== undefined && !Object.hasOwn(wf.jobs, name)) out.push(`${where}: unknown job "${name}"`);
   };
-  const steps = new Set(wf.preset?.steps.map((s) => s.id));
+  const steps = new Set(wf.preset.steps.map((s) => s.id));
   for (const j of Object.values(wf.jobs)) {
-    if (j.step !== undefined && !steps.has(j.step)) out.push(`jobs.${j.name}.step: ${j.step} is not a step of ${wf.preset?.name ?? 'the workflow'}`);
+    if (j.step !== undefined && !steps.has(j.step)) out.push(`jobs.${j.name}.step: ${j.step} is not a step of ${wf.preset.name}`);
     // A step reached on the way that has no job starts nothing: the chain would stop there silently.
     const next = nextOf(wf, j);
     if (next.step && isAgentStep(next.step) && !next.run) out.push(`jobs.${j.name}: its end reaches ${next.step.id}, which has no job`);
     const fix = blockingFix(wf, j);
     if (fix && fix.input !== 'findings') out.push(`jobs.${j.name}: the review's fix "${fix.name}" must be a job that reads the findings`);
   }
-  if (wf.entry !== undefined && !steps.has(wf.entry)) out.push(`entry: ${wf.entry} is not a step of ${wf.preset?.name ?? 'the workflow'}`);
+  if (!steps.has(wf.entry)) out.push(`entry: ${wf.entry} is not a step of ${wf.preset.name}`);
   job('relayJob', wf.relayJob);
   job('delegated', wf.delegated);
-  if (wf.level !== 'rapide') for (const name of REACTION_JOBS) job('reactions', name);
+  if (wf.level !== 'rapide') {
+    for (const name of REACTION_JOBS) job('reactions', name);
+    // A question relayed to the agent that implements starts its job: only the Rapide level, where nobody asks, has none.
+    if (wf.relayJob === undefined) out.push('relayJob: missing, the questions relayed to the agent that implements would start no job');
+  }
   return out;
 }
 
@@ -149,23 +152,21 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
   if (!entryStep || !startingJob(jobs, entryStep)) throw new WorkflowError(`preset ${p.name}: its entry ${entry} has no job`);
   // The bounds of the loops, read on the edges that take them: red CI's (the review and CI loop), the merge gate's (human review).
   const merge = p.steps.find((s) => s.type === 'human_gate' && s.gate === 'merge');
-  const humanRounds = merge?.onFailure && boundOf(p, merge.onFailure.counter);
-  const specChanges = boundOf(p, 'spec_review');
   const limits: Limits = {
     perRun,
     // `verifyAttempts` counts every check: the preset's returns to the run, plus the first one.
     verifyAttempts: presetBound(p, 'verify') + 1,
     ciFixAttempts: presetBound(p, p.redCi.counter),
-    ...(humanRounds !== undefined ? { humanReviewRounds: humanRounds } : {}),
+    // None for a loop the preset does not have (`factory/fantome`: no merge gate, a spec the preset approves).
+    humanReviewRounds: (merge?.onFailure && boundOf(p, merge.onFailure.counter)) ?? 0,
     repeatedFailures: p.sameFailure.limit,
     silentAfterMs: p.silentRun.minutes * 60_000,
     specCheckReturns: presetBound(p, 'spec_check'),
-    ...(specChanges !== undefined ? { specChanges } : {}),
+    specChanges: boundOf(p, 'spec_review') ?? 0,
   };
   const relay = jobs.find((j) => j.cause === 'relay');
   const wf: Workflow = {
-    version: 1,
-    blockComment: true,
+    version: WORKFLOW_FORMAT,
     ...(p.level ? { level: p.level } : {}),
     tracker: { kind: 'linear', pickup: { checks: p.guard.checks } },
     states: { todo: 'Todo', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' },
