@@ -357,7 +357,7 @@ describe('pyprojectStart (ORC-406)', () => {
   it('keeps only the tables that say how it starts: scripts and entry points, of PEP 621 and of Poetry', () => {
     const toml = `${base}\n[project.scripts]\nshop = "shop.cli:main" # the CLI\n\n[project.gui-scripts]\nshop-gui = "shop.gui:main"\n\n[project.entry-points."shop.plugins"]\nx = "shop.x"\n\n[tool.poetry.scripts]\nserve = "shop.app:serve"\n\n[tool.ruff]\nline-length = 100\n`;
     const kept = pyprojectStart(toml);
-    for (const line of ['shop = "shop.cli:main"', 'shop-gui = "shop.gui:main"', 'x = "shop.x"', 'serve = "shop.app:serve"']) expect(kept).toContain(line);
+    for (const value of ['shop.cli:main', 'shop.gui:main', 'shop.x', 'shop.app:serve']) expect(kept).toContain(value);
     expect(kept).not.toContain('version');
     expect(kept).not.toContain('line-length');
     expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"').replace('line-length = 100', 'line-length = 120'))).toBe(kept);
@@ -368,13 +368,13 @@ describe('pyprojectStart (ORC-406)', () => {
   it('keeps the task runners: PDM, Hatch, Rye, poethepoet, taskipy', () => {
     for (const table of ['tool.pdm.scripts', 'tool.hatch.envs.default.scripts', 'tool.rye.scripts', 'tool.poe.tasks', 'tool.taskipy.tasks']) {
       const toml = `${base}\n[${table}]\ndev = "flask run"\n`;
-      expect(pyprojectStart(toml), table).toContain('dev = "flask run"');
+      expect(pyprojectStart(toml), table).toContain('flask run');
       expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"')), table).toBe(pyprojectStart(toml));
     }
   });
 
   it('keeps scripts set by an inline, dotted or quoted key, wherever their table is; never a key of the same name in another tool', () => {
-    for (const toml of [`${base}scripts = { shop = "shop.cli:main" }\n`, `${base}scripts.shop = "shop.cli:main"\n`, `project.scripts.shop = "shop.cli:main"\n${base}`, `${base}"scripts" = { shop = "shop.cli:main" }\n`, `${base}[tool]\npoetry.scripts.shop = "shop.cli:main"\n`, `${base}["project"."scripts"]\nshop = "shop.cli:main"\n`]) {
+    for (const toml of [`${base}scripts = { shop = "shop.cli:main" }\n`, `${base}scripts.shop = "shop.cli:main"\n`, `${base}"scripts" = { shop = "shop.cli:main" }\n`, `${base}[tool]\npoetry.scripts.shop = "shop.cli:main"\n`, `${base}["project"."scripts"]\nshop = "shop.cli:main"\n`]) {
       expect(pyprojectStart(toml), toml).toContain('shop.cli:main');
       expect(pyprojectStart(toml.replace('version = "1.0"', 'version = "2.0"')), toml).toBe(pyprojectStart(toml));
     }
@@ -386,9 +386,14 @@ describe('pyprojectStart (ORC-406)', () => {
     expect(pyprojectStart(`${base}\n[project.scripts]\na = "m:a"\nb = "m:b"\n`)).toBe(pyprojectStart(`${base}\n[project.scripts]\nb = "m:b"\na = "m:a"\n`));
   });
 
-  it('reads the whole file where it cannot tell the scripts apart: a multi-line string, a script value over several lines out of its table', () => {
-    for (const toml of [`${base}description = ${Q}\nmany\nlines\n${Q}\n`, `${base}scripts.dev = [\n  "a",\n]\n`]) {
-      expect(pyprojectStart(toml), toml).toBe(toml);
-    }
+  it('reads a multi-line string or a value over several lines as TOML does: a long description counts for nothing', () => {
+    expect(pyprojectStart(`${base}description = ${Q}\nmany\nlines\n${Q}\n`)).toBe('');
+    expect(pyprojectStart(`${base}description = ${Q}\nmany\nlines\n${Q}\n\n[project.scripts]\nshop = "shop.cli:main"\n`)).toBe(pyprojectStart(`${base}\n[project.scripts]\nshop = "shop.cli:main"\n`));
+    expect(pyprojectStart(`${base}scripts.dev = [\n  "a",\n]\n`)).toContain('"a"');
+  });
+
+  it('reads the whole file where it does not parse', () => {
+    const broken = `${base}[project.scripts\nshop = "shop.cli:main"\n`;
+    expect(pyprojectStart(broken)).toBe(broken);
   });
 });

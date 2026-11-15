@@ -8,6 +8,7 @@ import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/
 import { zFields } from '../core/clean-verify.js';
 import { START_FILES } from '../knowledge/preview-recipe.js';
 import { canonical } from '../runtime/workflow-version.js';
+import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/toml.js';
 
 /**
  * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
@@ -72,9 +73,10 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
       entries.map(async ({ blob, path }) => {
         const part = START_PART[path];
         if (!part) return `${path}\0${blob}`;
-        const r = await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob]);
+        const args = ['-C', repoPath, 'cat-file', 'blob', blob];
+        const r = await exec('git', args);
         if (r.code !== 0) {
-          o.log?.(`start fingerprint: ${execFailure('git', ['-C', repoPath, 'cat-file', 'blob', blob], r).message}`);
+          o.log?.(`start fingerprint: ${execFailure('git', args, r).message}`);
           return undefined;
         }
         return `${path}\0${part(r.stdout)}`;
@@ -95,44 +97,35 @@ function packageScripts(text: string): string {
 }
 
 /**
- * The tables of a pyproject.toml that say how it starts, and all under them: PEP 621's scripts and entry points, Poetry's scripts
- * and plugins, and the task runners' (PDM, Hatch, Rye, poethepoet, taskipy).
+ * The tables of a pyproject.toml that say how it starts: PEP 621's scripts and entry points, Poetry's scripts and plugins, and the
+ * task runners' (PDM, Rye, poethepoet, taskipy; Hatch's, in each of its environments).
  */
-const PYPROJECT_START = /^(project\.(scripts|gui-scripts|entry-points)|tool\.poetry\.(scripts|plugins)|tool\.(pdm|rye)\.scripts|tool\.hatch\.envs\.[^.]+\.scripts|tool\.(poe|taskipy)\.tasks)(\.|$)/;
+const PYPROJECT_START = ['project.scripts', 'project.gui-scripts', 'project.entry-points', 'tool.poetry.scripts', 'tool.poetry.plugins', 'tool.pdm.scripts', 'tool.rye.scripts', 'tool.poe.tasks', 'tool.taskipy.tasks'];
 
-/** A dotted key or table name as one path: its quotes and the spaces around its dots out. */
-const tomlPath = (name: string): string => name.replace(/["']/g, '').replace(/\s*\.\s*/g, '.').trim();
+const at = (t: TomlValue | undefined, dotted: string): TomlValue | undefined => dotted.split('.').reduce<TomlValue | undefined>((v, k) => (isTable(v) ? v[k] : undefined), t);
 
 /**
- * What of a pyproject.toml says how it starts (ORC-406): each line of `PYPROJECT_START`'s tables, and each key that sets them from
- * another table (inline, dotted or quoted), by its full path, sorted, comments and blank lines out; the version and the
- * dependencies change nothing of it. With no TOML parser, the whole text where it cannot tell them apart surely: a multi-line
- * string, or such a key whose value goes on past its line.
+ * What of a pyproject.toml says how it starts (ORC-406): `PYPROJECT_START`'s tables, in canonical JSON, so that neither the
+ * version, the dependencies nor the order of the scripts count; the whole text where it does not parse.
  */
 export function pyprojectStart(text: string): string {
-  if (text.includes('"'.repeat(3)) || text.includes("'".repeat(3))) return text;
-  const kept: string[] = [];
-  let table = '';
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const header = /^\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$/.exec(line);
-    if (header) {
-      table = tomlPath(header[1]!);
-      continue;
-    }
-    if (PYPROJECT_START.test(table)) {
-      kept.push(`[${table}] ${line}`);
-      continue;
-    }
-    const key = /^([^=]+?)\s*=\s*(.*)$/.exec(line);
-    const path = key && tomlPath(table ? `${table}.${key[1]}` : key[1]!);
-    if (!path || !PYPROJECT_START.test(path)) continue;
-    const value = key[2]!;
-    if (value.split('[').length !== value.split(']').length || value.split('{').length !== value.split('}').length) return text;
-    kept.push(`${path} = ${value}`);
+  let toml: TomlTable;
+  try {
+    toml = parseToml(text);
+  } catch {
+    return text;
   }
-  return kept.sort().join('\n');
+  const picked: Record<string, TomlValue> = {};
+  for (const path of PYPROJECT_START) {
+    const v = at(toml, path);
+    if (v !== undefined) picked[path] = v;
+  }
+  const envs = at(toml, 'tool.hatch.envs');
+  for (const [name, env] of isTable(envs) ? Object.entries(envs) : []) {
+    const scripts = at(env, 'scripts');
+    if (scripts !== undefined) picked[`tool.hatch.envs.${name}.scripts`] = scripts;
+  }
+  return Object.keys(picked).length ? canonical(picked) : '';
 }
 
 /** What of a start file counts in the fingerprint, where not its whole blob. */
