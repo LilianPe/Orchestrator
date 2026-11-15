@@ -66,7 +66,7 @@ import { branchName, namesTicket } from './naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from './pickup.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from './prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
-import { isNote, isNotFound, noSearchReason, repoNameOf, searchAsked, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
+import { isNote, noSearchReason, repoNameOf, searchAsked, searchCounted, type PreviewRecipes, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { formatLinked, formatRunState, formatTranscript } from './answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
@@ -1214,11 +1214,12 @@ export class Orchestrator {
     if (job.verifyFailure === 'block') return this.cleanCheck(project, t, run.id, job, { ...(green ? { green } : {}), ...(t.humanHead ? { humanHead: t.humanHead } : {}) });
     const recipe = await this.recipeOf(project, t);
     // Asked at the launch on the config it read (`searchAsked`, ORC-386): only then is the agent's recipe tried, or the search spent.
-    // The launch's own decision where it kept it: another ticket's write to the note since then changes nothing of what was asked.
+    // The launch's own decision, kept on the run (ORC-406): another ticket's write to the note since then changes nothing of what was
+    // asked. Recomputed only for a run recorded before it was kept.
     const asked = !!recipe && (run.previewSearch ?? searchAsked(this.searchContext(project, job, run.repoConfig, run.startFingerprint), recipe.note));
     const found = asked ? output?.preview : undefined;
-    const noSearch = recipe && noSearchReason(recipe.note, run.startFingerprint);
-    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: { ...this.visualRequest(project, t, output, recipe?.note, found), ...(noSearch ? { noSearch } : {}) } });
+    const noSearch = recipe && !asked ? noSearchReason(recipe.note, run.startFingerprint) : undefined;
+    const res = await this.cleanCheck(project, t, run.id, job, { ...(t.humanHead ? { humanHead: t.humanHead } : {}), visual: this.visualRequest(project, t, output, recipe?.note, found, noSearch) });
     // Beside the verdict, never in its way: a write to the knowledge base waits for its pull and its push. Never a replayed ticket's.
     const recipes = this.d.previewRecipes;
     if (recipe && recipes && !project.replayed) {
@@ -1302,13 +1303,14 @@ export class Orchestrator {
   }
 
   /** What `verify` needs of the visual proof (ORC-176): the ticket's intake, never what the agent says of it but the page it names. */
-  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined, note: ReadNote, found: PreviewRecipe | undefined): VisualRequest {
+  private visualRequest(project: ProjectRuntime, t: TicketState, output: AgentOutput | undefined, note: ReadNote, found: PreviewRecipe | undefined, noSearch: string | undefined): VisualRequest {
     return {
       intake: t.visualProof === 'required',
       ...(this.d.visualProof ? { shooter: this.d.visualProof.shooter } : {}),
       // ORC-386: the learned recipe; the one the agent found only where it was asked to search.
       ...(isNote(note) && note.status === 'valid' ? { learned: note.recipe } : {}),
       ...(found ? { found } : {}),
+      ...(noSearch ? { noSearch } : {}),
       port: project.workflow.workspace.portBase,
       path: scenarioPath(output?.visual_scenario?.url),
       gate: (c) => this.policy.capture(c),
@@ -3120,7 +3122,7 @@ export class Orchestrator {
       const recipe = job.step === 'build' ? await this.recipeOf(project, t) : undefined;
       // Read with the config, on the default branch (ORC-406), and kept on the run: its check counts a failed search against it.
       // Only where a search could be asked, with no recipe in the way: never on a dormant instance, a declared start, a learned recipe.
-      const counted = !!recipe && (recipe.note === undefined || isNotFound(recipe.note)) && searchAsked(this.searchContext(project, job, config, undefined), undefined);
+      const counted = !!recipe && searchCounted(this.searchContext(project, job, config, undefined), recipe.note);
       const startFingerprint = counted ? await this.d.startFingerprint?.(project) : undefined;
       const previewSearch = !!recipe && searchAsked(this.searchContext(project, job, config, startFingerprint), recipe.note);
       const promptInput = {

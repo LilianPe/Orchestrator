@@ -146,6 +146,9 @@ export interface SearchContext {
 
 export const searchAsked = (c: SearchContext, note: ReadNote): boolean => c.step === 'build' && c.canShoot && !c.replayed && !c.declared && !c.services && searchOwed(note, c.fingerprint);
 
+/** Whether the fingerprint decides the search (ORC-406): one could be asked, and no recipe, valid or invalidated, is in the way. */
+export const searchCounted = (c: SearchContext, note: ReadNote): boolean => (note === undefined || isNotFound(note)) && searchAsked(c, undefined);
+
 export function formatRecipeNote(n: RecipeNote | NotFoundNote): string {
   const repo = n.scope.replace(/^repo:/, '');
   const replace = 'Declare `preview` in .factory/config.yml, or delete this note, to replace it.';
@@ -250,7 +253,7 @@ export class PreviewRecipes {
    * A search with no recipe to show for it, over no note or earlier ones (ORC-406): counted while the files that decide the start
    * hold `fingerprint`, counted from one when they changed; once per ticket, whose own relaunches spend no other ticket's search.
    */
-  searchFailed(repo: string, previous: NotFoundNote | undefined, s: { fingerprint: string | undefined; sha: string; runId: string; ticket: string; at: Date }, vet: Vet): Promise<string | undefined> {
+  private searchFailed(repo: string, previous: NotFoundNote | undefined, s: { fingerprint: string | undefined; sha: string; runId: string; ticket: string; at: Date }, vet: Vet): Promise<string | undefined> {
     const same = previous && sameStart(previous, s.fingerprint);
     if (same && previous.ticket === s.ticket && previous.failures > 0) return Promise.resolve(undefined);
     const failures = same ? previous.failures + 1 : 1;

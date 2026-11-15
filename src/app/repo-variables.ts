@@ -7,6 +7,7 @@ import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, ty
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 import { zFields } from '../core/clean-verify.js';
 import { START_FILES } from '../knowledge/preview-recipe.js';
+import { canonical } from '../runtime/workflow-version.js';
 
 /**
  * `.factory/config.yml` of a project's repository, read once at each launch (ORC-209 C): on its default branch as
@@ -78,8 +79,7 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
 async function scriptsOf(exec: Exec, repoPath: string, blob: string): Promise<string> {
   const r = await exec('git', ['-C', repoPath, 'cat-file', 'blob', blob]);
   try {
-    const scripts = (JSON.parse(r.stdout) as { scripts?: unknown }).scripts ?? {};
-    return JSON.stringify(scripts, typeof scripts === 'object' && scripts ? Object.keys(scripts).sort() : undefined);
+    return canonical((JSON.parse(r.stdout) as { scripts?: unknown }).scripts ?? {});
   } catch {
     return blob;
   }
