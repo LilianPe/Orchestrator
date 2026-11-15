@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { CONTAINER_SERVICES, ContainerSandboxProvider, defaultLimits, type SandboxLimits } from '../adapters/sandbox/docker-rootless.js';
 import { SandboxRouter } from '../adapters/sandbox/router.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
@@ -26,10 +27,10 @@ export function checkHostRuns(env: NodeJS.ProcessEnv): void {
  * The sandboxes of real runs (ORC-204): a container per attempt when FACTORY_CONTAINER_CLI is set, none
  * otherwise. Each reaches out only through `egress`, the factory's proxy (ORC-213).
  */
-export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress): SandboxProvider | undefined {
-  const cli = env['FACTORY_CONTAINER_CLI'];
+export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress, o: { browserImage?: string; exec?: Exec } = {}): SandboxProvider | undefined {
+  const cli = containerCli(env);
   if (!cli) return undefined;
-  if (cli !== 'docker' && cli !== 'podman') throw new Error(`FACTORY_CONTAINER_CLI=${cli}: docker or podman expected.`);
+  if (typeof cli !== 'string') throw new Error(`${cli.refused}.`);
   const image = env['FACTORY_RUNNER_IMAGE'];
   if (!image) throw new Error('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   const uid = process.getuid?.();
@@ -38,10 +39,66 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
   return new SandboxRouter([
     {
       name: 'container',
-      provider: new ContainerSandboxProvider({ cli, image, uid, gid, instance, limits: sandboxLimits(env), egress, ...(env['FACTORY_POSTGRES_IMAGE'] ? { postgresImage: env['FACTORY_POSTGRES_IMAGE'] } : {}) }),
-      capabilities: { level: 'L3', browser: false, services: CONTAINER_SERVICES },
+      provider: new ContainerSandboxProvider({
+        cli, image, uid, gid, instance, limits: sandboxLimits(env), egress,
+        ...(env['FACTORY_POSTGRES_IMAGE'] ? { postgresImage: env['FACTORY_POSTGRES_IMAGE'] } : {}),
+        ...(o.browserImage ? { browserImage: o.browserImage } : {}),
+        ...(o.exec ? { exec: o.exec } : {}),
+      }),
+      capabilities: { level: 'L3', browser: !!o.browserImage, services: CONTAINER_SERVICES },
     },
   ]);
+}
+
+/** `FACTORY_CONTAINER_CLI`: none without sandboxes, or the reason another CLI is refused. */
+function containerCli(env: NodeJS.ProcessEnv): 'docker' | 'podman' | { refused: string } | undefined {
+  const cli = env['FACTORY_CONTAINER_CLI'];
+  if (!cli) return undefined;
+  return cli === 'docker' || cli === 'podman' ? cli : { refused: `FACTORY_CONTAINER_CLI=${cli}: docker or podman expected` };
+}
+
+/** The label docker/browser.Dockerfile puts on the capture image, Playwright's version as its value. */
+export const BROWSER_LABEL = 'factory.browser';
+
+/**
+ * The capture image of the visual proof (ORC-404): `FACTORY_BROWSER_IMAGE`, when the engine has it, it carries the label of
+ * docker/browser.Dockerfile (the runner's image named there by mistake is no browser), and it was built on the runner image
+ * the commands run in (one left from before the runner's update would start the application with other tools). `detail`
+ * says why for the start's log and `factory doctor`; it never rejects. Without it, a required proof stays unavailable, indicative.
+ */
+export async function browserImage(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<{ image?: string; detail: string }> {
+  const cli = containerCli(env);
+  if (!cli) return { detail: 'no sandboxes (FACTORY_CONTAINER_CLI is not set)' };
+  if (typeof cli !== 'string') return { detail: cli.refused };
+  const image = env['FACTORY_BROWSER_IMAGE'];
+  if (!image) return { detail: 'FACTORY_BROWSER_IMAGE is not set (see docker/browser.Dockerfile)' };
+  const inspect = async (img: string, format: string): Promise<{ out: string } | { error: string }> => {
+    try {
+      return { out: (await mustExec(run, cli, ['image', 'inspect', '--format', format, img], { timeoutMs: 60_000 })).trimEnd() };
+    } catch (err) {
+      // An engine that fails as one that cannot be run: said, never thrown.
+      return { error: (err as Error).message.slice(0, 600) };
+    }
+  };
+  const own = await inspect(image, `{{index .Config.Labels "${BROWSER_LABEL}"}}\t{{json .RootFS.Layers}}`);
+  if ('error' in own) return { detail: own.error };
+  const [label = '', layers = '[]'] = own.out.split('\t');
+  // A label the image lacks prints as `<no value>` under Docker, empty under Podman: the line then starts with the tab, kept by `trimEnd`.
+  if (!label || label === '<no value>') return { detail: `${image} is not a capture image: no label ${BROWSER_LABEL} (see docker/browser.Dockerfile)` };
+  const runner = env['FACTORY_RUNNER_IMAGE'];
+  if (runner) {
+    const base = await inspect(runner, '{{json .RootFS.Layers}}');
+    if ('error' in base) return { detail: base.error };
+    const ours = JSON.parse(layers) as string[];
+    const theirs = JSON.parse(base.out) as string[];
+    if (!theirs.every((l, i) => ours[i] === l)) return { detail: `${image} was not built on ${runner}: build it again on it (see docker/browser.Dockerfile)` };
+  }
+  return { image, detail: `the captures run in ${image} (${label})` };
+}
+
+/** What the start's log and `factory doctor` say of it. */
+export function visualProofLine(v: { image?: string; detail: string }): string {
+  return `Visual proof on this instance: ${v.image ? 'available' : 'unavailable'} — ${v.detail}`;
 }
 
 /** Each limit of the attempt containers: unset, the default; `0` or `none`, left out (a host whose cgroups lack the controller). */
