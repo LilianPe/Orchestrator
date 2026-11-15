@@ -125,6 +125,8 @@ describe('PrPoller', () => {
       expect(await headIs(PUBLISHED)).toEqual([]);
       // The one before: the forge may still read the PR on it, just after a push.
       expect(await headIs(OTHER, {}, [OTHER, PUBLISHED])).toEqual([]);
+      // The one before, a second publication of the same commit between them.
+      expect(await headIs(OTHER, {}, [OTHER, PUBLISHED, PUBLISHED])).toEqual([]);
       // An older one: a branch a human put back, as the webhook reports it.
       expect((await headIs(OTHER, {}, [OTHER, HUMAN, PUBLISHED]))[0]?.payload).toMatchObject({ sha: OTHER, before: PUBLISHED });
       // Verified last: published, its `publish.done` not yet read, or a human's whose check passed.

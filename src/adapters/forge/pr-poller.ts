@@ -113,7 +113,10 @@ export class PrPoller {
     if (head === t.verifiedSha || head === t.humanHead || isTakenOver(t)) return;
     const seenKey = `lost-push:${t.projectId}:${t.ticketId}`;
     if ((await this.d.store.getMeta(seenKey)) === head) return;
-    const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event))).map((p) => p.sha);
+    // One head per commit: a commit published twice in a row is pushed once.
+    const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
+      .map((p) => p.sha)
+      .filter((sha, i, all) => sha !== all[i - 1]);
     const published = heads.at(-1);
     // Its last publication, and the one before, which the forge may still read just after a push. A branch put back on an older one
     // is a human's push, as the webhook reports it.
