@@ -173,7 +173,7 @@ On the server, with the user's rootless engine running:
 
 `factoryd` refuses to start on an engine that is not rootless: holding its socket would give root on the host.
 
-Operations commands are run in the container, on the server (over SSH from elsewhere): they go through the daemon's socket `factory.sock` in `FACTORY_DIR/data`, as `node`, with no GitHub sign-in (ORC-405):
+Operations commands are run in the container, on the server (over SSH from elsewhere): they go through the daemon's socket `cli/factory.sock` in `FACTORY_DIR/data`, as `node`, with no GitHub sign-in (ORC-405):
 
 ```bash
 docker compose exec factoryd node dist/src/cli/factory.js status

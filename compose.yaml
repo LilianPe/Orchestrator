@@ -43,7 +43,7 @@ services:
       GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-factory@localhost}
       GIT_COMMITTER_NAME:
       GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL:-factory@localhost}
-      # Also holds factory.sock, mode 0600: the CLI's way in (`docker compose exec factoryd node dist/src/cli/factory.js status`), without the GitHub sign-in (ORC-405).
+      # Also holds cli/factory.sock, mode 0600: the CLI's way in (`docker compose exec factoryd node dist/src/cli/factory.js status`), without the GitHub sign-in (ORC-405).
       FACTORY_HOME: ${FACTORY_DIR}/data
       FACTORY_INSTALL_DIR: ${FACTORY_DIR}/install
       FACTORY_DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:?définissez POSTGRES_PASSWORD}@postgres:5432/factory

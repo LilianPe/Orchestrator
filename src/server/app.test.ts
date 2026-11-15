@@ -998,6 +998,8 @@ describe('server', () => {
       const res = await app.request('/health');
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ ok: false, store: 'ok', takingTickets: false });
+      // The HEAD an uptime monitor sends gets the same status.
+      expect((await app.request('/health', { method: 'HEAD' })).status).toBe(503);
     });
   });
 

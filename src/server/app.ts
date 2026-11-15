@@ -174,7 +174,7 @@ export const isAgentPath = (path: string) => path === '/agent' || path.startsWit
  * never 401. And the health check (ORC-405), which tells the state alone.
  */
 function isPublicPath(method: string, path: string): boolean {
-  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && (path === '/oauth/callback' || path === GITHUB_CALLBACK_PATH || path === '/health')) || isAgentPath(path);
+  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && (path === '/oauth/callback' || path === GITHUB_CALLBACK_PATH)) || ((method === 'GET' || method === 'HEAD') && path === '/health') || isAgentPath(path);
 }
 
 /**

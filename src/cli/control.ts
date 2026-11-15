@@ -18,7 +18,10 @@ export interface ControlDeps {
   fetch?: (url: string, init?: RequestInit) => Promise<Response> | Response;
 }
 
-/** A request to the daemon through its Unix socket; rejected when nothing listens there. */
+/** The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. */
+const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK']);
+
+/** A request to the daemon through its Unix socket (the CLI's commands carry no body); rejected when nothing listens there. */
 function viaSocket(socket: string, path: string, init: RequestInit): Promise<Response> {
   return new Promise((resolve, reject) => {
     const req = request({ socketPath: socket, path, method: init.method ?? 'GET', headers: { host: 'localhost' } }, (res) => {
@@ -69,9 +72,16 @@ function formatStatus(s: State, now: number): string[] {
  */
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promise<Response | undefined> {
   if (d.socket && existsSync(d.socket)) {
-    // A socket a daemon killed left, or one this user may not open: HTTP, as without one.
-    const res = await viaSocket(d.socket, path, init).catch(() => undefined);
-    if (res) return res;
+    try {
+      return await viaSocket(d.socket, path, init);
+    } catch (err) {
+      // A socket a daemon killed left, or one this user may not open: HTTP, as without one. Any later error may come after
+      // the daemon took the command: never sent twice.
+      if (!NOT_REACHED.has((err as NodeJS.ErrnoException).code ?? '')) {
+        d.out(`${PRODUCT_NAME} did not answer through ${d.socket} (${(err as Error).message}): the command may have been taken, check with \`factory status\`.`);
+        return undefined;
+      }
+    }
   }
   let res: Response;
   try {

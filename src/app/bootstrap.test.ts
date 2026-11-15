@@ -359,8 +359,9 @@ describe('bootstrap', () => {
       expect(await (await fetch('http://127.0.0.1:4195/health')).json()).toEqual({ ok: true, store: 'ok', takingTickets: true });
       // On the server, the CLI goes through the socket in FACTORY_HOME, the factory user's alone (ORC-405): no GitHub sign-in.
       if (process.platform !== 'win32') {
-        const socket = join(home, 'factory.sock');
+        const socket = join(home, 'cli', 'factory.sock');
         expect(statSync(socket).mode & 0o777).toBe(0o600);
+        expect(statSync(join(home, 'cli')).mode & 0o777).toBe(0o700);
         const lines: string[] = [];
         expect(await runQueueCommand({ api: 'http://127.0.0.1:4195', socket, out: (l) => void lines.push(l) }, 'pause')).toBe(0);
         expect(await runStatusCommand({ api: 'http://127.0.0.1:4195', socket, out: (l) => void lines.push(l) })).toBe(0);

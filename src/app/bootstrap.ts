@@ -460,8 +460,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // The CLI on this server (ORC-405): its socket in FACTORY_HOME, the factory user's alone, without the GitHub sign-in.
-    // Not on Windows, whose sockets are named pipes: the CLI keeps HTTP on the loopback there.
-    const cliServer = process.platform === 'win32' ? undefined : listenCliSocket(app, paths.socket, { log });
+    // Never throws: without it, the CLI keeps HTTP on the loopback. Not on Windows, whose sockets are named pipes.
+    const cliServer = process.platform === 'win32' ? undefined : await listenCliSocket(app, paths.socket, { log });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
     if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);

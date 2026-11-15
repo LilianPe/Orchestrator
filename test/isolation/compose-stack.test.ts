@@ -200,7 +200,7 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     const health = await get('/health');
     expect([200, 503]).toContain(health.status);
     expect(Object.keys(JSON.parse(health.body) as object).sort()).toEqual(['ok', 'store', 'takingTickets']);
-    expect(compose('exec', '-T', 'factoryd', 'sh', '-c', `stat -c '%a %U' "${dir}/data/factory.sock"`).trim()).toBe('600 node');
+    expect(compose('exec', '-T', 'factoryd', 'sh', '-c', `stat -c '%a %U' "${dir}/data/cli/factory.sock"`).trim()).toBe('600 node');
     const factory = (...args: string[]) => compose('exec', '-T', 'factoryd', 'node', 'dist/src/cli/factory.js', ...args);
     expect(factory('status')).toMatch(/^Linear: not connected · queue: active/);
     expect(factory('pause').trim()).toBe('Queue paused.');

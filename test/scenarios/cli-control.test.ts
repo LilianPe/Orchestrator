@@ -1,7 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import { EventBus } from '../../src/server/live-feed.js';
@@ -142,9 +143,8 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
       githubLogin: { authorizeUrl: () => 'https://github.test/authorize', signIn: async (login) => ({ login, allowed: false }) },
       ...extra,
     });
-    const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
-    const server = listenCliSocket(app, socket, { host: 'srv-1', log: () => {} });
-    await new Promise((r) => server!.once('listening', r));
+    const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'cli', 'factory.sock');
+    const server = await listenCliSocket(app, socket, { host: 'srv-1', log: () => {} });
     const lines: string[] = [];
     const deps: ControlDeps = { api: 'http://127.0.0.1:4100', socket, out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init) };
     return { h, app, server: server!, socket, submitted, lines, deps };
@@ -175,29 +175,42 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
     }
   });
 
-  it("is the factory user's alone: mode 0600, and gone once the daemon closes it", async () => {
+  it("is the factory user's alone: mode 0600 in a folder 0700, and gone once the daemon closes it", async () => {
     const { server, socket } = await exposed();
     const st = statSync(socket);
     expect(st.isSocket()).toBe(true);
     expect(st.mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(socket)).mode & 0o777).toBe(0o700);
     expect(st.uid).toBe(process.getuid!());
     await close(server);
     expect(() => statSync(socket)).toThrow(/ENOENT/);
   });
 
-  it('binds anew over a socket file left at its path (a daemon killed), never over a file that is not a socket', async () => {
+  it("leaves another daemon's socket, never a file that is not a socket, and binds anew over what a daemon killed left", async () => {
     const first = await exposed();
-    const again = listenCliSocket(first.app, first.socket, { host: 'srv-2', log: () => {} })!;
-    await new Promise((r) => again.once('listening', r));
+    const logs: string[] = [];
+    const log = (l: string) => void logs.push(l);
+    // A second daemon on the same FACTORY_HOME: the first keeps its socket, and the CLI still reaches it.
+    expect(await listenCliSocket(first.app, first.socket, { host: 'srv-2', log })).toBeUndefined();
     expect(await runQueueCommand(first.deps, 'pause')).toBe(0);
-    expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-2']);
-    await close(again);
-    await close(first.server);
+    expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-1']);
     const notASocket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
     writeFileSync(notASocket, 'kept');
-    const logs: string[] = [];
-    expect(listenCliSocket(first.app, notASocket, { host: 'srv-1', log: (l) => void logs.push(l) })).toBeUndefined();
-    expect(logs).toEqual([`CLI socket: ${notASocket} is not a socket, left as it is: the CLI goes through HTTP on the loopback`]);
+    expect(await listenCliSocket(first.app, notASocket, { host: 'srv-1', log })).toBeUndefined();
+    expect(logs).toEqual([
+      `CLI socket: ${first.socket} is held by another daemon: the CLI goes through HTTP on the loopback`,
+      `CLI socket: ${notASocket} is not a socket, left as it is: the CLI goes through HTTP on the loopback`,
+    ]);
+    // What a kill -9 leaves: the socket file, nothing listening on it (a child killed with its server open).
+    const stale = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
+    spawnSync(process.execPath, ['-e', `require('node:net').createServer().listen(${JSON.stringify(stale)}, () => process.kill(process.pid, 'SIGKILL'))`], { stdio: 'ignore' });
+    expect(statSync(stale).isSocket()).toBe(true);
+    const again = await listenCliSocket(first.app, stale, { host: 'srv-3', log });
+    expect(again).toBeDefined();
+    expect(await runQueueCommand({ ...first.deps, socket: stale }, 'resume')).toBe(0);
+    expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-1', 'cli:srv-3']);
+    await close(again!);
+    await close(first.server);
   });
 
   // Without the socket (a client machine, a daemon not started), today's HTTP on the loopback.

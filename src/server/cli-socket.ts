@@ -1,39 +1,55 @@
-import { chmodSync, lstatSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, unlinkSync } from 'node:fs';
 import type { Server } from 'node:http';
+import { connect } from 'node:net';
 import { hostname } from 'node:os';
+import { dirname } from 'node:path';
 import { createAdaptorServer } from '@hono/node-server';
 import type { Hono } from 'hono';
 import { cliOnly } from './app.js';
 
+/** Whether a daemon still listens on the socket at `path`. */
+const answers = (path: string) =>
+  new Promise<boolean>((resolve) => {
+    const s = connect(path);
+    s.once('connect', () => resolve(!!s.destroy()));
+    s.once('error', () => resolve(false));
+  });
+
 /**
- * The CLI's listener on the daemon's server (ORC-405): a Unix socket at `path` (FACTORY_HOME), mode 0600, owned by the
- * factory's user, serving the CLI's routes of `app` (`cliOnly`) without a GitHub sign-in. The file's mode is the guard: no
- * token, no secret; from elsewhere, SSH to the server. Undefined, told in the log, when it cannot listen: the CLI then goes
- * through HTTP on the loopback, as before. Closing the server removes the file.
+ * The CLI's listener on the daemon's server (ORC-405): a Unix socket at `path`, in a folder of FACTORY_HOME that is the
+ * factory user's alone (0700), itself 0600, serving the CLI's routes of `app` (`cliOnly`) without a GitHub sign-in. The
+ * modes are the guard: no token, no secret; from elsewhere, SSH to the server. Undefined, told in the log, when it does not
+ * listen: the CLI then goes through HTTP on the loopback, as before. Closing the server removes the file.
  */
-export function listenCliSocket(app: Hono, path: string, o: { host?: string; log: (line: string) => void }): Server | undefined {
-  const fallback = 'the CLI goes through HTTP on the loopback';
-  const left = lstatSync(path, { throwIfNoEntry: false });
-  if (left && !left.isSocket()) {
-    o.log(`CLI socket: ${path} is not a socket, left as it is: ${fallback}`);
+export async function listenCliSocket(app: Hono, path: string, o: { host?: string; log: (line: string) => void }): Promise<Server | undefined> {
+  const fail = (why: string) => {
+    o.log(`CLI socket: ${path} ${why}: the CLI goes through HTTP on the loopback`);
     return undefined;
-  }
-  // What a daemon killed left: nothing listens on it any more (its HTTP port, bound before, says no other daemon runs here).
-  if (left) unlinkSync(path);
-  const server = createAdaptorServer({ fetch: cliOnly(app, o.host ?? hostname()) }) as Server;
-  server.on('error', (err) => o.log(`CLI socket ${path}: ${err.message}: ${fallback}`));
-  // Bound in listen() itself, under this umask: the file is never open to others, not even before the chmod.
-  const umask = process.umask(0o177);
+  };
   try {
-    server.listen(path);
-  } finally {
-    process.umask(umask);
+    // The folder first: the socket is never reachable by another user, not even before its own chmod.
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    chmodSync(dirname(path), 0o700);
+    const left = lstatSync(path, { throwIfNoEntry: false });
+    if (left && !left.isSocket()) return fail('is not a socket, left as it is');
+    // Another daemon on this FACTORY_HOME keeps its own; what a daemon killed left is replaced.
+    if (left && (await answers(path))) return fail('is held by another daemon');
+    if (left) unlinkSync(path);
+    const server = createAdaptorServer({ fetch: cliOnly(app, o.host ?? hostname()) }) as Server;
+    const bound = await new Promise<Error | undefined>((resolve) => {
+      server.once('error', resolve);
+      server.listen(path, () => resolve(undefined));
+    });
+    if (bound) return fail(`cannot be listened on (${bound.message})`);
+    try {
+      chmodSync(path, 0o600);
+    } catch (err) {
+      server.close();
+      return fail(`cannot be made the factory user's alone (${(err as Error).message})`);
+    }
+    server.on('error', (err) => o.log(`CLI socket ${path}: ${err.message}`));
+    return server;
+  } catch (err) {
+    return fail(`cannot be set up (${(err as Error).message})`);
   }
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Not bound (too long a path, a folder not writable): the error event above tells why.
-    return undefined;
-  }
-  return server;
 }

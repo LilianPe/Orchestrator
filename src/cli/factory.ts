@@ -62,7 +62,7 @@ async function main(): Promise<number> {
   const api = `http://127.0.0.1:${cfg.port}`;
   // No credential: on the server, the daemon's socket in FACTORY_HOME, its file mode the guard (ORC-405); else HTTP on the
   // loopback, where an exposed daemon asks for a GitHub sign-in (ORC-399), which only the dashboard gives.
-  const control = { api, socket: homePaths(home).socket, out: (l: string) => console.log(l) };
+  const control = { api, ...(process.platform === 'win32' ? {} : { socket: homePaths(home).socket }), out: (l: string) => console.log(l) };
 
   switch (cmd) {
     case 'init': {
