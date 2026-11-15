@@ -78,7 +78,8 @@ export class PrPoller {
         return;
       }
       if (done) return;
-      await this.lostPush(t, pr, at);
+      // A failed judgement of the head holds back no CI verdict: it is tried again at the next pass.
+      await this.lostPush(t, pr, at).catch((err) => this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`));
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
       const last = await this.d.store.getMeta(metaKey);

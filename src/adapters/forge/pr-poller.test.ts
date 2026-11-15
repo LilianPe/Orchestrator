@@ -176,6 +176,21 @@ describe('PrPoller', () => {
       expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
     });
 
+    it("holds back no CI verdict when the head's judgement fails", async () => {
+      const logs: string[] = [];
+      const events: FactoryEvent[] = [];
+      const s = setup((e) => {
+        if (e.type === 'push.human') throw new Error('inbox down');
+        events.push(e);
+      }, (m) => logs.push(m));
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED });
+      await s.store.recordEvent(published(PUBLISHED));
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: HUMAN, checks: 'pass', failedChecks: [] });
+      await s.poller.pollOnce('p');
+      expect(events.map((e) => e.type)).toEqual(['pr.checks_passed']);
+      expect(logs).toEqual([expect.stringContaining('inbox down')]);
+    });
+
     it('is not told with no publication of the factory to compare with, nor without a head', async () => {
       expect(await headIs(HUMAN, {}, [])).toEqual([]);
       // An `empty` publication pushed nothing (ORC-402): its sha is no head of the factory's.
