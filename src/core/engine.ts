@@ -175,7 +175,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   const asked: ClarifyQuestion[] = a.complete ? [] : a.missing.map((m) => (typeof m === 'string' ? { question: m, options: [] } : m));
   // The Rapide level (ORC-231): nobody answers a closed ticket, nor moves its blockers. What the guard would ask is assumed, to be
   // written in the spec, and the work goes on.
-  if (at.workflow.level === 'rapide') {
+  if (rapide(at.workflow)) {
     const unasked = [...checks, ...findings, ...asked.map((q) => (q.options.length ? `${q.question} (options: ${q.options.join(', ')})` : q.question))];
     if (unasked.length) out.events.push({ type: 'ticket.patched', patch: { assumed: unasked.map((q) => `Unasked: ${q}`) } });
     return success(out, at, job, p.runId);
@@ -388,12 +388,12 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
   }
   const version = (ticket?.spec?.version ?? 0) + 1;
   // Nobody reviews it at the Rapide level (ORC-231): the preset approves the version, with what the level assumed written in `assumed`.
-  const rapide = workflow.level === 'rapide';
-  const written: SpecVersion = rapide
+  const approved = rapide(workflow);
+  const written: SpecVersion = approved
     ? { job: job.name, version, spec: { ...spec, assumed: [...new Set([...(spec.assumed ?? []), ...(ticket?.assumed ?? [])])] }, at: event.at, approval: { author: FANTOME_APPROVER, at: event.at } }
     : { job: job.name, version, spec, at: event.at };
   out.events.push({ type: 'ticket.patched', patch: { spec: written, ...(ticket?.specCheckReturns ? { specCheckReturns: 0 } : {}) } });
-  if (rapide) {
+  if (approved) {
     out.trace.push(`spec_review: version ${version} approved by ${FANTOME_APPROVER} (level rapide), ${written.spec.assumed!.length} assumption(s)`);
     return success(out, at, job, p.runId);
   }
@@ -605,7 +605,7 @@ function block(out: Decision, workflow: Workflow, b: Block): Decision {
 /**
  * A `settle` that died (ORC-339): its retries spent, a pending job with no run would hold the ticket's messages for
  * good, in silence. The ticket is blocked on that job instead; the job stays pending, all of it (its input, its
- * restrictions), and a reply starts that very job (`resumedPending`). Anything else: only logged.
+ * restrictions), and a reply starts that very job (`startReaction`). Anything else: only logged.
  */
 function stuckPending(out: Decision, ticket: TicketState, workflow: Workflow, { error, attempts, queued }: EventPayloads['effect.failed']): Decision {
   const pending = ticket.pendingJob;
@@ -973,6 +973,16 @@ export function formatFailuresShort(failures: VerifyFailure[]): string {
   return triedFailures(failures).map((t) => `- ${t}`).join('\n');
 }
 
+/** The jobs the reactions start, by their runtime names as the rules named them. */
+const DEV_FEEDBACK = 'dev-feedback';
+const FIX_HUMAN = 'fix-human';
+const FIX_CI = 'fix-ci';
+const REVIEW = 'review';
+const ASK = 'ask';
+
+/** Every workflow but one at the Rapide level has them (`workflowViolations`), or a reaction would start nothing in silence. */
+export const REACTION_JOBS: readonly string[] = [DEV_FEEDBACK, FIX_HUMAN, REVIEW, ASK, FIX_CI, REBASE];
+
 /**
  * The default reactions (ORC-392): what a human's event, or a fact of the PR, starts or does once the built-ins have decided
  * it. Each is a function of its own, read on the ticket as the event leaves it, not a table: the `on` rules of the former pack
@@ -980,17 +990,11 @@ export function formatFailuresShort(failures: VerifyFailure[]): string {
  * and nothing a human does on the real one starts any job of its run. The trace names a reaction as the journals recorded
  * its rule (`on.<event>[<index>]`), and an event no reaction answers as `no rule for <event>`.
  */
-/**
- * The jobs the reactions start, by their runtime names as the rules named them: every workflow but one at the Rapide level
- * has them (`workflowViolations`), or a reaction would start nothing in silence.
- */
-export const REACTION_JOBS: readonly string[] = ['dev-feedback', 'fix-human', 'review', 'ask', 'fix-ci', 'rebase'];
-
 interface Reaction {
   /** The position of the former pack's rule, in the trace. */
   index: number;
   job: JobSpec;
-  /** A message regrouped this long before its job starts (ORC-180); none, or 0: at once. */
+  /** A message regrouped this long before its job starts (ORC-180); none: at once. */
   debounceMs?: number;
 }
 
@@ -1006,7 +1010,7 @@ const regroupMs = (workflow: Workflow): number => (workflow.preset?.regroup?.min
 function reaction(index: number, name: string, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, debounceMs?: number): Reaction | undefined {
   const job = workflow.jobs[name];
   if (!job || (ticket && !ticket.delegated && event.type !== 'ticket.delegated' && job.queue !== 'questions')) return undefined;
-  return { index, job, ...(debounceMs !== undefined ? { debounceMs } : {}) };
+  return { index, job, debounceMs };
 }
 
 /** The delegation, on a ticket not blocked, in Todo or In Progress (any status at the Rapide level): the chain's entry job. */
@@ -1022,8 +1026,11 @@ function onDelegated(event: FactoryEvent, ticket: TicketState | undefined, workf
  * the review (ORC-148), which reads it on the ticket as such a move would leave it.
  */
 function reviewAgain(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
-  return rapide(workflow) ? undefined : reaction(0, 'review', event, ticket, workflow);
+  return reviewsAgain(event, workflow) ? reaction(0, REVIEW, event, ticket, workflow) : undefined;
 }
+
+/** A move to AI Review, but at the Rapide level: it starts the review again (`reviewAgain`). */
+const reviewsAgain = (event: FactoryEvent, workflow: Workflow): boolean => event.type === 'status.changed' && event.payload.to === 'ai_review' && !rapide(workflow);
 
 /**
  * A message for the agent that implements (a reply in its session, an instruction in a mention, a review written on the PR):
@@ -1043,20 +1050,18 @@ function replyReaction(event: FactoryEvent, ticket: TicketState | undefined, wor
  * The reply to a block, in the ticket's session or on the ticket (ORC-196): `dev-feedback`, at once. It stands for the step the
  * ticket blocked on, which `startReaction` resumes in its place (`resumedJob`), and for a block with no step of its own.
  */
-const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => reaction(0, 'dev-feedback', event, ticket, workflow, 0);
+const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => reaction(0, DEV_FEEDBACK, event, ticket, workflow);
 
 /** Human feedback in Human Review (ORC-190): a round of `fix-human`, on the merge gate's counter, once the messages are regrouped. */
 const humanFeedback = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  reaction(1, 'fix-human', event, ticket, workflow, regroupMs(workflow));
+  reaction(1, FIX_HUMAN, event, ticket, workflow, regroupMs(workflow));
 
 /** An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any counter. */
 const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  reaction(2, 'dev-feedback', event, ticket, workflow, regroupMs(workflow));
+  reaction(2, DEV_FEEDBACK, event, ticket, workflow, regroupMs(workflow));
 
 /** A mention asks a question: the answer agent, at once (ORC-182). The memory in writing sleeps (ORC-193): a `retiens` is a message as any other. */
-function askQuestion(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
-  return rapide(workflow) ? undefined : reaction(0, 'ask', event, ticket, workflow);
-}
+const askQuestion = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined => reaction(0, ASK, event, ticket, workflow);
 
 /**
  * Red CI, merge gate included, on a ticket under review and not blocked: `fix-ci`, a round of the review and CI loop (the
@@ -1066,17 +1071,17 @@ function askQuestion(event: FactoryEvent, ticket: TicketState | undefined, workf
 function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
   const state = ticket?.logical ?? 'todo';
   const conflict = event.type === 'pr.conflicted';
-  if (rapide(workflow) || ticket?.blocked || !(state === 'human_review' || state === 'ai_review' || (conflict && state === 'dev'))) return undefined;
-  return reaction(0, conflict ? REBASE : 'fix-ci', event, ticket, workflow);
+  if (ticket?.blocked || !(state === 'human_review' || state === 'ai_review' || (conflict && state === 'dev'))) return undefined;
+  return reaction(0, conflict ? REBASE : FIX_CI, event, ticket, workflow);
 }
 
 /** The label `agent:stop` stops the ticket's work, as the stop of its session does (until ORC-201 removes the `agent:*` labels). */
-const STOP_LABEL = 'agent:stop';
+export const STOP_LABEL = 'agent:stop';
 
 /** The stop of the ticket's session in Linear, or the label `agent:stop` added: the work stops, the ticket blocked until a reply. */
 function stopped(out: Decision, event: FactoryEvent<'label.changed' | 'session.stopped'>, workflow: Workflow): Decision {
   const label = event.type !== 'label.changed' || (event.payload.change === 'added' && event.payload.label === STOP_LABEL);
-  if (rapide(workflow) || !label) return noReaction(out, event.type);
+  if (!label) return noReaction(out, event.type);
   reacted(out, event.type);
   return stop(out, workflow);
 }
@@ -1088,6 +1093,13 @@ const reacted = (out: Decision, type: EventType, index = 0): void => void out.tr
 function noReaction(out: Decision, type: EventType): Decision {
   out.trace.push(`no rule for ${type}`);
   return out;
+}
+
+/** The reaction `r` to an event of `type`, traced, then run: its job started by default; none traced as no reaction. */
+function traced(out: Decision, type: EventType, r: Reaction | undefined, run: (r: Reaction) => Decision): Decision {
+  if (!r) return noReaction(out, type);
+  reacted(out, type, r.index);
+  return run(r);
 }
 
 /**
@@ -1104,26 +1116,23 @@ function merged(out: Decision, event: FactoryEvent<'pr.merged'>, ticket: TicketS
 }
 
 /**
- * What the event starts or does once its built-in decided it, by its default reaction. A move or a label that starts a run
- * (the review again) is a human action on the run, checked by the matrix.
+ * What the event starts or does once its built-in decided it, by its default reaction. A move that starts a run (the review
+ * again) is a human action on the run, checked by the matrix. At the Rapide level, only the delegation reacts.
  */
 function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
-  const start = (r: Reaction | undefined, run: (r: Reaction) => Decision = (x) => startReaction(out, event, ticket, workflow, x)): Decision => {
-    if (!r) return noReaction(out, event.type);
-    reacted(out, event.type, r.index);
-    return run(r);
-  };
+  if (rapide(workflow) && event.type !== 'ticket.delegated') return noReaction(out, event.type);
+  const start = (r: Reaction | undefined, run = (x: Reaction) => startReaction(out, event, ticket, workflow, x)): Decision => traced(out, event.type, r, run);
   switch (event.type) {
     case 'ticket.delegated':
       return start(onDelegated(event, ticket, workflow));
     case 'status.changed':
-      return start(event.payload.to === 'ai_review' ? reviewAgain(event, ticket, workflow) : undefined, (r) =>
+      return start(reviewAgain(event, ticket, workflow), (r) =>
         authorize(out, event, ticket, ruleAction(ticket), 'linear', matrix) ? startReaction(out, event, ticket, workflow, r) : out,
       );
     case 'session.prompted':
       return start(replyReaction(event, ticket, workflow));
     case 'ticket.commented':
-      return start(ticket?.blocked && !rapide(workflow) ? resumeBlocked(event, ticket, workflow) : undefined);
+      return start(ticket?.blocked ? resumeBlocked(event, ticket, workflow) : undefined);
     case 'session.mentioned':
       return start(askQuestion(event, ticket, workflow));
     case 'label.changed':
@@ -1133,7 +1142,7 @@ function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefin
     case 'pr.conflicted':
       return start(prFailed(event, ticket, workflow), (r) => reviewCiLoop(out, r, event, ticket, workflow));
     case 'pr.merged':
-      return rapide(workflow) ? noReaction(out, event.type) : merged(out, event, ticket);
+      return merged(out, event, ticket);
     default:
       return noReaction(out, event.type);
   }
@@ -1215,10 +1224,7 @@ function humanReview(out: Decision, event: FactoryEvent<'pr.reviewed'>, ticket: 
  * for the next run.
  */
 function regroup(out: Decision, event: FactoryEvent<'session.prompted' | 'session.mentioned' | 'pr.reviewed'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
-  const r = replyReaction(event, ticket, workflow);
-  if (!r) return noReaction(out, 'session.prompted');
-  reacted(out, 'session.prompted', r.index);
-  return startReaction(out, event, ticket, workflow, r);
+  return traced(out, 'session.prompted', replyReaction(event, ticket, workflow), (r) => startReaction(out, event, ticket, workflow, r));
 }
 
 /**
@@ -1312,7 +1318,7 @@ function relayAnswers(out: Decision, ticket: TicketState | undefined, p: EventPa
 
 /** The read-only answer to a question, in its session. */
 function askInThread(out: Decision, event: FactoryEvent<'session.prompted'>, ticket: TicketState | undefined, workflow: Workflow): void {
-  const ask = workflow.jobs['ask'];
+  const ask = workflow.jobs[ASK];
   if (ask) startRun(out, event, ticket, ask, { input: 'thread', inputText: event.payload.body, linearSessionId: event.payload.linearSessionId });
 }
 
@@ -1382,7 +1388,7 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (event.type === 'label.changed') return false;
   if (event.type !== 'status.changed') return true;
   // A move to Done may merge (ORC-148): its actor is always checked. A move to AI Review reviews again (`reviewAgain`).
-  return event.payload.to === 'done' || (event.payload.to === 'ai_review' && !rapide(workflow));
+  return event.payload.to === 'done' || reviewsAgain(event, workflow);
 }
 
 /** The events a human sends that the matrix may check (`mayCheck`): a cheap filter before any read. */
@@ -1402,7 +1408,7 @@ const REPLIES = new Set<EventType>(['session.prompted', 'ticket.commented']);
  * read something else (`fix-ci`, its red checks: `dev-feedback` is the same step).
  */
 function resumedJob(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): JobSpec | undefined {
-  if (!workflow.blockComment || !REPLIES.has(event.type) || !ticket?.blocked || !ticket.blockedJob) return undefined;
+  if (!repliesToBlock(event, ticket, workflow) || !ticket?.blockedJob) return undefined;
   const job = workflow.jobs[ticket.blockedJob];
   // The fix of the review loop resumes itself on the reply, then goes back through the review (ORC-184): reading its findings
   // again, it would leave the reply aside.
@@ -1420,11 +1426,8 @@ function strandedPending(ticket: TicketState | undefined, workflow: Workflow): P
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
-/** The pending job a reply resumes, at once (a debounce armed before the block resumes it when it fires: `timer.fired`). */
-function resumedPending(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): PendingJob | undefined {
-  if (!workflow.blockComment || !REPLIES.has(event.type) || !ticket?.blocked) return undefined;
-  return strandedPending(ticket, workflow);
-}
+/** A reply to a blocked ticket, in a version whose reply resumes the blocked step (ORC-196). */
+const repliesToBlock = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): boolean => !!workflow.blockComment && REPLIES.has(event.type) && !!ticket?.blocked;
 
 /** Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision. */
 function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
@@ -1447,10 +1450,11 @@ function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: J
 
 /**
  * Starts the job of a reaction: the blocked step in its place on a reply (`resumedJob`), a stranded pending job first
- * (`resumedPending`); lifts the block it relaunches; arms its regrouping when it is debounced (never on a blocked ticket).
+ * (`strandedPending`); lifts the block it relaunches; arms its regrouping when it is debounced (never on a blocked ticket).
  */
 function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, r: Reaction): Decision {
-  const pending = resumedPending(event, ticket, workflow);
+  // The pending job a reply resumes, at once (a debounce armed before the block resumes it when it fires: `timer.fired`).
+  const pending = repliesToBlock(event, ticket, workflow) ? strandedPending(ticket, workflow) : undefined;
   if (pending) return startPending(out, event, ticket!, workflow, pending);
   const resumed = resumedJob(event, ticket, workflow);
   const job = resumed ?? r.job;
