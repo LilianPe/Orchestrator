@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
-import type { Workflow } from '../config/workflow-schema.js';
+import { defaultWorkflow } from '../presets/workflow.js';
+import type { Workflow } from './workflow.js';
 import type { AgentOutput, AttemptOutcome } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
@@ -17,7 +17,7 @@ import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 /** The head of the reason of the cut bound (ORC-220): only its sentence, the block's kind is `limit`. */
 const CUT_BOUND = /^Too many relaunches after a cut: /;
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T]): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload } as FactoryEvent;

@@ -1,14 +1,14 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
-import type { Workflow } from '../config/workflow-schema.js';
+import { defaultWorkflow } from '../presets/workflow.js';
+import type { Workflow } from './workflow.js';
 import type { Effect } from './decision.js';
 import { decide, SENSITIVE_PATHS } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type TicketState } from './types.js';
 import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 /** `workflow` as a version frozen before ORC-375 holds it: no relay job, the reply rule's job answers a relayed question. */
 const { relayJob: _relayJob, ...beforeOrc375 } = workflow;
 const withFeedback = (w: Workflow, patch: Partial<Workflow['jobs'][string]>): Workflow => ({ ...w, jobs: { ...w.jobs, 'dev-feedback': { ...w.jobs['dev-feedback']!, ...patch } } });

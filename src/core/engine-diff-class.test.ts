@@ -1,13 +1,12 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import type { ClassifiedDiff } from './diff-class.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], signed: Partial<FactoryEvent> = {}): FactoryEvent {
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', ...signed, payload } as FactoryEvent;

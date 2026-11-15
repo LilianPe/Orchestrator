@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from './config/load-workflow.js';
+import { defaultWorkflow } from './presets/workflow.js';
 
 const pack = join(import.meta.dirname, '../packs/standard');
 
@@ -18,7 +18,7 @@ describe('standard pack', () => {
   });
 
   it('ships every skill the workflow references, with matching frontmatter', () => {
-    const wf = loadWorkflow({ packDir: pack });
+    const wf = defaultWorkflow();
     for (const job of Object.values(wf.jobs)) {
       const [plugin, skill] = job.skill.split(':');
       expect(plugin).toBe('factory');

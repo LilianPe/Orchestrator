@@ -1,6 +1,6 @@
 import type { Parameters } from 'fast-check';
 import { expect, onTestFailed } from 'vitest';
-import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
+import type { JobSpec, Workflow } from '../../src/core/workflow.js';
 import type { Decision, Effect } from '../../src/core/decision.js';
 import { decide, refusesDevWork, sensitivePathsAtLaunch } from '../../src/core/engine.js';
 import { carriedAtLaunch } from '../../src/core/human-message.js';

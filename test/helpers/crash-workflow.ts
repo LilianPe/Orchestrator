@@ -2,14 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { WorkflowOverrides } from './workflow-with.js';
 
 /** A delegation decides three effects, in this order: labels, comment, start_run (ORC-149 crash tests). */
-export const CRASH_WORKFLOW = `
-version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", labels: { add: ["agent:pris"], remove: [] }, comment: "Pris en charge.", run: dev }
-`;
+export const CRASH_WORKFLOW: WorkflowOverrides = {
+  on: { 'ticket.delegated': [{ when: 'state in [todo, dev] && !blocked', labels: { add: ['agent:pris'], remove: [] }, comment: 'Pris en charge.', run: 'dev' }] },
+};
 
 /**
  * Runs `crash-after-decision.ts` in a child process on `target` (a SQLite file or a Postgres URL),

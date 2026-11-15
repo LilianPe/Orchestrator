@@ -1,4 +1,4 @@
-import type { JobSpec, Workflow } from '../../src/config/workflow-schema.js';
+import type { JobSpec, Workflow } from '../../src/core/workflow.js';
 
 /**
  * `workflow` as a version frozen before ORC-193 holds it: `learn` in a knowledge worktree after a merge, the `retiens`

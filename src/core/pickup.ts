@@ -1,6 +1,6 @@
 import type { Forge, OpenPr } from '../adapters/forge/types.js';
 import type { Tracker, TrackerIssue } from '../adapters/tracker/types.js';
-import type { PickupCheck } from '../config/workflow-schema.js';
+import type { PickupCheck } from './workflow.js';
 import { formatActiveWork } from './intake-checks.js';
 import type { BranchNaming } from './naming.js';
 import type { Blocker } from './types.js';

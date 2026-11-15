@@ -1,13 +1,12 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import type { Role } from './authz.js';
 import { AUTHZ_REFUSED, decide, mayCheck } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 import { beforeOrc183 } from '../../test/helpers/frozen-review.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const MERGER: Role[] = ['team_member', 'repo_writer', 'repo_merger'];
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], actor?: string, roles?: readonly Role[]): FactoryEvent {

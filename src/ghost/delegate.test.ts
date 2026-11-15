@@ -8,7 +8,7 @@ import type { FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { HOST_RUNS_REFUSED, Replays, replayDelegationId } from './delegate.js';
 import type { GhostReplay, GhostTicket } from './replay.js';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -71,7 +71,7 @@ describe('the daemon delegates each replayed ticket to the replay\'s project (OR
     ]);
     expect(accepted[0]!.actor).toBeUndefined();
     // No human to check: the matrix never refuses the replay's own delegation.
-    expect(mayCheck(accepted[0]!, loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') }))).toBe(false);
+    expect(mayCheck(accepted[0]!, defaultWorkflow())).toBe(false);
   });
 
   it('its run reads the ticket, its thread and its linked tickets as they were at the start, on its clone', async () => {

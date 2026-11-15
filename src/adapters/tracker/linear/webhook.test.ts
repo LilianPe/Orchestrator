@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../../core/types.js';
 import { SqliteStore } from '../../../store/sqlite-store.js';
 import { createLinearIngest, type RetryPolicy } from './ingest.js';
-import { loadWorkflow } from '../../../config/load-workflow.js';
+import { defaultWorkflow } from '../../../presets/workflow.js';
 import { FakeClock } from '../../../core/clock.js';
 import { unroutedReason } from '../../../core/routing.js';
 import { FakeTracker } from '../fake.js';
@@ -157,7 +157,7 @@ describe('mapLinearWebhook', () => {
     });
   });
   it('maps "retiens" under the standard pack as a mention, classified as any message: no command declares it (ORC-193)', async () => {
-    const { commands } = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const { commands } = defaultWorkflow();
     expect((await mapLinearWebhook(fx('session-created-command'), 'd3', { ...ctx(), commands: () => commands }))[0]).toMatchObject({
       type: 'session.mentioned', payload: { body: 'Retiens les agrégats côté serveur', linearSessionId: 'as-3', kind: 'instruction' },
     });
@@ -1092,7 +1092,7 @@ describe('ingest', () => {
     const { raw, sig } = signed(body);
     const webhook = ingest(raw, { 'linear-signature': sig });
     await new Promise((r) => setTimeout(r, 10));
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const workflow = defaultWorkflow();
     const reconciled = reconcileOnce({
       tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], serial: labelsTurn,
       submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {},
@@ -1131,7 +1131,7 @@ describe('ingest', () => {
     const { raw, sig } = signed(body);
     const webhook = ingest(raw, { 'linear-signature': sig });
     await new Promise((r) => setTimeout(r, 10));
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const workflow = defaultWorkflow();
     const projects = ['web', 'api'].map((id) => ({ id, repoPath: `/${id}`, teamKey: 'REL', workflow }));
     const reconciled = reconcileOnce({ tracker, store, projects, serial: labelsTurn, submit: write, clock: new FakeClock(2000), log: () => {} });
     await new Promise((r) => setTimeout(r, 10));
@@ -1163,7 +1163,7 @@ describe('ingest', () => {
     expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 20 });
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug', 'agent:reprendre'], updatedAt: 20 });
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const workflow = defaultWorkflow();
     await reconcileOnce({ tracker, store, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
     expect((await ids()).filter((id) => id.startsWith('reconcile:label'))).toEqual([]);
   });
@@ -1195,7 +1195,7 @@ describe('ingest', () => {
     };
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'app', stateName: 'AI Review', labels: ['bug'], updatedAt: 20 });
-    const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+    const workflow = defaultWorkflow();
     await reconcileOnce({ tracker, store: passStore, projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], serial: labelsTurn, submit: (e) => store.appendInbox(e), clock: new FakeClock(2000), log: () => {} });
     await webhook;
     expect(await knownLabels(store, 'p', 'REL-1')).toEqual({ labels: ['agent:reprendre', 'bug'], at: 30 });

@@ -1,12 +1,12 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../config/load-workflow.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import type { Role } from './authz.js';
 import { causeOf, TAKEN_OVER } from './block-cause.js';
 import { AUTHZ_REFUSED, decide, settledTicket } from './engine.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const OPERATOR: Role[] = ['operator'];
 
 function ev<T extends EventType>(type: T, payload: EventPayloads[T], actor: string | undefined, roles: readonly Role[] | undefined, taint: 'trusted' | 'untrusted' = 'trusted'): FactoryEvent {

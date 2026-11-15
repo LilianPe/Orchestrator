@@ -1,4 +1,4 @@
-import type { JobSpec, RunLimits, Workflow } from '../config/workflow-schema.js';
+import type { JobSpec, RunLimits, Workflow } from '../core/workflow.js';
 import type { Condition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, isAgentStep, type Effort, type Preset, type Step } from './preset.js';
@@ -74,7 +74,13 @@ type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'pickup' | 'onStart' |
 function stepJob(name: string, job: StepJob, settings: StepSettings): JobSpec {
   const step = agentStep(job.step);
   if (!step) throw new WorkflowError(`jobs.${name}.step: ${job.step} is not an agent step of ${preset.name}`);
-  return { name, verify: [], pickup: false, onStart: {}, onSuccess: {}, ...job, ...fromStep(step, PER_RUN, settings) };
+  const { queue, model, workspace, session, skill, lens, input, repoChecks, pickup = false, structuredOutput, red, onStart = {}, onSuccess = {}, onBlocking, counter } = job;
+  // In the order of the pack's loader: a replay journal pins the workflow as JSON text, keys in their order (ORC-389).
+  return {
+    name, step: job.step, queue, model, workspace, session, skill, ...(lens ? { lens } : {}), input, verify: [], ...(repoChecks ? { repoChecks } : {}),
+    pickup, structuredOutput, ...(red ? { red } : {}), ...fromStep(step, PER_RUN, settings), onStart, onSuccess,
+    ...(onBlocking ? { onBlocking } : {}), ...(counter ? { counter } : {}),
+  };
 }
 
 const REGROUPED_MS = 3 * 60_000;
@@ -186,8 +192,8 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
       // The answer agent (ORC-182), out of the preset's steps: a question starts it at once in the questions queue. It reads,
       // on a clone of the trunk, at network claude-api, and writes nothing; what it cannot answer, it relays.
       ask: {
-        name: 'ask', queue: 'questions', model: 'sonnet', effort: 'low', network: 'claude-api', tools: READ_TOOLS,
-        workspace: 'trunk-readonly', session: 'new', skill: 'factory:ask', input: 'thread', verify: [], pickup: false,
+        name: 'ask', queue: 'questions', model: 'sonnet', workspace: 'trunk-readonly', session: 'new', skill: 'factory:ask', input: 'thread',
+        verify: [], pickup: false, effort: 'low', network: 'claude-api', tools: READ_TOOLS,
         limits: { turns: 30, durationMs: 5 * 60_000, tokens: 200_000 }, onStart: {}, onSuccess: { post: 'reply' },
       },
     },

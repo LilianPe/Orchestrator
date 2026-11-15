@@ -3,14 +3,22 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
-import { loadWorkflow } from '../config/load-workflow.js';
+import type { Workflow } from '../core/workflow.js';
+import { asFantome } from '../presets/fantome.js';
+import { defaultWorkflow } from '../presets/workflow.js';
 import { exportJournal, formatReplay, readJournal, replayJournal, type ReplayOptions } from '../runtime/replay.js';
 import { DATABASE_URL_ENV, openStore } from '../store/open.js';
 
-export const REPLAY_USAGE = `Usage: factory replay <journal.json | directory>... [--what-if <workflow.yml>] [--pack <directory>]
+/** The presets compiled in the binary (ORC-389): their workflow as the daemon builds it, without `factory.yml`'s step settings. */
+const PRESET_WORKFLOWS: Readonly<Record<string, () => Workflow>> = {
+  'factory/default': () => defaultWorkflow(),
+  'factory/fantome': () => asFantome(defaultWorkflow()),
+};
+
+export const REPLAY_USAGE = `Usage: factory replay <journal.json | directory>... [--what-if <preset>]
        factory replay --export <ID> [--project <id>] [--out <file>]
   Replays exported journals: without --what-if, each decision must give back, bit for bit, the recorded
-  projection and effects; with --what-if, the decisions run on this workflow (laid over the pack)
+  projection and effects; with --what-if, the decisions run on the workflow of this preset (${Object.keys(PRESET_WORKFLOWS).join(', ')})
   and the replay stops at the first divergence. --export writes the journal of a ticket of the instance.`;
 
 export interface ReplayIo {
@@ -90,7 +98,6 @@ export async function runReplayCommand(argv: string[], io: ReplayIo = { print: (
       allowPositionals: true,
       options: {
         'what-if': { type: 'string' },
-        pack: { type: 'string' },
         export: { type: 'string' },
         project: { type: 'string' },
         out: { type: 'string' },
@@ -116,8 +123,13 @@ ${REPLAY_USAGE}`);
     io.print(REPLAY_USAGE);
     return 2;
   }
-  const options: ReplayOptions = values['what-if']
-    ? { mode: 'what-if', workflow: loadWorkflow({ packDir: values.pack ?? join(repoRoot(), 'packs/standard'), projectFile: values['what-if'] }) }
-    : { mode: 'regression' };
+  const preset = values['what-if'];
+  const workflow = preset === undefined ? undefined : Object.hasOwn(PRESET_WORKFLOWS, preset) ? PRESET_WORKFLOWS[preset] : undefined;
+  if (preset !== undefined && !workflow) {
+    io.print(`--what-if: unknown preset ${preset}
+${REPLAY_USAGE}`);
+    return 2;
+  }
+  const options: ReplayOptions = workflow ? { mode: 'what-if', workflow: workflow() } : { mode: 'regression' };
   return replayFiles(positionals, options, io);
 }

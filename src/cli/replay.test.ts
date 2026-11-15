@@ -33,14 +33,21 @@ describe('factory replay (ORC-174)', () => {
     expect(out).toMatch(/without divergence\.$/);
   });
 
-  it('--what-if: a modified preset diverges, and the report names the event; exit code 1', async () => {
-    const dir = tmp();
-    const yaml = join(dir, 'workflow.yml');
-    writeFileSync(yaml, 'version: 1\nlimits: { verify_attempts: 1 }\njobs:\n  dev: { verify: ["fake:check"] }\n');
-    const { code, out } = await run([join(journals, 'check-failed-then-feedback.json'), '--what-if', yaml]);
+  // The scenario ran under the test preset (`fake:check` verified, two attempts): factory/default verifies no such command.
+  it('--what-if <preset>: a journal diverges on the workflow of another compiled preset, and the report names the event; exit code 1', async () => {
+    const { code, out } = await run([join(journals, 'check-failed-then-feedback.json'), '--what-if', 'factory/default']);
     expect(code).toBe(1);
     expect(out).toContain('stopped at the first divergence');
     expect(out).toMatch(/event \S+ \(verify\.failed, #\d+ of the journal\)/);
+  });
+
+  it('--what-if refuses a preset the binary does not have, a workflow file included (ORC-389); exit code 2', async () => {
+    for (const preset of ['factory/nope', join(tmp(), 'workflow.yml')]) {
+      const { code, out } = await run([journals, '--what-if', preset]);
+      expect(code).toBe(2);
+      expect(out).toContain(`--what-if: unknown preset ${preset}`);
+      expect(out).toContain('factory/default, factory/fantome');
+    }
   });
 
   it('--export writes the journal of a ticket of the instance, which then replays', async () => {

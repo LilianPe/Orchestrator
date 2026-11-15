@@ -1,4 +1,4 @@
-import type { Workflow } from '../config/workflow-schema.js';
+import type { Workflow } from '../core/workflow.js';
 import { parseCondition } from '../core/conditions.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, type Preset, type Step } from './preset.js';

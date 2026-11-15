@@ -8,7 +8,7 @@ import type { FlakyTest } from '../checks/flaky.js';
 import type { FrozenTests } from '../checks/freeze.js';
 import type { RedCause } from '../checks/red.js';
 import type { VisualProof } from '../checks/visual-proof.js';
-import type { ReviewLens } from '../config/workflow-schema.js';
+import type { ReviewLens } from './workflow.js';
 
 /** `cancelled`: a ticket a human moved to a status of type canceled (ORC-170), read on that type, never mapped by name. */
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done', 'cancelled'] as const;

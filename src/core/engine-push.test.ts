@@ -1,8 +1,7 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FREEZE_CHECK } from '../checks/freeze.js';
-import { loadWorkflow } from '../config/load-workflow.js';
-import type { Workflow } from '../config/workflow-schema.js';
+import { defaultWorkflow } from '../presets/workflow.js';
+import type { Workflow } from './workflow.js';
 import type { Role } from './authz.js';
 import type { Decision } from './decision.js';
 import { decide, isFenced, pushCheckId } from './engine.js';
@@ -14,7 +13,7 @@ import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, typ
  * ORC-159: a human's push on the agent's branch pauses the agent, and `verify` starts again from the pushed head in a
  * fresh clone; an approval from before the push passes no gate.
  */
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../packs/standard') });
+const workflow = defaultWorkflow();
 const MERGER: Role[] = ['team_member', 'repo_writer', 'repo_merger'];
 const AGENT = 'a9e47aaa';
 const HUMAN = 'cafe1234';

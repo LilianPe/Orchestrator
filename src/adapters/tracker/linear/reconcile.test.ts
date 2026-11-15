@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadWorkflow } from '../../../config/load-workflow.js';
+import { defaultWorkflow } from '../../../presets/workflow.js';
 import { FakeClock } from '../../../core/clock.js';
 import { decide } from '../../../core/engine.js';
 import { unroutedReason } from '../../../core/routing.js';
@@ -10,7 +10,7 @@ import { FakeTracker, STANDARD_STATES } from '../fake.js';
 import { knownLabels, recordLabels } from './labels.js';
 import { Reconciler, reconcileOnce } from './reconcile.js';
 
-const workflow = loadWorkflow({ packDir: join(import.meta.dirname, '../../../../packs/standard') });
+const workflow = defaultWorkflow();
 
 describe('reconcileOnce', () => {
   it('emits delegation, moves and undelegation', async () => {
