@@ -660,6 +660,15 @@ const CONFLICTS: Record<ConflictCase, string> = {
 const triedFailures = (failures: VerifyFailure[]): string[] => failures.map((f) => `\`${f.command}\` (code ${f.exitCode ?? 'timeout'})`);
 
 /**
+ * The blocks that drop the `done` of the dev run they caught in flight (ORC-403). A stop, a pause, a take-over, a closed PR
+ * and a human's push stopped the run: what it did after is not the factory's to publish, and a push's own check is under way.
+ * A question journaled before ORC-400 (`asked`) is the run's own: its turn ended on it. A block from before kinds (ORC-345)
+ * keeps what it decided. Any other block leaves the work to be checked and published, the ticket still blocked.
+ */
+const DROPS_DONE = new Set<BlockKind>(['stopped', 'paused', 'taken_over', 'pr_closed', 'human_push', 'asked']);
+const dropsDone = (kind: BlockKind | undefined): boolean => !kind || DROPS_DONE.has(kind);
+
+/**
  * A dev run's end read through its closed outcome (ORC-289): the `RunOutcome` it decides as, or the block
  * it ends in. Without `attempt` (rows written before it), `outcome` decides as before. `errored` is the
  * infrastructure's: blocked, never handed back to the agent. A success without output stays a success
@@ -2029,9 +2038,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const outcome = job.queue === 'dev' ? (stagnationBlock(event.payload, workflow) ?? attemptDecision(event.payload, job)) : event.payload.outcome;
       // Already blocked (a human's stop, a question journaled before ORC-400…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, workflow, { ...outcome, job: jobName });
-      // A run that ended well on a ticket already blocked (the MCP's `ask` before ORC-400, then the end of its turn): no output is
-      // expected of it, its question stays.
-      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev') return out;
+      // A run that ended well on a ticket blocked meanwhile is kept, its block shown still (ORC-403), unless that block dropped it.
+      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev' && dropsDone(ticket.blockKind)) return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.step === 'spec_draft') return specEnd(out, { event, ticket, workflow }, job, event.payload);
