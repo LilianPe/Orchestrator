@@ -122,6 +122,9 @@ export function blockingFix(wf: Workflow, job: JobSpec): JobSpec | undefined {
   return Object.values(wf.jobs).find((j) => j.step === to && j.cause === 'review');
 }
 
+/** The preset has rounds of human review feedback (ORC-190): its merge gate sends the run back to a fix. */
+export const hasHumanRounds = (wf: Workflow): boolean => wf.preset.steps.some((s) => s.type === 'human_gate' && s.gate === 'merge' && !!s.onFailure);
+
 /**
  * Each start of `job` is a round of human review feedback (ORC-190): the fix the merge gate's failure edge sends the run to,
  * on its counter (`limits.humanReviewRounds`).

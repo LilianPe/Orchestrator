@@ -31,7 +31,7 @@ import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
-import { frozenWorkflow, workflowVersion } from '../runtime/workflow-version.js';
+import { FrozenFormatError, frozenWorkflow, workflowVersion } from '../runtime/workflow-version.js';
 import {
   KEPT_PR,
   LEASE_MS,
@@ -536,6 +536,8 @@ export class Orchestrator {
   private readonly relayTracker: Tracker;
   /** Versions of the projects' workflows, by workflow object. */
   private versionOfWorkflow = new WeakMap<Workflow, WorkflowVersion>();
+  /** The frozen versions refused for their format (ORC-393), whose refusal is logged once. */
+  private refusedVersions = new Set<string>();
   /** Workflows by version hash: the current ones and those tickets are frozen on. */
   private workflows = new Map<string, Workflow>();
   /** Dequeued items whose start has not taken its slot yet, per queue: drain hands out no more than the free slots. */
@@ -782,7 +784,7 @@ export class Orchestrator {
       await store.renewRun(run.id, clock.now() + RUN_LEASE_MS, run.leaseToken);
       // Its slot, in the memory of this process. Over a capacity lowered meanwhile, it goes on all the same.
       scheduler.tryAcquire(run.queue, `${run.ticketId}:${run.queue}`);
-      this.follow(run.id, handle, run.leaseToken!, bounds.stagnation?.silentMs);
+      this.follow(run.id, handle, run.leaseToken!, bounds.stagnation.silentMs);
       this.liveRuns.add(run.id);
       this.track(this.pump(run, job.step ?? job.name, handle, sandbox?.id), run.id);
       this.log('info', `run ${run.id} of ${run.ticketId} still alive: reattached`);
@@ -1616,14 +1618,15 @@ export class Orchestrator {
     return v;
   }
 
-  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket, in the daemon's log (ORC-393). */
+  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket, logged once (ORC-393). */
   private workflowOf(version: WorkflowVersion, ticketId: string | undefined): Workflow {
     let wf = this.workflows.get(version.hash);
     if (!wf) {
       try {
         wf = frozenWorkflow(version);
       } catch (err) {
-        this.log('error', `${ticketId ?? 'an event'} refused: ${(err as Error).message}`);
+        if (!this.refusedVersions.has(version.hash)) this.log('error', `${ticketId ?? 'an event'} refused: ${(err as Error).message}`);
+        this.refusedVersions.add(version.hash);
         throw err;
       }
       this.workflows.set(version.hash, wf);
@@ -1962,7 +1965,11 @@ export class Orchestrator {
       const taken = () => this.d.store.finishQueued(claim).then(() => void (finished = true));
       this.worker
         .exclusive(item, async () => {
-          const project = await this.runtimeFor(item.projectId, item.ticketId);
+          // A ticket frozen on a workflow it no longer reads (ORC-393): its start leaves the queue, launched never.
+          const project = await this.runtimeFor(item.projectId, item.ticketId).catch((err: unknown) => {
+            if (err instanceof FrozenFormatError) return undefined;
+            throw err;
+          });
           // Launched before a crash cut it before it left the queue: recover()'s, not launched again (ORC-277).
           const launched = item.startMark !== undefined && (await this.startHandled(item.startMark));
           let outcome: StartOutcome = 'done';
@@ -3236,7 +3243,7 @@ export class Orchestrator {
         sensitivePaths,
         ...(sandbox ? { sandboxId: sandbox.id } : {}),
       });
-      this.follow(runId, handle, run.leaseToken!, bounds.stagnation?.silentMs);
+      this.follow(runId, handle, run.leaseToken!, bounds.stagnation.silentMs);
       this.liveRuns.add(runId);
       this.track(this.pump(run, job.step ?? job.name, handle, sandbox?.id), runId);
       handedOver = true;

@@ -135,7 +135,9 @@ describe('worker: per-ticket lock and decision transaction', () => {
     // Each of its events is set aside, the stop and what the restart's recovery sent alike: none is decided.
     const dead = await h.store.deadLetters('REL-1');
     expect(dead.map((d) => d.event.type)).toContain('control.stop');
-    expect(dead.every((d) => d.error.includes('frozen before ORC-393, its ticket is refused'))).toBe(true);
+    expect(dead.every((d) => d.error.includes('its ticket is refused (format 1: frozen before ORC-393)'))).toBe(true);
+    // Logged once, however many times its events read the version.
+    expect(h.logs.filter((l) => l.message.startsWith('REL-1 refused:'))).toHaveLength(1);
     expect((await h.ticket()).workflowHash).toBe(frozen);
     // A ticket started now is frozen on the current version, and decided on it.
     await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');

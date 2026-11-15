@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { blockingFix, delegatedJob, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview } from './chain.js';
+import { blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts, type BlockFacts } from './block-comment.js';
@@ -1153,12 +1153,12 @@ const asksForFix = (p: EventPayloads['pr.reviewed']): boolean => !!p.body.trim()
  * GitHub login; a review whose author was not resolved is not read, as a PR is open to anyone): kept in the inbox, untrusted
  * as GitHub's content is. In Human Review, its reaction (`replyReaction`): `fix-human`, debounced, a round of human
  * feedback. Elsewhere it waits for the end of the work in flight (`handOver`) or the next step's launch; a blocked ticket keeps
- * it, as only a reply in Linear relaunches. At the Rapide level, nobody reviews: only traced.
+ * it, as only a reply in Linear relaunches. A preset with no round of human review (`factory/fantome`) only traces it.
  */
 function humanReview(out: Decision, event: FactoryEvent<'pr.reviewed'>, ticket: TicketState | undefined, workflow: Workflow, matrix: AuthzMatrix): Decision {
   const { number, kind, author, body } = event.payload;
-  if (rapide(workflow)) {
-    out.trace.push('pr.reviewed: no reaction at the Rapide level');
+  if (!hasHumanRounds(workflow)) {
+    out.trace.push('pr.reviewed: no reaction, the preset has no round of human review');
     return out;
   }
   if (!ticket?.delegated || ticket.prNumber !== number || ticket.prState !== 'OPEN') {

@@ -92,10 +92,11 @@ describe('human review feedback goes back through fix → verify → AI review �
     }
   });
 
-  it('at the Rapide level, a review is only traced: nobody reviews a replayed ticket', () => {
-    const out = decide(inHumanReview(), reviewed('Rename it.'), { ...workflow, level: 'rapide' });
+  it('a preset with no round of human review only traces a review (`factory/fantome`, no merge gate)', () => {
+    const noRounds = { ...workflow, preset: { ...workflow.preset, steps: workflow.preset.steps.map((s) => (s.type === 'human_gate' && s.gate === 'merge' ? { ...s, onFailure: undefined } : s)) } };
+    const out = decide(inHumanReview(), reviewed('Rename it.'), noRounds);
     expect(out).toMatchObject({ events: [], effects: [], timers: [] });
-    expect(out.trace).toContain('pr.reviewed: no reaction at the Rapide level');
+    expect(out.trace).toContain('pr.reviewed: no reaction, the preset has no round of human review');
   });
 
   it('out of Human Review a review is kept and starts nothing: no uncounted fix, no fix that skips the AI review', () => {

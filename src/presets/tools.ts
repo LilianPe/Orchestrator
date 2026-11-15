@@ -54,9 +54,9 @@ export function perStepToolViolations(perStep: Record<string, readonly string[]>
 
 /**
  * The tools a run gets (ORC-383): its job's, kept to the repository's list for its step, which only restricts, and without WebFetch
- * where the run's network does not reach. No tools given (every tool) takes the repository's list.
+ * where the run's network does not reach.
  */
-export function narrowTools(tools: readonly string[] | undefined, repo: readonly string[] | undefined, network: NetworkLevel): readonly string[] | undefined {
-  const kept = tools && repo ? tools.filter((t) => repo.includes(t)) : (tools ?? repo);
-  return kept && !reachesWeb(network) ? kept.filter((t) => t !== WEB_FETCH) : kept;
+export function narrowTools(tools: readonly string[], repo: readonly string[] | undefined, network: NetworkLevel): readonly string[] {
+  const kept = repo ? tools.filter((t) => repo.includes(t)) : tools;
+  return reachesWeb(network) ? kept : kept.filter((t) => t !== WEB_FETCH);
 }

@@ -24,14 +24,18 @@ export function workflowVersion(workflow: Workflow): WorkflowVersion & { definit
   return { hash: hashCanonical(workflow), definition: workflow };
 }
 
+/** A ticket frozen on a workflow of another format than this factory's (ORC-393): refused, never decided on. */
+export class FrozenFormatError extends Error {}
+
 /**
- * The workflow a ticket is frozen on, read back (ORC-393). A version of another format than this factory's, the v1 ones frozen
- * before the preset drove the chain, throws: its ticket is refused rather than decided on rules it no longer has.
+ * The workflow a ticket is frozen on, read back (ORC-393). A version of another format than this factory's throws: format 1
+ * is every version frozen before ORC-393, the preset-driven ones of ORC-391 and ORC-392 included. Its ticket is refused rather
+ * than decided on rules the engine no longer has, or on a shape it does not know.
  */
 export function frozenWorkflow(version: WorkflowVersion): Workflow {
   const format = (version.definition as { version?: unknown } | null)?.version;
   if (format !== WORKFLOW_FORMAT) {
-    throw new Error(`workflow version ${version.hash.slice(0, 12)} is of format ${String(format)}, not ${WORKFLOW_FORMAT}: frozen before ORC-393, its ticket is refused`);
+    throw new FrozenFormatError(`workflow version ${version.hash.slice(0, 12)} is of format ${String(format)}, not ${WORKFLOW_FORMAT}: its ticket is refused (format 1: frozen before ORC-393)`);
   }
   return version.definition as Workflow;
 }
