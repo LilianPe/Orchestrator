@@ -161,21 +161,30 @@ describe('PrPoller', () => {
       expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
     });
 
-    it('waits for a take-over to end, and for a publication to compare with, before judging a head', async () => {
+    it('waits for a take-over to end before judging a head', async () => {
       // A take-over's bundle is on the forge before its `push.human`, under the human's name, is accepted.
-      expect(await headIs(HUMAN, { blocked: true, blockKind: 'taken_over' })).toEqual([]);
       const s = setup();
       await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED, blocked: true, blockKind: 'taken_over' });
+      await s.store.recordEvent(published(PUBLISHED));
       s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: HUMAN, checks: 'none', failedChecks: [] });
       await s.poller.pollOnce('p');
-      // No publication yet: nothing to compare with.
+      expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
+      // The same head, judged once the take-over has ended.
       await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, blocked: false, blockKind: undefined });
       await s.poller.pollOnce('p');
-      expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
-      // The same head, judged again once both are there.
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
+    });
+
+    it('takes a head from before the first publication for no push, even read again just after it', async () => {
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: OTHER, checks: 'none', failedChecks: [] });
+      await s.poller.pollOnce('p');
+      // The factory publishes; the forge still reads the PR on the head before, which no publication of its own precedes.
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, verifiedSha: PUBLISHED });
       await s.store.recordEvent(published(PUBLISHED));
       await s.poller.pollOnce('p');
-      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
+      expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
     });
 
     it("holds back no CI verdict when the head's judgement fails", async () => {
