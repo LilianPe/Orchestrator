@@ -42,7 +42,7 @@ None at the port level: it has no notion of an attempt. Echoes of our own writes
 
 None. `FakeTracker` accepted any status name: since ORC-189, it has a catalog per team and refuses, in `moveTo` as in `addIssue`, a status that is not in it.
 
-- By default, each team has the statuses of the standard workflow (`STANDARD_STATES`, `packs/standard/workflow.yml`; a test checks that they do not diverge). The scenario harness passes those of the workflow config it loads.
+- By default, each team has the statuses of the standard workflow (`STANDARD_STATES`, those of `defaultWorkflow()`; a test checks that they do not diverge). The scenario harness passes those of the workflow config it loads.
 - The catalog only carries the statuses the workflow names; a real Linear team has others (Backlog, Canceled…). A scenario that needs a status outside the catalog declares it: `h.tracker.setStates('REL', [...h.tracker.statesOf('REL'), 'Backlog'])` (keeps the statuses of the loaded workflow), or `new FakeTracker([...])` for all teams.
 
 The live `LinearTracker` runs read-only (without statuses): `getIssue`, `history`, `search` and `listDelegated`, with the token's user as the app; variables in [the index](README.md#live-tests). Its writes, and therefore their effects, go through no suite.

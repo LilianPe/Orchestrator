@@ -18,6 +18,7 @@ export interface RunLimits {
 }
 
 export interface Limits {
+  /** Read by nothing since ORC-390: the queues' capacities are `concurrency` of factory.yml and a fixed 2. Kept, as the journals hash them. */
   parallelSessions: number;
   questionSessions: number;
   perRun: RunLimits;

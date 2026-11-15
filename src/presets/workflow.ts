@@ -6,7 +6,7 @@ import { perStepToolViolations, READ_TOOLS, stepTools } from './tools.js';
 
 /**
  * The workflow of `factory/default`, built in TypeScript (ORC-388): its jobs and its rules are the ones the standard pack
- * held, its bounds and each job's effort, turns, network and tools are the preset's. A repository no longer overrides any
+ * held until ORC-389 removed it, its bounds and each job's effort, turns, network and tools are the preset's. A repository no longer overrides any
  * of it: `.factory/workflow.yml` is ignored, and `factory doctor` says so. The engine still runs jobs and rules, until it
  * walks the preset's steps itself (ORC-391, ORC-392).
  */
@@ -75,7 +75,7 @@ function stepJob(name: string, job: StepJob, settings: StepSettings): JobSpec {
   const step = agentStep(job.step);
   if (!step) throw new WorkflowError(`jobs.${name}.step: ${job.step} is not an agent step of ${preset.name}`);
   const { queue, model, workspace, session, skill, lens, input, repoChecks, pickup = false, structuredOutput, red, onStart = {}, onSuccess = {}, onBlocking, counter } = job;
-  // In the order of the pack's loader: a replay journal pins the workflow as JSON text, keys in their order (ORC-389).
+  // In the order the pack's loader gave: a replay journal pins the workflow as JSON text, keys in their order (ORC-389).
   return {
     name, step: job.step, queue, model, workspace, session, skill, ...(lens ? { lens } : {}), input, verify: [], ...(repoChecks ? { repoChecks } : {}),
     pickup, structuredOutput, ...(red ? { red } : {}), ...fromStep(step, PER_RUN, settings), onStart, onSuccess,
@@ -172,6 +172,7 @@ export function defaultWorkflow(settings: StepSettings = {}): Workflow {
     tracker: { kind: 'linear', pickup: { checks: ['has_description', 'not_started'] } },
     states: { todo: 'Todo', dev: 'In Progress', human_review: 'Human Review', ai_review: 'AI Review', done: 'Done' },
     limits: {
+      // Read by nothing since ORC-390 (`concurrency` of factory.yml, a fixed 2 for the questions): kept, as hashed in the journals.
       parallelSessions: 3,
       questionSessions: 2,
       perRun: PER_RUN,

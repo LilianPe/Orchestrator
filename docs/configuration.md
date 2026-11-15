@@ -127,7 +127,7 @@ There is no budget in dollars (ORC-216): a run's cost (`costUsd`, the one Claude
 ### Ports
 
 - `port` (4100): the Relais server.
-- `workspace.ports.base` (4200, in `workflow.yml`): each run in the `dev` queue receives `PORT = base + slot no.`, from `base` to `base + concurrency - 1`. Useful if the agent starts a dev server. These ports must be free on the machine.
+- `workspace.portBase` of the workflow (4200): each run in the `dev` queue receives `PORT = base + slot no.`, from `base` to `base + concurrency - 1`. Useful if the agent starts a dev server. These ports must be free on the machine.
 
 ## `secrets.json`
 

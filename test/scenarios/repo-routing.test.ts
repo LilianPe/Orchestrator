@@ -77,7 +77,7 @@ describe('an event routed on a stale read, on either store (ORC-291, ORC-316)', 
 
   it('two copies that debounce the same job keep a timer each, and each fires: a project workflow debouncing a question (ORC-316)', async () => {
     // Not the standard pack: it debounces only `dev-feedback`, which a copy that does not hold the ticket never arms.
-    const h = createHarness({ extraProjects: ['api'], projectYaml: 'version: 1\non:\n  session.mentioned:\n    - { run: ask, debounce: 1m }\n' });
+    const h = createHarness({ extraProjects: ['api'], workflow: { on: { 'session.mentioned': [{ run: 'ask', debounceMs: 60_000 }] } } });
     h.tracker.addIssue({ identifier: 'REL-1', description: 'x'.repeat(40) });
     const mention = async (id: string, projectId: string, session: string) => {
       await h.orch.accept({ id, type: 'session.mentioned', at: h.clock.now(), projectId, ticketId: 'REL-1', actor: 'user-1', taint: 'trusted', payload: { linearSessionId: session, body: 'Pourquoi ?', author: 'A' } } as FactoryEvent);

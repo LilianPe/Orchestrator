@@ -23,7 +23,7 @@ Running Relais day to day: limits, budget, pause, logs, recovery after a restart
 
 A control `factory.yml` disables (`max_diff: off`, `budgets: off`, or `off` per token cap, ORC-381) is said at each start (`Disabled in factory.yml: <keys>.`), by `factory validate`, and by a banner of the dashboard. Only `factory.yml` disables one: a repository's `.factory/config.yml` that sets `off` is refused, and its own `max_diff` and `per_ticket_tokens` still apply. The usage limit of the Claude subscription is not one of these caps: it still holds the launches until its reset.
 
-After a `limit` result or a failure, a code run **blocks** the ticket and Relais writes in the Linear session to reply in the thread to resume; a question run replies « I could not finish (failure or limit reached). ». Details and settings: [`workflow.md`](workflow.md#limits). Budgets in tokens and turns: [`configuration.md`](configuration.md#budgets).
+After a `limit` result or a failure, a code run **blocks** the ticket and Relais writes in the Linear session to reply in the thread to resume; a question run replies « I could not finish (failure or limit reached). ». Details and settings: [`preset.md`](preset.md#limits). Budgets in tokens and turns: [`configuration.md`](configuration.md#budgets).
 
 ## Blocked tickets
 
@@ -230,7 +230,6 @@ Each repair is **journaled**: the command writes directly to the database (the d
 |---|---|---|
 | `relais up` refuses to start: « exposes the interface and the API of Relais outside this machine » | Non-loopback `host` without `RELAIS_UI_PASSWORD`. | Set `RELAIS_UI_PASSWORD`, or `host: 127.0.0.1`. |
 | `invalid config.yaml: <field>: …` | Value refused in `config.yaml`. | Fix the indicated field ([`configuration.md`](configuration.md#configyaml)). |
-| Validation error in `workflow.yml` at startup | Invalid key or value in `.relais/workflow.yml`. | [`workflow.md`](workflow.md#7-common-errors-and-validation). |
 | `http://localhost:4100` does not respond, Relais is running | `localhost` resolves to `::1` while Relais listens on `127.0.0.1`. | Open `http://127.0.0.1:4100`. |
 | UI shows "Not Found", API OK | UI not built. | `npm run build`. |
 | `Linear not connected: open …/oauth/start` | No token yet, or `secrets.json` deleted. | Click « Connect Linear ». |
@@ -251,7 +250,7 @@ Each repair is **journaled**: the command writes directly to the database (the d
 | `… not written to the inbox after <n> attempts, written again at each beat` | The result of a run or of its verifications could not be written, the database unreachable: it is kept and written again every 30 s, without a bound (ORC-343). `… written to the inbox` once it is. | Restore the database: no restart is needed. |
 | `… not written to the inbox after <n> attempts, lost` | The result of a run or of its verifications could not be written, for a permanent error, or during a shutdown. The run stays in progress and keeps its slot. | Fix the cause, then restart `relais up`: the run is taken over as after a restart during a run. |
 | « I cannot start this ticket… » | Pickup checks (`pickup.checks`). | Complete the description, or delete the leftover `relais/<ticket>-…` branch; `relais plan` shows the reasons. |
-| Duplicate statuses in Linear ("In Progress" created next to « En cours ») | Column names not declared before connecting. | Declare `states` in `workflow.yml` ([`workflow.md`](workflow.md#adapting-linear-column-names)), delete the duplicates in Linear. |
+| Duplicate statuses in Linear ("In Progress" created next to « En cours ») | Column names not declared before connecting. | Declare `states` in `workflow.yml` ([`preset.md`](preset.md#linear-statuses)), delete the duplicates in Linear. |
 | « Launch error: The worktree setup failed: … » | A `workspace.setup` command fails. | Run it by hand in the repository; fix `setup`. |
 | « Launch error: the forge could not be read (git fetch, code …) » or « Launch error: git failed (code …); the command and its output are in the daemon log. », or the same text after « Error: » or « Error: the pending <job> could not be started: » (a launch decided by an effect, which failed transiently until the effect gave up) | `git fetch` impossible, or another `git` command of the workspace's preparation failed. A failed command reaches the ticket by its name and code only, never its paths nor its command line, retried launches included (ORC-364). | The daemon log has the command and git's output: `git -C <repoPath> fetch …` for the fetch, `launch of <job> on <ticket>…` for another command (`, to try again:` for each transient failure). Check access to `origin` from `repoPath`. |
 | « The git repository of the worktree <project>/<ticket> is not the one the factory created » | The workspace's `.git` was replaced by the agent, or it is a `git worktree` from before ORC-317. The daemon log names the folder. | Read what the run did, then delete the folder: the next launch recreates it from the forge. |

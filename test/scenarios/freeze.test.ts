@@ -3,6 +3,7 @@ import { fingerprint, FREEZE_CHECK, REFREEZE } from '../../src/checks/freeze.js'
 import type { EventPayloads } from '../../src/core/types.js';
 import { exportJournal } from '../../src/runtime/replay.js';
 import { createHarness } from '../helpers/harness.js';
+import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /**
  * ORC-131: after `red`, the tests and their harness are frozen; `factory/tests-gelés` blocks any change to them, the
@@ -19,10 +20,10 @@ const MEMBER = 'user-armand';
 type Harness = ReturnType<typeof createHarness>;
 
 /** A ticket, a designated maintainer and a member, the branch at `sha-freeze`. */
-function ticketWithBranch(projectYaml?: string): Harness {
+function ticketWithBranch(workflow?: WorkflowOverrides): Harness {
   const h = createHarness({
     authz: { maintainers: [LEAD], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } },
-    ...(projectYaml ? { projectYaml } : {}),
+    ...(workflow ? { workflow } : {}),
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
   h.tracker.setTeamMembers('REL', [LEAD, MEMBER]);
@@ -35,13 +36,7 @@ function ticketWithBranch(projectYaml?: string): Harness {
 
 /** The tests step (red measured) then dev, held so that a test can change the branch before its verification. */
 async function frozenThenDev(): Promise<Harness> {
-  const h = ticketWithBranch(`version: 1
-on:
-  ticket.delegated:
-    - { when: "state in [todo, dev] && !blocked", run: tests }
-  command:
-    - { say: retester, run: tests }
-`);
+  const h = ticketWithBranch(delegationStarts('tests', { on: { command: [{ say: 'retester', run: 'tests' }] } }));
   h.checks.failNext('AssertionError: expected 1 to be 2');
   h.runner.enqueue({}, { hold: true });
   await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });

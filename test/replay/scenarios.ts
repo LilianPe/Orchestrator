@@ -222,7 +222,7 @@ async function github(h: Harness, name: string, body: unknown): Promise<void> {
 export function scenarioWorkflow(name: string): Workflow {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
-  return loadTestWorkflow(scenario.preset?.yaml);
+  return loadTestWorkflow(scenario.preset?.workflow);
 }
 
 /** Runs a scenario and exports the journal of its ticket. */

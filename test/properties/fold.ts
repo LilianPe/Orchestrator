@@ -78,7 +78,7 @@ export function workflow(verifyAttempts = 2, ciFixAttempts = 2, aiReview = false
   const key = `${verifyAttempts}:${ciFixAttempts}:${aiReview}`;
   let wf = workflows.get(key);
   if (!wf) {
-    wf = deepFreeze(loadTestWorkflow(testPreset({ verifyAttempts, ciFixAttempts }).yaml, { aiReview }));
+    wf = deepFreeze(loadTestWorkflow(testPreset({ verifyAttempts, ciFixAttempts }).workflow, { aiReview }));
     workflows.set(key, wf);
   }
   return wf;

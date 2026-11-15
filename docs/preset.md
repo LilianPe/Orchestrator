@@ -1,6 +1,6 @@
 # The `factory/default` preset
 
-The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules of [`workflow.yml`](workflow.md) (ORC-187). The `on` rules and the jobs still drive the runs, but the engine already takes its bounds from the preset, compiled each time the workflow is built (see "What the engine already reads"). Since ORC-388 they are built in TypeScript, `defaultWorkflow()` in `src/presets/workflow.ts`, the same as the standard pack's `workflow.yml` (a test checks it, hash included); a repository's `.factory/workflow.yml` is ignored: `factory doctor` says so, and the daemon logs it at each start.
+The preset describes, in TypeScript, the sequence of a run's steps and the bound on each loop. It will replace the 6 states and the `on` rules (ORC-187). The rules and the jobs still drive the runs ([the workflow the engine runs](#the-workflow-the-engine-runs-orc-389)), but the engine already takes its bounds from the preset, compiled each time the workflow is built (see "What the engine already reads"). Since ORC-388 they are built in TypeScript, `defaultWorkflow()` in `src/presets/workflow.ts`; a repository's `.factory/workflow.yml` is ignored: `factory doctor` says so, and the daemon logs it at each start.
 
 Code: `src/presets/preset.ts` (types and compiler), `src/presets/factory-default.ts` (the definition), `src/presets/workflow.ts` (the workflow the engine runs).
 
@@ -69,9 +69,9 @@ Each agent step has a list of built-in tools, passed to `claude --tools` and enf
 
 ## What the engine already reads
 
-`loadWorkflow` compiles the preset then carries its bounds over into `limits`, which is frozen with each ticket's workflow version (ORC-149). A ticket therefore keeps the bounds it started with.
+`defaultWorkflow` compiles the preset then carries its bounds over into `limits`, which is frozen with each ticket's workflow version (ORC-149). A ticket therefore keeps the bounds it started with.
 
-| Preset bound | In the loaded workflow | Effect |
+| Preset bound | In the workflow | Effect |
 | -- | -- | -- |
 | `counters.verify` (3) | `limits.verifyAttempts` = 4 | 3 returns to the run after a failed check; the 4th failure blocks |
 | `counters.review_ci` (2) | `limits.ciFixAttempts` = 2 | 2 runs per run of the ticket between `fix-ci` on red CI, `rebase` on a conflict (ORC-146) and `fix-review` on a blocking finding of the AI review (ORC-184); the next red CI, conflict or review that still finds blocks |
@@ -96,7 +96,7 @@ The YAML's `on` rules still drive the sequence (ORC-177): the engine does not ex
 | `publish` refused | `dev-feedback`: it writes, goes through `verify` then `publish` again, and the owed move follows (`owedMove`) |
 | dead-letter, dead effect, `stop` | `dev-feedback`, these blocks have no step of their own |
 
-**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the `human_review` gate: this needs an engine that executes the steps (ORC-177). `clarify` does not have a job yet; `after_merge` has none either, the factory carries it out itself without an agent (`do: after_merge` on `pr.merged`, ORC-197, [workflow.md](workflow.md#after-the-merge-orc-197)); `intake` and `spec_draft` have one, which the scenarios turn on, a repository no longer since ORC-388 ([intake](#intake-step-and-the-guard-before-in-progress-orc-206), [spec](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)); `spec_check` and `spec_review` are decided at its end and on the gate's commands. A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
+**Not yet**: relaunching a step without an agent (`verify`, `red`, `freeze_tests`, `spec_check`, `publish`, `merge`) on its own, and resuming at the `human_review` gate: this needs an engine that executes the steps (ORC-177). `clarify` does not have a job yet; `after_merge` has none either, the factory carries it out itself without an agent (`do: after_merge` on `pr.merged`, ORC-197, [after the merge](#after-the-merge-orc-197)); `intake` and `spec_draft` have one, which the scenarios turn on, a repository no longer since ORC-388 ([intake](#intake-step-and-the-guard-before-in-progress-orc-206), [spec](#spec_draft-spec_check-and-the-spec_review-gate-orc-212)); `spec_check` and `spec_review` are decided at its end and on the gate's commands. A reply to the guard relaunches `intake`. The attempt number follows the counter that led to the block; a step without a counter shows 1/1. A project rule with a `debounce` on a blocked ticket keeps its job: its timer starts once the block is lifted.
 
 ## `factory/fantome` (ORC-231)
 
@@ -109,7 +109,7 @@ spec that passes `spec_check` is approved by the preset; a human gate at that le
 
 A conflict of the ticket's PR with its base branch arrives in the inbox as `pr.conflicted` (GitHub webhook, ORC-134). It is the engine that starts the step that handles it; an agent at work on another step never resolves it: the `dev`, `feedback`, `fix-ci` and `review` skills leave the base alone and hand back.
 
-**Start.** The pack's rule `pr.conflicted: { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }`, for the ticket's open PR only (another PR's conflict, a merged or closed one's, is only journaled). Each start counts on `review_ci` (`ciFixAttempts`), the counter of red CI (I5): the conflict's id carries the head and the base, so GitHub repeating it on the same pair starts nothing more. A rebase already running or waiting starts no second one either, whatever the head: it takes the branch onto the base as it is then. Past the bound, the conflict starts nothing and blocks the ticket, kind `conflict` (a green CI does not lift it, unlike the red-CI bound). A conflict during another step leaves that run alone: the start waits behind it, pending, and runs once that work is out (verified and published).
+**Start.** The rule `pr.conflicted: { when: "state in [dev, human_review, ai_review] && !blocked", run: rebase }`, for the ticket's open PR only (another PR's conflict, a merged or closed one's, is only journaled). Each start counts on `review_ci` (`ciFixAttempts`), the counter of red CI (I5): the conflict's id carries the head and the base, so GitHub repeating it on the same pair starts nothing more. A rebase already running or waiting starts no second one either, whatever the head: it takes the branch onto the base as it is then. Past the bound, the conflict starts nothing and blocks the ticket, kind `conflict` (a green CI does not lift it, unlike the red-CI bound). A conflict during another step leaves that run alone: the start waits behind it, pending, and runs once that work is out (verified and published).
 
 **The step.** The `rebase` job (agent, skill `factory:rebase`, Sonnet, effort medium, 60 turns, the repository's network) resumes the ticket's session in its worktree, in its sandbox like any dev job. It runs `git rebase origin/<base>` and resolves the ordinary conflicts, then the touched tests, types and lint. It moves nothing and posts nothing. Three cases stop it: `git rebase --abort`, then `submit_result` with `status: blocked`, `reason: conflict` and `conflict`:
 
@@ -161,7 +161,7 @@ Then the guard before In Progress: a failed deterministic check, a probable dupl
 A ticket « blocked by » a Linear ticket that is not done waits instead of starting. Done is a status of Linear's `completed` type; a cancelled blocker delivered nothing and still holds; a deleted one (in Linear's trash), or one the factory's token cannot read, holds nothing. The blockers are read with the ticket (`blockedBy` of the [tracker port](ports/tracker.md)), before its first run, where the pickup checks run:
 
 - **`intake` on**: they are an input of its guard, journaled with its end (`blockedBy` of `run.finished`). A ticket incomplete or failing a check is asked its questions first (`clarify`, below): the human has something to answer; `intake` runs again after the last answer, and the wait comes then. A complete one waits, and what `intake` would start (`on_success.run`, `dev`) is the start it waits for; an `on_success.post` is posted at once, an `on_success.move` is not made (the start moves the ticket itself).
-- **`intake` off** (the pack): the guard lives at the launch of the job with `pickup: true` (`dev`), in the orchestrator, after the pickup checks: a failed check still blocks; else, an open blocker makes that very start wait, as it was decided (its input, its restrictions).
+- **`intake` off** (`factory/default`): the guard lives at the launch of the job with `pickup: true` (`dev`), in the orchestrator, after the pickup checks: a failed check still blocks; else, an open blocker makes that very start wait, as it was decided (its input, its restrictions).
 
 The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer. The session gets a thought naming the blockers and their status. `/status` says it. The ticket stays where it is (Todo): nothing moves to In Progress. While it waits, a reply, a move or a debounced reply starts no dev work; a message stays in `humanInbox` for the run that starts later. A delegation again keeps the wait. A stop (a block), an undelegation or a dev run started all the same end it.
 
@@ -171,7 +171,7 @@ The wait is no block: no `Bloqué` label, no blocking comment, nothing to answer
 
 At the launch of `intake`, before its first run, the factory searches for duplicates through the adapters: every open PR of the repository, the most recently updated first, with its first 30 files and their count (the [forge port](ports/forge.md), GraphQL, every page: a list of PRs it cannot read to its end fails the launch, never reads as « no duplicate »), the 100 most recently committed branches but the default one, and the tickets of the team the tracker finds close to the title (`Tracker.search`, its 10 best matches: a ranking, not a list). Then:
 
-- **The ticket's own work** (a `factory/<id>-…` branch, every page of them, named by its open PR when it has one) is a certain duplicate, found without judgement: a failed check, with its link, journaled in `pickup` of `run.finished`. It is the `not_started` check, absorbed into the search: it runs when `pickup.checks` lists it (the pack does), at intake's launch or at a `pickup: true` job's without intake. A PR from a fork names a branch of another repository: it is never the ticket's own, and hides no branch.
+- **The ticket's own work** (a `factory/<id>-…` branch, every page of them, named by its open PR when it has one) is a certain duplicate, found without judgement: a failed check, with its link, journaled in `pickup` of `run.finished`. It is the `not_started` check, absorbed into the search: it runs when `pickup.checks` lists it (`factory/default`'s does), at intake's launch or at a `pickup: true` job's without intake. A PR from a fork names a branch of another repository: it is never the ticket's own, and hides no branch.
 - **The rest** goes to intake as data, in a « Work in progress elsewhere » section of its prompt: the open PRs with their files (30 per PR), the close tickets, then the recent branches without an open PR, capped at 12,000 characters in that order, what is cut counted. Intake judges which is a probable duplicate (same files or same subject, for the same purpose) and names it in `duplicates`.
 - **Existing code**: intake names the functions and modules close to the request in `reuse`. The ticket keeps the last assessment's (`reuse` of its state); `build` gets them in an « Existing code to reuse » section of its prompt.
 - **Scope**: a ticket of performance, of architecture or a large refactor is refused in `scope.refuse`, with the sub-tickets intake proposes in `scope.split`. The factory creates none in Linear and starts none.
@@ -225,7 +225,7 @@ Every section is optional to the schema: a missing one is `spec_check`'s verdict
 
 | Command | Effect |
 | -- | -- |
-| `/approve` (or `/approve <version>`, which must be the version waiting) | records who approved the version and when (`spec.approval`), then starts the job after the spec (`on_success.run`: `tests` in the pack) |
+| `/approve` (or `/approve <version>`, which must be the version waiting) | records who approved the version and when (`spec.approval`), then starts the job after the spec (`onSuccess.run`: `tests` in `factory/default`) |
 | `/changes <comment>` | the comment goes into `humanInbox` as an instruction (ORC-180), and the job drafts the next version from it and its last one (« Spec under review »), in a session of its own, never the ticket's; a version is never approved by an earlier approval. Until it is published (`spec.drafting`, a start still in the queue included), nothing is approved, changed or rejected. 3 rounds since the last approval (counter `spec_review`, `limits.specChanges`): the 4th blocks the ticket on the job, step `spec_review`, cause « limit » |
 | `/reject` | blocks the ticket on the job, step `spec_review`, cause « stopped »: a reply drafts again |
 
@@ -305,8 +305,8 @@ An attempt whose process stops without a `result` line, without having been stop
 The `tests` step (agent, skill `factory:tests`, Sonnet, effort medium, repository network) writes **only** the tests that translate the acceptance criteria, and commits them. The factory does not take its word for it: the `red` check (`src/checks/red.ts`) observes for itself.
 
 1. When the step launches, the factory records the worktree's head (`baseSha`); a return to the step keeps the first one. The check reads the files changed by the step's commits only (`baseSha..HEAD`, on the factory's repository), plus the worktree's uncommitted or untracked files. A file that is not a test (single rule in `src/checks/test-files.ts`, helpers and data under a test folder included) is a scope violation (`scope`), observed without running anything.
-2. It runs only the added or modified test files (`*.test.ts`, `test_*.py`…, not helpers or data) with the job's command (`red.command`, `npm test --` in the pack). With sandboxes, `git status` and the tests run in a separate sandbox, without network; without them, on the host like `verify`.
-3. It reads the runner's machine report (ORC-342): the JSON report of vitest (`--reporter=json`) or jest (`--json`), the JUnit report of pytest (`--junitxml`), written to a temporary file and printed after the output behind a random marker. The runner is the one the command names (`npx vitest run`, `python -m pytest`), or the one the `package.json` script runs when the command goes through `npm` or `pnpm` past a `--` (`npm test --` in the pack), as the last command of that script. Only the report's failure messages and the errors of the files that did not load are classified, never a test's name: a passing test called "fails on an AssertionError" changes nothing. Without a known runner, or when the runner wrote no report (it crashed before, the flags went elsewhere), the text output is read as before, a word of a test's name included. It classifies (vitest, jest, pytest), errors before "no tests" (pytest writes `collected 0 items / 1 error` before an import error):
+2. It runs only the added or modified test files (`*.test.ts`, `test_*.py`…, not helpers or data) with the job's command (`red.command`, `npm test --` in `factory/default`). With sandboxes, `git status` and the tests run in a separate sandbox, without network; without them, on the host like `verify`.
+3. It reads the runner's machine report (ORC-342): the JSON report of vitest (`--reporter=json`) or jest (`--json`), the JUnit report of pytest (`--junitxml`), written to a temporary file and printed after the output behind a random marker. The runner is the one the command names (`npx vitest run`, `python -m pytest`), or the one the `package.json` script runs when the command goes through `npm` or `pnpm` past a `--` (`npm test --` in `factory/default`), as the last command of that script. Only the report's failure messages and the errors of the files that did not load are classified, never a test's name: a passing test called "fails on an AssertionError" changes nothing. Without a known runner, or when the runner wrote no report (it crashed before, the flags went elsewhere), the text output is read as before, a word of a test's name included. It classifies (vitest, jest, pytest), errors before "no tests" (pytest writes `collected 0 items / 1 error` before an import error):
 
 | Output | Cause | Red |
 | -- | -- | -- |
@@ -322,7 +322,7 @@ The `tests` step (agent, skill `factory:tests`, Sonnet, effort medium, repositor
 | non-test file, committed or not | `scope` | refused |
 | the check could not run (git, worktree, sandbox) | `infra` | no verdict |
 
-The verdict comes back like the result of `verify`: `verify.passed` or `verify.failed`, with the `red` field carrying the cause. A verified red starts the next job (`on_success.run`, `dev` in the pack).
+The verdict comes back like the result of `verify`: `verify.passed` or `verify.failed`, with the `red` field carrying the cause. A verified red starts the next job (`onSuccess.run`, `dev` in `factory/default`).
 
 **Measurement mode.** For the first 20 tickets, the check is in measurement mode: it never blocks. An unverified red, a scope violation included, leaves in the decision the trace "red: would have blocked (<cause>), measure mode: the run goes on", and the build starts. The verdicts are in the ticket's measurements (`red` of `TicketMeasures`, ORC-235): a red that is not `verified` is what the check would have blocked.
 
@@ -391,6 +391,283 @@ Each default reaction of the MVP doc has a harness scenario in `test/scenarios/`
 | A PR closed by a human cancels the run | ORC-134 | `github-webhook.test.ts`, « criterion 4: a factory PR closed by a human without merge cancels the run » |
 | A cancelled ticket cancels the run | ORC-170 (its cancel) | `cancel.test.ts`, « ticket cancelled by a human (ORC-170) » |
 | The delegation withdrawn cancels the run | ORC-227 | `cancel.test.ts`, « delegation withdrawn (ORC-227) » |
+
+## The workflow the engine runs (ORC-389)
+
+Until the engine walks the preset's steps itself (ORC-391, ORC-392), it runs **jobs** chained by their `onSuccess` and **rules** that react to events. `defaultWorkflow()` (`src/presets/workflow.ts`) builds them in TypeScript: the jobs and rules are a table, the bounds and each job's effort, turns, network and tools come from the preset, and `factory.yml`'s step settings apply. The YAML pack (`packs/standard/workflow.yml`), its loader and `docs/workflow.md` are gone since ORC-389; a repository's `.factory/workflow.yml` is ignored since ORC-388. Tests vary the workflow in TypeScript (`workflowWith`, [tests](tests.md)), and `factory replay --what-if <preset>` replays journals on a compiled preset ([CLI](cli.md)).
+
+### Jobs
+
+A job describes **how** to launch a Claude Code run (`JobSpec`, `src/core/workflow.ts`). Fields:
+
+| Field | Values | Default | Effect |
+|---|---|---|---|
+| `step` | agent step of the preset | — | The step this job runs (ORC-136): it sets its effort (`claude --effort`), its network and its tools, and caps its turns. A name that is not an agent step makes `defaultWorkflow` throw. Without `step` (`ask`), the job has its own limits, effort, network and tools (ORC-182). |
+| `queue` | `dev`, `questions` | **required** | Execution queue ([from an event to a run](#from-an-event-to-a-run)). A `dev` job is only launched on a ticket delegated to Relais. |
+| `model` | text | **required** | Passed as is to `claude --model` (alias such as `sonnet`, `opus`, `haiku`, or full identifier). |
+| `workspace` | `worktree`, `trunk-readonly`, `published` | **required** | `worktree`: git worktree specific to the ticket, on a `relais/<ticket>-<title>` branch, reused from one run to the next. `trunk-readonly`: up-to-date copy of the main branch, gone with the run, run launched in plan mode (read-only), or held to `Read`, `Grep` and `Glob` for a read-only step of the preset (`intake`, which must have it, ORC-367). Every job of a preset step has its step's tools (ORC-383, [tools per step](#the-agents-tools-per-step-orc-383)). `knowledge`, a worktree of the knowledge repository, is refused since ORC-193: the memory in writing sleeps, and the launch refuses the `learn` and `remember` of a version frozen before. `published`: a fresh clone of the commit the factory published, detached, gone with the run; only a job of the `review` step has it, and it must (ORC-183). |
+| `lens` | `correctness`, `security` | — | The angle of an AI review job, given in its prompt (ORC-183); only a job of the `review` step has one. |
+| `session` | `new`, `resume` | `new` | `resume` resumes the ticket's Claude session if it exists (the development context), otherwise opens a new one. |
+| `skill` | text | **required** | The run's prompt starts with `/<skill>` followed by the ticket (identifier, title, URL, branch, PR, description). The workflow's job skills are `factory:dev`, `factory:feedback`, `factory:fix-ci`, `factory:review`, `factory:ask` and the others of the jobs below; they load the method skills themselves ([`pack-and-skills.md`](pack-and-skills.md#method-skills)). |
+| `input` | `feedback`, `ci_failures`, `thread`, `verify_failures`, `findings` | — | Section added to the prompt (see below). A job with a `lens` reads the published commit's diff against the trunk instead, whatever relaunched it (ORC-183), and the findings the last fix contested (ORC-184). `findings`: the blocking findings of the last AI review, each under its id (`correctness-1`), then the PR's unresolved review threads as they are (ORC-184). |
+| `verify` | list of commands | `[]` | Run after a successful run (see below). |
+| `repoChecks` | boolean | `false` | The run goes through `verify` even without commands: the commands from `.factory/config.yml` read on the base branch, forbidden paths, the freeze. Merging then requires a green `verify` on the reviewed commit. True in `factory/default` for `dev`, what inherits from it, and `review`. **Only such a job publishes** (ORC-125): a job that writes code without it stays in its worktree, the agent having no way to push. |
+| `verifyFailure` | `block` | — | A failing `verify` blocks the ticket instead of relaunching the job, which did not write the commit: the `review` of a version frozen before ORC-183, on a human push. |
+| `pickup` | boolean | `false` | If `true`, applies `tracker.pickup.checks` before the ticket's first run (when no Claude session exists yet). `intake` runs them too, as inputs of its guard rather than a block (ORC-206, [preset](#intake-step-and-the-guard-before-in-progress-orc-206)). Both also read the « blocked by » tickets not done: the ticket waits for them instead of starting (ORC-363, [preset](#waiting-on-a-blocked-by-ticket-orc-363)). |
+| `structuredOutput` | boolean | absent | **Provisional** (ORC-289, until ORC-191/ORC-192 make every agent call `submit_result`): if `true`, a run in the `dev` queue that ends without valid output is a failure. When absent, it stays a success. In `factory/default`, `true` for `dev`, `intake`, `spec`, `fix-review` and the review lenses. |
+| `limits` | `{ turns, durationMs, tokens }` | `limits.perRun` | The run's limits. `tokens`, a cap per attempt (cache reads left out), set for a job without `step`: a step's comes from `budgets.per_step_tokens` (ORC-182). |
+| `effort` | `low`, `medium`, `high` | — | `claude --effort`: its step's, or a job's own without `step` (ORC-182). |
+| `network` | `none`, `claude-api`, `limited` | the repository's | Its step's, or a job's own without `step` (ORC-182), narrowed by the repository's; `full` is reserved for setup. |
+| `onStart` | `{ move: <logical state> }` | `{}` | Moves the ticket when the run starts (if it is not already there). |
+| `onSuccess` | `{ move: <logical state>, post: summary \| reply \| synthesis \| review, run: <job> }` | `{}` | After a successful run (and successful checks): moves the ticket and/or posts in the Linear session the message the factory composes from the agent's `submit_result`, never from its last message (ORC-214): `summary` (end of the dev work) posts the recap: its summary, why, risks, untested and points to review when stated, the tests added, and the attempts, turns, tokens and duration of the ticket's work (ORC-195); `reply` (reply to feedback, to a question) and `synthesis` (the review synthesis of a version frozen before ORC-183) post its `summary` alone; `review` posts nothing in Linear: the findings of the ticket's AI review lenses go to the PR as a GitHub review and the `factory/review` check (ORC-183). `run` starts that job next. A run that returned no result posts a fixed sentence saying so. The text then goes through the `OutputPolicy` ([`linear.md`](linear.md#what-the-factory-publishes-orc-214)). |
+| `counter` | `human_review` | — | Each start of the job, a relaunch after a cut and a return of `verify` aside, is a round of human review feedback, counted up to `limits.humanReviewRounds`; past it, the ticket is blocked instead (ORC-190). |
+| `onBlocking` | `{ run: <job> }` | — | Only on the job whose `onSuccess` posts the review (ORC-184): when a blocking finding of either lens stands on the published commit, `run` starts in place of `onSuccess`, a round of the review and CI loop (`limits.ciFixAttempts`); past the bound, the ticket is blocked. The job named must read the findings (`input: findings`). |
+
+The values of `input`:
+- `feedback`: the Linear thread messages accumulated since the last run, plus the PR's unresolved review comments (title « Feedback to address »).
+- `ci_failures`: « The PR's CI is failing. Run `gh pr checks` for the details. » (title « CI failures »).
+- `thread`: the text of the message that triggered the run (mention or command) (title « Message »). Empty if the event is not a message.
+- `verify_failures`: used by Relais itself when it relaunches a job after failed checks; no need to configure it.
+
+The checks (`verify`): with sandboxes (`FACTORY_CONTAINER_CLI`), the factory pins the branch's last commit, exports it with `git bundle` to a fresh clone, and runs each command in a fresh container with network `none` (`bash -c`, 15 minutes maximum per command), **all of them** even if one fails. What is not committed is not checked. Without a sandbox, see `FACTORY_ALLOW_HOST_VERIFY` in [`configuration.md`](configuration.md#environment-variables). The same commit already found green is not rechecked. On top of these come, as blocking, `factory/chemins-interdits`, `factory/secrets` (gitleaks, on the commits added to the base branch), `factory/tests-gelés`, `factory/taille-du-diff` (the diff since the base against `max_diff` of the base's `.factory/config.yml`, ORC-333; with `max_diff: off` in `factory.yml`, only the bounds that file sets, ORC-381), `factory/dependances` (ORC-371: each package the branch adds to its manifests, npm and PyPI, must exist in its registry and be on `dependencies.allow` of the base's `.factory/config.yml`; the registries asked by the daemon through the egress proxy, never from a sandbox, see [`repository-configuration.md`](repository-configuration.md#dependencies)) and `factory/semgrep` (ORC-333: the runner image's Semgrep, in a sandbox at network `none` before any code of the agent runs, with the factory's security rules and the repository's own, on the lines the branch adds; a `nosemgrep` comment or a `.semgrepignore` of the branch is not read, see [`repository-configuration.md`](repository-configuration.md#semgrep-rules)).
+**Flaky tests** (ORC-164). When a command runs vitest, jest or pytest (named in it, or in the `package.json` script it runs past a `--`), `verify` asks the runner for its machine report (vitest and jest JSON, pytest JUnit as `xunit1`) and names the failing tests from it. The failing tests are rerun once, together, with the repository's own command, in the same sandbox (at most 20 per command); the first five that count are also rerun on the base commit, checked out before any code of the agent runs and set up in a sandbox of their own at network `none`. Every attempt is journaled with the verdict (`verify.passed.flaky`, `verify.failed.flaky`: outcome, duration, output). The agent reads, under the command's output, what the reruns found: passed on its rerun (flaky on this commit), failing on the base too (not caused by this ticket). These still count: only a test listed in the repository's known flaky tests is **indicative**, and does not count. A command whose failing tests are all indicative runs once more without them, and passes only if that run passes: the report is written by the agent's code, and an exit can have a cause no test carries (a coverage threshold, an unhandled error). A human lists them with [`factory flaky`](cli.md#factory-flaky-project-orc-164); there is no automatic rule. A test frozen for the ticket (ORC-131) is never indicative unless its entry records a human's decision that it may be while frozen (`--frozen`). A command without a known runner, a timeout, or a report that does not load (a file that does not compile) reruns nothing. Only with sandboxes: `verify` on the host (`FACTORY_ALLOW_HOST_VERIFY`) reruns nothing and reads no known flaky test.
+
+- All pass: `onSuccess` applies.
+- One fails and attempts remain: Relais relaunches **the same job**, resuming the session, with the output of the failing commands, trimmed to its beginning, its end and its error lines (8,000 characters at most).
+- After `limits.verifyAttempts` failed passes: the ticket is blocked and Relais posts the list of failing commands in the session.
+- The check cannot run (engine down, silent sandbox, failing `setup`, rejected configuration, unreachable forge or package registry): `verify.errored`, the ticket is blocked for infrastructure reasons, without sending anything back to the agent or touching the counter.
+- The visual proof (ORC-176), on a job that writes the commit, once its commands pass; see below.
+- Same failure three times in a row (same failing commands, same exit codes, unchanged commit content): the ticket is blocked with the cause « Loop », even if passes remain. The worktree's fingerprint is the git tree of its content, untracked files included, computed without touching its index or its objects (60 s at most), with no hook or fsmonitor of the repository's config and none of the daemon's credentials in the environment of a filter it declares (ORC-319). Files written by the checks must be ignored by git (`coverage/`, reports): otherwise the fingerprint changes on every pass and the guard never triggers, without ever blocking wrongly. The count resets to zero on a green check or a human relaunch. Outside a git repository, this guard does not apply. A fingerprint that cannot be read disables the guard for that failure, and the daemon's log says so (`verify of <ticket>: unreadable worktree fingerprint: …`). Its bound comes from the preset.
+
+**The visual proof** (ORC-176, check `factory/preuve-visuelle`). `verify` decides it on the real diff and journals it with its verdict (`verify.passed.visualProof`): `required` when the diff touches a path of `visual_paths` (`.factory/config.yml` of the base branch, the paths that trigger it named) or when `intake` asked for it (a ticket that speaks of a screen, ORC-206), `not_applicable` otherwise. Nothing the agent submits enters the decision: a model's `not_applicable` is ignored. Required, the factory takes it itself, never the agent: the base's files are checked out from the clone before any code of the agent runs; then, in a sandbox of its own at network `none`, with a browser and nothing mounted, it starts the application (the base's `preview` in `.factory/config.yml`, ORC-397) and shoots the page of `visual_scenario.url` from `submit_result` (a path of the application, `/` otherwise; its `steps` are not played) at three widths (1280, 768, 375 px), on the commit, then, set up as the commit was, on the base. Each capture passes the `OutputPolicy` (ORC-214) and is kept by its sha256 under the factory's artifacts dir (`<artifactsDir>/<ticket>/`), which no run mounts, with its row in `artifacts`. Back to the job, with the `verify` counter: an application that does not start on the commit, a console error or an uncaught exception on its page, a capture the policy refuses, captures identical to the base's at every width. What is no fault of the branch leaves the proof unavailable and its check neutral, indicative until the application starts reliably in the sandbox (ORC-152): no browser in the sandboxes (none offers one yet), no `preview`, a base that does not start. The check, published on the commit: the captures by hash, or « No visual proof applicable. ». Not there yet: a human command that forces the decision, and the captures shown in the PR (ORC-195, ORC-197).
+
+The jobs of `factory/default`:
+
+| Job | Queue | Model | Role |
+|---|---|---|---|
+| `dev` | dev | sonnet | First development; moves the ticket to `dev` at the start; once published, posts a summary, moves it to `ai_review` and starts `review`. |
+| `dev-feedback` | dev | sonnet | Extends `dev`: resumes the session to address feedback, then `verify`, publication and the AI review (`move: ai_review, post: reply, run: review`, ORC-170). |
+| `fix-ci` | dev | sonnet | Extends `dev-feedback`: fixes CI, then goes back through `verify`, publication and the AI review (ORC-184). |
+| `fix-review` | dev | sonnet | Extends `dev-feedback`: the fix of the review loop, on the blocking findings of the last AI review and the PR's unresolved threads; one commit per finding fixed or a justified contest (`fixed`, `contested` of `submit_result`), then `verify`, publication and the AI review again (ORC-184). |
+| `fix-human` | dev | sonnet | Extends `dev-feedback`: the fix of human review feedback in Human Review (the session's replies, the PR's reviews and unresolved threads), then `verify`, publication, the AI review and Human Review again; each start a round of `humanReviewRounds` (`counter: human_review`, ORC-190). |
+| `review` | dev | opus | First lens of the AI review (correctness and spec), read-only, on a fresh clone of the published commit; then starts `review-security` ([preset.md](#review-step-orc-183)). |
+| `review-security` | dev | opus | Extends `review`: the security and tests lens; publishes both lenses' findings (GitHub review, `factory/review` check), then moves the ticket to `human_review`; a blocking finding starts `fix-review` instead (`onBlocking`, ORC-184). |
+| `answer-relayed` | dev | sonnet | Extends `dev-feedback`, the workflow's `relayJob` (ORC-375): resumes the session to answer the questions relayed to it, with no human feedback waiting; no checks (no `repoChecks`), no counter, and an empty `onSuccess`: the ticket stays where it is, nothing is posted beside the answers, no review. A commit it leaves goes the reply rule's job's way. |
+| `ask` | questions | sonnet | The answer agent (ORC-182): answers a question read-only (`Read`, `Grep`, `Glob`), at network `claude-api`, low effort, 30 turns, 200,000 tokens, 5 min; relays what it cannot answer to the agent that implements. |
+
+### Linear statuses
+
+The five **logical states** and the Linear status each one names (`states`):
+
+| Logical state | Linear status |
+|---|---|
+| `todo` | `Todo` |
+| `dev` | `In Progress` |
+| `human_review` | `Human Review` |
+| `ai_review` | `AI Review` |
+| `done` | `Done` |
+
+`ready` ("Ready to Merge") is gone (ORC-170): only a version frozen before keeps it. A repository cannot rename them since ORC-388 (ORC-382 makes them configurable). `cancelled` has no name: it is read on the Linear type *Canceled* ([`linear.md`](linear.md#5-states-columns-and-labels)). No other state name is accepted. During « Connect Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
+
+### Pickup checks
+
+The pickup checks, `tracker.pickup.checks` (`has_description` and `not_started` in `factory/default`), made before the **first** run of a job with `pickup` (`dev`):
+- `has_description`: the ticket description is at least 30 characters long.
+- `not_started`: no `factory/<ticket-id>-…` branch already exists on the forge (read through the forge port, every page, ORC-207). With `intake` on, its duplicate search makes this check at its launch, whatever the list says, and names the branch's open PR when it has one.
+- `has_acceptance_criteria`: the description holds acceptance criteria, however they are written (ORC-353): the words « critères d'acceptation » (or « critère d'acceptation », « criteres… ») or "acceptance criteria", case-insensitively; or a section of its own with something in it, under a heading such as « Definition of done », « Expected behavior », « Résultat attendu », « Acceptance tests »; or an example « Given … then » / « Étant donné … alors », on one line or the lines of its list item (a Gherkin `Scenario:` included); or a checklist (`- [ ]`). No model reads it: whether the criteria are enough is `intake`'s judgement (`complete`), when a rule runs it. `factory/default` does not list it (ORC-395 will settle where it goes).
+
+If a check fails, the ticket is blocked and Relais replies in the Linear session with the list of problems (« I cannot start this ticket… Fix it, then reply in this thread »). `relais plan` shows, for each delegated ticket, whether it would be picked up or not, and why.
+
+### Limits
+
+`limits.perRun` (150 turns, 90 minutes) is the limit of a job without limits of its own; a job of a step never exceeds its step's turns.
+
+What happens when a run hits a limit (`limit`) or fails?
+- Job in the `dev` queue: the ticket is **blocked** and Relais says so in the ticket's block comment (« The run <job> reached a limit (turns, duration or budget). », or « … failed. »; an attempt stopped at its token or turn cap says « The run <job> spent its token budget … » or « … its turn budget (max_turns of its step). », kind `budget`, ORC-216). A reply in the ticket relaunches that job, or `dev-feedback` if the block has none (the workflow's `session.prompted` rule).
+- Job in the `questions` queue: Relais replies « I could not finish (failure or limit reached). ».
+
+What happens when CI stays red or the AI review keeps finding (`ciFixAttempts`)?
+- One count per run for the review and CI loop (ORC-184). Each `pr.checks_failed` rule that launches a run (`fix-ci` in `factory/default`), each `pr.conflicted` one (`rebase`), and each end of the AI review with a blocking finding standing (the `onBlocking` job of the lens that publishes, `fix-review` in `factory/default`) counts that run against the ticket, the merge gate included. Once `ciFixAttempts` runs have been launched, the next one starts nothing: the ticket is **blocked** and Relais says so in the block comment (« CI still failing after 2 attempts of fix-ci. », plus the failing checks; « The AI review still has 1 blocking finding on <sha>, and the review and CI loop has used its 2 runs: I am not starting fix-review. »). Subsequent red CIs relaunch nothing and do not repeat the message.
+- The count resets to zero when another PR is detected for the ticket (`pr.opened` with another number), or when a human starts work on the ticket, blocked or not (reply in the ticket, project label, status change or delegation that launches a run). A green CI does not reset it (it did before ORC-184): a review that keeps finding would loop between its fix and green CI. It still lifts the block of the red-CI bound. Neither a new push by the agent (that is the loop itself) nor a `debounce` timer armed before the block resets it.
+- A round of human review feedback (`fix-human`, ORC-190) does not count here: it has its own count, `humanReviewRounds`. A human who writes feedback starts work, so the count of the review and CI loop starts over with it.
+- Unlike `verifyAttempts`, which counts passes (including the first run), `ciFixAttempts` counts relaunches: with `2`, two `fix-ci` runs, then a block on the third red CI. This is the unit of invariant I5 ([`decisions/ORC-138.md`](decisions/ORC-138.md), point 8), checked as a property on the three sources of the loop (`test/properties/decide.prop.test.ts`).
+
+What happens when human review keeps sending the PR back (`humanReviewRounds`)?
+- Each start of the job with `counter: human_review` (`fix-human` in `factory/default`) is a round of human feedback (ORC-190): a review written on the PR or a reply in the ticket's session while it is in Human Review, after the 3-minute grouping, or what waited for the end of other work. A relaunch after a cut, and the returns of `verify`, are no new round. Once `humanReviewRounds` rounds have started, the next feedback starts nothing: the ticket is **blocked** (« The 3 rounds of human review feedback are used: I am not starting fix-human on the new feedback. »), the feedback kept in `humanInbox`.
+- A reply in the ticket relaunches `fix-human` on that feedback, and gives the rounds back, as a human relaunch gives every bound back. Another PR starts the count over too.
+
+Durations: a number (milliseconds) or a `<integer><unit>` text with the unit `ms`, `s`, `m` or `h` (`90m`, `30s`, `2h`). Combinations such as `1h30m` are rejected: write `90m`.
+
+There is no budget in dollars (ORC-216): Budgets count tokens and turns: `budgets` of `factory.yml` ([`configuration.md`](configuration.md)).
+
+> Queue capacities are global to the instance and set outside the workflow (ORC-390): `concurrency` of `factory.yml` for the `dev` queue (3 by default), a fixed 2 for the `questions` queue. The sandbox of a check (`verify`, `red`) takes a `dev` slot too, and waits for a free one before any new launch (ORC-353). Beyond that, runs wait in a persistent queue. Each run in the `dev` queue receives `PORT = workspace.portBase + slot number` (4200) (0 to `concurrency - 1`). The other limits are specific to each project.
+
+### The relayed answer (`relayJob`)
+
+The job a question relayed to the agent that implements starts (ORC-375), when nothing runs on the ticket and no human feedback waits beside the question, in place of the job of the reply rule (`session.prompted`) that matches; nothing starts where no reply rule would. The workflow names `answer-relayed`. It must be a job of the `dev` queue that resumes the ticket session (`session: resume`) on the `feedback` input, with no `counter`. Its end runs its own `onSuccess`, without checks; if the run moved the head of the worktree since its launch (a commit), that commit goes the way of the reply rule's job instead: `verify`, publication, then that job's `onSuccess` (in Human Review, `fix-human`'s: AI Review and both lenses again), as no round of human review. Where no reply rule starts a job by the end of the run (a human moved the ticket meanwhile), the commit stays unpublished in the worktree until the next job that publishes. A version frozen before ORC-375 has none: its relay starts the reply rule's job (ORC-374).
+
+### Reactions
+
+`on` maps an event type to an **ordered list** of rules. For a given event, Relais goes through the list and applies **the first rule that matches, and only that one**. If none matches, nothing happens, except for a reply in the ticket's dev session, which is always kept (see `session.prompted`).
+
+#### Configurable events
+
+| Event | When | Specifics |
+|---|---|---|
+| `ticket.delegated` | The ticket is delegated to Relais in Linear. | — |
+| `ticket.commented` | A workspace user comments on a blocked ticket, outside a session (ORC-196). | A reply to the block comment: checked against the matrix, kept for the run, which launches the blocked step. Absent from versions pinned before it. |
+| `status.changed` | The ticket changes status in Linear (by a human). | Filterable with `from` / `to`. Moves made by Relais itself do not generate this event. |
+| `session.mentioned` | `@relais …` in a comment, when the first word is not a command. | — |
+| `session.prompted` | Reply in a Relais Linear session. | The accepted message always enters `humanInbox`, whether a rule matches or not: without a rule for the ticket's state (`todo`, `ai_review`, `ready`, `done` in `factory/default`), it waits for the next run of the implementing agent. The rule receives an instruction from any session, and any reply in the dev session; a question there also launches `ask`. A question from a thread launches `ask`, without reading the rules ([details](linear.md#human-messages-during-a-run)). |
+| `session.stopped` | "Stop" button in Linear, or ticket taken away from the agent. | In a question session, Relais stops the answer in progress, without reading the rules. |
+| `label.changed` | A label is added to or removed from the ticket (by a human). | Filterable with `label`. Only an addition matches a rule: a removal enters the inbox and the journal (`change: removed`) but triggers nothing. |
+| `push.human` | A human pushes a commit to the ticket's branch. | No rule in `factory/default`: the engine reacts on its own (ORC-159). On a delegated ticket at work, the agent's work pauses (the run in flight stops, the check, the publication and the waiting job are dropped) and the ticket is blocked (kind `human_push`) on the job the push interrupted; `verify` checks the pushed commit as the forge holds it, in a fresh clone, under the checks of the job the factory publishes, the freeze included (no sandboxes: no verdict, an infrastructure failure). Its verdict is told by the block's comment; green, the commit is the one verified last. The ticket stays paused either way: a reply resumes the interrupted job, which rebases its work on the push, and every later `verify` refuses a commit that does not carry the last human push (`factory/commits-humains`), until a publication of the factory carries it or a human puts the branch back on the commit verified last. A ticket already blocked for another reason keeps that block and the job a reply resumes; its push is checked all the same. The commit under review is no longer reviewed (as soon as the factory publishes, whether it works on the ticket or not): a Done merges nothing until the factory shows a new head in Human Review. A push of the commit `verify` last found green is the factory's own publication, and neither pauses nor counts as human; nor does anything happen on a ticket not delegated, delivered, stopped or whose PR is closed. Received through the GitHub `push` webhook (account that is not a bot), marked untrusted ([`github.md`](github.md#github-webhooks)). |
+| `command` | `@relais <word> …` when `<word>` is a `say` value from the `command` list. | Filterable with `say`. |
+| `pr.checks_passed` | The PR's CI passes. | Before the rules, Relais lifts the block caused by the red-CI bound. The count of the review and CI loop (`limits.ciFixAttempts`) stays: one per run (ORC-184). |
+| `pr.checks_failed` | The PR's CI fails. | A rule that launches a run is bounded by `limits.ciFixAttempts`: once the bound is reached, Relais blocks the ticket instead of applying the rule. |
+| `pr.conflicted` | The PR conflicts with its base branch (ORC-146). | Only for the ticket's open PR. A rule that launches a run counts on the same bound as red CI (`limits.ciFixAttempts`): once it is reached, Relais blocks the ticket (cause « conflict ») instead of applying the rule. |
+| `pr.merged` | The PR is merged. | Before the rules, Relais records the PR as merged and stops work on the ticket like a `stop`, without blocking it: the running `dev` run is stopped, waiting or queued runs and `debounce` timers are deleted. After that, no job from the `dev` queue starts on the ticket any more, whatever rule, timer or wait requests it (project label, reply, red CI, waiting or queued job): the refusal is only traced, with no message in Linear. The end of the stopped `dev` run and its checks are ignored. The rules apply after the stop: `done` and cleanup do not change, a block is lifted, and jobs from the `questions` queue (`ask`) still run. The rule starts no run: the memory in writing sleeps (ORC-193). The ticket becomes active again when a human changes its status to something other than *Done* (also when Relais could not move it to *Done*), delegates it again, or a new PR (another number) is detected for it. GitHub polling no longer looks at a ticket in *Done* whose PR is merged: a new PR is only seen once the ticket has left *Done*. |
+| `pr.closed` | The PR is closed without merging. | Before the rules, if it is the ticket's known PR, open, and the ticket is not *Done*, Relais cancels work on the ticket: the running `dev` run is stopped, the waiting job and the expected check are deleted, the ticket is blocked (« PR #n closed without merge ») with a message in the session. A human relaunches as after a `stop` (reply in the ticket); a new PR (another number) is followed like any PR, and the same PR reopened becomes open again (`pr.opened`). |
+
+`factory/default` has no rule for `pr.checks_passed` nor `pr.closed`.
+
+#### Lifecycle events (not configurable)
+
+Relais handles these types in hard-coded fashion: a rule placed under them **never triggers**.
+
+| Event | Fixed behavior |
+|---|---|
+| `run.finished` | Success: checks if the job has any, otherwise `onSuccess`. Failure or limit: ticket blocked (`dev` queue) or error message (`questions` queue). An answer with `relay` (ORC-182): its question enters the run inbox (`relayed`) for the next launch of the ticket session, and the human is told so; the end of the run it was handed to, whatever its outcome, posts that agent's answer (`answers`) in the question's thread, or says there was none. When nothing is at work on the ticket (ORC-374), the job of the first reply rule (`session.prompted`) that matches starts at once to ask it, as no round of human review (it answers a question), unless a human change request waits beside it, which that job reads: then it is a round. Without a change request, the workflow's `relayJob` (`answer-relayed`, ORC-375) starts in its place, where that rule would start a job: its end moves, posts and reviews nothing, unless the run moved the head of its worktree since its launch (`committed`), a commit that goes through `verify` and publication under the reply rule's job, then that job's `onSuccess`. With no reply rule to start, or waiting on its blockers, the question waits for the launch still to come. A blocked ticket keeps nothing: the human is told no answer will come. A question relayed while a step that does not resume the session ran (the AI review) resumes it at that step's end, by the same rule. When the work ends with questions still relayed (`pr.merged`, `ticket.undelegated`, or the ticket cancelled by a human: `status.changed` with `cancelled`), each human is told in the question's thread that no answer will come, and they leave (`relay.dropped`). Work cancelled to go on (a stop, a pause, a spec changed, a check lost) keeps them. `dev` queue, depending on the attempt's outcome (ORC-289): agent question (`needs_input`) or disputed ticket (`spec_impossible`), ticket blocked with the question or the justification; infrastructure failure (`errored`: runner or sandbox down, unreadable output; not an error after the run has ended), ticket blocked, without a fix run; an already blocked ticket (the agent called `ask`) keeps its block, without a second message. A `done` returned by a failing run is a failure. Stopped run: nothing. End of a `dev` queue run after the PR is merged: nothing. |
+| `verify.passed` / `verify.failed` | `onSuccess`, or a new attempt, or a block (see `verify`). After the PR is merged: nothing. |
+| `timer.fired` | A timer set by a decision expires (event `timer:<key>:<due>` written to the inbox). Kind `debounce`: launches the job whose `debounce` delay just expired (and unblocks the ticket). Kinds `clarify.remind` and `clarify.expire` (ORC-210): at 24 h the open `clarify` questions are asked again, at 72 h the ticket is blocked on `intake`; a round answered or ended since does nothing ([preset](#clarify-questions-reminder-and-expiry-orc-210)). Kind `usage.reset` (ORC-340): asks again the question the usage limit cut, as a relaunch of its run (a code step's, armed before ORC-357, relaunches it the same way); without a job: nothing. |
+| `pr.opened` | Records the PR and attaches it to the Linear session. |
+| `control.pause` / `control.resume` / `control.stop` | Pause / resume of the queue, stop of a ticket (UI, `relais pause`, `relais resume`, `relais stop`). |
+
+**Delegation withdrawn** (`ticket.undelegated`, internal: no rule can name it). The reconciliation writes it when a human takes the ticket back from the agent in Linear, after a `session.stopped` when a run is under way, which stops that run as Linear's Stop does. On a delegated ticket that is not blocked, Relais cancels its work as a cancel of the ticket stops it (ORC-227): the run is stopped, the verdict of a check in progress is ignored, the waiting job and the `debounce` timers are deleted, nothing is published. It writes nothing in Linear and blocks nothing. A blocked ticket keeps its block and its job: its work already ended, by the `session.stopped` when a run was under way. Unlike a cancel, the block and the messages kept in `humanInbox` stay.
+
+Events about a ticket that Relais does not follow yet are ignored, except `ticket.delegated`, `session.mentioned`, `session.prompted` and `command`, which add it to the followed tickets.
+
+**Untrusted events.** Each event carries a trust label (`taint`). An event marked `untrusted` (content from a source the orchestrator does not consider trustworthy) never launches a `workspace: knowledge` job (`learn`, `remember`, of a version frozen before ORC-193 only): the rule applies without that run, and a Linear activity explains the refusal. The other runs the event requests carry a mark of it (`sensitivePaths`, a list kept for the decisions the journals record, of which only the presence is read): the recorded run and the runner request carry it. Linear ingestion marks as `untrusted` whatever Linear does not attribute to a workspace user: reply or comment without a user id, coming through a bot or from outside the workspace, ticket change made by an integration or an OAuth app, delegation or move found by reconciliation without a signed actor ([Linear](linear.md), ORC-160); GitHub ingestion always marks a `push.human` and a `pr.reviewed` as `untrusted` ([GitHub](github.md#github-webhooks), ORC-134). The runner enforces nothing while the run writes: `checkClone`, which `verify` and the publication both run on every commit of the branch since the base, refuses the diff (`factory/chemins-interdits`, ORC-338), and so does `verify` on the host without sandboxes (`hostChecks`), with the same function (`checkBranchPaths`) on the branch read on the factory's repository against the forge's default branch, fetched first: the same verdict as on the clone. As on the clone, what gives no verdict (no worktree, a git read that fails, a config the default branch refuses) is an infrastructure or config failure that blocks the ticket, never sent to the agent, and no command runs on a refused branch. The rules:
+
+- **Every run, trusted or not:** the unconditional forbidden paths: `.github/**` (workflows, actions, `dependabot.yml`…), `CODEOWNERS` at any depth (GitHub reads it at the root, in `.github/` and in `docs/`), `.env`, `.envrc` and every `.env.*` but the templates `.env.example`, `.env.sample` and `.env.template`, which leave this rule only, not the forbidden directories they may sit in (dotenv, Vite and Next.js load `.env`, `.env.local`, `.env.<mode>` and `.env.<mode>.local`, and direnv runs `.envrc`: they hold values or run; an unknown `.env.*` is treated as one of them), `.factory/**`, `.claude/**`, and what runs at checkout or install (git hooks, `.gitattributes`, `.gitmodules`, `.npmrc`, `.yarnrc*`, `.yarn/releases/**`, `.yarn/plugins/**`, `.pnpmfile.cjs`, `setup.py`, `package.json#scripts`, `.husky/**`, `.vscode/**`, `Dockerfile*`, `.devcontainer/**`), plus `claims/**`.
+- **Untrusted branch:** when a run that read untrusted content first starts in the ticket's worktree, the ticket records the branch's head at that moment (`untrustedSince`, sticky until a worktree is made again on a branch made anew from the default branch, nothing on it beyond that branch: that ends the mark and the human pushes kept with it, and the ticket's Claude session, which read under the mark, is not resumed: the next implementer run starts a new one, ORC-358. A merge alone does not end it: it says nothing of what the branch still holds). From then on, what the agent's commits since that head touch in the repository's [`sensitive_paths`](repository-configuration.md), read on the default branch, is refused, at every later verification and publication of that ticket, whoever runs next: the untrusted run's commits stay on the branch. What a trusted run committed before stays the human reviewer's, as on a trusted branch, and so do the commits a human pushed to the branch (`push.human`: the ticket keeps each push's `before` and `after`, and only the commits between them are the human's, not the agent's they were built on) and the default branch's: a teammate's edit of a sensitive path never wedges the ticket. A push recorded without its `before` leaves out nothing. A merge counts by what it changed beyond the clean merge. A head that was not read, or that is no longer an ancestor of the branch (a rewritten history), reads all the agent's commits since the branch left the default branch, human pushes still left out. A ticket from before this mark is read once in its run records, at its first verification, publication or untrusted launch, and the answer kept on it: its whole branch when an untrusted run of a worktree job worked on it, and a later untrusted run does not narrow that. Without sandboxes, `verify` reads the branch on the factory's repository: for a marked branch, against the forge's default branch, its `HEAD` fetched as the clone fetches it, whatever `origin/HEAD` still names; without a mark, against the repository's default branch as the launch last fetched it, no forge read (ORC-358). An entry of `sensitive_paths` that names nothing is left out of the check with a warning (`factory validate`, the daemon's log); an untrusted branch is then refused as a config failure until it is fixed, and trusted branches go on.
+- **Trusted branch:** a branch no untrusted run ever worked on may change the repository's `sensitive_paths`. Nothing blocks it; the human review of the draft PR is the control, as for any other file.
+
+ Each pending piece of feedback keeps the label of the event that brought it: a run that reads feedback (`input: feedback`) is untrusted as soon as one of those pieces of feedback is, even if launched later by a trusted event (end of `debounce`, project label, move to `dev`). A run's label is set at its **launch**, based on what it reads then, and not when the decision requests it: a job put on hold behind a run (launched by `settle` at the end of that run) or left in the queue reads the feedback that arrived in the meantime, and becomes untrusted if any of it is. The run also keeps the sensitive paths it was requested with. Unresolved review comments that the forge returns to an `input: feedback` run are always untrusted: anyone who can comment on the PR writes them, and nothing authenticates them as coming from the team (ORC-160). Feedback recorded before this rule, without a label, counts as trusted, like an event from the first version of the journal: no source marked any event `untrusted` back then. **What a run reads beyond its input takes the label of who wrote it, not of who started the run** (ORC-349): a run that resumes the ticket's Claude session (a `verify` relaunch, a reply) carries the sensitive paths when the ticket's branch carries the mark of an untrusted run (`untrustedSince`, ORC-338), since that session read what that run read. The mark is read at the launch, outside any decision: a recorded journal replays as it was decided. The other runs only take the label of their event.
+
+**Authorizations.** Before the rules, `decide` checks the [authorization matrix](linear.md#authorizations-who-can-do-what) against the event's signed actor and the roles journaled with it (ORC-186): a delegation, a mention or a command requires the right to trigger; a reply in the session, the right to reply (or to relaunch, if the ticket is blocked); a label or a status change, only when the rule that takes it launches a run (`run:`), the right to trigger or, for a blocked ticket, to relaunch. A refusal applies no rule and replies in the ticket. The `on` rules do not change the matrix; the `factory/default` preset will declare it (ORC-187).
+
+#### Rule fields
+
+**Conditions** (all must be true):
+
+| Field | Effect |
+|---|---|
+| `when` | Condition on the ticket's state ([`when` grammar](#when-grammar)), kept as written in `whenSrc`. |
+| `from`, `to` | Logical state of origin / destination. Only filter `status.changed` (ignored on other events). |
+| `label` | Exact label name. The rule matches **only** the addition of this label (`label.changed`). |
+| `say` | Command word, **in lowercase** (Relais lowercases the typed word). The rule only matches `command`. Each `say` declared under `command` becomes a recognized command word. |
+
+A rule with no condition always matches.
+
+**Actions** (applied in this order):
+
+| Field | Effect |
+|---|---|
+| `move` | Moves the ticket to this logical state. |
+| `labels` | `{ add: [...], remove: [...] }`: adds / removes Linear labels. |
+| `comment` | Posts this text as a comment on the ticket. |
+| `do` | `stop`: stops the running run, empties waiting runs and blocks the ticket (« Stopped. Reply on this ticket to relaunch. »). `cleanup`: deletes the ticket's worktree. (`propose_delegate`, the answer to `fais-le`, is refused since ORC-193.) `after_merge` (ORC-197, on `pr.merged` only, on no other event): the step of a merged PR, see [After the merge](#after-the-merge-orc-197), then `cleanup`. |
+| `run` | Launches the job with this name (a job of the workflow). If the ticket was blocked, it is unblocked first. |
+| `debounceMs` | With `run`: instead of launching right away, schedules the job after this delay. A new matching event before expiry pushes the delay back: messages close together produce a single run. `0` = immediate. The delay is a timer in the database, written with the decision, specific to each project: a Relais restart does not lose it. |
+
+A rule with no action is valid: it "consumes" the event without doing anything (and prevents the following rules from applying).
+
+There is no `post` field in a rule: publishing the result is a job's `onSuccess`.
+
+**Non-delegated ticket.** If the ticket is not delegated to Relais, a rule whose `run` targets a job from the `dev` queue is skipped (except on `ticket.delegated`) and Relais moves on to the next rule. Only jobs from the `questions` queue run on a non-delegated ticket.
+
+#### Rules of `factory/default`
+
+| Event | Rules (in order) |
+|---|---|
+| `ticket.delegated` | if `state in [todo, dev] && !blocked` → `dev` |
+| `status.changed` | to `ai_review` → `review` (the published commit reviewed again: on a human's move, and the job a merge refused for a push since the review starts, ORC-148; every fix starts its own review since ORC-170). A move from Human Review back to In Progress starts nothing since ORC-190: the feedback itself does. |
+| `session.prompted` | if `blocked` → `dev-feedback` immediately; if `state in [human_review]` → 3-minute grouping with no new message, then `fix-human`, a round of human feedback (ORC-190); if `state in [dev]` → the same grouping, then `dev-feedback`. A run in progress is not interrupted: its end hands the messages over. Otherwise, the message stays in `humanInbox` |
+| `pr.reviewed` | no rule of its own: a review written on the open PR, with words and not an approval, by a writer of the repository (`review_feedback`), is kept in `humanInbox` and goes through the `session.prompted` rules, the blocked one aside (ORC-190) |
+| `session.mentioned` | → `ask` |
+| `ticket.commented` | if `blocked` → the blocked step, or `dev-feedback` if the block has none (ORC-196, [preset](#resuming-the-blocked-step-orc-196)) |
+| `label.changed` | `agent:stop` → `stop` |
+| `session.stopped` | → `stop` |
+| `pr.checks_failed` | if `state in [human_review, ai_review] && !blocked` → `fix-ci`, a round of the review and CI loop (`limits.ciFixAttempts`, shared with `rebase` and `fix-review`), then block |
+| `pr.conflicted` | if `state in [dev, human_review, ai_review] && !blocked` → `rebase` ([preset](#rebase-step-orc-146)), on the same count as `fix-ci`, then block |
+| `pr.merged` | → moves to `done`, the `after_merge` step (the requester told, the changelog entry), deletes the worktree; no run (ORC-193) |
+
+### `when` grammar
+
+A condition is a sequence of **atoms** joined by `&&` (all must be true).
+
+| Atom | True when |
+|---|---|
+| `state == <state>` | The ticket's logical state is `<state>`. |
+| `state != <state>` | It is not. |
+| `state in [<state>, <state>, …]` | It is one of those. |
+| `blocked` | The ticket is blocked (failure, limit, stop, pickup check…). |
+| `!blocked` | It is not. |
+| `job == <name>` | The job of the `dev` run in progress on the ticket is `<name>`. |
+
+`<state>` is one of the logical states (`todo`, `dev`, `human_review`, `ai_review`, `done`, `cancelled` for a ticket a human cancelled, and `ready` for a workflow that still declares it), never a Linear column name. For an event without a known ticket, the state is `todo` and `blocked` is false.
+
+Valid:
+
+```text
+state == dev
+state != done && !blocked
+state in [human_review, ai_review] && !blocked
+blocked
+job == review
+```
+
+Rejected (`invalid condition: …`):
+
+```text
+state == todo || blocked        # || forbidden: write two rules
+!(state == done)                # no parentheses, and no ! before an atom other than blocked
+!state in [todo]                # no negation of "in": list the other states
+state == "In Progress"          # a logical state, not a column name
+state == backlog                # unknown logical state
+```
+
+To express an "or", write several rules in a row: the first one that matches wins.
+
+### From an event to a run
+
+1. Linear or GitHub sends an event (webhook, or periodic PR polling).
+2. If it is a lifecycle event, Relais applies its fixed behavior. Otherwise, it takes the first rule of the event that matches.
+3. The rule produces commands. For `run: <job>`, it is a "launch a run" command that carries the job's name (or a delay, with `debounce`).
+4. The orchestrator then reads the job:
+   - `dev` queue on a non-delegated ticket: refused;
+   - `knowledge` job (`learn`, `remember` of a version frozen before ORC-193): refused, only logged;
+   - `dev` queue while a run or checks are in progress on this ticket: the job is put **on hold on the ticket** and launched as soon as the current run is finished. There is only one waiting slot per ticket: a new request replaces the previous one;
+   - queue paused or the Claude account's usage limit reached: queued;
+   - no free slot in the queue (`concurrency` of `factory.yml` / 2 for questions): queued;
+   - otherwise: launch.
+5. Launch: `pickup` checks if needed, preparation of the workspace (`workspace`), `onStart.move`, choice of session (`session`), prompt construction (`/<skill>`, ticket, `input`), then Claude Code with the job's `model` and `limits`.
+6. End of the run: fixed behavior of `run.finished` (checks, `onSuccess`, or block).
+
+The two queues:
+- `dev`: work on the code of a delegated ticket (dev, feedback, CI, review). **Only one `dev` run at a time per ticket.**
+- `questions`: answers (`ask`). They do not block the ticket's development; only one at a time per ticket, the others wait their turn.
+
+### After the merge (ORC-197)
+
+`do: after_merge`, the rule of `pr.merged`, is the `after_merge` step of the preset, carried out by the factory itself, without an agent. Its effect (`after_merge`, one outbox row):
+
+1. appends an entry to the **changelog**, once by its merge, named as the inbox names the `pr.merged` event (`pr:<ticket>:<number>:merged`): a replay, or the event decided again, writes nothing, and an entry is never changed: the ticket and its title, what changed (the `summary` of the work the factory published last, the ticket's title when none was), where (the page the visual proof shot, and the paths of the diff in `visual_paths` that asked for it), the captures before and after `verify` took (ORC-176), each by the id of the artifact kept of it, or « no visual proof applicable » (`not_applicable`), or why the factory could not take it (`unavailable`), the PR's link and merge commit, and when GitHub merged it. The changelog needs nothing of Linear: it is written first.
+2. mentions the requester, the issue's creator in Linear, in the ticket's session with the merged PR's link, best effort as an ack (a refusal or an issue gone is logged, and does not hold back the cleanup): « Delivered, <their profile>: [PR #n](url) is merged. » (Linear turns a profile's link into a mention). An issue with no creator (made by an integration) gets the same text without the mention.
+
+Then the worktree is deleted (`cleanup`). The changelog is read through `GET /api/changelog` ([interface-and-security.md](interface-and-security.md#what-the-server-exposes)). A version frozen before ORC-197 keeps its `do: cleanup`: no entry nor mention for its tickets.
+
 
 ## Compilation and version
 

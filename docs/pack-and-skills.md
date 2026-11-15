@@ -5,7 +5,6 @@ Relais's core contains no business instructions: it orchestrates. What the agent
 ```text
 packs/standard/
 ├── .claude-plugin/plugin.json   # "relais" plugin → skills relais:<name>
-├── workflow.yml                 # default behavior (events, jobs, limits)
 ├── settings.json                # run permissions
 ├── hooks/hooks.json             # SessionStart and PreToolUse hooks
 ├── hooks/session-start.mjs      # always-on rules, method
@@ -16,7 +15,7 @@ packs/standard/
 
 Each run starts Claude Code with `--plugin-dir packs/standard` (skills become `/relais:<name>`), `--settings <RELAIS_HOME>/run-settings.json` `--setting-sources ""` and `--strict-mcp-config` (ORC-284, options measured by ORC-128). No Claude Code setting comes from anywhere but the factory: neither the user's (`~/.claude/settings.json`), nor the repository's (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, skills, agents and commands in `.claude/`). The worktree's `.claude/` is removed before each session ([`interface-and-security.md`](interface-and-security.md)).
 
-Behavior (which skill, when, with which model) is configured in `.relais/workflow.yml`: see [`workflow.md`](workflow.md).
+Behavior (which skill, when, with which model) is configured in `.relais/workflow.yml`: see [`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389).
 
 ## The pack's skills
 
@@ -115,9 +114,9 @@ Why `git rebase` and `git merge` are allowed: since ORC-146 only the `rebase` st
 
 From the simplest to the deepest:
 
-1. **Tune the behavior** without touching the pack: the repository's `.relais/workflow.yml` (models, limits, verifications, rules, jobs). See [`workflow.md`](workflow.md#6-recipes).
+1. **Tune the behavior** without touching the pack: the repository's `.relais/workflow.yml` (models, limits, verifications, rules, jobs). See [`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389).
 2. **Give the repository context**: the factory reads `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` and puts them in each run's prompt as data (8,000 bytes at most, `@path` imports not followed, ORC-284); `docs/agent/*.md` is read by the `dev`, `review` and `ask` skills. That is the place for your commit, test and naming conventions: they take precedence over the skills' style, never over the factory's rules. The repository's Claude Code settings (`.claude/settings.json`) do not apply to runs.
-3. **Add a skill** for a new job: since ORC-284, a project skill (`.claude/skills/<name>/SKILL.md` in the repository) **is no longer loaded** by runs; add the skill to the pack (point 4). The old way, a project skill referenced by `skill: "<name>"` in a job of `.relais/workflow.yml`, no longer works. Full example: [`workflow.md`](workflow.md#adding-a-custom-job-with-its-own-skill).
+3. **Add a skill** for a new job: since ORC-284, a project skill (`.claude/skills/<name>/SKILL.md` in the repository) **is no longer loaded** by runs; add the skill to the pack (point 4). The old way, a project skill referenced by `skill: "<name>"` in a job of `.relais/workflow.yml`, no longer works. Full example: [`preset.md`](preset.md#the-workflow-the-engine-runs-orc-389).
 4. **Modify the pack** itself: edit `packs/standard/` (skills, hook, permissions) in your copy of Relais. This applies to all projects of the instance; restart `relais up` to regenerate `run-settings.json`. To change the method for the whole team (review level thresholds, verification commands, TDD rules), edit the relevant method skill: every job skill that loads it follows. To add a method skill: a `skills/<name>/SKILL.md` folder, cited as `relais:<name>` from a job skill or the hook.
 
 Relais always loads `packs/standard`: `extends` in `workflow.yml` has no effect and there is not yet a mechanism to choose another pack. For a team "pack", maintain a copy of Relais with your own `packs/standard/`.

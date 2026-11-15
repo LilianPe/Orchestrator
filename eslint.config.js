@@ -6,6 +6,9 @@ import tseslint from 'typescript-eslint';
 const movedOutOfCore = (prefixes) => [
   { group: prefixes.flatMap((p) => [`${p}bus`, `${p}bus.js`]), message: 'core/bus is now src/server/live-feed.ts (ORC-390).' },
   { group: prefixes.flatMap((p) => [`${p}scheduler`, `${p}scheduler.js`]), message: 'core/scheduler is now src/runtime/capacity.ts (ORC-390).' },
+  // The YAML workflow is gone (ORC-389): the workflow is built by defaultWorkflow, its types are core/workflow's.
+  { group: ['**/config/load-workflow', '**/config/load-workflow.js'], message: 'The YAML loader is gone: defaultWorkflow() in src/presets/workflow.ts (ORC-389).' },
+  { group: ['**/config/workflow-schema', '**/config/workflow-schema.js'], message: 'The workflow types are in src/core/workflow.ts (ORC-389).' },
 ];
 
 export default tseslint.config(

@@ -114,7 +114,7 @@ describe('attempt labels', () => {
   it('gives two workflow versions two fingerprints', () => {
     const v1 = defaultWorkflow();
     const v2 = defaultWorkflow();
-    v2.limits.parallelSessions += 1;
+    v2.limits.verifyAttempts += 1;
     expect(workflowFingerprint(v2)).not.toBe(workflowFingerprint(v1));
     expect(workflowFingerprint(defaultWorkflow())).toBe(workflowFingerprint(v1));
     const a = attemptLabels({ job, ...prompted(P), workflow: v1, pack, factoryCommit: null });
