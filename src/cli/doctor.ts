@@ -10,7 +10,7 @@ import { resolveGithubApp } from '../config/github-app.js';
 import { loadFactoryYml } from '../config/factory-yml.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage } from '../app/sandbox-wiring.js';
+import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -558,7 +558,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   const out = options.out ?? ((line) => console.log(line));
   // Of the instance, not of the repository: said first, whatever stops the check after.
   const visualProof = await browserImage(options.env ?? process.env, options.exec);
-  if (!options.json) out(`Visual proof on this instance: ${visualProof.image ? 'available' : 'unavailable'} — ${visualProof.detail}`);
+  if (!options.json) out(visualProofLine(visualProof));
   let githubApp;
   try {
     githubApp = resolveGithubApp(effectiveInstance(options.home, loadFactoryYml(options.home, options.env)), options.env);

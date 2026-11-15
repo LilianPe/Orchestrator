@@ -88,11 +88,11 @@ describe('browserImage (ORC-404)', () => {
 
   it('is none, and never rejects, when the engine lacks the image, fails, or cannot be run', async () => {
     const missing = engine(() => ({ stdout: '', stderr: 'Error: localhost/factory-browser:1: image not known', code: 125 }));
-    expect(await browserImage(ENV, missing.exec)).toEqual({ detail: expect.stringMatching(/inspect localhost\/factory-browser:1 failed \(code 125\).*image not known/) });
+    expect(await browserImage(ENV, missing.exec)).toEqual({ detail: expect.stringMatching(/podman image inspect .* localhost\/factory-browser:1: Error: .*image not known/) });
     const hung = engine(() => ({ stdout: '', stderr: '', code: 124 }));
-    expect((await browserImage(ENV, hung.exec)).detail).toMatch(/failed \(code 124\)/);
+    expect((await browserImage(ENV, hung.exec)).detail).toMatch(/localhost\/factory-browser:1: exit 124$/);
     const absent: Exec = () => Promise.reject(new Error('spawn podman ENOENT'));
-    expect(await browserImage(ENV, absent)).toEqual({ detail: 'podman could not run: spawn podman ENOENT' });
+    expect(await browserImage(ENV, absent)).toEqual({ detail: 'spawn podman ENOENT' });
   });
 });
 

@@ -73,7 +73,7 @@ describe.skipIf(!enabled || !capture)(`the visual proof in verify, on the captur
     base = mkdtempSync(join(tmpdir(), 'factory-visual-'));
   });
   const BRANCH = 'feat/iso-404';
-  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' }).trim();
   const commit = (cwd: string, files: Record<string, string>, message: string) => {
     for (const [path, content] of Object.entries(files)) {
       mkdirSync(dirname(join(cwd, path)), { recursive: true });
@@ -87,11 +87,9 @@ describe.skipIf(!enabled || !capture)(`the visual proof in verify, on the captur
   it('shoots the page before and after at three widths, with the start the base declares', async () => {
     const origin = join(base, 'origin');
     git(base, 'init', '-q', '-b', 'main', origin);
-    for (const c of [['user.email', 't@t'], ['user.name', 't']] as const) git(origin, 'config', ...c);
     commit(origin, { '.factory/config.yml': 'visual_paths: ["server.js"]\npreview: node server.js\n', 'server.js': server('Old settings') }, 'base');
     const repo = join(base, 'repo');
     git(base, 'clone', '-q', origin, repo);
-    for (const c of [['user.email', 't@t'], ['user.name', 't']] as const) git(repo, 'config', ...c);
     git(repo, 'checkout', '-q', '-b', BRANCH);
     commit(repo, { 'server.js': server('New settings, with a much longer title') }, 'the page');
     const workDir = join(base, 'work');

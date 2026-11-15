@@ -18,7 +18,7 @@ import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { GitPublisher } from '../publish/publish.js';
 import { hostSecretScan, OutputPolicy, sandboxSecretScan } from '../publish/output-policy.js';
-import { browserImage, checkHostRuns, instanceId, makeSandboxes } from './sandbox-wiring.js';
+import { browserImage, checkHostRuns, instanceId, makeSandboxes, visualProofLine } from './sandbox-wiring.js';
 import { PlaywrightShooter } from '../adapters/browser/playwright.js';
 import { configProblems } from './config-check.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
@@ -188,8 +188,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
     // The visual proof's browser (ORC-404): the capture image, when this engine has it; without, a required proof is unavailable.
     const browser = o.fakeRunner ? undefined : await browserImage(env);
-    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress, browser?.image ? { browserImage: browser.image } : {});
-    if (browser && sandboxes) log(`Visual proof: ${browser.image ? 'available' : 'unavailable'}, ${browser.detail}.`);
+    const capture = browser?.image;
+    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress, capture ? { browserImage: capture } : {});
+    if (browser && sandboxes) log(visualProofLine(browser));
     if (!o.fakeRunner && !sandboxes) {
       log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
       // Without it, verify refuses to run: one of the `configProblems` below.
@@ -305,7 +306,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       repoConfig: makeRepoConfig({ log }),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
-      ...(sandboxes && browser?.image ? { visualProof: { shooter: new PlaywrightShooter(), artifactsDir: paths.artifacts } } : {}),
+      ...(sandboxes && capture ? { visualProof: { shooter: new PlaywrightShooter(), artifactsDir: paths.artifacts } } : {}),
       ...(sandboxes
         ? {
             sandboxes,

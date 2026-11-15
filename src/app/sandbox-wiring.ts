@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import { execCmd, type Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import { CONTAINER_SERVICES, ContainerSandboxProvider, defaultLimits, type SandboxLimits } from '../adapters/sandbox/docker-rootless.js';
 import { SandboxRouter } from '../adapters/sandbox/router.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
@@ -28,9 +28,9 @@ export function checkHostRuns(env: NodeJS.ProcessEnv): void {
  * otherwise. Each reaches out only through `egress`, the factory's proxy (ORC-213).
  */
 export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress, o: { browserImage?: string; exec?: Exec } = {}): SandboxProvider | undefined {
-  const cli = env['FACTORY_CONTAINER_CLI'];
+  const cli = containerCli(env);
   if (!cli) return undefined;
-  if (cli !== 'docker' && cli !== 'podman') throw new Error(`FACTORY_CONTAINER_CLI=${cli}: docker or podman expected.`);
+  if (typeof cli !== 'string') throw new Error(`${cli.refused}.`);
   const image = env['FACTORY_RUNNER_IMAGE'];
   if (!image) throw new Error('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   const uid = process.getuid?.();
@@ -50,6 +50,13 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
   ]);
 }
 
+/** `FACTORY_CONTAINER_CLI`: none without sandboxes, or the reason another CLI is refused. */
+function containerCli(env: NodeJS.ProcessEnv): 'docker' | 'podman' | { refused: string } | undefined {
+  const cli = env['FACTORY_CONTAINER_CLI'];
+  if (!cli) return undefined;
+  return cli === 'docker' || cli === 'podman' ? cli : { refused: `FACTORY_CONTAINER_CLI=${cli}: docker or podman expected` };
+}
+
 /** The label docker/browser.Dockerfile puts on the capture image, Playwright's version as its value. */
 export const BROWSER_LABEL = 'factory.browser';
 
@@ -60,16 +67,17 @@ export const BROWSER_LABEL = 'factory.browser';
  * says why for the start's log and `factory doctor`; it never rejects. Without it, a required proof stays unavailable, indicative.
  */
 export async function browserImage(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<{ image?: string; detail: string }> {
-  const cli = env['FACTORY_CONTAINER_CLI'];
-  if (cli !== 'docker' && cli !== 'podman') return { detail: cli ? `FACTORY_CONTAINER_CLI=${cli}: docker or podman expected` : 'no sandboxes (FACTORY_CONTAINER_CLI is not set)' };
+  const cli = containerCli(env);
+  if (!cli) return { detail: 'no sandboxes (FACTORY_CONTAINER_CLI is not set)' };
+  if (typeof cli !== 'string') return { detail: cli.refused };
   const image = env['FACTORY_BROWSER_IMAGE'];
   if (!image) return { detail: 'FACTORY_BROWSER_IMAGE is not set (see docker/browser.Dockerfile)' };
   const inspect = async (img: string, format: string): Promise<{ out: string } | { error: string }> => {
     try {
-      const r = await run(cli, ['image', 'inspect', '--format', format, img], { timeoutMs: 60_000 });
-      return r.code === 0 ? { out: r.stdout.trimEnd() } : { error: `${cli} image inspect ${img} failed (code ${r.code}): ${r.stderr.trim().slice(-500)}` };
+      return { out: (await mustExec(run, cli, ['image', 'inspect', '--format', format, img], { timeoutMs: 60_000 })).trimEnd() };
     } catch (err) {
-      return { error: `${cli} could not run: ${(err as Error).message}` };
+      // An engine that fails as one that cannot be run: said, never thrown.
+      return { error: (err as Error).message.slice(0, 600) };
     }
   };
   const own = await inspect(image, `{{index .Config.Labels "${BROWSER_LABEL}"}}\t{{json .RootFS.Layers}}`);
@@ -86,6 +94,11 @@ export async function browserImage(env: NodeJS.ProcessEnv, run: Exec = execCmd):
     if (!theirs.every((l, i) => ours[i] === l)) return { detail: `${image} was not built on ${runner}: build it again on it (see docker/browser.Dockerfile)` };
   }
   return { image, detail: `the captures run in ${image} (${label})` };
+}
+
+/** What the start's log and `factory doctor` say of it. */
+export function visualProofLine(v: { image?: string; detail: string }): string {
+  return `Visual proof on this instance: ${v.image ? 'available' : 'unavailable'} — ${v.detail}`;
 }
 
 /** Each limit of the attempt containers: unset, the default; `0` or `none`, left out (a host whose cgroups lack the controller). */
