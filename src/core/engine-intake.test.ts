@@ -3,6 +3,7 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import type { Workflow } from './workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { causeOf } from './block-cause.js';
+import { nextOf, startMove } from './chain.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type FactoryEvent, type TicketState } from './types.js';
@@ -25,8 +26,10 @@ const after = (t: TicketState | undefined, e: FactoryEvent, wf = workflow) => de
 describe('intake (ORC-206)', () => {
   it('is an agent step of factory/default at effort low, that writes nothing and does not move the ticket', () => {
     const job = workflow.jobs['intake']!;
-    expect(job).toMatchObject({ step: 'intake', queue: 'dev', effort: 'low', structuredOutput: true, pickup: false, onStart: {} });
-    expect(job.onSuccess).toEqual({ run: 'dev' });
+    expect(job).toMatchObject({ step: 'intake', queue: 'dev', effort: 'low', structuredOutput: true, pickup: false });
+    expect(startMove(workflow, job)).toBeUndefined();
+    // The guard before `build`, the chain's entry until ORC-395: it hands over to `dev`, which moves the ticket at its launch.
+    expect(nextOf(workflow, job)).toEqual({ run: workflow.jobs['dev'], step: expect.objectContaining({ id: 'build' }) });
   });
 
   it('records the size and the risk it estimated, then the guard lets a complete ticket start dev', () => {

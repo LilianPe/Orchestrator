@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { causeOf } from './block-cause.js';
+import { nextOf, startMove } from './chain.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import type { Spec } from './spec.js';
@@ -44,7 +45,13 @@ const approved = () => after(reviewing(), command('/approve'));
 
 describe('spec_draft, spec_check and the spec_review gate (ORC-212)', () => {
   it('spec_draft is an agent step at effort high that writes nothing, moves nothing, and leads to tests once approved', () => {
-    expect(workflow.jobs['spec']).toMatchObject({ step: 'spec_draft', queue: 'dev', effort: 'high', structuredOutput: true, pickup: false, onStart: {}, onSuccess: { run: 'tests' } });
+    const spec = workflow.jobs['spec']!;
+    expect(spec).toMatchObject({ step: 'spec_draft', queue: 'dev', effort: 'high', structuredOutput: true, pickup: false });
+    expect(startMove(workflow, spec)).toBeUndefined();
+    // Its end waits at the gate; the approval passes it, and the tests start.
+    expect(nextOf(workflow, spec)).toMatchObject({ step: { id: 'spec_review' } });
+    expect(nextOf(workflow, spec).run).toBeUndefined();
+    expect(nextOf(workflow, spec, true).run?.name).toBe('tests');
     expect(workflow.limits).toMatchObject({ specCheckReturns: 1, specChanges: 3 });
   });
 

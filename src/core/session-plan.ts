@@ -1,4 +1,5 @@
-import type { JobSpec } from './workflow.js';
+import { nextOf } from './chain.js';
+import type { JobSpec, Workflow } from './workflow.js';
 
 /** The steps the MVP doc shows in the session; `Questions` shows nothing of `clarify` yet (ORC-210 asks without a run). */
 const STEPS = ['Understand', 'Questions', 'Spec', 'Tests', 'Build', 'Verify', 'PR'] as const;
@@ -38,9 +39,9 @@ export function closePlan(plan: readonly PlanStep[], hasPr: boolean): PlanStep[]
  * The step of the plan a job works on, read from its shape. None for a review or a question, nor for a run that ends
  * without handing the ticket over (a reply, a CI fix): nothing would close the step it reopened.
  */
-export function planStepOfJob(job: Pick<JobSpec, 'queue' | 'skill' | 'red' | 'onSuccess' | 'step'>): PlanStepName | undefined {
+export function planStepOfJob(job: JobSpec, workflow: Workflow): PlanStepName | undefined {
   if (job.queue !== 'dev' || job.skill?.endsWith(':review')) return undefined;
   if (job.step === 'spec_draft') return 'Spec';
   if (job.red) return 'Tests';
-  return job.onSuccess.move ? 'Build' : undefined;
+  return nextOf(workflow, job).move ? 'Build' : undefined;
 }

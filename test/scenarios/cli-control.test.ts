@@ -1,32 +1,41 @@
-import { mkdtempSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import { EventBus } from '../../src/server/live-feed.js';
-import { newTicketState } from '../../src/core/types.js';
-import { createApp } from '../../src/server/app.js';
+import { newTicketState, type FactoryEvent } from '../../src/core/types.js';
+import { createApp, type ServerDeps } from '../../src/server/app.js';
+import { listenCliSocket } from '../../src/server/cli-socket.js';
 import { RUN_LEASE_MS } from '../../src/store/types.js';
 import { createHarness, heldRun } from '../helpers/harness.js';
 
 type H = ReturnType<typeof createHarness>;
 
-/** The two commands against the daemon's own API, in this process, as ORC-220's criterion 4 asks. */
-function control(h: H): ControlDeps & { lines: string[] } {
+/** The two commands against the daemon's own API, in this process, as ORC-220's criterion 4 asks; what they submit, kept. */
+function control(h: H, extra: Partial<ServerDeps> = {}) {
+  const submitted: FactoryEvent[] = [];
   const app = createApp({
     store: h.store,
     bus: new EventBus(),
     clock: h.clock,
-    submit: (e) => h.orch.accept(e),
+    submit: (e) => {
+      submitted.push(e);
+      return h.orch.accept(e);
+    },
     isPaused: () => h.orch.isPaused(),
     linearWebhook: () => ({ status: 200 }),
     githubWebhook: async () => ({ status: 200 }),
     linearConnected: () => true,
     capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-cli-')),
+    ...extra,
   });
   const lines: string[] = [];
-  return { api: 'http://127.0.0.1:4100', out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init), lines };
+  const deps: ControlDeps = { api: 'http://127.0.0.1:4100', out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init) };
+  return { ...deps, lines, app, submitted };
 }
 
 describe('factory status and factory stop (ORC-220)', () => {
@@ -113,5 +122,98 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(await runQueueCommand({ ...deps, fetch: down }, 'resume')).toBe(1);
     expect(lines.at(-1)).toContain('factory up');
     expect(lines.join('\n')).not.toMatch(/Queue (paused|resumed)\./);
+  });
+});
+
+// ORC-405: an exposed daemon asks every HTTP request for a GitHub sign-in (ORC-399); on its server, the CLI goes through the
+// Unix socket in FACTORY_HOME instead, which the file's mode guards.
+describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix socket (ORC-405)", () => {
+  /** An exposed daemon's app, with its socket in a fresh FACTORY_HOME; every HTTP request refused as the sign-in refuses it. */
+  async function exposed() {
+    const h = createHarness();
+    const { app, submitted, lines, ...http } = control(h, { githubLogin: { authorizeUrl: () => 'https://github.test/authorize', signIn: async (login) => ({ login, allowed: false }) } });
+    const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'cli', 'factory.sock');
+    const server = await listenCliSocket(app, socket, { host: 'srv-1', log: () => {} });
+    return { h, app, server: server!, socket, submitted, lines, deps: { ...http, socket } };
+  }
+  const close = (s: Server) => new Promise((r) => s.close(r));
+
+  // Criterion 1: status, stop and pause work on the server of an exposed daemon, without a GitHub sign-in.
+  it('runs status, pause, resume and stop on an exposed daemon, without a GitHub sign-in, as cli:<host>', async () => {
+    const { h, server, submitted, lines, deps } = await exposed();
+    try {
+      await heldRun(h);
+      expect(await runStatusCommand(deps, h.clock.now())).toBe(0);
+      expect(lines).toContain('  REL-1  dev  Export CSV');
+      expect(await runQueueCommand(deps, 'pause')).toBe(0);
+      expect(await runQueueCommand(deps, 'resume')).toBe(0);
+      expect(await runStopCommand(deps, 'REL-1')).toBe(0);
+      expect(lines.slice(-3)).toEqual(['Queue paused.', 'Queue resumed.', 'Stop requested for REL-1.']);
+      await h.orch.drained();
+      // Checked on the matrix as an operator (ORC-186), and decided: the ticket is stopped.
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
+        ['control.pause', 'cli:srv-1', ['operator']],
+        ['control.resume', 'cli:srv-1', ['operator']],
+        ['control.stop', 'cli:srv-1', ['operator']],
+      ]);
+      expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Stopped on request' });
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("is the factory user's alone: mode 0600 in a folder 0700, and gone once the daemon closes it", async () => {
+    const { server, socket } = await exposed();
+    const st = statSync(socket);
+    expect(st.isSocket()).toBe(true);
+    expect(st.mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(socket)).mode & 0o777).toBe(0o700);
+    expect(st.uid).toBe(process.getuid!());
+    await close(server);
+    expect(() => statSync(socket)).toThrow(/ENOENT/);
+  });
+
+  it("leaves another daemon's socket, never a file that is not a socket, and binds anew over what a daemon killed left", async () => {
+    const first = await exposed();
+    const logs: string[] = [];
+    const log = (l: string) => void logs.push(l);
+    // A second daemon on the same FACTORY_HOME: the first keeps its socket, and the CLI still reaches it.
+    expect(await listenCliSocket(first.app, first.socket, { host: 'srv-2', log })).toBeUndefined();
+    expect(await runQueueCommand(first.deps, 'pause')).toBe(0);
+    expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-1']);
+    const notASocket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
+    writeFileSync(notASocket, 'kept');
+    expect(await listenCliSocket(first.app, notASocket, { host: 'srv-1', log })).toBeUndefined();
+    expect(logs).toEqual([
+      `CLI socket: ${first.socket} is held by another daemon: the CLI goes through HTTP on the loopback`,
+      `CLI socket: ${notASocket} is not a socket, left as it is: the CLI goes through HTTP on the loopback`,
+    ]);
+    // What a kill -9 leaves: the socket file, nothing listening on it (a child killed with its server open).
+    const stale = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'factory.sock');
+    spawnSync(process.execPath, ['-e', `require('node:net').createServer().listen(${JSON.stringify(stale)}, () => process.kill(process.pid, 'SIGKILL'))`], { stdio: 'ignore' });
+    expect(statSync(stale).isSocket()).toBe(true);
+    const again = await listenCliSocket(first.app, stale, { host: 'srv-3', log });
+    expect(again).toBeDefined();
+    expect(await runQueueCommand({ ...first.deps, socket: stale }, 'resume')).toBe(0);
+    expect(first.submitted.map((e) => e.actor)).toEqual(['cli:srv-1', 'cli:srv-3']);
+    await close(again!);
+    await close(first.server);
+  });
+
+  // Without the socket (a client machine, a daemon not started), today's HTTP on the loopback.
+  it('falls back to HTTP on the loopback when there is no socket, or nothing listens on it', async () => {
+    const { server, socket, lines, deps } = await exposed();
+    await close(server);
+    const asked: string[] = [];
+    const http = async (url: string) => {
+      asked.push(url);
+      return new Response('{"error":"sign in with GitHub first"}', { status: 401 });
+    };
+    expect(await runStatusCommand({ ...deps, fetch: http })).toBe(1);
+    expect(asked).toEqual(['http://127.0.0.1:4100/api/state']);
+    expect(lines.at(-1)).toBe(`Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives. On the server, the CLI goes through ${socket}: run it there as the factory's user (over SSH from elsewhere).`);
+    writeFileSync(socket, '');
+    expect(await runStatusCommand({ ...deps, fetch: http })).toBe(1);
+    expect(asked).toHaveLength(2);
   });
 });

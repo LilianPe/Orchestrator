@@ -9,9 +9,9 @@ import { stepTools } from '../presets/tools.js';
 import { runValidateCommand } from './validate.js';
 
 const AGENTS = factoryDefault.steps.filter(isAgentStep).map((s) => s.id);
-/** factory.yml's budgets whose worst case on factory/default is its ticket cap exactly: 41 attempts of 1,000 tokens. */
-const budgeted = (perTicketTokens = 41_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
-const WITHIN = 'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, within budgets.per_ticket_tokens 41000.';
+/** factory.yml's budgets whose worst case on factory/default is its ticket cap exactly: 40 attempts of 1,000 tokens. */
+const budgeted = (perTicketTokens = 40_000): FactoryYml => ({ budgets: { perStepTokens: Object.fromEntries(AGENTS.map((s) => [s, 1_000])), perTicketTokens } });
+const WITHIN = 'Worst case of factory/default: 40000 tokens and 3450 turns per ticket, within budgets.per_ticket_tokens 40000.';
 /** What it shows of the default tools of each agent step (ORC-383). */
 const TOOLS = ['Tools of each agent step of factory/default:', ...factoryDefault.steps.filter(isAgentStep).map((s) => `- ${s.id}: ${stepTools(s)!.join(', ')}`)];
 
@@ -143,9 +143,9 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
   });
 
   it('refuses a preset whose worst case exceeds the ticket cap', () => {
-    expect(run(repo(), budgeted(40_999))).toEqual({
+    expect(run(repo(), budgeted(39_999))).toEqual({
       code: 1,
-      out: ['no .factory/config.yml: the factory/default baseline applies as is.', ...TOOLS, 'Budgets of factory/default refused:', "- worst case 41000 tokens per ticket exceeds budgets.per_ticket_tokens 40999: lower a step's per_step_tokens or a counter of factory/default"],
+      out: ['no .factory/config.yml: the factory/default baseline applies as is.', ...TOOLS, 'Budgets of factory/default refused:', "- worst case 40000 tokens per ticket exceeds budgets.per_ticket_tokens 39999: lower a step's per_step_tokens or a counter of factory/default"],
     });
   });
 
@@ -185,7 +185,7 @@ describe('factory validate: the worst case of the preset (ORC-216)', () => {
           'no .factory/config.yml: the factory/default baseline applies as is.',
           'Disabled in factory.yml: budgets.per_ticket_tokens.',
           ...TOOLS,
-          'Worst case of factory/default: 41000 tokens and 3600 turns per ticket, under no ticket cap.',
+          'Worst case of factory/default: 40000 tokens and 3450 turns per ticket, under no ticket cap.',
         ],
       });
       const lowered = run(repo('budgets: { per_ticket_tokens: 20000 }\n'), { budgets: { perStepTokens: steps, perTicketTokens: 'off' } });

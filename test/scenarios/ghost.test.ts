@@ -12,7 +12,7 @@ import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { Spec } from '../../src/core/spec.js';
 import { NO_CHANGE } from '../../src/core/review.js';
 import { KEPT_PR } from '../../src/store/types.js';
-import { createHarness } from '../helpers/harness.js';
+import { createHarness, withTestCommand } from '../helpers/harness.js';
 
 /**
  * ORC-231: a project without effects (the replay of closed tickets, a prompt tried out) runs its ticket as any other, and nothing of it
@@ -108,7 +108,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
 
   function replayed(over: Parameters<typeof createHarness>[0] = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'factory-ghost-'));
-    const h = createHarness({ fantome: true, sandboxed: true, replays: { dir, startTime: START }, ...over });
+    const h = createHarness({ fantome: true, sandboxed: true, replays: { dir, startTime: START }, repoConfig: withTestCommand(), ...over });
     const CLONE = join(dir, 'pilot', 'REL-1', 'repo');
     // REL-1 is Done on Linear, its PR merged: what came after its start is there too, and must not reach the run.
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from the audit list.', stateName: 'Done', stateType: 'completed', createdAt: START - 86_400_000 });

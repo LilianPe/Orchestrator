@@ -19,7 +19,8 @@ import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { GitPublisher } from '../publish/publish.js';
 import { hostSecretScan, OutputPolicy, sandboxSecretScan } from '../publish/output-policy.js';
-import { checkHostRuns, instanceId, makeSandboxes } from './sandbox-wiring.js';
+import { browserImage, checkHostRuns, instanceId, makeSandboxes, visualProofLine } from './sandbox-wiring.js';
+import { PlaywrightShooter } from '../adapters/browser/playwright.js';
 import { configProblems } from './config-check.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
 import { createLinearIngest } from '../adapters/tracker/linear/ingest.js';
@@ -39,8 +40,8 @@ import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint 
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
-import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
+import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { BLOCKED_LABEL } from '../core/engine.js';
@@ -54,6 +55,7 @@ import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, GITHUB_CALLBACK_PATH, isLoopbackHost, type ServerDeps } from '../server/app.js';
+import { listenCliSocket } from '../server/cli-socket.js';
 import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
@@ -119,13 +121,16 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const githubSecret = githubWebhookSecret(instance, env);
 
   // The workflow of factory/default for every project: a repository's `.factory/workflow.yml` is ignored (ORC-388).
-  const workflow = defaultWorkflow(stepSettings(yml));
+  const settings = stepSettings(yml);
+  const workflow = defaultWorkflow(settings);
+  // The replay of closed tickets (ORC-231): driven by the fantome's own steps, with the instance's step settings.
+  const ghost = presetWorkflow(fantome, settings);
   const projects: ProjectRuntime[] = instance.projects.map((p) => ({
     id: p.id,
     repoPath: p.repoPath,
     teamKey: p.linearTeamKey,
-    // The replay of closed tickets (ORC-231): the fantome's sequence, and nothing of the project leaves the factory.
-    workflow: isFantome(p) ? asFantome(workflow) : workflow,
+    // The replay of closed tickets (ORC-231): nothing of the project leaves the factory.
+    workflow: isFantome(p) ? ghost : workflow,
     ...(projectEffects(p) ? { effects: 'none' as const } : {}),
   }));
   // Said at each start, not only by `factory doctor`.
@@ -199,7 +204,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       reads,
       agentApi: { host: agentHostInSandbox, port: agentPort, to: { host: agentListenHost === '0.0.0.0' ? '127.0.0.1' : agentListenHost, port: agentPort } },
     });
-    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress);
+    // The visual proof's browser (ORC-404): the capture image, when this engine has it; without, a required proof is unavailable.
+    const browser = o.fakeRunner ? undefined : await browserImage(env);
+    const capture = browser?.image;
+    const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress, capture ? { browserImage: capture } : {});
+    if (browser && sandboxes) log(visualProofLine(browser));
     if (!o.fakeRunner && !sandboxes) {
       log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
       // Without it, verify refuses to run: one of the `configProblems` below.
@@ -231,7 +240,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
     const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
     if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
-    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health and the diagnosis tell why.
+    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health says so, the log and the diagnosis why.
     const hostChecks = !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1';
     const problems = configProblems({
       fakeRunner: !!o.fakeRunner,
@@ -315,6 +324,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       repoConfig: makeRepoConfig({ log }),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
+      ...(sandboxes && capture ? { visualProof: { shooter: new PlaywrightShooter(), artifactsDir: paths.artifacts } } : {}),
       ...(sandboxes
         ? {
             sandboxes,
@@ -458,6 +468,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       (e: unknown) => log(`webhooks kept before the stop not read: ${(e as Error).message}`),
     );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
+    // The CLI on this server (ORC-405): its socket in FACTORY_HOME, the factory user's alone, without the GitHub sign-in.
+    // Never throws: without it, the CLI keeps HTTP on the loopback.
+    const cliServer = await listenCliSocket(app, paths.socket, { log });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
     if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);
@@ -487,7 +500,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
           (s as unknown as { closeAllConnections(): void }).closeAllConnections();
         });
-      await Promise.all([close(server), ...(agentServer ? [close(agentServer)] : [])]);
+      await Promise.all([server, agentServer, cliServer].filter((s) => s !== undefined).map(close));
     };
     try {
       timers.start();

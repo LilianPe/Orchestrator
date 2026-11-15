@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { defaultWorkflow } from './workflow.js';
-import { asFantome, fantome, projectEffects } from './fantome.js';
+import { nextOf, startMove } from '../core/chain.js';
+import { presetWorkflow } from './workflow.js';
+import { fantome, projectEffects } from './fantome.js';
 import { compilePreset, PresetError, type Preset } from './preset.js';
 
 describe('the factory/fantome preset (ORC-231)', () => {
@@ -18,16 +19,21 @@ describe('the factory/fantome preset (ORC-231)', () => {
     expect(() => compilePreset(gated)).toThrow(/rapide.*human gate/);
   });
 
-  it('the workflow it drives: delegation runs intake, intake the spec, the spec the tests, and dev ends at its publication', () => {
-    const wf = asFantome(defaultWorkflow());
-    expect(wf.level).toBe('rapide');
+  it('the workflow it drives, by its own steps: delegation runs intake, intake the spec, the spec the tests, and dev ends at its publication', () => {
+    const wf = presetWorkflow(fantome);
+    expect(wf).toMatchObject({ level: 'rapide', entry: 'intake', preset: fantome });
     expect(wf.on['ticket.delegated']).toEqual([expect.objectContaining({ run: 'intake', whenSrc: '!blocked' })]);
     // Nothing else starts a job: a closed ticket's state, or a human on the real one, never does.
     expect(Object.keys(wf.on)).toEqual(['ticket.delegated']);
-    expect(wf.jobs['intake']!.onSuccess).toEqual({ run: 'spec' });
-    expect(wf.jobs['spec']!.onSuccess).toEqual({ run: 'tests' });
-    expect(wf.jobs['tests']!.onSuccess).toEqual({ run: 'dev' });
-    expect(wf.jobs['dev']).toMatchObject({ onStart: {}, onSuccess: {} });
+    expect(Object.keys(wf.jobs)).toEqual(['intake', 'dev', 'spec', 'tests', 'ask']);
+    const end = (job: string) => nextOf(wf, wf.jobs[job]!);
+    expect(end('intake').run?.name).toBe('spec');
+    // Its spec is approved by the preset (no gate): `spec_check` leads to the tests.
+    expect(end('spec').run?.name).toBe('tests');
+    expect(end('tests').run?.name).toBe('dev');
+    // Nothing moves nor is posted at the Rapide level: a replayed ticket is closed.
+    expect(end('dev')).toEqual({ step: null });
+    expect(startMove(wf, wf.jobs['dev']!)).toBeUndefined();
     // The bounds are the preset's.
     expect(wf.limits).toMatchObject({ specCheckReturns: 1, verifyAttempts: 4 });
   });

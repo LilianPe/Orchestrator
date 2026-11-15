@@ -19,7 +19,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 | `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
 
-The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. They send no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
+The commands that require the daemon go through its Unix socket, `cli/factory.sock` in `FACTORY_HOME`, when it is there (ORC-405): on the daemon's server, as the factory's user (mode 0600), with no GitHub sign-in, and their actions are journaled as `cli:<host>`. Otherwise they call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`, with no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. From another machine: SSH to the server. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
 ### `relais init`
 
@@ -68,6 +68,7 @@ Check before entrusting a repository: refuses (exit code `1`) a CI that can expo
 - `--json`: machine report (workflows, triggers, secrets yes/no, environments, verdict).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
 - Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
+- Says first whether this instance can take the visual proof (ORC-404): `available` with the capture image of `FACTORY_BROWSER_IMAGE` and its Playwright version, or `unavailable` and why (no sandboxes, the variable unset, the image absent from the engine or the engine not answering, an image without the label of `docker/browser.Dockerfile`, or one not built on `FACTORY_RUNNER_IMAGE`). Of the instance, not the repository: the verdict does not change; `--json` has it under `visualProof` (`available`, `detail`), a failed check included.
 
 Full rule, examples and limits: [`github.md`](github.md).
 

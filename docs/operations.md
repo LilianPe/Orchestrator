@@ -47,11 +47,11 @@ To stop a single ticket: `relais stop <ID>`, the Stop button, the `agent:stop` l
 
 The budgets are not checked under `--fake-runner`. Fix the cause, then restart. A missing Claude token stays a warning: the account is read again at each launch, its fix needs no restart.
 
-**`GET /health`** answers 200 `{ ok: true, store: "ok", takingTickets: true, configProblems: [], linearConnected }` while the store answers and the factory takes tickets; 503 otherwise, with `store: "unreachable"` or the reasons in `configProblems`.
+**`GET /health`** answers 200 `{ ok: true, store: "ok", takingTickets: true }` while the store answers and the factory takes tickets; 503 otherwise, with `store: "unreachable"` or `takingTickets: false`. It is open (ORC-405), so it tells the state alone: the reasons are in the log at startup and in each ticket's diagnosis.
 
 **`GET /tickets/<ID>/diagnosis`** (`?project=<id>` when two projects track the identifier, 409 otherwise) tells why a ticket is stuck: its state and block, its active run, the inbox event the worker holds it behind (error, attempts, next try: held in the daemon's memory alone), its last failed effect, its open dead letters, its place in the queues, and what holds every ticket (invalid configuration, pause, usage limit). `reasons` sums them up in sentences, the factory's first. 404 for a ticket neither the store nor the worker knows.
 
-Both are behind the interface's GitHub sign-in off the loopback (ORC-399), as every route but the webhooks, the OAuth callbacks and `/agent`. No secret in the answers: the daemon's secret values and secret shapes (tokens, keys, a URL's password) are masked in every error and block reason.
+The diagnosis is behind the interface's GitHub sign-in off the loopback (ORC-399), as every route but `/health`, the webhooks, the OAuth callbacks and `/agent`. No secret in the answers: the daemon's secret values and secret shapes (tokens, keys, a URL's password) are masked in every error and block reason.
 
 ## Linear's rate limit (ORC-350)
 
@@ -262,6 +262,6 @@ Each repair is **journaled**: the command writes directly to the database (the d
 | A `verify` command passes by hand but not under Relais | Different environment: `bash -c` without a login profile, the daemon's `PATH`, `PORT`. | Rerun it with the daemon's environment, not your shell's: `env -i PATH="<daemon PATH>" HOME="$HOME" bash -c '<command>'` in the ticket's worktree (`<RELAIS_HOME>/workspaces/<projet>/<ticket>`). The daemon's `PATH`: `tr '\0' '\n' < /proc/<pid>/environ \| grep ^PATH=`. |
 | `npm`, `node` or another tool not found in `setup` or `verify` since the upgrade (ORC-324) | Commands no longer load a login profile (`bash -c` instead of `bash -lc`): what `~/.bash_profile` or `~/.profile` added to `PATH` (nvm, asdf, volta, `~/.local/bin`) is no longer there. | Give that `PATH` to the daemon itself: `Environment=PATH=…` in the systemd unit, `environment:` in `docker compose`, or export it before `relais up`. Commands receive the daemon's `PATH` as is. |
 | `factory status`: « does not answer on … » | Daemon stopped or different `port`. | Start `relais up`; check `port` and `RELAIS_HOME`. |
-| `factory status`: « Access refused by the daemon » | Non-loopback daemon: it asks for a GitHub sign-in (ORC-399), which the CLI cannot give (401 response). | Use the dashboard, or run the command against a daemon on the loopback. |
+| `factory status`: « Access refused by the daemon » | Non-loopback daemon reached over HTTP: it asks for a GitHub sign-in (ORC-399), which the CLI cannot give (401 response). Its socket `cli/factory.sock` in `FACTORY_HOME` is absent or not readable by this user. | Run the command on the server, as the factory's user (ORC-405): `docker compose exec factoryd node dist/src/cli/factory.js status`, over SSH from elsewhere. Or use the dashboard. |
 
 For a complete end-to-end acceptance run (test Linear), follow [`acceptance.md`](acceptance.md).

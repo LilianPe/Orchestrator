@@ -4,6 +4,7 @@ import type { AgentOutput, Finding } from './agent-output.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { beforeOrc391 } from '../../test/helpers/frozen-jobs.js';
 
 const workflow = defaultWorkflow();
 
@@ -162,7 +163,8 @@ describe('the review → fix loop, on the counter of the review and CI loop (ORC
   });
 
   it('a version frozen before ORC-184, with no on_blocking, goes to Human Review on a blocking finding, as it did', () => {
-    const frozen = { ...workflow, jobs: Object.fromEntries(Object.entries(workflow.jobs).map(([k, { onBlocking: _, ...j }]) => [k, j])) };
+    const legacy = beforeOrc391(workflow);
+    const frozen = { ...legacy, jobs: Object.fromEntries(Object.entries(legacy.jobs).map(([k, { onBlocking: _, ...j }]) => [k, j])) };
     const out = decide(secondLens(), finished('review-security', output([blocking]), 'r2'), frozen);
     expect(out.effects.at(-1)).toEqual({ kind: 'move', to: 'human_review' });
     expect(out.events).toEqual([]);

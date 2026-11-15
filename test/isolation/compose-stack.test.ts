@@ -194,6 +194,21 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     expect((await get('/', true, 'text/html')).status).toBe(302);
   });
 
+  // ORC-405: from the Internet the health check alone, the state without a ticket; on the server, the CLI through the socket
+  // in FACTORY_HOME, mode 0600, without a GitHub sign-in.
+  it('answers /health without a session, the state alone, and the CLI in the container through its socket', async () => {
+    const health = await get('/health');
+    expect([200, 503]).toContain(health.status);
+    expect(Object.keys(JSON.parse(health.body) as object).sort()).toEqual(['ok', 'store', 'takingTickets']);
+    expect(compose('exec', '-T', 'factoryd', 'sh', '-c', `stat -c '%a %U' "${dir}/data/cli/factory.sock"`).trim()).toBe('600 node');
+    const factory = (...args: string[]) => compose('exec', '-T', 'factoryd', 'node', 'dist/src/cli/factory.js', ...args);
+    expect(factory('status')).toMatch(/^Linear: not connected · queue: active/);
+    expect(factory('pause').trim()).toBe('Queue paused.');
+    expect(factory('resume').trim()).toBe('Queue resumed.');
+    // Over HTTP, the same command still asks for the sign-in.
+    expect(await get('/api/state', true)).toMatchObject({ status: 401 });
+  });
+
   it('keeps the authority out of factoryd', () => {
     expect(compose('exec', '-T', 'factoryd', 'sh', '-c', `test -e "${dir}/egress-ca/ca.key" && echo present || echo absent`).trim()).toBe('absent');
     expect(compose('exec', '-T', 'proxy', 'sh', '-c', `test -e "${dir}/egress-ca/ca.key" && echo present || echo absent`).trim()).toBe('present');

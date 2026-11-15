@@ -68,7 +68,7 @@ usine.exemple.fr {
 }
 ```
 
-Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers 401 `{"error":"sign in with GitHub first"}` (from `factoryd`, not the proxy), and `docker compose exec factoryd wget -qO- http://127.0.0.1:4100/health` would too: the health check is the operators', behind the sign-in, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
+Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers `{"ok":…,"store":…,"takingTickets":…}` (from `factoryd`, not the proxy: open, the state alone, ORC-405) and `curl -sS https://usine.exemple.fr/api/state` 401 `{"error":"sign in with GitHub first"}`, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
 
 **Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
 
@@ -92,6 +92,7 @@ The engine reads a mount's paths **on the host**, not in the `factoryd` containe
 
 - **`Dockerfile`** (`factoryd` and `proxy`): Node 24, `git`, the `docker` CLI and `gh`. `gh` stays until ORC-181. Claude Code is no longer in it: the agent runs in the runner. User `node` (uid 1000).
 - **`docker/runner.Dockerfile`** (the runners): Node 24 with pnpm, Python 3 with uv and pip, `git`, Claude Code. Pinned versions. No `gh`, no engine CLI, no daemon code.
+- **`docker/browser.Dockerfile`** (the visual proof's captures, ORC-404, optional): the runner image plus Playwright (pinned) and its headless Chromium, built `FROM` the runner image so that the application starts with the same tools as its commands. Only the sandboxes that shoot run it, at network `none`, with nothing mounted but the checkout; every other sandbox stays on the runner image, which carries no browser. It weighs about 630 MB more than the runner image, uncompressed (measured on Docker Desktop: the Playwright layer is 626 MB, of which 278 MB of headless Chromium, the rest its system libraries and fonts); a capture at three widths takes about 3 s, the container's start included, for a page served by `node`. Without it, `FACTORY_BROWSER_IMAGE` unset, a required visual proof is unavailable and its check neutral: the daemon says so at its start, and `factory doctor` on every run.
 
 No image receives a secret at build time. Isolation test no. 7 looks for tokens in the history, the configuration and the files of every layer of the runner image.
 
@@ -113,6 +114,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |
+| `FACTORY_BROWSER_IMAGE` | no | The capture image of the visual proof (`docker/browser.Dockerfile`), built on the runner image. Unset, or absent from the engine, the visual proof is unavailable. |
 | `FACTORY_LOOPBACK_PORT` | no | Port of `factoryd` on the host's loopback, for its reverse proxy (4100 by default). |
 | `FACTORY_PUBLIC_HOST` | with the `tls` profile | Domain of `publicUrl`, for `caddy`'s certificate. |
 | `POSTGRES_PASSWORD` | yes | Database password, reused in a URL: letters and digits only. |
@@ -168,12 +170,18 @@ On the server, with the user's rootless engine running:
    FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
    ```
 
+   For the visual proof, the capture image too, on the runner image just built, then `FACTORY_BROWSER_IMAGE` in `.env`:
+
+   ```bash
+   docker build -f docker/browser.Dockerfile --build-arg RUNNER_IMAGE="$FACTORY_RUNNER_IMAGE" -t "$FACTORY_BROWSER_IMAGE" docker
+   ```
+
 4. Point the host's reverse proxy at `http://127.0.0.1:4100`, or the port of `FACTORY_LOOPBACK_PORT` ([TLS](#tls-and-webhooks)), then `docker compose up -d`. Without a reverse proxy on the server: `docker compose --profile tls up -d`, with `FACTORY_PUBLIC_HOST`.
 5. Open `https://usine.exemple.fr`, sign in with GitHub (a login of `dashboard`), click **Connect Linear**.
 
 `factoryd` refuses to start on an engine that is not rootless: holding its socket would give root on the host.
 
-Operations commands are run in the container:
+Operations commands are run in the container, on the server (over SSH from elsewhere): they go through the daemon's socket `cli/factory.sock` in `FACTORY_DIR/data`, as `node`, with no GitHub sign-in (ORC-405):
 
 ```bash
 docker compose exec factoryd node dist/src/cli/factory.js status
@@ -209,6 +217,8 @@ Under compose, this state is in Postgres, not in a file.
 ```bash
 git pull
 docker build -f docker/runner.Dockerfile -t "$FACTORY_RUNNER_IMAGE" docker
+# With the visual proof: the capture image again, on the new runner image.
+docker build -f docker/browser.Dockerfile --build-arg RUNNER_IMAGE="$FACTORY_RUNNER_IMAGE" -t "$FACTORY_BROWSER_IMAGE" docker
 FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
 docker compose up -d
 ```

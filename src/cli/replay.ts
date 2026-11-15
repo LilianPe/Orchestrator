@@ -5,15 +5,15 @@ import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { factoryDefault } from '../presets/factory-default.js';
-import { asFantome, fantome } from '../presets/fantome.js';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { fantome } from '../presets/fantome.js';
+import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
 import { exportJournal, formatReplay, readJournal, replayJournal, type ReplayOptions } from '../runtime/replay.js';
 import { DATABASE_URL_ENV, openStore } from '../store/open.js';
 
 /** The presets compiled in the binary (ORC-389): their workflow as the daemon builds it, without `factory.yml`'s step settings. */
 const PRESET_WORKFLOWS: Readonly<Record<string, () => Workflow>> = {
   [factoryDefault.name]: () => defaultWorkflow(),
-  [fantome.name]: () => asFantome(defaultWorkflow()),
+  [fantome.name]: () => presetWorkflow(fantome),
 };
 
 export const REPLAY_USAGE = `Usage: factory replay <journal.json | directory>... [--what-if <preset>]
