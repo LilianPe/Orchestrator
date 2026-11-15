@@ -12,8 +12,9 @@ export class SecretReader {
 
   constructor(private readonly sources: Readonly<Record<string, SecretSource>>) {}
 
-  async read(refs: Readonly<Record<string, SecretRef>>): Promise<Record<string, string>> {
-    const entries = await Promise.all(Object.entries(refs).map(async ([name, ref]) => [name, await this.one(name, ref)] as const));
+  /** `minLength`: a repository's secret is sealed in its files, hence its minimum; a server secret is never sealed (ORC-398). */
+  async read(refs: Readonly<Record<string, SecretRef>>, minLength = MIN_REPO_SECRET_LENGTH): Promise<Record<string, string>> {
+    const entries = await Promise.all(Object.entries(refs).map(async ([name, ref]) => [name, await this.one(name, ref, minLength)] as const));
     return Object.fromEntries(entries);
   }
 
@@ -22,7 +23,7 @@ export class SecretReader {
     return [...this.seen];
   }
 
-  private async one(name: string, ref: SecretRef): Promise<string> {
+  private async one(name: string, ref: SecretRef, minLength: number): Promise<string> {
     const at = `the secret ${name} (${refText(ref)})`;
     const source = Object.hasOwn(this.sources, ref.source) ? this.sources[ref.source] : undefined;
     if (!source) throw new Error(`${at} could not be read: no source ${ref.source}`);
@@ -33,7 +34,7 @@ export class SecretReader {
       throw new Error(`${at} could not be read: ${err instanceof Error ? err.message : 'the source failed'}`, { cause: err });
     }
     if (typeof value !== 'string') throw new Error(`${at} could not be read: the source answered no text`);
-    if (value.length < MIN_REPO_SECRET_LENGTH) throw new Error(`${at}: at least ${MIN_REPO_SECRET_LENGTH} characters expected`);
+    if (value.length < minLength) throw new Error(`${at}: at least ${minLength} characters expected`);
     this.seen.add(value);
     return value;
   }

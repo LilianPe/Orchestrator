@@ -7,6 +7,7 @@ import { ENV_NAME } from '../adapters/secrets/env.js';
 import { kindOf, SECRET_SOURCE_KINDS, type SecretSourceDecl } from '../adapters/secrets/registry.js';
 import { refText, type SecretRef, type SecretSourceKind } from '../adapters/secrets/types.js';
 import { MAX_DIFF } from '../checks/diff-size.js';
+import { MIN_SECRETS_KEY_LENGTH } from './secrets-file.js';
 import { READ_CAPS, type ReadCaps } from '../network/reads.js';
 import { GITHUB_LOGIN, type DashboardAccess } from '../adapters/forge/github-login.js';
 import type { Effort } from '../presets/preset.js';
@@ -98,7 +99,7 @@ export function claudeAccountReader(
   home: string,
   env: NodeJS.ProcessEnv = process.env,
   log: (m: string) => void = () => {},
-  sealed?: ReadonlyMap<string, string>,
+  sealed?: ReadonlyMap<string, string | undefined>,
 ): () => ClaudeAccount {
   const resolve = (text: string | undefined): ClaudeAccount => {
     // A token read from a source at the start keeps its value; an account added since with one waits for the next start (ORC-398).
@@ -145,7 +146,7 @@ export function factoryYmlText(home: string): string | undefined {
 }
 
 /** Top-level keys of the file, validated together as `parseFactoryYml` validates them, the rest of the file left out; undefined when all are absent or null. */
-function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv, sealed?: ReadonlyMap<string, string>): FactoryYml | undefined {
+function parseSection(text: string, keys: string[], env?: NodeJS.ProcessEnv, sealed?: ReadonlyMap<string, string | undefined>): FactoryYml | undefined {
   let raw: unknown;
   try {
     raw = parse(text);
@@ -222,6 +223,7 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 /** A team of factory.yml's `dashboard`: `<org>/<team-slug>`. */
 const GITHUB_TEAM = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[\w.-]+$/;
 
+/** The file with its `env:` secrets only: a server secret of another source is a fault here. The daemon and the CLI read it with `loadSealedFactoryYml` (ORC-398). */
 export function loadFactoryYml(home: string, env: NodeJS.ProcessEnv = process.env): FactoryYml | undefined {
   const text = factoryYmlText(home);
   return text === undefined ? undefined : parseFactoryYml(text, env);
@@ -242,13 +244,13 @@ export function loadFactoryLimits(home: string): Pick<FactoryYml, 'budgets' | 'm
  * Validates the file and resolves its `env:` values, but for `repos[].secrets`, references whose syntax alone is checked
  * against `kinds` (ORC-308); throws a FactoryYmlError naming the path of every faulty key. A server secret written with another
  * source takes its value from `sealed`, by its reference, which `loadSealedFactoryYml` read at the daemon's start (ORC-398):
- * `defer` leaves it unread, and without `sealed` it is a fault.
+ * `defer` leaves it unread, as does a reference `sealed` holds without a value; without `sealed` it is a fault.
  */
 export function parseFactoryYml(
   text: string,
   env: NodeJS.ProcessEnv = process.env,
   kinds: Readonly<Record<string, SecretSourceKind>> = SECRET_SOURCE_KINDS,
-  sealed?: ReadonlyMap<string, string> | 'defer',
+  sealed?: ReadonlyMap<string, string | undefined> | 'defer',
 ): FactoryYml {
   let raw: unknown;
   try {
@@ -377,9 +379,10 @@ export function parseFactoryYml(
     if (!ref) return undefined;
     secretRefs[path] = ref;
     if (sealed === 'defer') return undefined;
-    const read = sealed?.get(refText(ref));
-    if (read === undefined) violations.push(`${path}: ${refText(ref)} is read from its source at the daemon's start`);
-    return read;
+    // Held without a value: a command that does not need this secret did not read it.
+    if (sealed?.has(refText(ref))) return sealed.get(refText(ref));
+    violations.push(`${path}: ${refText(ref)} is read from its source at the daemon's start`);
+    return undefined;
   };
   const linear = section('linear');
   if (linear) {
@@ -451,7 +454,8 @@ export function parseFactoryYml(
     }
   }
   const secretsKey = secret('secrets_key', r['secrets_key']);
-  if (secretsKey !== undefined) out.secretsKey = secretsKey;
+  if (secretsKey !== undefined && secretsKey.length < MIN_SECRETS_KEY_LENGTH) violations.push(`secrets_key: at least ${MIN_SECRETS_KEY_LENGTH} characters expected`);
+  else if (secretsKey !== undefined) out.secretsKey = secretsKey;
   const concurrency = leaf('concurrency', r['concurrency'], z.number().int().positive(), 'a positive integer is expected');
   if (concurrency !== undefined) out.concurrency = concurrency;
   // `off` disables a token cap (ORC-381): `budgets: off` both.

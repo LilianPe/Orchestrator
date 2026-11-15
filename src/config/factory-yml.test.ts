@@ -283,7 +283,7 @@ secrets_key: "coffre:factory#secrets_key"
       ['coffre:gh#key', PEM],
       ['coffre:lin#secret', 'lin-secret-sealed'],
       ['coffre:claude#a', 'tok-sealed'],
-      ['coffre:factory#secrets_key', 'secrets-key-sealed'],
+      ['coffre:factory#secrets_key', 'secrets-key-sealed-of-at-least-32-chars'],
     ]);
     const faults = (yaml: string, sealed?: ReadonlyMap<string, string>): string[] => {
       try {
@@ -300,7 +300,7 @@ secrets_key: "coffre:factory#secrets_key"
       expect(c.github).toEqual({ appId: '42', privateKey: PEM, webhookSecret: 'gh-webhook-secret-123' });
       expect(c.linear?.clientSecret).toBe('lin-secret-sealed');
       expect(c.claude?.accounts).toEqual([{ name: 'a', token: 'tok-sealed' }]);
-      expect(c.secretsKey).toBe('secrets-key-sealed');
+      expect(c.secretsKey).toBe('secrets-key-sealed-of-at-least-32-chars');
       expect(c.secretRefs).toEqual({
         'github.private_key': { source: 'coffre', path: 'gh#key' },
         'github.webhook_secret': { source: 'env', path: 'GH_WEBHOOK_SECRET' },
@@ -324,6 +324,10 @@ secrets_key: "coffre:factory#secrets_key"
         'claude.accounts[0].token: coffre:claude#a is read from its source at the daemon\'s start',
         'secrets_key: coffre:factory#secrets_key is read from its source at the daemon\'s start',
       ]);
+    });
+
+    it('refuses a secrets_key too short to derive a key from', () => {
+      expect(faults('secrets_key: env:CLAUDE_TOKEN_1\n')).toEqual(['secrets_key: at least 32 characters expected']);
     });
 
     it('refuses a reference to a source not declared, or a path its adapter refuses', () => {

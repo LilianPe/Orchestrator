@@ -7,7 +7,7 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
+import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
@@ -63,7 +63,7 @@ export interface DoctorOptions {
 }
 
 /** The visual proof (ORC-404) and the server secrets (ORC-398) in the JSON report. */
-const visualProofOf = (o: Pick<DoctorOptions, 'visualProof' | 'serverSecrets'>) => ({
+const instanceReportOf = (o: Pick<DoctorOptions, 'visualProof' | 'serverSecrets'>) => ({
   ...(o.visualProof ? { visualProof: { available: !!o.visualProof.image, detail: o.visualProof.detail } } : {}),
   ...(o.serverSecrets ? { serverSecrets: o.serverSecrets } : {}),
 });
@@ -500,7 +500,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}), ...visualProofOf(options) }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}), ...instanceReportOf(options) }, null, 2));
   } else {
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
@@ -537,7 +537,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
 
 function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>, message: string, ignored: string[] = []): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}), ...visualProofOf(options) }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}), ...instanceReportOf(options) }, null, 2));
   } else {
     options.out(message);
   }
@@ -575,7 +575,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
   try {
-    githubApp = resolveGithubApp(effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env)).yml), env);
+    githubApp = resolveGithubApp(effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml), env);
   } catch (error) {
     out(errorMessage(error));
     return 1;

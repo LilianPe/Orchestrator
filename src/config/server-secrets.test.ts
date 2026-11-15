@@ -29,7 +29,7 @@ describe('the server secrets read at the start (ORC-398)', () => {
     const coffre = new FakeSecretSource({ 'gh#key': PEM, 'claude#a': 'tok-sealed-value' });
     const kinds = { ...SECRET_SOURCE_KINDS, fake: fakeSecretKind({ coffre }) };
     const h = home(YML);
-    const { yml, sealed, reader } = await loadSealedFactoryYml(h, ENV, kinds);
+    const { yml, sealed, reader } = await loadSealedFactoryYml(h, ENV, { kinds });
     expect(yml?.github).toEqual({ appId: '42', privateKey: PEM, webhookSecret: 'gh-webhook-secret-123' });
     expect(coffre.reads.sort()).toEqual(['claude#a', 'gh#key']);
     expect(reader.values()).toEqual(expect.arrayContaining([PEM, 'tok-sealed-value']));
@@ -39,10 +39,25 @@ describe('the server secrets read at the start (ORC-398)', () => {
   it('a source that fails stops the start, naming the key and its reference, never a value', async () => {
     const coffre = new FakeSecretSource({ 'gh#key': PEM, 'claude#a': 'tok-sealed-value' }, { down: true });
     const kinds = { ...SECRET_SOURCE_KINDS, fake: fakeSecretKind({ coffre }) };
-    const err = await loadSealedFactoryYml(home(YML), ENV, kinds).catch((e: unknown) => e);
+    const err = await loadSealedFactoryYml(home(YML), ENV, { kinds }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(FactoryYmlError);
     expect((err as FactoryYmlError).message).toContain('the secret github.private_key (coffre:gh#key) could not be read: the secret manager does not answer');
     expect((err as FactoryYmlError).message).not.toContain('sealed');
+  });
+
+  it('a command reads only the keys it needs: a source out of its reach for the others does not stop it', async () => {
+    const coffre = new FakeSecretSource({ 'gh#key': PEM });
+    const kinds = { ...SECRET_SOURCE_KINDS, fake: fakeSecretKind({ coffre }) };
+    const { yml } = await loadSealedFactoryYml(home(YML), ENV, { kinds, only: ['github.private_key'] });
+    expect(coffre.reads).toEqual(['gh#key']);
+    expect(yml?.github?.privateKey).toBe(PEM);
+    expect(yml?.claude?.accounts).toEqual([{ name: 'a', token: '' }]);
+  });
+
+  it('a server secret has no minimal length: it is never sealed in files', async () => {
+    const coffre = new FakeSecretSource({ 'gh#key': PEM, 'claude#a': 'short' });
+    const kinds = { ...SECRET_SOURCE_KINDS, fake: fakeSecretKind({ coffre }) };
+    expect((await loadSealedFactoryYml(home(YML), ENV, { kinds })).yml?.claude?.accounts[0]?.token).toBe('short');
   });
 
   it('without factory.yml, nothing to read', async () => {
@@ -65,6 +80,20 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     ]);
     const stale = await serverSecretReport(home(YML), ENV, { now: NOW, kinds: kindsWith({ 'gh#key': old }) });
     expect(stale[0]!.warnings).toEqual([`rotated ${ROTATION_MAX_DAYS + 1} days ago, past ${ROTATION_MAX_DAYS}`]);
+  });
+
+  it('never warns about the rotation of secrets_key: rotating it would leave secrets.json unreadable', async () => {
+    const h = home('secret_sources: { coffre: { kind: fake, name: coffre } }\nsecrets_key: "coffre:factory#key"\n');
+    const old = new Date(NOW - (ROTATION_MAX_DAYS + 30) * DAY);
+    expect(await serverSecretReport(h, {}, { now: NOW, kinds: kindsWith({ 'factory#key': old }) })).toEqual([
+      { key: 'secrets_key', reference: 'coffre:factory#key', inClear: false, rotatedAt: old.toISOString(), warnings: [] },
+    ]);
+  });
+
+  it('names a GitHub key left in config.yaml though factory.yml reads it from a source', async () => {
+    const h = home(YML);
+    writeFileSync(join(h, 'config.yaml'), 'github: { appId: 1, privateKey: /srv/app.pem }\n');
+    expect((await serverSecretReport(h, ENV, { now: NOW, kinds: kindsWith({}) })).map((r) => r.key)).toContain('github.privateKey');
   });
 
   it('names a GitHub key and a secrets.json kept in clear on disk', async () => {

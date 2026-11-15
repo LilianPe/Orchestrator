@@ -14,8 +14,8 @@ const IN_CLEAR_ENV = "in clear in the daemon's environment: a sealed source (sys
 
 export interface SealedFactoryYml {
   yml?: FactoryYml;
-  /** The values read from a source other than `env`, by their reference: what `claudeAccountReader` re-reads with. */
-  sealed: ReadonlyMap<string, string>;
+  /** The values read from a source other than `env`, by their reference (undefined: not read): what `claudeAccountReader` re-reads with. */
+  sealed: ReadonlyMap<string, string | undefined>;
   /** The reader of every source: the server's values already in it, for the masking; it reads the repositories' at each setup. */
   reader: SecretReader;
 }
@@ -28,21 +28,28 @@ export interface SealedFactoryYml {
 export async function loadSealedFactoryYml(
   home: string,
   env: NodeJS.ProcessEnv = process.env,
-  kinds: Readonly<Record<string, SecretSourceKind>> = SECRET_SOURCE_KINDS,
+  o: { kinds?: Readonly<Record<string, SecretSourceKind>>; only?: readonly string[] } = {},
 ): Promise<SealedFactoryYml> {
+  const kinds = o.kinds ?? SECRET_SOURCE_KINDS;
   const text = factoryYmlText(home);
   const draft = text === undefined ? undefined : parseFactoryYml(text, env, kinds, 'defer');
   const reader = new SecretReader(openSecretSources(draft?.secretSources, kinds, env));
-  const wanted = Object.entries(draft?.secretRefs ?? {}).filter(([, ref]) => ref.source !== 'env');
+  const refs = Object.entries(draft?.secretRefs ?? {}).filter(([, ref]) => ref.source !== 'env');
+  // A command reads only the keys it needs: the others stay unset, so a source out of its reach does not stop it.
+  const wanted = refs.filter(([key]) => !o.only || o.only.includes(key));
   let values: Record<string, string>;
   try {
-    values = await reader.read(Object.fromEntries(wanted));
+    values = await reader.read(Object.fromEntries(wanted), 1);
   } catch (err) {
     throw new FactoryYmlError([(err as Error).message]);
   }
-  const sealed = new Map(wanted.map(([key, ref]) => [refText(ref), values[key]!]));
+  const sealed = new Map<string, string | undefined>(refs.map(([key, ref]) => [refText(ref), values[key]]));
   return { yml: text === undefined ? undefined : parseFactoryYml(text, env, kinds, sealed), sealed, reader };
 }
+
+/** The server secrets a CLI command reads besides `env:` (ORC-398): Linear's and the key of `secrets.json`; the GitHub App's key. */
+export const LINEAR_SECRETS = ['linear.client_secret', 'linear.webhook_secret', 'secrets_key'] as const;
+export const GITHUB_APP_SECRETS = ['github.private_key'] as const;
 
 /** One line of `doctor`'s instance section: a server secret, where it is kept, its rotation. */
 export interface SecretReport {
@@ -73,12 +80,11 @@ export async function serverSecretReport(
   const sources = openSecretSources(yml?.secretSources, kinds, env);
   const reports: SecretReport[] = [];
   for (const [key, ref] of Object.entries(yml?.secretRefs ?? {})) reports.push(await describeRef(key, ref, yml, sources, now));
-  if (!yml?.secretRefs?.['github.private_key']) {
-    if (loadInstance(home).github?.privateKey) {
-      reports.push({ key: 'github.privateKey', reference: 'config.yaml', inClear: true, warnings: ['in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)'] });
-    } else if (env['GH_APP_KEY']) {
-      reports.push({ key: 'github.privateKey', reference: 'env:GH_APP_KEY', inClear: true, warnings: [IN_CLEAR_ENV] });
-    }
+  // A copy left in config.yaml is still on the disk, even when factory.yml's reference replaces it.
+  if (loadInstance(home).github?.privateKey) {
+    reports.push({ key: 'github.privateKey', reference: 'config.yaml', inClear: true, warnings: ['in clear on disk: write github.private_key in factory.yml with a sealed source (systemd-creds)'] });
+  } else if (!yml?.secretRefs?.['github.private_key'] && env['GH_APP_KEY']) {
+    reports.push({ key: 'github.privateKey', reference: 'env:GH_APP_KEY', inClear: true, warnings: [IN_CLEAR_ENV] });
   }
   const file = homePaths(home).secrets;
   if (existsSync(file)) {
@@ -98,9 +104,12 @@ async function describeRef(key: string, ref: SecretRef, yml: FactoryYml | undefi
   } catch (err) {
     return { key, reference, inClear: false, warnings: [`its rotation date could not be read: ${(err as Error).message}`] };
   }
-  if (!rotatedAt) return { key, reference, inClear: false, warnings: ['its source knows no rotation date'] };
+  // Rotating `secrets_key` would leave secrets.json unreadable, nothing re-encrypts it yet: never asked for.
+  const rotates = key !== 'secrets_key';
+  if (!rotatedAt) return { key, reference, inClear: false, warnings: rotates ? ['its source knows no rotation date'] : [] };
   const days = Math.floor((now - rotatedAt.getTime()) / DAY);
-  return { key, reference, inClear: false, rotatedAt: rotatedAt.toISOString(), warnings: days > ROTATION_MAX_DAYS ? [`rotated ${days} days ago, past ${ROTATION_MAX_DAYS}`] : [] };
+  const stale = rotates && days > ROTATION_MAX_DAYS;
+  return { key, reference, inClear: false, rotatedAt: rotatedAt.toISOString(), warnings: stale ? [`rotated ${days} days ago, past ${ROTATION_MAX_DAYS}`] : [] };
 }
 
 /** The report in text, for `doctor`. */
