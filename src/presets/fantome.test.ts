@@ -1,10 +1,7 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from './workflow.js';
 import { asFantome, fantome, projectEffects } from './fantome.js';
 import { compilePreset, PresetError, type Preset } from './preset.js';
-
-const packDir = join(import.meta.dirname, '../../packs/standard');
 
 describe('the factory/fantome preset (ORC-231)', () => {
   it('compiles at the Rapide level: no human gate, no clarify, the run ends at its publication', () => {

@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
 import type { Workflow } from './workflow.js';

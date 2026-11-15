@@ -33,12 +33,12 @@ describe('factory replay (ORC-174)', () => {
     expect(out).toMatch(/without divergence\.$/);
   });
 
-  // The scenario ran under the test preset (`fake:check` verified, two attempts): factory/default verifies no such command.
+  // The scenario's delegation started `dev`; factory/fantome starts at its entry, `intake` (ORC-231).
   it('--what-if <preset>: a journal diverges on the workflow of another compiled preset, and the report names the event; exit code 1', async () => {
-    const { code, out } = await run([join(journals, 'check-failed-then-feedback.json'), '--what-if', 'factory/default']);
+    const { code, out } = await run([join(journals, 'check-failed-then-feedback.json'), '--what-if', 'factory/fantome']);
     expect(code).toBe(1);
     expect(out).toContain('stopped at the first divergence');
-    expect(out).toMatch(/event \S+ \(verify\.failed, #\d+ of the journal\)/);
+    expect(out).toMatch(/event \S+ \(ticket\.delegated, #1 of the journal\): effects\[0\]\.job recorded "dev", replayed "intake"/);
   });
 
   it('--what-if refuses a preset the binary does not have, a workflow file included (ORC-389); exit code 2', async () => {
