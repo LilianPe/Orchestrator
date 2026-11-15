@@ -253,6 +253,19 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
     expect((await makeApi(protectionRoutes(branch, [])).branchProtection('/repo')).classic).toBe(true);
   });
 
+  it('reads every page of the branch rules: a pull request rule past the first 100 still counts', async () => {
+    const first = Array.from({ length: 100 }, () => ({ type: 'required_status_checks', ruleset_id: 5 }));
+    const branch = { name: 'main', protected: true, protection: { enabled: false } };
+    const routes = protectionRoutes(branch, []);
+    routes.splice(1, 0, (url) =>
+      url.pathname === '/repos/acme/app/rules/branches/main'
+        ? { body: url.searchParams.get('page') === '2' ? [{ type: 'pull_request', ruleset_id: 6 }] : first }
+        : undefined,
+    );
+    const protection = await makeApi(routes).branchProtection('/repo');
+    expect(protection.pullRequestRulesets).toEqual([{ id: 6, bypass: 'never' }]);
+  });
+
   it("rejects a ruleset that does not say whether the App can bypass it", async () => {
     const routes = protectionRoutes({ protected: true, protection: { enabled: false } }, [{ type: 'pull_request', ruleset_id: 7 }], undefined, { '7': { id: 7 } });
     await expect(makeApi(routes).branchProtection('/repo')).rejects.toThrow(/unreadable answer, not a ruleset/);

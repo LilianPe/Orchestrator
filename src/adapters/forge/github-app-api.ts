@@ -89,8 +89,7 @@ const isRepository = (v: unknown): v is { default_branch: string } => isRecord(v
  */
 const isBranch = (v: unknown): v is { protection: { enabled: boolean } } =>
   isRecord(v) && isRecord(v.protection) && typeof v.protection.enabled === 'boolean';
-const isRuleList = (v: unknown): v is { type: string; ruleset_id: number }[] =>
-  Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number');
+const isRule = (r: unknown): r is { type: string; ruleset_id: number } => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number';
 const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
 
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
@@ -145,7 +144,7 @@ export class GitHubAppApi extends GitHubAppAuth {
     const { default_branch: branch } = await this.read('GET', base, token, isRepository, 'a repository with its default branch');
     const [{ protection: { enabled: classic } }, rules] = await Promise.all([
       this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its classic protection flag'),
-      this.read('GET', `${base}/rules/branches/${segment(branch)}?per_page=100`, token, isRuleList, 'a list of branch rules'),
+      this.allPages(`${base}/rules/branches/${segment(branch)}`, null, 'a list of branch rules', isRule, token),
     ]);
     const ids = [...new Set(rules.filter((rule) => rule.type === 'pull_request').map((rule) => rule.ruleset_id))].sort((a, b) => a - b);
     const pullRequestRulesets = await Promise.all(

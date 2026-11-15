@@ -386,7 +386,7 @@ export class GitHubAppAuth {
   }
 
   /**
-   * Every page of a list GitHub returns under `key`, 100 per page. An answer without that list, or with an entry
+   * Every page of a list GitHub returns under `key` (`null`: the answer is the list itself), 100 per page. An answer without that list, or with an entry
    * `isEntry` rejects, throws: read as empty, it would drop checks from the verdict, down to `none`, hide a CI, create a
    * second check run, or let `doctor` skip an environment (ORC-273).
    * A list longer than `MAX_PAGES` pages throws too: a server that ignores `page` would loop forever, under a lease
@@ -395,7 +395,7 @@ export class GitHubAppAuth {
    */
   protected async allPages<E>(
     path: string,
-    key: string,
+    key: string | null,
     what: string,
     isEntry: (e: unknown) => e is E,
     token: string,
@@ -404,8 +404,10 @@ export class GitHubAppAuth {
     const all: E[] = [];
     for (let page = 1; ; page++) {
       const url = `${path}?${new URLSearchParams([...filter, ['per_page', '100'], ['page', String(page)]])}`;
-      const isPage = (d: unknown): d is Record<string, E[]> => isRecord(d) && Array.isArray(d[key]) && d[key].every(isEntry);
-      const list = (await this.read('GET', url, token, isPage, what))[key]!;
+      const isList = (d: unknown): d is E[] => Array.isArray(d) && d.every(isEntry);
+      const isPage = (d: unknown): d is E[] | Record<string, E[]> => (key === null ? isList(d) : isRecord(d) && isList(d[key]));
+      const data = await this.read('GET', url, token, isPage, what);
+      const list = key === null ? (data as E[]) : (data as Record<string, E[]>)[key]!;
       if (page > MAX_PAGES) {
         if (list.length === 0) return all;
         throw new Error(`${apiLabel('GET', path)}: more than ${MAX_PAGES * 100} entries, never read as complete`);
