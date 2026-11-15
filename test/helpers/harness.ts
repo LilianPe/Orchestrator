@@ -204,6 +204,8 @@ export function createHarness(
     verify?: Verifier;
     /** The clean check itself; by default its verdict comes from `checks`. */
     cleanVerify?: CleanVerifier;
+    /** The dry run itself (ORC-408); by default the real one, which a scenario without a forge cannot run. */
+    dryRunner?: OrchestratorDeps['dryRunner'];
     /** An instance without the GitHub App or the sandboxes: it cannot publish (ORC-125). */
     noPublisher?: boolean;
     /** `false`: an instance with neither sandboxes nor `FACTORY_ALLOW_HOST_VERIFY`. */
@@ -329,7 +331,8 @@ export function createHarness(
       // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.
       cleanVerify: opts.cleanVerify ?? (async (req: CleanVerifyRequest) => ({ ...(req.commands.length ? await life.gate(checks.run)(req.worktree, [...req.commands], undefined, {}) : { ok: true, failures: [] }), sha: req.head ?? (await workspaces.head(req.worktree)) ?? 'head', tree: 'clean-tree' })),
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
-      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, runnerImage: 'factory/runner:test', egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
+      ...(opts.dryRunner ? { dryRunner: opts.dryRunner } : {}),
       ...(visualProof ? { visualProof } : {}),
       ...(opts.previewRecipes ? { previewRecipes: opts.previewRecipes } : {}),
       ...(opts.startFingerprint ? { startFingerprint: opts.startFingerprint } : {}),

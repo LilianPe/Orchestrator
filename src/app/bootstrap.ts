@@ -345,6 +345,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             runsDir: paths.runs,
             egressJournal: (runId: string) => egress.journalPath(runId),
             registries: registriesViaEgress(egress),
+            // Required with sandboxes (`makeSandboxes`): the dry run's fingerprint (ORC-408).
+            runnerImage: env['FACTORY_RUNNER_IMAGE']!,
           }
         : {}),
       // In a sandbox, no host path: the agent reaches the factory through its MCP alone (ORC-192).

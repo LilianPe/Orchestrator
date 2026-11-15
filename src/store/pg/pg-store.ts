@@ -15,6 +15,7 @@ import type { ReviewLens } from '../../core/workflow.js';
 import type { Finding } from '../../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../../core/audit.js';
 import type { Baseline, BaselineMeasure } from '../../core/baseline.js';
+import type { DryRun } from '../../core/dry-run.js';
 import type { GhostGrade, GhostJudgment, GhostReplay, GhostSide, GhostTicket } from '../../ghost/replay.js';
 import type { OutboxEffect } from '../../core/decision.js';
 import { findingRowId, type ReviewFinding } from '../../core/review.js';
@@ -1052,6 +1053,19 @@ export class PgStore implements AsyncStore {
       select id, project_id, threshold, as_is_threshold, memory, seed, tickets, round(extract(epoch from started_at) * 1000) as started_at, started_by from ghost_replays ${rest}
     `);
     return rows.map((r) => ({ id: r.id, projectId: r.project_id, threshold: Number(r.threshold), ...(r.as_is_threshold === null ? {} : { asIsThreshold: Number(r.as_is_threshold) }), memory: r.memory, seed: r.seed, tickets: r.tickets, startedAt: Number(r.started_at), startedBy: r.started_by }));
+  }
+
+  async putDryRun(d: DryRun): Promise<void> {
+    // Through JSON: an absent field stays absent, as the SQLite store keeps it.
+    const data = JSON.parse(JSON.stringify(d)) as DryRun;
+    const row = { projectId: d.projectId, sha: d.sha, target: d.target, endedAt: new Date(d.endedAt), data };
+    await this.db.insert(schema.dryRuns).values({ id: d.id, ...row }).onConflictDoUpdate({ target: schema.dryRuns.id, set: row });
+  }
+
+  async lastDryRun(projectId: string, sha?: string): Promise<DryRun | undefined> {
+    const which = sha === undefined ? sql`target = 'main'` : sql`sha = ${sha}`;
+    const { rows } = await this.db.execute<{ data: DryRun }>(sql`select data from dry_runs where project_id = ${projectId} and ${which} order by ended_at desc, id desc limit 1`);
+    return rows[0]?.data;
   }
 
   async putGhostTicket(t: GhostTicket): Promise<void> {

@@ -97,6 +97,7 @@ import {
 } from './types.js';
 import { runSealedSetup } from './sealed-setup.js';
 import type { RegistryOpener } from '../checks/registry.js';
+import { runDryRun, type DryRun, type DryRunRequest } from './dry-run.js';
 import { checkBranchPaths, classOfBranch, runCleanVerify, servicesUnavailable, untrustedCheck, type CleanVerifier, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from './clean-verify.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, cappedExit, VERIFY_CHECK, type Verifier, type VerifyResult } from './verify.js';
@@ -251,6 +252,10 @@ export interface OrchestratorDeps {
   hostChecks?: boolean;
   /** `verify` with sandboxes (ORC-151); a test replaces it. */
   cleanVerify?: CleanVerifier;
+  /** The dry run (ORC-408); a test replaces it. */
+  dryRunner?: (req: DryRunRequest) => Promise<DryRun>;
+  /** The image the sandboxes run (`FACTORY_RUNNER_IMAGE`), in the dry run's fingerprint (ORC-408); required for a dry run. */
+  runnerImage?: string;
   /** The package registries `verify` asks (`factory/dependances`, ORC-371), through the egress proxy. */
   registries?: RegistryOpener;
   projects: ProjectRuntime[];
@@ -2335,6 +2340,44 @@ export class Orchestrator {
    */
   private async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
     await this.d.labelsWritten?.(projectId, ticketId, await this.d.tracker.setLabels(ticketId, add, remove));
+  }
+
+  /**
+   * The dry run of a project (ORC-408), on the forge's default branch or on the commit `sha`: its `setup` and commands in the
+   * sandboxes (`runDryRun`), in a place of its own under `runsDir/<id>`, then recorded, red or green. It rejects when it cannot run
+   * (no sandboxes, an engine or a forge down): nothing is recorded then.
+   */
+  async dryRun(projectId: string, o: { sha?: string } = {}): Promise<DryRun> {
+    const project = this.d.projects.find((p) => p.id === projectId);
+    if (!project) throw new Error(`no project ${projectId}`);
+    const { sandboxes, runsDir, originUrl, runnerImage } = this.d;
+    if (!sandboxes || !runsDir || !originUrl || !runnerImage) throw new Error('a dry run runs in the sandboxes: FACTORY_CONTAINER_CLI and FACTORY_RUNNER_IMAGE are required');
+    const id = `dry-${randomUUID()}`;
+    const workDir = join(runsDir, id, 'dry-run');
+    mkdirSync(workDir, { recursive: true });
+    try {
+      const run = await (this.d.dryRunner ?? runDryRun)({
+        sandboxes,
+        runId: id,
+        projectId,
+        originUrl: await originUrl(project),
+        ...(o.sha ? { sha: o.sha } : {}),
+        workDir,
+        setup: project.workflow.workspace.setup,
+        // The commands `verify` runs on a ticket's code when `.factory/config.yml` declares none: the `dev` job's.
+        commands: project.workflow.jobs['dev']?.verify ?? [],
+        image: runnerImage,
+        env: async (config) => (await this.repoVariablesOf(project, config)).env,
+        knownFlaky: await this.d.store.knownFlakyTests(projectId),
+        now: () => this.d.clock.now(),
+        log: (message) => this.log('warn', `dry run of ${projectId}: ${message}`),
+      });
+      await this.d.store.putDryRun(run);
+      this.log('info', `dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : `red (${run.breaks.map((b) => b.kind).join(', ')})`}`);
+      return run;
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `dry run of ${projectId}: ${workDir} not removed: ${err.message}`));
+    }
   }
 
   /**

@@ -323,7 +323,7 @@ const REPORT_READ_S = 60;
  * agent's (a test that hangs), as on the host. With a runner, the line asks it for its report in a file of the sandbox, read
  * back by an exec of its own, capped: not through the command's output, whose tail alone reaches the daemon.
  */
-function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): Run {
+export function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): Run {
   return async (line, runner) => {
     const f = `"\${TMPDIR:-/tmp}"/factory-report-${randomUUID()}`;
     const started = Date.now();
@@ -336,7 +336,7 @@ function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): R
 }
 
 /** The runner of each command that names one, from the commit's `package.json` for an npm script: read before any of its code runs. */
-async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, Runner>> {
+export async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, Runner>> {
   const runners = new Map<string, Runner>();
   for (const command of commands) {
     const runner = await runnerOfCommand(command, { showAtHead: (p) => show(git, sha, p) });
@@ -482,7 +482,7 @@ const humanCommitsMissing = (human: string, branch: string): VerifyFailure => ({
 });
 
 /** The message goes to the journal and to the ticket: neither the URL, which can carry a token, nor what git quotes of one. */
-function withoutCredentials(message: string, url: string): string {
+export function withoutCredentials(message: string, url: string): string {
   return message.replaceAll(url, 'origin').replace(/\/\/[^/\s@]+@/g, '//***@');
 }
 
@@ -815,7 +815,7 @@ async function checkAdded(git: CloneGit, from: string, sha: string): Promise<Ver
  * A file of a commit; undefined when it has none. A blob the agent made huge never comes into the daemon's memory: as
  * itself, by its id, it reads as changed.
  */
-async function show(git: CloneGit, rev: string, path: string): Promise<string | undefined> {
+export async function show(git: CloneGit, rev: string, path: string): Promise<string | undefined> {
   const entry = /^\d+ (\w+) (\w+)\s+(\d+)?/.exec(await git.raw('ls-tree', '-l', '-z', rev, '--', path));
   if (entry?.[1] !== 'blob') return undefined;
   return Number(entry[3]) > MAX_READ_BYTES ? `\0too large: ${entry[2]}` : git.raw('show', `${rev}:${path}`);

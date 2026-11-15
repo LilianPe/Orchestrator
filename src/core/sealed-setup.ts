@@ -123,6 +123,13 @@ export async function sealSecrets(roots: readonly string[], secrets: readonly st
   return purged;
 }
 
+/** A setup command that failed: its message the one every caller shows; its output kept for the dry run, which classifies it (ORC-408). */
+export class SetupFailure extends Error {
+  constructor(said: string, readonly command: string, readonly exitCode: number | null, readonly output: string) {
+    super(`The worktree setup failed: ${said}`);
+  }
+}
+
 export interface SealedSetupRequest {
   /** The attempt's: the setup's container is `<runId>-setup`, so `recover()` finds it among the dead. */
   runId: string;
@@ -197,9 +204,10 @@ async function setUpIn(sandboxes: Pick<SandboxProvider, 'exec' | 'destroy'>, id:
     if (rc.code !== 0) throw new Error(`The worktree setup failed: Yarn 1 scripts not disabled (${rc.stderr.trim()})`);
     for (const command of req.commands) {
       const started = Date.now();
-      const { code } = await sandboxes.exec(id, (req.argv ?? cappedCommand)(command), { env });
-      if (cappedExit(code, started) === null) throw new Error(`The worktree setup failed: ${command} (timed out after ${VERIFY_TIMEOUT_MS / 60_000} min)`);
-      if (code !== 0) throw new Error(`The worktree setup failed: ${command}`);
+      const { code, stdout, stderr } = await sandboxes.exec(id, (req.argv ?? cappedCommand)(command), { env });
+      const exitCode = cappedExit(code, started);
+      if (exitCode === null) throw new SetupFailure(`${command} (timed out after ${VERIFY_TIMEOUT_MS / 60_000} min)`, command, null, stdout + stderr);
+      if (code !== 0) throw new SetupFailure(command, command, exitCode, stdout + stderr);
     }
   } finally {
     // Its failure wins over the setup's: a container still alive holds the secret and can still write it, no agent may start.
