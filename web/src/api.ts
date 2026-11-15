@@ -1,12 +1,18 @@
 import type { AuditListView, AuditSheetView, BlockParetoView, BusMessage, DefectEntry, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
 
+let reloading = false;
+
 /**
  * `fetch`, signing in again when the session is gone (ORC-399): off the loopback a 401 is the GitHub sign-in's, and a
- * reload sends the page through GitHub. On the loopback, no route the dashboard calls answers 401.
+ * reload, once whatever else was in flight, sends the page through GitHub. On the loopback, no route the dashboard calls
+ * answers 401. The live stream's errors say not why: the state, polled every 10 s, does.
  */
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(path, init);
-  if (res.status === 401) location.reload();
+  if (res.status === 401 && !reloading) {
+    reloading = true;
+    location.reload();
+  }
   return res;
 }
 
@@ -69,10 +75,6 @@ export function subscribe(onMessage: (m: BusMessage) => void, onConnection: (c: 
     es.addEventListener(kind, (e) => onMessage(JSON.parse((e as MessageEvent).data) as BusMessage));
   }
   es.onopen = () => onConnection(true);
-  // The stream says not why it failed: a request does, and signs in again if the session is gone.
-  es.onerror = () => {
-    onConnection(false);
-    void call('/api/state');
-  };
+  es.onerror = () => onConnection(false);
   return () => es.close();
 }

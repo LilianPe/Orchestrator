@@ -5,7 +5,7 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import { MAX_DIFF } from '../checks/diff-size.js';
 import { READ_CAPS, type ReadCaps } from '../network/reads.js';
-import type { DashboardAccess } from '../adapters/forge/github-login.js';
+import { GITHUB_LOGIN, type DashboardAccess } from '../adapters/forge/github-login.js';
 import type { Effort } from '../presets/preset.js';
 import type { StepSettings } from '../presets/workflow.js';
 
@@ -203,8 +203,7 @@ const SECTIONS: Record<string, string[]> = {
 const effort = z.enum(['low', 'medium', 'high']);
 const counts = z.record(z.string(), z.number().int().positive());
 const REPO = /^[\w.-]+\/[\w.-]+$/;
-/** A GitHub login or org name; a team is `<org>/<team-slug>`. */
-const GITHUB_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+/** A team of factory.yml's `dashboard`: `<org>/<team-slug>`. */
 const GITHUB_TEAM = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[\w.-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -308,8 +307,8 @@ export function parseFactoryYml(text: string, env: NodeJS.ProcessEnv = process.e
   }
   const dashboard = section('dashboard');
   if (dashboard) {
-    const logins = leaf('dashboard.logins', dashboard['logins'], z.array(z.string().regex(GITHUB_NAME)), 'GitHub logins expected');
-    const org = leaf('dashboard.org', dashboard['org'], z.string().regex(GITHUB_NAME), 'a GitHub org expected');
+    const logins = leaf('dashboard.logins', dashboard['logins'], z.array(z.string().regex(GITHUB_LOGIN)), 'GitHub logins expected');
+    const org = leaf('dashboard.org', dashboard['org'], z.string().regex(GITHUB_LOGIN), 'a GitHub org expected');
     const team = leaf('dashboard.team', dashboard['team'], z.string().regex(GITHUB_TEAM), '`<org>/<team-slug>` expected');
     const named = (v: unknown) => v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0);
     if (!['logins', 'org', 'team'].some((k) => named(dashboard[k]))) violations.push('dashboard: name the logins, the org or the team let in');

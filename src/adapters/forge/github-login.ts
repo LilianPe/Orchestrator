@@ -1,4 +1,7 @@
-import { fetchHttp, type HttpClient } from './github-app.js';
+import { fetchHttp, githubApiHeaders, isRateLimit, type HttpClient } from './github-app.js';
+
+/** A GitHub login, or an org's name: what a session may name, and what `dashboard` of factory.yml may list. */
+export const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
 /**
  * Who may sign in to the dashboard (ORC-399), `dashboard` of factory.yml: any of these logins, the active members of
@@ -52,27 +55,24 @@ export async function githubSignIn(o: GithubLoginOptions, code: string): Promise
   if (!exchange.ok) throw new Error(`GitHub OAuth answered ${exchange.status}`);
   const token = JSON.parse(await exchange.text()) as { access_token?: string; error?: string };
   if (!token.access_token) throw new Error(`GitHub OAuth refused: ${token.error ?? 'no token'}`);
-  const get = (path: string) =>
-    http(`${API}${path}`, {
-      method: 'GET',
-      headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token.access_token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'factory-orchestrator' },
-    });
+  const get = (path: string) => http(`${API}${path}`, { method: 'GET', headers: githubApiHeaders(token.access_token!) });
   const user = await get('/user');
   if (!user.ok) throw new Error(`GitHub answered ${user.status} on /user`);
   const { login } = JSON.parse(await user.text()) as { login: string };
-  // An active membership, read with the person's own token: 403 or 404 when GitHub says they are not a member.
+  // An active membership, read with the person's own token: 403 or 404 when GitHub says they are not a member, never
+  // a rate limit, which decides nothing.
   const member = async (path: string) => {
     const res = await get(path);
-    if (res.status === 403 || res.status === 404) return false;
+    const text = await res.text();
+    if ((res.status === 403 && !isRateLimit(res, text)) || res.status === 404) return false;
     if (!res.ok) throw new Error(`GitHub answered ${res.status} on ${path}`);
-    return (JSON.parse(await res.text()) as { state?: string }).state === 'active';
+    return (JSON.parse(text) as { state?: string }).state === 'active';
   };
   const { logins, org, team } = o.access;
-  if (logins.some((l) => l.toLowerCase() === login.toLowerCase())) return { login, allowed: true };
-  if (org && (await member(`/user/memberships/orgs/${encodeURIComponent(org)}`))) return { login, allowed: true };
-  if (team) {
-    const [teamOrg, slug] = team.split('/');
-    if (await member(`/orgs/${encodeURIComponent(teamOrg!)}/teams/${encodeURIComponent(slug!)}/memberships/${encodeURIComponent(login)}`)) return { login, allowed: true };
-  }
-  return { login, allowed: false };
+  const [teamOrg, slug] = team?.split('/') ?? [];
+  const allowed =
+    logins.some((l) => l.toLowerCase() === login.toLowerCase()) ||
+    (!!org && (await member(`/user/memberships/orgs/${encodeURIComponent(org)}`))) ||
+    (!!team && (await member(`/orgs/${encodeURIComponent(teamOrg!)}/teams/${encodeURIComponent(slug!)}/memberships/${encodeURIComponent(login)}`)));
+  return { login, allowed };
 }

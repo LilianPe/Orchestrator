@@ -61,7 +61,7 @@ async function main(): Promise<number> {
   const cfg = loadInstance(home);
   const api = `http://127.0.0.1:${cfg.port}`;
   // No credential: off the loopback, the daemon asks for a GitHub sign-in (ORC-399), which only the dashboard gives.
-  const control = { api, headers: {}, out: (l: string) => console.log(l) };
+  const control = { api, out: (l: string) => console.log(l) };
 
   switch (cmd) {
     case 'init': {

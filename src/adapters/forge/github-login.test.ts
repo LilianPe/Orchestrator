@@ -3,15 +3,15 @@ import type { HttpClient, HttpRequest } from './github-app.js';
 import { githubAuthorizeUrl, githubSignIn, type DashboardAccess } from './github-login.js';
 
 /** GitHub as the sign-in reaches it: the code exchange, the user, and the memberships `members` holds, by URL. */
-function github(members: Record<string, { status: number; state?: string }> = {}, token: { status?: number; body?: unknown } = {}) {
+function github(members: Record<string, { status: number; state?: string; headers?: Record<string, string> }> = {}, token: { status?: number; body?: unknown } = {}) {
   const calls: { url: string; init: HttpRequest }[] = [];
   const http: HttpClient = async (url, init) => {
     calls.push({ url, init });
-    const answer = (status: number, body: unknown) => ({ ok: status < 300, status, text: async () => JSON.stringify(body) });
+    const answer = (status: number, body: unknown, headers: Record<string, string> = {}) => ({ ok: status < 300, status, headers: new Headers(headers), text: async () => JSON.stringify(body) });
     if (url === 'https://github.com/login/oauth/access_token') return answer(token.status ?? 200, token.body ?? { access_token: 'ghu_user', token_type: 'bearer' });
     if (url === 'https://api.github.com/user') return answer(200, { login: 'Armand', id: 1 });
     const m = members[url];
-    return m ? answer(m.status, { state: m.state }) : answer(404, { message: 'Not Found' });
+    return m ? answer(m.status, { state: m.state }, m.headers) : answer(404, { message: 'Not Found' });
   };
   return { http, calls };
 }
@@ -56,5 +56,7 @@ describe('signing in to the dashboard with GitHub, through the factory App (ORC-
     await expect(signIn({ logins: ['armand'] }, github({}, { status: 500, body: {} }))).rejects.toThrow(/500/);
     const url = 'https://api.github.com/user/memberships/orgs/acme';
     await expect(signIn({ logins: [], org: 'acme' }, github({ [url]: { status: 502 } }))).rejects.toThrow(/502/);
+    // A rate limit is no answer about the membership: it throws, never refuses a member.
+    await expect(signIn({ logins: [], org: 'acme' }, github({ [url]: { status: 403, headers: { 'x-ratelimit-remaining': '0' } } }))).rejects.toThrow(/403/);
   });
 });

@@ -412,7 +412,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       }),
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,
-      ...(githubLogin ? { githubLogin } : {}),
+      githubLogin,
       configProblems: problems,
       heldRows: (ticketId) => orchestrator.heldRows(ticketId),
       secrets: () => transcriptSecrets(env, daemonSecrets()),

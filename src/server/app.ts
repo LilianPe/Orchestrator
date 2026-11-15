@@ -22,6 +22,7 @@ import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
 import { ticketDiagnoses, type HeldRow } from '../core/diagnosis.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
+import { githubActor } from '../core/authz.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
 import type { KbHit } from '../knowledge/kb.js';
@@ -30,6 +31,13 @@ import { buildFlow, flowKey, flowTicket } from './flow.js';
 import { readSession, signSession } from './session.js';
 import { readStatic } from './static.js';
 import { PRODUCT_NAME } from '../product.js';
+
+declare module 'hono' {
+  interface ContextVariableMap {
+    /** The GitHub login of the request's session, set by the guard off the loopback (ORC-399). */
+    githubLogin?: string;
+  }
+}
 
 export interface ServerDeps {
   store: Store;
@@ -194,19 +202,25 @@ export function createApp(d: ServerDeps): Hono {
 
   // Drawn at each start and kept in memory alone (ORC-399): a restart ends every session.
   const sessionKey = randomBytes(32);
-  /** The GitHub login of the request's session, undefined without a valid one. */
-  const signedIn = (c: Context) => readSession(getCookie(c, SESSION_COOKIE), sessionKey, d.clock.now());
   /**
    * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: `github:<login>` of the
    * session off the loopback (ORC-399), as the GitHub webhooks name their sender; `dashboard:local` on the loopback,
    * whatever header comes. Whoever passed the guard is an operator.
    */
-  const operator = (c: Context): Pick<FactoryEvent, 'actor' | 'roles'> => ({ actor: d.githubLogin ? `github:${signedIn(c)}` : 'dashboard:local', roles: ['operator'] });
+  const operator = (c: Context): Pick<FactoryEvent, 'actor' | 'roles'> => {
+    const login = c.get('githubLogin');
+    return { actor: login ? githubActor(login) : 'dashboard:local', roles: ['operator'] };
+  };
 
   if (d.githubLogin) {
     const github = d.githubLogin;
     app.use('*', async (c, next) => {
-      if (isPublicPath(c.req.method, c.req.path) || signedIn(c)) return next();
+      if (isPublicPath(c.req.method, c.req.path)) return next();
+      const login = readSession(getCookie(c, SESSION_COOKIE), sessionKey, d.clock.now());
+      if (login) {
+        c.set('githubLogin', login);
+        return next();
+      }
       // A page a browser opens goes to GitHub, its state in a cookie of this browser; the API and the tools get a 401.
       if (c.req.method === 'GET' && c.req.header('accept')?.includes('text/html')) {
         const state = randomBytes(16).toString('hex');

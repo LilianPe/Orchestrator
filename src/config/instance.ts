@@ -167,7 +167,6 @@ export function daemonSecretValues(home: string, yml: FactoryYml | undefined): s
   const fromYml = [
     yml?.github?.privateKey,
     yml?.github?.webhookSecret,
-    yml?.github?.clientSecret,
     ...(yml?.claude?.accounts.map((a) => a.token) ?? []),
     ...(yml?.repos?.flatMap((r) => Object.values(r.secrets ?? {})) ?? []),
   ];

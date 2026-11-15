@@ -1,7 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-
-/** The characters of a GitHub login: what a session may name, and never a `.`, which separates its parts. */
-const LOGIN = /^[A-Za-z0-9-]{1,39}$/;
+import { GITHUB_LOGIN as LOGIN } from '../adapters/forge/github-login.js';
 
 const mac = (payload: string, key: Buffer) => createHmac('sha256', key).update(payload).digest('base64url');
 

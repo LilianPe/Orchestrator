@@ -6,7 +6,6 @@ import type { TicketState } from '../core/types.js';
 /** The daemon's HTTP API, as `factory status` and `factory stop` reach it. */
 export interface ControlDeps {
   api: string;
-  headers: Record<string, string>;
   out: (line: string) => void;
   /** The global `fetch`; a test hands the server's own. */
   fetch?: (url: string, init?: RequestInit) => Promise<Response> | Response;
@@ -42,25 +41,28 @@ function formatStatus(s: State, now: number): string[] {
   return lines;
 }
 
-const SIGN_IN_ASKED = 'Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.';
-
-/** The daemon's answer to `path`; or undefined when it does not answer, the reason told. */
+/**
+ * The daemon's answer to `path`; or undefined, the reason told: a daemon that does not answer, or one that asks for a
+ * GitHub sign-in (ORC-399), which the CLI cannot give: it sends no credential.
+ */
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promise<Response | undefined> {
+  let res: Response;
   try {
-    return await (d.fetch ?? fetch)(`${d.api}${path}`, { ...init, headers: d.headers });
+    res = await (d.fetch ?? fetch)(`${d.api}${path}`, init);
   } catch (err) {
     d.out(`${PRODUCT_NAME} does not answer on ${d.api} (${(err as Error).message}): run \`factory up\`, or check the port and FACTORY_HOME.`);
     return undefined;
   }
+  if (res.status !== 401) return res;
+  d.out('Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.');
+  return undefined;
 }
 
-/** The state; or undefined, the reason told: a daemon down, a sign-in asked. */
+/** The state; or undefined, the reason told. */
 async function readState(d: ControlDeps): Promise<State | undefined> {
   const res = await ask(d, '/api/state');
-  if (!res) return undefined;
-  if (res.status === 401) d.out(SIGN_IN_ASKED);
-  else if (!res.ok) d.out(`The daemon answers ${res.status} on /api/state.`);
-  return res.ok ? ((await res.json()) as State) : undefined;
+  if (res && !res.ok) d.out(`The daemon answers ${res.status} on /api/state.`);
+  return res?.ok ? ((await res.json()) as State) : undefined;
 }
 
 export async function runStatusCommand(d: ControlDeps, now: number = Date.now()): Promise<number> {
@@ -75,11 +77,10 @@ export async function runQueueCommand(d: ControlDeps, command: 'pause' | 'resume
   const res = await ask(d, `/api/control/${command}`, { method: 'POST' });
   if (!res) return 1;
   if (!res.ok) {
-    const not = command === 'pause' ? 'The queue is not paused.' : 'The queue is not resumed.';
-    d.out(`${res.status === 401 ? SIGN_IN_ASKED : `The daemon refuses to ${command} the queue (${res.status}).`} ${not}`);
+    d.out(`The daemon refuses to ${command} the queue (${res.status}).`);
     return 1;
   }
-  d.out(command === 'pause' ? 'Queue paused.' : 'Queue resumed.');
+  d.out(`Queue ${command === 'pause' ? 'paused' : 'resumed'}.`);
   return 0;
 }
 
@@ -94,7 +95,8 @@ export async function runStopCommand(d: ControlDeps, ticketId: string): Promise<
     d.out(`Ticket ${ticketId} unknown to ${PRODUCT_NAME}.`);
     return 1;
   }
-  const res = await (d.fetch ?? fetch)(`${d.api}/api/tickets/${t.projectId}/${ticketId}/stop`, { method: 'POST', headers: d.headers });
+  const res = await ask(d, `/api/tickets/${t.projectId}/${ticketId}/stop`, { method: 'POST' });
+  if (!res) return 1;
   if (!res.ok) {
     d.out(`The daemon refuses to stop ${ticketId} (${res.status}).`);
     return 1;

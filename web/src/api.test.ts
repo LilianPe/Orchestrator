@@ -16,7 +16,8 @@ describe('the API client and the GitHub sign-in (ORC-399)', () => {
     await post('/api/runs/r1/stop');
     await fetchSnapshot().catch(() => undefined);
     await expect(fetchFlow()).rejects.toThrow('401');
-    expect(reload).toHaveBeenCalledTimes(3);
+    // Once, whatever else was in flight.
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('reloads nothing on any other answer', async () => {

@@ -248,11 +248,19 @@ function validationErrors(data: object): string[] {
   return Array.isArray(errors) ? errors.flatMap((e: { message?: unknown }) => (typeof e?.message === 'string' ? [e.message] : [])) : [];
 }
 
+/** The headers of every GitHub REST call, with an installation token or a user's (ORC-399). */
+export const githubApiHeaders = (token: string): Record<string, string> => ({
+  accept: 'application/vnd.github+json',
+  authorization: `Bearer ${token}`,
+  'x-github-api-version': '2022-11-28',
+  'user-agent': 'factory-orchestrator',
+});
+
 /**
  * A refusal for the rate, not for the permission: GitHub answers both a primary and a secondary rate limit with a 403
  * (or a 429), a `retry-after` header, `x-ratelimit-remaining: 0`, or a message that names it.
  */
-function isRateLimit(res: HttpResponse, message: string): boolean {
+export function isRateLimit(res: HttpResponse, message: string): boolean {
   return (
     (res.status === 403 || res.status === 429) &&
     (res.headers?.get('retry-after') != null || res.headers?.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(message))
@@ -394,13 +402,7 @@ export class GitHubAppAuth {
   async #send(method: string, path: string, auth: string, body: unknown, secret: boolean): Promise<unknown> {
     const res = await this.http(`${this.apiBase}${path}`, {
       method,
-      headers: {
-        accept: 'application/vnd.github+json',
-        authorization: `Bearer ${auth}`,
-        'x-github-api-version': '2022-11-28',
-        'user-agent': 'factory-orchestrator',
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
+      headers: { ...githubApiHeaders(auth), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const text = await res.text();
