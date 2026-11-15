@@ -30,26 +30,10 @@ import type { JobSpec, Workflow } from '../core/workflow.js';
 import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from './outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from './transient.js';
-import { Worker } from './worker.js';
-import { FrozenFormatError, frozenWorkflow, workflowVersion } from './workflow-version.js';
-import {
-  KEPT_PR,
-  LEASE_MS,
-  PAUSE_ACCEPTED,
-  RUN_LEASE_MS,
-  type DecisionOutcome,
-  type DecisionRequest,
-  type EffectOutcome,
-  type OutboxRow,
-  type QueueItem,
-  type RunRecord,
-  type SessionRole,
-  type Store,
-  type WorkflowVersion,
-} from '../store/types.js';
+import { KEPT_PR, LEASE_MS, PAUSE_ACCEPTED, RUN_LEASE_MS, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type QueueItem, type RunRecord, type SessionRole, type Store } from '../store/types.js';
 import { agentOutputKey, attemptOutcome, parseAgentOutput, type AgentOutput, type PreviewRecipe } from '../core/agent-output.js';
 import { describePr, START_SAID, verifySummary } from '../publish/describe.js';
-import { composeResult, OutputPolicy, OutputRefused, PolicedTracker } from '../publish/output-policy.js';
+import { composeResult, OutputPolicy, OutputRefused } from '../publish/output-policy.js';
 import type { EventBus } from '../server/live-feed.js';
 import type { Clock } from '../core/clock.js';
 import type { Effect } from '../core/decision.js';
@@ -57,7 +41,7 @@ import { deadLetteredEvent, repairedEvent } from '../core/dead-letter.js';
 import type { HeldRow } from '../core/diagnosis.js';
 import { NO_PLAN, planDecision } from '../core/decision-plan.js';
 import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from '../core/block-comment.js';
-import { blockedLabelChange, goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from '../core/engine.js';
+import { goesThroughFreeze, HUMAN_EVENTS, isAnswerer, mayCheck, mayPublish, RECONCILE_MS, reconcileTicket, refusesDevWork, SENSITIVE_PATHS, sensitivePathsAtLaunch, staleRelaunch, stepOf, waitingBody, waitingOn } from '../core/engine.js';
 import { codeRunTokens, runMeasure } from '../core/measures.js';
 import { attemptLabels, packFingerprints } from '../core/attempt-labels.js';
 import { formatReuse, ownWork, ticketBranches } from '../core/intake-checks.js';
@@ -69,7 +53,7 @@ import { isNote, noSearchReason, repoNameOf, searchAsked, searchCounted, type Pr
 import { formatLinked, formatRunState, formatTranscript } from '../core/answer-context.js';
 import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from '../core/human-message.js';
-import { branchAnew, heldByOther, pendingOf, reduce, samePending } from '../core/reduce.js';
+import { branchAnew, heldByOther, pendingOf, samePending } from '../core/reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from '../core/session-plan.js';
 import { startMove } from '../core/chain.js';
 import { formatSpec } from '../core/spec.js';
@@ -116,11 +100,14 @@ import { factoryDefault } from '../presets/factory-default.js';
 import { isTakenOver, REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from '../core/block-cause.js';
 import { DECLARED_READS, declaredReads, type DeclaredReads } from '../network/reads.js';
 import { readSecurityLog, refusalSummary } from '../network/security-log.js';
+import { DaemonBase } from './daemon-base.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+
 /** The contested findings as the first lens of a round read them (ORC-184): its own end replaces its findings on the commit, which the ids name by rank. */
 const contestedKey = (projectId: string, ticketId: string): string => `contested-input:${projectId}:${ticketId}`;
+
 /** Set while a fresh worktree is not set up and sealed (ORC-211): a daemon killed before the end leaves it, and the next launch makes the worktree anew. */
 const setupPendingKey = (path: string): string => `setup-pending:${path}`;
 
@@ -128,6 +115,7 @@ const setupPendingKey = (path: string): string => `setup-pending:${path}`;
  * Every run's Claude Code (ORC-284): no auto-memory (ORC-205), telemetry off by both variables ORC-128
  * names, which one does it unmeasured; in a sandbox the egress proxy blocks it anyway (ORC-213).
  */
+
 export const CLAUDE_RUN_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 
 /** Half of what Linux takes for one environment string (128 KiB): past it, the launch itself would fail. */
@@ -145,6 +133,7 @@ export function fullReadEnv(cwd: string, paths: readonly string[]): Record<strin
  * The run's output, validated again: absent or invalid, the agent submitted none (ORC-289). A store
  * that cannot be read rejects: that is the infrastructure's, not the agent's.
  */
+
 async function storedOutput(store: Store, runId: string): Promise<AgentOutput | undefined> {
   const raw = await store.getMeta(agentOutputKey(runId));
   if (raw === undefined) return undefined;
@@ -166,8 +155,10 @@ const USAGE_RETRY_MS = 60 * 60_000;
 
 /** Meta key: until when (ms) the account's usage limit holds every launch (ORC-340). */
 const USAGE_LIMITED_UNTIL = 'usage-limited-until';
+
 /** The account of a hold: each account has its own limit, and a launch on another one is not held. */
 const usageHoldKey = (account: string): string => `${USAGE_LIMITED_UNTIL}:${account}`;
+
 /** The shortest wait on a usage limit: a reset already past (or announced late) is not a reason to hit the limit again at once. */
 const USAGE_MIN_WAIT_MS = 5 * 60_000;
 
@@ -179,6 +170,7 @@ class TicketBudgetError extends Error {}
  * stay in the daemon's log (ORC-364); the ticket gets the command's name, without its directory (a CLI configured by
  * its path), and its code.
  */
+
 const launchErrorTold = (err: unknown): string =>
   err instanceof ExecFailure ? `${basename(err.cmd)} failed (code ${err.code}); the command and its output are in the daemon log.` : (err as Error).message;
 
@@ -193,6 +185,7 @@ const causeChain = (err: unknown): string => {
  * What a run's stagnation is watched against (ORC-136, ORC-187). Only a dev job has its worktree read for a loop: `decide`
  * blocks no ticket on a question, whose checkout stays out of it.
  */
+
 function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation: StagnationBounds & { silentMs: number } } {
   return { stagnation: { silentMs: wf.limits.silentAfterMs, ...(job.queue === 'dev' ? { repeats: wf.limits.repeatedFailures } : {}) } };
 }
@@ -392,6 +385,7 @@ interface StartFrom {
  * it would fail again. `failure`: what failed, also its `cause`, which `isTransient` reads. Its message is what a launch
  * error tells the ticket (`launchErrorTold`): its retries spent, the effect's failure reaches it as such (ORC-364).
  */
+
 class RetryableStart extends Error {
   constructor(readonly failure: unknown) {
     super(failure instanceof Error ? launchErrorTold(failure) : String(failure), { cause: failure });
@@ -402,10 +396,12 @@ class RetryableStart extends Error {
  * Starts of a queue item that failed before their `run.started` (ORC-339): handed out again after 2 s, 4 s, 8 s, 16 s,
  * doubled up to 5 min; past 5 attempts, or 14 (about 33 min) when the failure is transient (ORC-343), the ticket is blocked.
  */
+
 export const START_RETRY = { attempts: 5, transientWindowMs: TRANSIENT_WINDOW_MS, baseMs: 2_000, capMs: 300_000 } satisfies RetryPolicy;
 
 /** A read or write of the factory's state, as its caller takes its failure (`sessionFor`, `move`): as it is by default. */
 type StateIo = <T>(io: Promise<T>) => Promise<T>;
+
 const asIs: StateIo = (io) => io;
 
 /** A start behind another daemon's launch not started yet (ORC-359): that very start is that launch's, another goes back in line. */
@@ -446,6 +442,7 @@ export function logicalFromName(states: Workflow['states'], name: string): Logic
  * session a reviewer's, a read-only question the answerer's.
  * ponytail: read from the job's shape, not declared in the workflow; a `role:` per job if a pack needs another.
  */
+
 function roleOf(job: JobSpec, ticketSession: boolean): SessionRole | undefined {
   if (ticketSession) return 'implementer';
   if (job.queue === 'dev') return 'reviewer';
@@ -475,6 +472,7 @@ function sessionSaved(configDir: string, sessionId: string): boolean {
  * `factory/preuve-visuelle` (ORC-176): the captures the factory took, or that there is none to take. A required proof the instance
  * could not take is neutral, indicative until the application starts reliably in the sandbox (ORC-152): it blocks nothing.
  */
+
 function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summary: string } {
   if (p.decision === 'not_applicable') return { conclusion: 'neutral', summary: 'No visual proof applicable.' };
   const why = [
@@ -491,6 +489,7 @@ function visualCheck(p: VisualProof): { conclusion: 'success' | 'neutral'; summa
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky']; diffClass?: CleanVerifyResult['diffClass'] };
 
 const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
+
 /** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
 const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
@@ -499,6 +498,7 @@ const blockedOn = (kind: BlockKind, reason: string, job: string): InternalEvent 
 
 /** The sandboxes of the take-overs (ORC-234): one per ticket, `take-over-<project>-<ticket>`, no attempt of an agent. */
 export const takeOverKey = (projectId: string, ticketId: string): string => `take-over-${projectId}-${ticketId}`;
+
 /** Where a bundle handed back is checked (`<runsDir>/<key>/`, its secret scan's sandbox `<key>-publish-secrets`): an attempt like any, which `recover()` reaps. */
 const bundleKey = (projectId: string, ticketId: string): string => `bundle-${projectId}-${ticketId}`;
 
@@ -510,80 +510,7 @@ export interface TakeOverDesk {
   keepBundle(projectId: string, ticketId: string, bytes: Uint8Array): Promise<string>;
 }
 
-export class Daemon {
-  private background = new Map<Promise<void>, string | undefined>();
-  /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
-  private liveRuns = new Set<string>();
-  private handles = new Map<string, RunHandle>();
-  /**
-   * The attempts this process follows (ORC-344), until their end is delivered: the token of their lease, which each of its
-   * writes of them carries, when they last showed progress, how long a silence their lease outlives, and whether a stop
-   * was asked of them. `ending`: their stream is over, their end on its way: no beat renews them, none takes them over.
-   */
-  private held = new Map<string, { token: number; seenAt: number; silentMs: number; stopped?: true; ending?: true }>();
-  private beating = false;
-  private stopping = false;
-  private newId: () => string;
-  /** Inbox writes in flight (accept). */
-  private writes = new Set<Promise<void>>();
-  /** False until `replayInbox()` when `holdInboxUntilReplay` is set: `accept` then only writes. */
-  private dispatchOpen: boolean;
-  /** The inbox worker (ORC-149): one task per ticket, a decision transaction per event. */
-  private readonly worker: Worker;
-  /** The policy every published text goes through (ORC-214), and the tracker without it, for the live relay alone: its words are the factory's. */
-  private readonly policy: OutputPolicy;
-  private readonly relayTracker: Tracker;
-  /** Versions of the projects' workflows, by workflow object. */
-  private versionOfWorkflow = new WeakMap<Workflow, WorkflowVersion>();
-  /** The frozen versions refused for their format (ORC-393), and the tickets whose refusal is logged, once each. */
-  private refusedVersions = new Map<string, FrozenFormatError>();
-  private refusedTickets = new Set<string>();
-  /** Workflows by version hash: the current ones and those tickets are frozen on. */
-  private workflows = new Map<string, Workflow>();
-  /** Dequeued items whose start has not taken its slot yet, per queue: drain hands out no more than the free slots. */
-  private admitting: Record<QueueName, number> = { dev: 0, questions: 0 };
-  /** Runs of this daemon's launches that ended without letting go of their hold on the ticket (ORC-359): dead, whatever its time. */
-  private droppedHolds = new Set<string>();
-  /** Until when each account's usage limit holds its launches (ORC-357), as last read from the store or written to it: read again at each drain and each start outside one. */
-  private usageHolds = new Map<string, number>();
-  /** The holds the store failed to record (ORC-357): they still hold this daemon's launches. */
-  private unrecordedHolds = new Map<string, number>();
-  /** Drains run one at a time. */
-  private draining: Promise<void> = Promise.resolve();
-  private instance: Promise<string> | undefined;
-  /** Results this process could not write, the database down (ORC-343): written again at each beat (`supervise`), by id. */
-  private unwritten = new Map<string, { what: string; write: () => Promise<void> }>();
-
-  constructor(private d: DaemonDeps) {
-    this.policy = d.outputPolicy ?? new OutputPolicy();
-    this.relayTracker = d.tracker;
-    this.d = { ...d, tracker: new PolicedTracker(d.tracker, this.policy, (m) => this.log('warn', m)) };
-    this.newId = d.newId ?? randomUUID;
-    this.dispatchOpen = !d.holdInboxUntilReplay;
-    this.worker = new Worker({
-      store: d.store,
-      log: (level, message) => this.log(level, message),
-      prepare: (event) => this.prepared(event),
-      request: (event) => this.request(event),
-      committed: (event, outcome) => this.committed(event, outcome),
-      execute: (row) => this.execute(row),
-      noEffect: (projectId) => this.noEffect(projectId),
-      ...(d.keptEffectsDir ? { keep: (row: OutboxRow) => this.keep(row, d.keptEffectsDir!) } : {}),
-      leaseMs: d.effectLeaseMs,
-      retry: d.processRetry,
-      left: (row) => void this.freeSlot(row),
-      deadLettered: (row) => void this.freeSlot(row),
-      effectRetry: d.effectRetry,
-      now: () => d.clock.now(),
-    });
-  }
-
-  /**
-   * The one way in for an event (ORC-147): writes it to the inbox and resolves once the row is
-   * committed, then lets the worker process it from the inbox. Resolves `false` for an id the
-   * inbox already holds (a duplicate: nothing more happens). Rejects when the write fails: the
-   * event was not taken, and the producer must report it (a webhook answers 500).
-   */
+export class Daemon extends DaemonBase {
   accept(event: FactoryEvent | StoredEvent): Promise<boolean> {
     const write = this.d.store.appendInbox(event).then((fresh) => {
       if (fresh) this.wake();
@@ -1510,12 +1437,6 @@ export class Daemon {
     }
   }
 
-  project(id: string): ProjectRuntime {
-    const p = this.d.projects.find((x) => x.id === id);
-    if (!p) throw new Error(`unknown project ${id}`);
-    return p;
-  }
-
   /** Paused by `set_paused`, or by a pause accepted whose `set_paused` has not run yet (`PAUSE_ACCEPTED`, ORC-335): its lane and a ticket's go side by side. */
   async isPaused(): Promise<boolean> {
     const flags = await Promise.all([this.d.store.getMeta('paused'), this.d.store.getMeta(PAUSE_ACCEPTED)]);
@@ -1570,120 +1491,6 @@ export class Daemon {
     if (prompt && index.more) this.log('warn', `${ticketId} ${job}: INDEX.md over its cap, ${index.more} characters left out of the knowledge index the session reads (kb_search reaches the notes)`);
     return prompt;
   }
-
-  private log(level: 'info' | 'warn' | 'error', message: string): void {
-    this.d.bus.publish({ kind: 'log', level, message, at: this.d.clock.now() });
-  }
-
-  private track(p: Promise<void>, runId?: string): void {
-    const wrapped = p.catch((err: unknown) => this.log('error', (err as Error).message)).finally(() => this.background.delete(wrapped));
-    this.background.set(wrapped, runId);
-  }
-
-  /**
-   * The only way the orchestrator changes a ticket outside a decision (an effect recording what it
-   * did): through `reduce`, on the projection read again under the ticket's lock.
-   */
-  private async apply(t: TicketState, ...events: InternalEvent[]): Promise<TicketState> {
-    const now = this.d.clock.now();
-    const step = (from: TicketState): TicketState => {
-      let next = from;
-      for (const e of events) next = reduce(next, e)!;
-      return { ...next, updatedAt: now };
-    };
-    let before = t.blocked;
-    let next = await this.d.store.updateTicket(t.projectId, t.ticketId, (from) => ((before = from.blocked), step(from)));
-    if (!next) {
-      next = step(t);
-      await this.d.store.putTicket(next);
-    }
-    this.d.bus.publish({ kind: 'ticket', ticket: next });
-    // Blocked or unblocked outside a decision (recover, a launch error, a refused pickup): the label
-    // `decide` keeps in step with its own changes follows here (ORC-170). A failed write does not undo the change.
-    const label = blockedLabelChange(before, next.blocked);
-    if (label) {
-      await this.setLabels(t.projectId, t.ticketId, label.add, label.remove).catch((e: Error) => this.log('warn', `could not set the label of ${t.ticketId}: ${e.message}`));
-    }
-    return next;
-  }
-
-  /** The version of a project's workflow now: a ticket's first decision freezes it (ORC-149). */
-  private currentVersion(project: ProjectRuntime): WorkflowVersion {
-    let v = this.versionOfWorkflow.get(project.workflow);
-    if (!v) {
-      v = workflowVersion(project.workflow);
-      this.versionOfWorkflow.set(project.workflow, v);
-      this.workflows.set(v.hash, project.workflow);
-    }
-    return v;
-  }
-
-  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket (ORC-393). */
-  private workflowOf(version: WorkflowVersion, ticketId: string | undefined): Workflow {
-    let wf = this.workflows.get(version.hash);
-    if (!wf) {
-      try {
-        wf = frozenWorkflow(version);
-      } catch (err) {
-        if (err instanceof FrozenFormatError) this.refuse(version.hash, ticketId, err);
-        throw err;
-      }
-      this.workflows.set(version.hash, wf);
-    }
-    return wf;
-  }
-
-  /** A ticket refused for the format of its frozen version: in the daemon's log, once per ticket. */
-  private refuse(hash: string, ticketId: string | undefined, err: FrozenFormatError): void {
-    this.refusedVersions.set(hash, err);
-    const key = `${ticketId ?? ''}:${hash}`;
-    if (this.refusedTickets.has(key)) return;
-    this.refusedTickets.add(key);
-    this.log('error', `${ticketId ?? 'an event'} refused: ${err.message}`);
-  }
-
-  /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
-  /** `known`: the ticket, when the caller has just read it (`null`: read, and not tracked). */
-  private async runtimeFor(projectId: string, ticketId: string | undefined, known?: TicketState | null): Promise<ProjectRuntime | undefined> {
-    const found = projectId === '*' ? this.d.projects[0] : this.project(projectId);
-    if (!found || !ticketId) return found;
-    // A replayed ticket (ORC-376) runs on its clone, and reads the ticket as it was.
-    const replayed = await this.d.replays?.of(found.id, ticketId);
-    const project = replayed ? { ...found, repoPath: replayed.repoPath, replayed } : found;
-    const hash = (known === undefined ? await this.d.store.getTicket(project.id, ticketId) : known)?.workflowHash;
-    if (!hash || hash === this.currentVersion(project).hash) return project;
-    let workflow = this.workflows.get(hash);
-    if (!workflow) {
-      // A ticket refused for its version's format (ORC-393) has no runtime: nothing is launched, executed nor kept for it.
-      const refused = this.refusedVersions.get(hash);
-      if (refused) {
-        this.refuse(hash, ticketId, refused);
-        return undefined;
-      }
-      const stored = await this.d.store.getWorkflowVersion(hash);
-      if (!stored) throw new Error(`workflow version ${hash} of ${ticketId} is not stored`);
-      try {
-        workflow = this.workflowOf(stored, ticketId);
-      } catch (err) {
-        if (err instanceof FrozenFormatError) return undefined;
-        throw err;
-      }
-    }
-    return { ...project, workflow };
-  }
-
-  private async ticket(projectId: string, ticketId: string): Promise<TicketState> {
-    const t = await this.d.store.getTicket(projectId, ticketId);
-    if (!t) throw new Error(`unknown ticket ${ticketId}`);
-    return t;
-  }
-
-  /**
-   * An event that starts tracking a ticket must carry its snapshot, so that `decide` and a replay of the
-   * journal never read the tracker. A producer that could not fill it gets it filled here, before journaling.
-   * An issue the tracker no longer finds (deleted meanwhile, ORC-302) leaves it without one: its decision
-   * ignores it, journaled, instead of retrying a read that would fail again. Any other read error throws: retried.
-   */
   private async withSnapshot(event: FactoryEvent): Promise<FactoryEvent> {
     if (event.projectId === '*' || !event.ticketId || !CREATES_TICKET.has(event.type)) return event;
     const payload = event.payload as { issue?: IssueSnapshot };
@@ -1743,7 +1550,7 @@ export class Daemon {
    * `force` records facts without a decision: it needs the snapshot alone, not what may be down still. An event
    * already prepared stays as it is. One its upcast refuses is left to the decision, which throws too.
    */
-  private async prepared(event: FactoryEvent): Promise<FactoryEvent> {
+  protected async prepared(event: FactoryEvent): Promise<FactoryEvent> {
     const outside = async (e: FactoryEvent) => this.withQueued(await this.withFreeze(await this.withRoles(await this.withSnapshot(e))));
     if (event.type !== 'dead_letter.repaired') return outside(event);
     let repaired: FactoryEvent | undefined;
@@ -1758,7 +1565,7 @@ export class Daemon {
   }
 
   /** The decision transaction of an event (ORC-149): `decide` runs in the store, under the ticket's lock. */
-  private request(event: FactoryEvent): DecisionRequest {
+  protected request(event: FactoryEvent): DecisionRequest {
     const project = event.projectId === '*' ? this.d.projects[0] : this.project(event.projectId);
     const now = this.d.clock.now();
     if (!project) return { event, workflow: { hash: '', definition: null }, decide: () => NO_PLAN };
@@ -1776,14 +1583,14 @@ export class Daemon {
    * aside still frees its run's slot: otherwise, slot after slot, it would stop every launch for as long
    * as it stays. The slots are in memory, so the replay at the next start frees nothing twice.
    */
-  private async freeSlot(row: StoredEvent): Promise<void> {
+  protected async freeSlot(row: StoredEvent): Promise<void> {
     if (row.type !== 'run.finished') return;
     const run = await this.d.store.getRun((row.payload as EventPayloads['run.finished']).runId).catch(() => undefined);
     if (run) this.d.scheduler.release(`${run.ticketId}:${run.queue}`);
   }
 
   /** After the commit, before the effects. */
-  private async committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void> {
+  protected async committed(event: FactoryEvent, outcome: Extract<DecisionOutcome, { status: 'committed' }>): Promise<void> {
     const { bus, scheduler } = this.d;
     // First, and without a store read: a finished run's slot is freed whatever follows.
     if (event.type === 'run.finished' && outcome.known && event.ticketId) {
@@ -1805,7 +1612,7 @@ export class Daemon {
    * throws when the effect failed. The executor retries it, then lets it die; its result comes back
    * through the inbox (`effect:<id>`), and a dead one blocks the ticket by `decide`.
    */
-  private async execute(row: OutboxRow): Promise<EffectOutcome | void> {
+  protected async execute(row: OutboxRow): Promise<EffectOutcome | void> {
     const project = await this.runtimeFor(row.projectId, row.ticketId);
     if (!project) return;
     const effect = row.effect;
@@ -1819,25 +1626,7 @@ export class Daemon {
     if (outcome?.deduplicated) this.log('info', `effect ${row.id} (${effect.kind}) already made${outcome.ref ? ` (${outcome.ref})` : ''}: not written again`);
     return outcome;
   }
-
-  /** A project without effects (ORC-231): the outbox keeps its effects, and the orchestrator makes none of its writes outside it. */
-  private noEffect(projectId: string): boolean {
-    return this.d.projects.find((p) => p.id === projectId)?.effects === 'none';
-  }
-
-  /** Whether `what`, a write to Linear made outside the outbox, is left out because its project has no effects: said in the log. */
-  private silenced(projectId: string, what: string): boolean {
-    if (!this.noEffect(projectId)) return false;
-    this.log('info', `${what} not made: the project has no effects`);
-    return true;
-  }
-
-  /**
-   * An effect of a project without effects (ORC-231), kept instead of made: what it would have written, as a JSON file and its row in
-   * `artifacts`, once by the row's id. A `publish` keeps the PR it would have opened, its title, its body and the ticket's diff, then
-   * goes on as a publication does (`publish.done`), so the run ends as it would have; a `reconcile` reads nothing and keeps nothing.
-   */
-  private async keep(row: OutboxRow, dir: string): Promise<void> {
+  protected async keep(row: OutboxRow, dir: string): Promise<void> {
     const effect = row.effect;
     if (effect.kind === 'reconcile' || !row.ticketId) return;
     const project = await this.runtimeFor(row.projectId, row.ticketId);
@@ -2267,15 +2056,6 @@ export class Daemon {
   /**
    * Labels written by the factory (ORC-346): what the write set goes into the labels known (`labelsWritten`), so a pass
    * that reads the ticket after its webhook was lost sees no human change. Its webhook is known by its actor.
-   */
-  private async setLabels(projectId: string, ticketId: string, add: string[], remove: string[]): Promise<void> {
-    await this.d.labelsWritten?.(projectId, ticketId, await this.d.tracker.setLabels(ticketId, add, remove));
-  }
-
-  /**
-   * Plans each project's reconciliation in the store (ORC-185), in `RECONCILE_MS` (the connection to Linear passes
-   * at once), unless a timer already plans it (a restart): its firings then arm the next ones. The timer of a
-   * project gone from the configuration is deleted: it would fire for a project the factory no longer knows.
    */
   async armReconciliation(): Promise<void> {
     const timers = (await this.d.store.dueTimers(Number.MAX_SAFE_INTEGER)).filter((t) => t.kind === 'reconcile');
