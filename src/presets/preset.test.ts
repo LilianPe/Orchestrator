@@ -76,10 +76,35 @@ describe('factory/default', () => {
     expect(step(factoryDefault, 'verify_fix')).toMatchObject({ next: 'publish', onFailure: { goto: 'fix', counter: 'verify' } });
   });
 
-  it('sends a conflict with the default branch to a rebase step, on the review and CI counter, then through verify and publish (ORC-146)', () => {
+  it('sends a conflict with the default branch to a rebase step, on the review and CI counter, then through verify and its own publication, with no AI review after it (ORC-146, ORC-391)', () => {
     expect(factoryDefault.conflict).toEqual({ goto: 'rebase', counter: 'review_ci' });
     expect(step(factoryDefault, 'rebase')).toMatchObject({ type: 'agent_step', writes: 'code', skill: 'factory:rebase', model: 'claude-sonnet-5-5', effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_rebase' });
-    expect(step(factoryDefault, 'verify_rebase')).toMatchObject({ type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'rebase', counter: 'verify' } });
+    expect(step(factoryDefault, 'verify_rebase')).toMatchObject({ type: 'verify', mode: 'full', network: 'none', next: 'publish_rebase', onFailure: { goto: 'rebase', counter: 'verify' } });
+    expect(step(factoryDefault, 'publish_rebase')).toEqual({ id: 'publish_rebase', type: 'publish', mode: 'push', next: null });
+  });
+
+  it('carries what the chain needs (ORC-391): skills, lenses, the red mode, the attempt duration, the guard, the fix causes, after_merge with no agent', () => {
+    expect(['intake', 'spec_draft', 'tests', 'build', 'rebase'].map((id) => (step(factoryDefault, id) as { skill?: string }).skill)).toEqual([
+      'factory:intake', 'factory:spec', 'factory:tests', 'factory:dev', 'factory:rebase',
+    ]);
+    expect(step(factoryDefault, 'review')).toMatchObject({ lenses: ['correctness', 'security'] });
+    expect(step(factoryDefault, 'red')).toMatchObject({ mode: 'red', red: 'measure' });
+    expect(factoryDefault).toMatchObject({ attempt: { minutes: 90 }, guard: { checks: ['has_description', 'not_started'] } });
+    expect(Object.keys((step(factoryDefault, 'fix') as Extract<Step, { type: 'fix' }>).skills)).toEqual(['ci', 'review', 'human', 'instruction', 'relay']);
+    expect(step(factoryDefault, 'after_merge')).toEqual({ id: 'after_merge', type: 'factory_step', does: 'after_merge', next: null });
+  });
+
+  it('refuses a red step without its mode, a mode on another check, a review without lenses, an attempt of no duration', () => {
+    const p = clone();
+    const { red: _red, ...unmoded } = step(p, 'red') as Extract<Step, { type: 'verify' }>;
+    p.steps = p.steps.map((s) => (s.id === 'red' ? unmoded : s.id === 'verify' ? { ...s, red: 'blocking' as const } : s.id === 'review' ? { ...s, lenses: [] } : s));
+    p.attempt = { minutes: 0 };
+    expect(violations(p)).toEqual(expect.arrayContaining([
+      'attempt: minutes must be a positive integer',
+      'step red: a red step, and only it, says whether its red is measured or blocking',
+      'step verify: a red step, and only it, says whether its red is measured or blocking',
+      'step review: a review step needs its lenses, each once',
+    ]));
   });
 
   it('refuses a conflict edge to an unknown step or on an undeclared counter', () => {
