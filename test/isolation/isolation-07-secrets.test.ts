@@ -9,7 +9,7 @@ import { ClaudeCodeRunner, SANDBOX_CLAUDE_TOKEN } from '../../src/adapters/runne
 import { SANDBOX_HOME, WORKSPACE_TARGET, type Sandbox } from '../../src/adapters/sandbox/types.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { repoVariables } from '../../src/config/repo-variables.js';
-import { CLAUDE_RUN_ENV } from '../../src/runtime/daemon.js';
+import { CLAUDE_RUN_ENV } from '../../src/runtime/launch.js';
 import { runSealedSetup } from '../../src/core/sealed-setup.js';
 import { cli, enabled, image, useSandboxes } from './helpers.js';
 
@@ -26,7 +26,7 @@ const TOKEN = /ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0
 const CREDENTIAL_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_PASS|_PWD|APIKEY|_KEY|CREDENTIALS?|DATABASE_URL)$/i;
 
 const CHOSEN_ACCOUNT = 'sk-ant-oat01-chosen-account-token';
-/** What the daemon sets for a sandboxed run (src/app/bootstrap.ts agentEnv, src/core/orchestrator.ts). */
+/** What the daemon sets for a sandboxed run (src/app/bootstrap.ts agentEnv, src/runtime/launch.ts). */
 const RUN_ENV = {
   FACTORY_RUN_TOKEN: 'run-token-of-this-run',
   FACTORY_TICKET: 'ISO-7',

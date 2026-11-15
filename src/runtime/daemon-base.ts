@@ -1,32 +1,58 @@
 import { randomUUID } from 'node:crypto';
-import type { RunHandle } from '../adapters/runner/types.js';
+import type { RunHandle, RunResult, StagnationBounds } from '../adapters/runner/types.js';
 import type { Sandbox, SandboxProvider } from '../adapters/sandbox/types.js';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { Workspace } from '../adapters/workspace/types.js';
-import type { Workflow } from '../core/workflow.js';
+import type { JobSpec, Workflow } from '../core/workflow.js';
 import { Worker } from './worker.js';
 import { FrozenFormatError, frozenWorkflow, workflowVersion } from './workflow-version.js';
-import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, RunRecord, WorkflowVersion } from '../store/types.js';
+import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, RunRecord, Store, WorkflowVersion } from '../store/types.js';
+import { agentOutputKey, parseAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { OutputPolicy, PolicedTracker } from '../publish/output-policy.js';
 import { blockedLabelChange } from '../core/engine.js';
 import { reduce } from '../core/reduce.js';
 import type { StoredEvent } from '../core/upcast.js';
 import type { InternalEvent, QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import type { EgressPolicy } from '../network/levels.js';
-import type { DaemonDeps, ProjectRuntime, StartFrom, StartOpts, StartOutcome } from './daemon.js';
+import type { StartFrom, StartOpts, StartOutcome } from './launch.js';
+import type { DaemonDeps, ProjectRuntime } from './daemon.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 export const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
 
+export async function storedOutput(store: Store, runId: string): Promise<AgentOutput | undefined> {
+  const raw = await store.getMeta(agentOutputKey(runId));
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = parseAgentOutput(JSON.parse(raw));
+    return parsed.ok ? parsed.output : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What only the runner knows of an attempt's end (ORC-136), kept on its row: recover() sends the same result if the process dies before it does. */
+export function endFacts({ stagnation, infra, usageLimit, overBudget }: Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit' | 'overBudget'>): Pick<RunResult, 'stagnation' | 'infra' | 'usageLimit' | 'overBudget'> {
+  return { ...(stagnation ? { stagnation } : {}), ...(infra ? { infra } : {}), ...(usageLimit ? { usageLimit } : {}), ...(overBudget ? { overBudget } : {}) };
+}
+
+export function stagnationBounds(wf: Workflow, job: JobSpec): { stagnation: StagnationBounds & { silentMs: number } } {
+  return { stagnation: { silentMs: wf.limits.silentAfterMs, ...(job.queue === 'dev' ? { repeats: wf.limits.repeatedFailures } : {}) } };
+}
+
 /** A read or write of the factory's state, as its caller takes its failure (`sessionFor`, `move`): as it is by default. */
 export type StateIo = <T>(io: Promise<T>) => Promise<T>;
 
+/** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
 export interface EffectKey {
   id: string;
   replay: boolean;
   /** The inbox event the effect's decision came from. */
   eventId: string;
 }
+
+/** The inbox id of an attempt's result, and its key among the results kept (`deliver`). */
+export const endKey = (runId: string): string => `attempt:${runId}:finished`;
 
 /** The sandboxes of the take-overs (ORC-234): one per ticket, `take-over-<project>-<ticket>`, no attempt of an agent. */
 export const takeOverKey = (projectId: string, ticketId: string): string => `take-over-${projectId}-${ticketId}`;
@@ -258,6 +284,8 @@ export abstract class DaemonBase {
   abstract accept(event: FactoryEvent | StoredEvent): Promise<boolean>;
   abstract wake(): void;
   protected abstract submitResult(event: FactoryEvent): Promise<void>;
+  protected abstract deliver(id: string, what: string, write: () => Promise<void>): Promise<void>;
+  protected abstract follow(runId: string, handle: RunHandle, token: number, silentMs: number): void;
   protected abstract stopRun(runId: string): void;
   protected abstract destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void>;
   protected abstract openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services?: readonly string[]): Promise<Sandbox>;

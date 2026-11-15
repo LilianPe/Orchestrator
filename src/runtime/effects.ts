@@ -37,7 +37,6 @@ const publishFacts = (t: TicketState, c: Extract<Effect, { kind: 'publish' }>) =
   ...(c.visualProof?.start ? { start: c.visualProof.start } : {}),
 });
 
-/** An outbox effect's idempotency key (ORC-162): `<ticket:seq:i>@<installation>`, and whether the row runs again. */
 /** A session's plan as the store keeps it (ORC-171): the session is that of the delegation that opened it. */
 interface KeptPlan {
   sessionId: string;
