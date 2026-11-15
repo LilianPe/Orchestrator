@@ -40,7 +40,7 @@ FACTORY_ISOLATION=1 FACTORY_COMPOSE=1 FACTORY_CONTAINER_CLI=docker FACTORY_RUNNE
   npx vitest run --project isolation test/isolation/compose-stack.test.ts
 ```
 
-Expected: the 4 services started on a rootless engine, `caddy` under its `tls` profile; TLS through `caddy`, 401 without the password; `factoryd` published on the loopback alone, in plain HTTP, for the host's reverse proxy (ORC-221); a runner created from `factoryd`, without the engine socket, with `--network none`, with pnpm and uv installing through the proxy, and the refusals in the log. Without a real `claude` or ticket.
+Expected: the 4 services started on a rootless engine, `caddy` under its `tls` profile; TLS through `caddy`, 401 without a GitHub session and a page sent to the App's authorization (ORC-399); `factoryd` published on the loopback alone, in plain HTTP, for the host's reverse proxy (ORC-221); a runner created from `factoryd`, without the engine socket, with `--network none`, with pnpm and uv installing through the proxy, and the refusals in the log. Without a real `claude` or ticket.
 
 `FACTORY_ALLOW_ROOTFUL_ENGINE=1` lets this test run on a workstation (Docker Desktop): it then skips the "rootless" check and checks the refusal. This result proves nothing for the server.
 
@@ -48,7 +48,7 @@ Claude Code authentication is required: `ANTHROPIC_API_KEY`, or `CLAUDE_TOKEN_1`
 
 Then, by hand: `docker compose up -d` behind the host's reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or `docker compose --profile tls up -d`, UI at `https://<domain>`, same behavior as 3; a Linear webhook and a GitHub webhook delivered with a 200 (ORC-221). With `concurrency: 1`, delegate two tickets: only one runner runs (`docker ps --filter label=factory.attempt`).
 
-With `host` other than `127.0.0.1`, the daemon refuses to start without `FACTORY_UI_PASSWORD`: the UI, `/api/*` and `/oauth/start` then require HTTP Basic authentication (any username, password = `FACTORY_UI_PASSWORD`). Still open: `POST /webhooks/linear` and `POST /webhooks/github` (signed), `GET /oauth/callback`, and `POST /agent/mcp` (run token; every other `/agent` path answers 404, ORC-192). Check: `curl -i https://<domain>/api/state` answers 401.
+With `host` other than `127.0.0.1`, the daemon refuses to start without the GitHub sign-in (the App's OAuth client, `dashboard` in `factory.yml`, an `https://` `publicUrl`, ORC-399): the UI, `/api/*` and `/oauth/start` then require a session, opened by signing in with GitHub as a person of the list, org or team. Still open: `POST /webhooks/linear` and `POST /webhooks/github` (signed), `GET /oauth/callback` and `GET /auth/github/callback` (their `state`), and `POST /agent/mcp` (run token; every other `/agent` path answers 404, ORC-192). Check: `curl -i https://<domain>/api/state` answers 401; signed in with a login outside `dashboard`, the callback answers 403; a pause from the dashboard is journaled with `github:<login>`.
 
 ## Optional live checks
 - `LINEAR_API_KEY=<personal key> npx vitest run src/adapters/tracker/linear/queries.live.test.ts`: all queries validate against the Linear schema.

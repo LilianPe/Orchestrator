@@ -21,6 +21,14 @@ describe('the changelog entry of a merged PR (ORC-197)', () => {
     expect(mergedWork([])).toBeUndefined();
   });
 
+  it('skips a publication that pushed nothing: the work merged is the last one that went out (ORC-402)', () => {
+    const events = [passed('r1', 'first', { sha: 'a' }), ev('publish.done', { runId: 'r1', job: 'dev', sha: 'a' }), passed('r2', 'nothing new', { sha: 'a' }), ev('publish.done', { runId: 'r2', job: 'feedback', sha: 'a', empty: true })];
+    expect(mergedWork(events)?.output?.summary).toBe('first');
+    // Its verdict is no work either: not when GitHub merges the head it verified, nor as the last green verdict.
+    expect(mergedWork(events, 'a')?.output?.summary).toBe('first');
+    expect(mergedWork([passed('r1', 'first'), ...events.slice(2)])?.output?.summary).toBe('first');
+  });
+
   it("says the ticket's title when no work is recorded, and no visual proof applicable", () => {
     expect(changelogEntry(ticket, pr, undefined)).toEqual({ id: 'pr:REL-1:3:merged', ...ticket, summary: 'Export CSV', prNumber: 3, prUrl: 'https://gh/pr/3', paths: [], visualProof: { status: 'not_applicable' }, at: 5 });
   });

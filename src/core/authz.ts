@@ -7,7 +7,7 @@
 
 /**
  * Roles resolved for an actor on a project (`RoleResolver`): Linear team, GitHub rights, designations of the configuration.
- * `operator` is the dashboard's (ORC-301): given by its guard, the password or the loopback without one, never by a resolver.
+ * `operator` is the dashboard's (ORC-301): given by its guard, the GitHub sign-in or the loopback (ORC-399), never by a resolver.
  */
 export const ROLES = ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator', 'operator'] as const;
 export type Role = (typeof ROLES)[number];

@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { githubWebhookSecret, resolveGithubApp } from './github-app.js';
+import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from './github-app.js';
 import { loadInstance, saveInstance, type InstanceConfig } from './instance.js';
 
 const PEM = '-----BEGIN PRIVATE KEY-----\nMIIBfake\n-----END PRIVATE KEY-----';
@@ -56,6 +56,14 @@ describe('GitHub App configuration', () => {
     expect(githubWebhookSecret({ ...base(), github: { ...app, webhookSecret: '' } }, { GH_WEBHOOK_SECRET: 'env' })).toBe('env');
     expect(githubWebhookSecret(base(), { GH_WEBHOOK_SECRET: ' env ' })).toBe('env');
     expect(githubWebhookSecret(base(), {})).toBe('');
+  });
+
+  it("reads the App's OAuth client of the dashboard sign-in from config.yaml, else GH_APP_CLIENT_ID and GH_APP_CLIENT_SECRET (ORC-399)", () => {
+    const app = { appId: '7', privateKey: PEM };
+    expect(githubOAuthClient({ ...base(), github: { ...app, clientId: 'Iv1.conf', clientSecret: ' conf-secret ' } }, { GH_APP_CLIENT_ID: 'env' })).toEqual({ clientId: 'Iv1.conf', clientSecret: 'conf-secret' });
+    expect(githubOAuthClient(base(), { GH_APP_CLIENT_ID: 'Iv1.env', GH_APP_CLIENT_SECRET: 'env-secret' })).toEqual({ clientId: 'Iv1.env', clientSecret: 'env-secret' });
+    expect(githubOAuthClient(base(), {})).toBeUndefined();
+    expect(() => githubOAuthClient(base(), { GH_APP_CLIENT_ID: 'Iv1.env' })).toThrow(/client id and its client secret/);
   });
 
   it('accepts a numeric app id from YAML', () => {

@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
+import { runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { newTicketState } from '../../src/core/types.js';
 import { createApp } from '../../src/server/app.js';
@@ -26,7 +26,7 @@ function control(h: H): ControlDeps & { lines: string[] } {
     transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-cli-')),
   });
   const lines: string[] = [];
-  return { api: 'http://127.0.0.1:4100', headers: {}, out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init), lines };
+  return { api: 'http://127.0.0.1:4100', out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init), lines };
 }
 
 describe('factory status and factory stop (ORC-220)', () => {
@@ -65,7 +65,7 @@ describe('factory status and factory stop (ORC-220)', () => {
       asked.push(url);
       return Response.json(url.endsWith('/api/state') ? { tickets } : {});
     };
-    expect(await runStopCommand({ api: 'http://d', headers: {}, out: () => {}, fetch }, 'REL-1')).toBe(0);
+    expect(await runStopCommand({ api: 'http://d', out: () => {}, fetch }, 'REL-1')).toBe(0);
     expect(asked.at(-1)).toBe('http://d/api/tickets/web/REL-1/stop');
   });
 
@@ -88,12 +88,30 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(c.lines[0]).toContain('REL-9 unknown');
   });
 
-  it('says what to do when the daemon is down or asks for its password', async () => {
+  it('pauses and resumes the queue, and says so only once the daemon has taken the command', async () => {
+    const h = createHarness();
+    const c = control(h);
+    expect(await runQueueCommand(c, 'pause')).toBe(0);
+    expect(await runQueueCommand(c, 'resume')).toBe(0);
+    expect(c.lines).toEqual(['Queue paused.', 'Queue resumed.']);
+  });
+
+  // ORC-399: off the loopback the daemon asks for a GitHub sign-in the CLI cannot give: each command says so, and never that
+  // the queue is paused.
+  it('says what to do when the daemon is down or asks for a GitHub sign-in, and never that it took the command', async () => {
     const lines: string[] = [];
-    const deps = { api: 'http://127.0.0.1:1', headers: {}, out: (l: string) => void lines.push(l) };
-    expect(await runStatusCommand({ ...deps, fetch: async () => Promise.reject(new Error('fetch failed')) })).toBe(1);
+    const deps = { api: 'http://127.0.0.1:1', out: (l: string) => void lines.push(l) };
+    const down = async () => Promise.reject(new Error('fetch failed'));
+    const signIn = async () => new Response('{"error":"sign in with GitHub first"}', { status: 401 });
+    const SIGN_IN = 'Access refused by the daemon: off the loopback, it asks for a GitHub sign-in, which only the dashboard gives.';
+    expect(await runStatusCommand({ ...deps, fetch: down })).toBe(1);
     expect(lines.at(-1)).toContain('factory up');
-    expect(await runStopCommand({ ...deps, fetch: async () => new Response('', { status: 401 }) }, 'REL-1')).toBe(1);
-    expect(lines.at(-1)).toContain('FACTORY_UI_PASSWORD');
+    expect(await runStopCommand({ ...deps, fetch: signIn }, 'REL-1')).toBe(1);
+    expect(lines.at(-1)).toBe(SIGN_IN);
+    expect(await runQueueCommand({ ...deps, fetch: signIn }, 'pause')).toBe(1);
+    expect(lines.at(-1)).toBe(SIGN_IN);
+    expect(await runQueueCommand({ ...deps, fetch: down }, 'resume')).toBe(1);
+    expect(lines.at(-1)).toContain('factory up');
+    expect(lines.join('\n')).not.toMatch(/Queue (paused|resumed)\./);
   });
 });

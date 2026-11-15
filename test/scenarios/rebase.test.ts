@@ -53,6 +53,25 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     expect(t).toMatchObject({ logical: 'human_review', blocked: false, verifiedSha: 'rebased1', ciFixAttempts: 1 });
   });
 
+  it('a publication that pushed nothing is not the head a rebase replaces: the last commit the factory pushed is (ORC-402)', async () => {
+    const h = createHarness();
+    await inReview(h);
+    // Human feedback whose fix leaves the branch on the default branch, which already holds the work: nothing more than the base
+    // to push, `publish.done` says it empty.
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Already on main.' }] });
+    h.workspaces.heads.set(WORKTREE, 'main2');
+    h.publisher.refuseNext('empty');
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Take main in.', author: 'L', kind: 'instruction' });
+    await h.advance(180_000);
+    const empty = (await h.store.recentEvents(200, 'REL-1')).find((e) => e.type === 'publish.done' && e.payload.empty);
+    expect(empty?.payload).toMatchObject({ sha: 'main2' });
+
+    h.runner.enqueue({ output: DONE, events: [{ kind: 'text', text: 'Rebased.' }] });
+    h.workspaces.heads.set(WORKTREE, 'rebased1');
+    await conflict(h);
+    expect(h.publisher.published.at(-1)).toMatchObject({ sha: 'rebased1', rewrites: 'built1' });
+  });
+
   it('criterion 2: a rebase whose checks fail is not published: the step goes back to the agent with the failures', async () => {
     const failing = { ok: false, failures: [{ command: 'npm test', exitCode: 1, output: 'red' }] };
     let calls = 0;
