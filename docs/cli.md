@@ -19,7 +19,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 | `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
 
-The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. If `RELAIS_UI_PASSWORD` is set in your shell, they send it as HTTP Basic (necessary when the daemon listens beyond loopback). In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
+The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. They send no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
 ### `relais init`
 
@@ -42,7 +42,7 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), sme
 - Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs)).
 - If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
-- Refuses to start if `host` is not loopback and `RELAIS_UI_PASSWORD` is empty.
+- Refuses to start if `host` is not loopback without the dashboard's GitHub sign-in: the App's OAuth client, `dashboard` in `factory.yml`, an `https://` `publicUrl` (ORC-399).
 - Refuses to start without `FACTORY_CONTAINER_CLI` (the agents would run on the host), unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349). `--fake-runner` launches no agent and needs neither.
 
 `Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are left running, then reattached on the next start, or started again if they vanished meanwhile, ORC-344).
@@ -97,7 +97,7 @@ Linear: connected · queue: active (0 waiting) · dev slots 1/3
     Stopped on request
 ```
 
-For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable or password missing: says so, exit code 1.
+For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable or asking for a GitHub sign-in: says so, exit code 1.
 
 ### `relais pause` / `relais resume`
 
