@@ -57,6 +57,12 @@ describe('formatActiveWork: what intake reads of the work in progress elsewhere 
     expect(text.match(/feat\/csv/g)).toHaveLength(1);
   });
 
+  it("leaves out factory/artifacts, the captures' branch (ORC-407): never a ticket's work", () => {
+    const text = formatActiveWork('REL-3', { prs: [], branches: [branch('factory/artifacts'), branch('wip/pdf')], tickets: [] });
+    expect(text).toContain('wip/pdf');
+    expect(text).not.toContain('factory/artifacts');
+  });
+
   it("a fork's PR hides no branch of the repository and is never the ticket's own work; close tickets come before branches", () => {
     const fork = pr(7, 'factory/rel-3-fix', ['src/a.ts'], { fork: true });
     const text = formatActiveWork('REL-3', {

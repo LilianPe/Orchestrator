@@ -80,11 +80,6 @@ describe('recentRepoBranches (ORC-207)', () => {
     expect(f.calls).toHaveLength(1);
   });
 
-  it("leaves out factory/artifacts, the captures' branch (ORC-407): never a ticket's work", async () => {
-    const f = forge(() => ({ repository: { url: 'https://github.com/acme/app', defaultBranchRef: { name: 'main' }, refs: { nodes: [{ name: 'factory/artifacts' }, { name: 'wip/pdf' }] } } }));
-    expect((await recentRepoBranches(f.gql, 'acme', 'app')).map((b) => b.name)).toEqual(['wip/pdf']);
-  });
-
   it('an empty repository has no default branch; an answer without branches is unreadable', async () => {
     const empty = forge(() => ({ repository: { url: 'u', defaultBranchRef: null, refs: { nodes: [] } } }));
     expect(await recentRepoBranches(empty.gql, 'acme', 'app')).toEqual([]);

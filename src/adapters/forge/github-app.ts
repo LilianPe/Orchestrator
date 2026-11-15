@@ -206,7 +206,9 @@ const ARTIFACTS_README = `# ${ARTIFACTS_BRANCH}\n\nThe captures of the factory's
 
 const isSha = (v: unknown): v is { sha: string } => isRecord(v) && typeof v.sha === 'string';
 const isRef = (v: unknown): v is { object: { sha: string } } => isRecord(v) && isSha(v.object);
-const isCommit = (v: unknown): v is { sha: string; tree: { sha: string } } => isSha(v) && isSha((v as { tree?: unknown }).tree);
+const isCommit = (v: unknown): v is { sha: string; tree: { sha: string } } => isRecord(v) && typeof v.sha === 'string' && isSha(v.tree);
+/** An entry of a tree `onArtifacts` writes: a blob, or a folder removed (`sha: null`). */
+type TreeEntry = { path: string; mode: string; type: 'blob' | 'tree'; sha: string | null };
 /** A tree as `pruneArtifacts` reads it, not recursive: its entries' paths and types. */
 const isTree = (v: unknown): v is { truncated?: boolean; tree: { path: string; type: string }[] } =>
   isRecord(v) && Array.isArray(v.tree) && v.tree.every((e) => isRecord(e) && typeof e.path === 'string' && typeof e.type === 'string');
@@ -254,6 +256,9 @@ function unreadable(method: string, path: string, what: string, data: unknown, s
 }
 
 /** `/repos/{owner}/{name}`, encoded. */
+/** The repository's page: the root of a link to one of its files (ORC-407), and of its git URL. */
+const repoWebUrl = (repo: GitHubRepoRef): string => `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
+
 function repoApi(repo: GitHubRepoRef): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 }
@@ -573,7 +578,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
     return {
-      url: `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}.git`,
+      url: `${repoWebUrl(repo)}.git`,
       env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` },
     };
   }
@@ -728,58 +733,61 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     // No retry would make it one: an answer, as a refusal.
     for (const f of files) if (!ARTIFACT_PATH.test(f.path)) throw new ArtifactsRefused(`not a path on ${ARTIFACTS_BRANCH}: ${f.path}`);
     const repo = await this.repo(repoPath);
-    const commit = await this.onArtifacts(repo, async (token, api) => {
-      const blob = async (content: Uint8Array) => (await this.read('POST', `${api}/git/blobs`, token, isSha, 'a git blob', { content: Buffer.from(content).toString('base64'), encoding: 'base64' })).sha;
-      const entries = await Promise.all(files.map(async (f) => ({ path: f.path, mode: '100644', type: 'blob', sha: await blob(f.content) })));
-      return { message: `Host ${files.length} visual-proof capture(s) [skip ci]`, change: async () => entries };
-    });
-    const at = `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/blob/${commit}`;
-    return files.map((f) => `${at}/${f.path.split('/').map(encodeURIComponent).join('/')}?raw=true`);
+    // Uploaded once, whatever the attempts: a blob does not depend on the tip.
+    let blobs: Promise<TreeEntry[]> | undefined;
+    const { commit } = await this.onArtifacts(repo, `Host ${files.length} visual-proof capture(s) [skip ci]`, (_tip, token, api) =>
+      (blobs ??= Promise.all(
+        files.map(async (f) => {
+          const { sha } = await this.read('POST', `${api}/git/blobs`, token, isSha, 'a git blob', { content: Buffer.from(f.content).toString('base64'), encoding: 'base64' });
+          return { path: f.path, mode: '100644', type: 'blob', sha };
+        }),
+      )),
+    );
+    return files.map((f) => `${repoWebUrl(repo)}/blob/${commit}/${f.path.split('/').map(encodeURIComponent).join('/')}?raw=true`);
   }
 
-  /** ORC-407: the tip's top-level folders, each asked of `expired`; those it says yes to removed in one commit. */
+  /** ORC-407: the tip's top-level folders, each asked of `expired` once; those it says yes to removed in one commit. */
   async pruneArtifacts(repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
-    let removed: string[] = [];
-    await this.onArtifacts(await this.repo(repoPath), async (token, api) => ({
-      message: 'Remove the captures of PRs closed 30 days ago [skip ci]',
-      change: async (tip) => {
-        removed = [];
-        if (!tip) return undefined;
-        const tree = await this.read('GET', `${api}/git/trees/${encodeURIComponent(tip.tree)}`, token, isTree, 'a git tree');
-        if (tree.truncated) throw new Error(`the tree of ${ARTIFACTS_BRANCH} is too large for GitHub to list in full`);
-        for (const e of tree.tree) if (e.type === 'tree' && (await expired(e.path))) removed.push(e.path);
-        return removed.length ? removed.map((path) => ({ path, mode: '040000', type: 'tree', sha: null })) : undefined;
-      },
-    }));
-    return removed;
+    // An attempt after a race asks again only of a folder it has not seen.
+    const verdicts = new Map<string, Promise<boolean>>();
+    const ask = (folder: string) => verdicts.get(folder) ?? verdicts.set(folder, expired(folder)).get(folder)!;
+    const { entries } = await this.onArtifacts(await this.repo(repoPath), 'Remove the captures of PRs closed 30 days ago [skip ci]', async (tip, token, api) => {
+      if (!tip) return [];
+      const tree = await this.read('GET', `${api}/git/trees/${encodeURIComponent(tip.tree)}`, token, isTree, 'a git tree');
+      if (tree.truncated) throw new Error(`the tree of ${ARTIFACTS_BRANCH} is too large for GitHub to list in full`);
+      const folders = tree.tree.filter((e) => e.type === 'tree').map((e) => e.path);
+      const gone = await Promise.all(folders.map(ask));
+      return folders.filter((_, i) => gone[i]).map((path) => ({ path, mode: '040000', type: 'tree', sha: null }));
+    });
+    return entries.map((e) => e.path);
   }
 
   /**
-   * One change of `ARTIFACTS_BRANCH`, and of no other ref: its tip read, the tree `change` gives on it (`undefined`: nothing to
-   * change), a commit on the tip, or an orphan root with its README, then the ref moved without force. Another writer's commit in
-   * between, or the branch deleted: read again, at most `ARTIFACTS_ATTEMPTS` times. What the forge refuses is `ArtifactsRefused`; a rate limit, a 5xx or
-   * the network throws, to be retried. Returns the commit that holds the result.
+   * One change of `ARTIFACTS_BRANCH`, and of no other ref: its tip read, the entries `change` gives on it (none: nothing to change),
+   * a commit on the tip, or an orphan root with its README, then the ref moved without force. Another writer's commit in between, or
+   * the branch deleted: read again, at most `ARTIFACTS_ATTEMPTS` times. What the forge refuses is `ArtifactsRefused`; a rate limit,
+   * a 5xx or the network throws, to be retried. Returns the commit that holds the result, and the entries it committed.
    */
   private async onArtifacts(
     repo: GitHubRepoRef,
-    prepare: (token: string, api: string) => Promise<{ message: string; change: (tip: { commit: string; tree: string } | undefined) => Promise<object[] | undefined> }>,
-  ): Promise<string | undefined> {
+    message: string,
+    change: (tip: { commit: string; tree: string } | undefined, token: string, api: string) => Promise<TreeEntry[]>,
+  ): Promise<{ commit?: string; entries: TreeEntry[] }> {
     const token = await this.installationToken(repo);
     const api = repoApi(repo);
     try {
-      const { message, change } = await prepare(token, api);
       for (let attempt = 1; ; attempt++) {
         const tip = await this.artifactsTip(api, token);
-        const entries = await change(tip);
-        if (!entries) return tip?.commit;
-        const root = tip ? {} : { tree: [...entries, { path: 'README.md', mode: '100644', type: 'blob', content: ARTIFACTS_README }] };
-        const tree = await this.read('POST', `${api}/git/trees`, token, isSha, 'a git tree', tip ? { base_tree: tip.tree, tree: entries } : root);
-        if (tip && tree.sha === tip.tree) return tip.commit;
+        const entries = await change(tip, token, api);
+        if (!entries.length) return { ...(tip ? { commit: tip.commit } : {}), entries };
+        const body = tip ? { base_tree: tip.tree, tree: entries } : { tree: [...entries, { path: 'README.md', mode: '100644', type: 'blob', content: ARTIFACTS_README }] };
+        const tree = await this.read('POST', `${api}/git/trees`, token, isSha, 'a git tree', body);
+        if (tip && tree.sha === tip.tree) return { commit: tip.commit, entries };
         const commit = await this.read('POST', `${api}/git/commits`, token, isSha, 'a git commit', { message, tree: tree.sha, parents: tip ? [tip.commit] : [] });
         try {
           if (tip) await this.call('PATCH', `${api}/git/refs/${ARTIFACTS_REF}`, token, { sha: commit.sha, force: false });
           else await this.call('POST', `${api}/git/refs`, token, { ref: `refs/${ARTIFACTS_REF}`, sha: commit.sha });
-          return commit.sha;
+          return { commit: commit.sha, entries };
         } catch (err) {
           const raced = err instanceof GitHubApiError && err.status === 422 && /fast.forward|already exists|does not exist/i.test(err.message);
           if (!raced) throw err;
