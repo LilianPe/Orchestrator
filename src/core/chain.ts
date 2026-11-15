@@ -93,6 +93,17 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
   return { ...(run ? { run } : {}), ...(move ? { move } : {}), ...(post ? { post } : {}), step: next };
 }
 
+/**
+ * The job a delegation starts (ORC-392): the one a test names (`delegated`), else the chain's entry's. A version frozen
+ * with no preset starts `dev`.
+ */
+export function delegatedJob(wf: Workflow): string | undefined {
+  if (wf.delegated) return wf.delegated;
+  if (!wf.preset) return 'dev';
+  const entry = stepById(wf, wf.entry);
+  return entry && jobStarting(wf, entry)?.name;
+}
+
 /** The move the launch of `job` makes: the chain's entry shows its status from its first run on. */
 export function startMove(wf: Workflow, job: JobSpec): LogicalState | undefined {
   if (!wf.preset) return job.onStart?.move;

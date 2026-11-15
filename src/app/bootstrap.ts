@@ -44,7 +44,7 @@ import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
-import { BLOCKED_LABEL } from '../core/engine.js';
+import { BLOCKED_LABEL, STOP_LABEL } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Orchestrator, type ProjectRuntime } from '../core/orchestrator.js';
 import { queueCapacity, Scheduler } from '../runtime/capacity.js';
@@ -72,7 +72,7 @@ export interface BootOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
+const FACTORY_LABELS = [STOP_LABEL, BLOCKED_LABEL];
 
 /**
  * The dashboard's GitHub sign-in off the loopback (ORC-399): the factory App's OAuth client, who factory.yml lets in, and
@@ -378,7 +378,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         labelNameById: (t, id) => linearTracker?.labelNameById(t, id),
         // Read from the settings until Linear is connected: a webhook of the factory's write before a restart may come first.
         factoryActor: () => linearTracker?.appUserId ?? linearSettings(o.home, yml)?.appUserId,
-        commands: (pid) => projects.find((p) => p.id === pid)?.workflow.commands ?? [],
         now: () => clock.now(),
         knownLabels: (pid, id) => knownLabels(store, pid, id),
         // Tickets the factory tracks only: the reconciliation compares no other.

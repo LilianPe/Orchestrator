@@ -42,7 +42,6 @@ export interface MapContext {
   labelNameById(teamKey: string, labelId: string): string | undefined;
   /** The Linear id of the factory's app user (`appUserId`), unknown before Linear is connected: the actor of its own writes (ORC-346). */
   factoryActor?(): string | undefined;
-  commands(projectId: string): string[];
   now(): number;
   /** The ticket's labels as the factory last read them, and when (ORC-185); undefined when it never did. */
   knownLabels?(projectId: string, identifier: string): Promise<KnownLabels | undefined>;
@@ -137,10 +136,10 @@ function parseCommand(text: string): { name: string; body: string } {
   return { name: first.toLowerCase(), body: rest.join(' ') };
 }
 
-/** The factory's own commands, not a workflow rule's: `/refreeze` (ORC-131) and the spec gate's (ORC-212). */
+/** The factory's commands: `/refreeze` (ORC-131) and the spec gate's (ORC-212); a workflow declares none since ORC-392. */
 const FACTORY_COMMANDS: readonly string[] = [REFREEZE, ...SPEC_COMMANDS];
 
-function sessionEvents(body: any, author: string, projectId: string, ctx: MapContext): PartialEvent[] {
+function sessionEvents(body: any, author: string): PartialEvent[] {
   const sessionId: string = body.agentSession.id;
   if (body.action === 'created') {
     const comment = body.agentSession.comment;
@@ -148,7 +147,7 @@ function sessionEvents(body: any, author: string, projectId: string, ctx: MapCon
     const text = stripMention(comment.body ?? '');
     const command = parseCommand(text);
     const commentId = commentRef(comment.id);
-    if ([...FACTORY_COMMANDS, ...ctx.commands(projectId)].includes(command.name)) {
+    if (FACTORY_COMMANDS.includes(command.name)) {
       return [{ type: 'command', payload: { ...command, ...message(command.body), linearSessionId: sessionId, author, ...commentId, ack: true, kind: 'command' } }];
     }
     const said = message(text);
@@ -369,7 +368,7 @@ export async function mapLinearWebhook(body: any, key: string, ctx: MapContext, 
   const at = o.at ?? ctx.now();
   let partials: PartialEvent[];
   if (noRepo) partials = [{ type: 'ticket.delegated', payload: { ...delegationPayload(body), ack: true, noRepo } }];
-  else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name, projectId, ctx);
+  else if (body.type === 'AgentSessionEvent') partials = sessionEvents(body, name);
   else if (body.type === 'Comment') partials = await commentEvents(body, identifier, projectId, actor, name, ctx);
   else partials = await issueEvents(body, identifier, teamKey, projectId, ctx);
   // The choice to make goes with the event: `decide` blocks the delegation, answers the rest.
