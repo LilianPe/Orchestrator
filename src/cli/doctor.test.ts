@@ -823,6 +823,8 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
     const result = await doctor([], [], { fake: { failProtection: true } });
     expect(result.code).toBe(1);
     expect(result.text).toContain('Cannot read the protection of the default branch');
+    expect(result.text).toContain("Result: refused — the default branch's protection cannot be read");
+    expect(result.text).not.toContain('is not protected');
   });
 
   it('puts the protection in the JSON report', async () => {

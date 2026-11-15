@@ -612,7 +612,10 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const branch = protection.branch ? ` ${protection.branch}` : '';
   const refusals = [
     ...(host.verdict === 'refused' ? ['the host cannot limit the sandbox'] : []),
-    ...(protection.verdict === 'refused' ? [`the default branch${branch} is not protected`] : []),
+    // Unread, the protection is unknown: never told as absent.
+    ...(protection.verdict === 'refused'
+      ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
+      : []),
     ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
   ];
   const accepted = refusals.length === 0;
