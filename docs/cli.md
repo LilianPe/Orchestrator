@@ -19,7 +19,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 | `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
 
-The commands that require the daemon call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`. They send no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
+The commands that require the daemon go through its Unix socket, `cli/factory.sock` in `FACTORY_HOME`, when it is there (ORC-405): on the daemon's server, as the factory's user (mode 0600), with no GitHub sign-in, and their actions are journaled as `cli:<host>`. Otherwise they call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`, with no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. From another machine: SSH to the server. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
 ### `relais init`
 

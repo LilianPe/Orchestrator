@@ -22,7 +22,7 @@ import { overview } from '../core/overview.js';
 import { runDetail } from '../core/run-detail.js';
 import { ticketDiagnoses, type HeldRow } from '../core/diagnosis.js';
 import { TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
-import { githubActor } from '../core/authz.js';
+import { cliActor, githubActor } from '../core/authz.js';
 import type { RunRecord, Store } from '../store/types.js';
 import { handleMcp } from '../api/mcp.js';
 import type { KbHit } from '../knowledge/kb.js';
@@ -169,9 +169,40 @@ export const AGENT_MCP_PATH = '/agent/mcp';
 /** The agents' prefix: the MCP and, everywhere else under it, a 404 (ORC-192). */
 export const isAgentPath = (path: string) => path === '/agent' || path.startsWith('/agent/');
 
-/** Public, guarded by their own: the webhooks, the OAuth callbacks, and `/agent`, so that what is not the MCP there answers 404, never 401. */
+/**
+ * Public, guarded by their own: the webhooks, the OAuth callbacks, and `/agent`, so that what is not the MCP there answers 404,
+ * never 401. And the health check (ORC-405), which tells the state alone.
+ */
 function isPublicPath(method: string, path: string): boolean {
-  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && (path === '/oauth/callback' || path === GITHUB_CALLBACK_PATH)) || isAgentPath(path);
+  return (method === 'POST' && (path === '/webhooks/linear' || path === '/webhooks/github')) || (method === 'GET' && (path === '/oauth/callback' || path === GITHUB_CALLBACK_PATH)) || ((method === 'GET' || method === 'HEAD') && path === '/health') || isAgentPath(path);
+}
+
+/**
+ * The mark of a request the CLI's Unix socket brought (ORC-405), in Hono's env: the host's name. Only `cliOnly` sets it;
+ * nothing a request carries over HTTP reaches the env.
+ */
+const CLI_HOST = Symbol('cliHost');
+const cliHostOf = (c: Context): string | undefined => (c.env as { [CLI_HOST]?: string } | undefined)?.[CLI_HOST];
+
+/** What no guard of the interface holds: a public path, or a request of the CLI's socket (ORC-405). */
+const unguarded = (c: Context) => isPublicPath(c.req.method, c.req.path) || cliHostOf(c) !== undefined;
+
+/** What `factory status|stop|pause|resume` call (src/cli/control.ts). */
+const CLI_ROUTES: readonly (readonly [string, RegExp])[] = [
+  ['GET', /^\/api\/state$/],
+  ['POST', /^\/api\/control\/(pause|resume)$/],
+  ['POST', /^\/api\/tickets\/[^/]+\/[^/]+\/stop$/],
+];
+
+/**
+ * The CLI's routes alone (ORC-405), for the listener of the Unix socket in FACTORY_HOME, which its file mode keeps to the
+ * factory's user: let in without a GitHub sign-in, as the operator `cli:<host>`. Every other path answers 404.
+ */
+export function cliOnly(app: Hono, host: string): (req: Request) => Response | Promise<Response> {
+  return (req) => {
+    const path = new URL(req.url).pathname;
+    return CLI_ROUTES.some(([method, route]) => method === req.method && route.test(path)) ? app.fetch(req, { [CLI_HOST]: host }) : new Response('Not Found', { status: 404 });
+  };
 }
 
 /**
@@ -203,19 +234,20 @@ export function createApp(d: ServerDeps): Hono {
   // Drawn at each start and kept in memory alone (ORC-399): a restart ends every session.
   const sessionKey = randomBytes(32);
   /**
-   * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: `github:<login>` of the
-   * session off the loopback (ORC-399), as the GitHub webhooks name their sender; `dashboard:local` on the loopback,
-   * whatever header comes. Whoever passed the guard is an operator.
+   * Who acts from the dashboard (ORC-301), checked on the matrix and journaled with the event: `cli:<host>` through the CLI's
+   * socket (ORC-405); `github:<login>` of the session off the loopback (ORC-399), as the GitHub webhooks name their sender;
+   * `dashboard:local` on the loopback, whatever header comes. Whoever passed the guard is an operator.
    */
   const operator = (c: Context): Pick<FactoryEvent, 'actor' | 'roles'> => {
+    const cli = cliHostOf(c);
     const login = c.get('githubLogin');
-    return { actor: login ? githubActor(login) : 'dashboard:local', roles: ['operator'] };
+    return { actor: cli !== undefined ? cliActor(cli) : login ? githubActor(login) : 'dashboard:local', roles: ['operator'] };
   };
 
   if (d.githubLogin) {
     const github = d.githubLogin;
     app.use('*', async (c, next) => {
-      if (isPublicPath(c.req.method, c.req.path)) return next();
+      if (unguarded(c)) return next();
       const login = readSession(getCookie(c, SESSION_COOKIE), sessionKey, d.clock.now());
       if (login) {
         c.set('githubLogin', login);
@@ -250,7 +282,8 @@ export function createApp(d: ServerDeps): Hono {
     // DNS rebinding (ORC-349): a page whose name the attacker rebinds to 127.0.0.1 is same-origin with this server under
     // that name, Origin and Host alike. Without a password, only a name of the loopback is answered.
     app.use('*', async (c, next) => {
-      if (isPublicPath(c.req.method, c.req.path)) return next();
+      // The CLI's socket is no page a browser opens: no name to rebind.
+      if (unguarded(c)) return next();
       if (!isLoopbackHost((c.req.header('host') ?? new URL(c.req.url).host).replace(/:\d*$/, ''))) return c.text('Unknown host', 403);
       return next();
     });
@@ -297,14 +330,15 @@ export function createApp(d: ServerDeps): Hono {
   const configProblems = d.configProblems ?? [];
   const takingTickets = configProblems.length === 0;
 
-  // The health check (ORC-350): the store answers, and the factory takes tickets. 503 otherwise, with why.
+  // The health check (ORC-350): the store answers, and the factory takes tickets; 503 otherwise. Open (ORC-405), it tells
+  // the state alone: why the configuration takes no ticket is the start's log and each ticket's diagnosis, behind the sign-in.
   app.get('/health', async (c) => {
     const store = await d.store.getMeta('paused').then(
       () => 'ok' as const,
       () => 'unreachable' as const,
     );
     const ok = store === 'ok' && takingTickets;
-    return c.json({ ok, store, takingTickets, configProblems, linearConnected: d.linearConnected() }, ok ? 200 : 503);
+    return c.json({ ok, store, takingTickets }, ok ? 200 : 503);
   });
 
   // Why a ticket is stuck (ORC-350), with what holds every ticket: the configuration, the pause, the usage limit.
