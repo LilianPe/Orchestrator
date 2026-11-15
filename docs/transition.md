@@ -211,6 +211,11 @@ The first cited ticket is the one that touches the module first or the most; the
 | `src/adapters/publisher/fake.ts` | The harness's `FakePublisher`, wired to the orchestrator | keep | ORC-225, ORC-125, ORC-234 (done: `publishBundle`) |
 | `src/adapters/checks/types.ts` | `CheckRunner` port: checks outside the agent | keep | ORC-225, ORC-151 |
 | `src/adapters/checks/fake.ts` | The harness's `FakeCheckRunner` | keep | ORC-225 |
+| `src/adapters/secrets/types.ts` | `SecretSource` port and `SecretSourceKind` (an adapter: path and options checked at startup); `SecretRef`, a repository secret's reference `<source>:<path>` | keep | ORC-308 |
+| `src/adapters/secrets/env.ts` | The built-in `env` source: the daemon's environment, read at each `setup` | keep | ORC-308 |
+| `src/adapters/secrets/fake.ts` | The harness's `FakeSecretSource` and `fakeSecretKind`: a table of values, out of service on demand | keep | ORC-308 |
+| `src/adapters/secrets/registry.ts` | `SECRET_SOURCE_KINDS`, the adapters `secret_sources` may name (`env` only, no real manager before ORC-151 and ORC-179); `openSecretSources` | keep | ORC-308, ORC-151, ORC-179 |
+| `src/adapters/secrets/reader.ts` | `SecretReader`: a setup's references read from their sources, the minimal length checked, errors naming the reference and never the value; the values read kept for the masking | keep | ORC-308 |
 
 ### `src/checks/`
 

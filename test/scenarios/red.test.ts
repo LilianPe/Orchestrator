@@ -87,7 +87,7 @@ describe('the tests step and the red check (ORC-123)', () => {
   });
 
   it('runs the tests with the variables the repository declares, never its secrets (ORC-211)', async () => {
-    const h = harness('measure', true, async () => ({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: 'registry-secret' }, missing: [] }));
+    const h = harness('measure', true, async () => ({ env: { NODE_ENV: 'test' }, setupSecrets: { REGISTRY_TOKEN: { source: 'env', path: 'REGISTRY_TOKEN' } }, missing: [] }));
     h.sandboxes.execResult = (argv) => (argv[0] === 'git' ? { stdout: '', stderr: '', code: 0 } : { stdout: 'AssertionError: expected 1 to be 2', stderr: '', code: 1 });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const tests = h.sandboxes.execs.find((e) => e.argv.at(-1) === "npm test -- 'src/export.test.ts'");
