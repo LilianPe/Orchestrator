@@ -1,7 +1,7 @@
 import { parseCondition } from '../../src/core/conditions.js';
 import type { EventType } from '../../src/core/types.js';
 import type { JobSpec, Limits, PickupCheck, Rule, Workflow } from '../../src/core/workflow.js';
-import { defaultWorkflow } from '../../src/presets/workflow.js';
+import { defaultWorkflow, workflowViolations } from '../../src/presets/workflow.js';
 
 /** A rule as a test writes it: its condition in the `when` grammar, parsed as the engine's rules are (`whenSrc` kept). */
 export type RuleOverride = Omit<Rule, 'when' | 'whenSrc'> & { when?: string };
@@ -47,34 +47,15 @@ export function workflowWith(o: WorkflowOverrides = {}): Workflow {
     on,
     jobs,
   };
-  check(out);
+  const refused = workflowViolations(out);
+  if (refused.length) throw new Error(`workflowWith: ${refused.join('; ')}`);
   return out;
 }
 
-/** What the pack's loader refused, refused here too: a scenario fails at its setup, not deep in the engine. */
-function check(wf: Workflow): void {
-  const job = (where: string, name: string | undefined) => {
-    if (name !== undefined && !wf.jobs[name]) throw new Error(`workflowWith: ${where}: unknown job "${name}"`);
-  };
-  const state = (where: string, s: string | undefined) => {
-    if (s !== undefined && !Object.hasOwn(wf.states, s)) throw new Error(`workflowWith: ${where}: no status for "${s}"`);
-  };
-  for (const [type, rules] of Object.entries(wf.on)) {
-    for (const r of rules ?? []) {
-      job(`on.${type}.run`, r.run);
-      for (const s of [r.move, r.from, r.to]) state(`on.${type}`, s);
-      if (r.do === 'after_merge' && type !== 'pr.merged') throw new Error(`workflowWith: on.${type}.do: after_merge is on pr.merged only`);
-    }
-  }
-  for (const j of Object.values(wf.jobs)) {
-    job(`jobs.${j.name}.onSuccess.run`, j.onSuccess.run);
-    job(`jobs.${j.name}.onBlocking.run`, j.onBlocking?.run);
-    state(`jobs.${j.name}.onStart.move`, j.onStart.move);
-    state(`jobs.${j.name}.onSuccess.move`, j.onSuccess.move);
-  }
-}
+/** When a delegation starts work, as the default's rule says it. */
+export const DELEGATED = defaultWorkflow().on['ticket.delegated']![0]!.whenSrc!;
 
 /** A delegation starts `job` instead of `dev`: the steps the default does not run yet (`intake`, `spec`, `tests`, ORC-395). */
 export function delegationStarts(job: string, o: WorkflowOverrides = {}): WorkflowOverrides {
-  return { ...o, on: { ...o.on, 'ticket.delegated': [{ when: 'state in [todo, dev] && !blocked', run: job }] } };
+  return { ...o, on: { ...o.on, 'ticket.delegated': [{ when: DELEGATED, run: job }] } };
 }

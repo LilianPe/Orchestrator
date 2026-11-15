@@ -11,7 +11,7 @@ import { perStepToolViolations, READ_TOOLS, stepTools } from './tools.js';
  * walks the preset's steps itself (ORC-391, ORC-392).
  */
 
-export class WorkflowError extends Error {}
+class WorkflowError extends Error {}
 
 /** What `factory.yml` says of the agent steps (ORC-136), by step name. */
 export interface StepSettings {
@@ -37,7 +37,7 @@ export const agentStep = (name: string): Extract<Step, { maxTurns: number }> | u
 };
 
 /** A step named in `factory.yml` that the preset does not have would silently cap nothing. */
-export function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
+function checkStepSettings({ effort, budgets, tools }: StepSettings): void {
   const named = { 'claude.effort.per_step': effort?.perStep, 'budgets.max_turns': budgets?.maxTurns, 'budgets.per_step_tokens': budgets?.perStepTokens, 'tools.per_step': tools?.perStep };
   for (const [where, steps] of Object.entries(named)) {
     for (const name of Object.keys(steps ?? {})) {
@@ -53,7 +53,7 @@ export function checkStepSettings({ effort, budgets, tools }: StepSettings): voi
  * What a job takes from its agent step. The step sets the effort, `factory.yml` may change it; the step's turns are a
  * ceiling that `factory.yml` only lowers, as a step only narrows the network.
  */
-export function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
+function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimits, settings: StepSettings): Pick<JobSpec, 'effort' | 'limits' | 'network' | 'tools'> {
   const tools = settings.tools?.perStep?.[step.id] ?? stepTools(step);
   const tokens = settings.budgets?.perStepTokens?.[step.id];
   return {
@@ -65,7 +65,7 @@ export function fromStep(step: Extract<Step, { maxTurns: number }>, own: RunLimi
 }
 
 /** The ceiling of a run with no limits of its own: the turns before the preset's, and its duration. */
-export const PER_RUN: Readonly<RunLimits> = { turns: 150, durationMs: 90 * 60_000 };
+const PER_RUN: Readonly<RunLimits> = { turns: 150, durationMs: 90 * 60_000 };
 
 /** A job of an agent step, before what it takes from that step. */
 type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'verifyFailure' | 'pickup' | 'onStart' | 'onSuccess' | 'effort' | 'limits' | 'network' | 'tools'> &
@@ -74,13 +74,44 @@ type StepJob = Omit<JobSpec, 'name' | 'step' | 'verify' | 'verifyFailure' | 'pic
 function stepJob(name: string, job: StepJob, settings: StepSettings): JobSpec {
   const step = agentStep(job.step);
   if (!step) throw new WorkflowError(`jobs.${name}.step: ${job.step} is not an agent step of ${preset.name}`);
-  const { queue, model, workspace, session, skill, lens, input, repoChecks, pickup = false, structuredOutput, red, onStart = {}, onSuccess = {}, onBlocking, counter } = job;
+  const { step: _step, queue, model, workspace, session, skill, lens, input, repoChecks, pickup = false, structuredOutput, red, onStart = {}, onSuccess = {}, onBlocking, counter, ...rest } = job;
+  // Every field is named below, or a field added to `JobSpec` would be lost: none may be left over.
+  const _none: Record<string, never> = rest;
   // In the order the pack's loader gave: a replay journal pins the workflow as JSON text, keys in their order (ORC-389).
   return {
-    name, step: job.step, queue, model, workspace, session, skill, ...(lens ? { lens } : {}), input, verify: [], ...(repoChecks ? { repoChecks } : {}),
-    pickup, structuredOutput, ...(red ? { red } : {}), ...fromStep(step, PER_RUN, settings), onStart, onSuccess,
-    ...(onBlocking ? { onBlocking } : {}), ...(counter ? { counter } : {}),
+    name, step: job.step, queue, model, workspace, session, skill, lens, input, verify: [], repoChecks,
+    pickup, structuredOutput, red, ...fromStep(step, PER_RUN, settings), onStart, onSuccess, onBlocking, counter,
   };
+}
+
+/**
+ * What the pack's loader refused in a workflow, now that none goes through it: a run, a move or the relayed answer that names
+ * nothing, a blocking lens whose fix does not read the findings, `after_merge` on another event than `pr.merged`.
+ */
+export function workflowViolations(wf: Workflow): string[] {
+  const out: string[] = [];
+  const job = (where: string, name: string | undefined) => {
+    if (name !== undefined && !Object.hasOwn(wf.jobs, name)) out.push(`${where}: unknown job "${name}"`);
+  };
+  const state = (where: string, s: string | undefined) => {
+    if (s !== undefined && !Object.hasOwn(wf.states, s)) out.push(`${where}: no status for "${s}"`);
+  };
+  for (const [type, rules] of Object.entries(wf.on)) {
+    for (const [i, r] of (rules ?? []).entries()) {
+      const at = `on.${type}[${i}]`;
+      job(`${at}.run`, r.run);
+      for (const k of ['move', 'from', 'to'] as const) state(`${at}.${k}`, r[k]);
+      if (r.do === 'after_merge' && type !== 'pr.merged') out.push(`${at}.do: after_merge is the step of a merged PR, on pr.merged only`);
+    }
+  }
+  for (const j of Object.values(wf.jobs)) {
+    job(`jobs.${j.name}.onSuccess.run`, j.onSuccess.run);
+    state(`jobs.${j.name}.onStart.move`, j.onStart.move);
+    state(`jobs.${j.name}.onSuccess.move`, j.onSuccess.move);
+    if (j.onBlocking && wf.jobs[j.onBlocking.run]?.input !== 'findings') out.push(`jobs.${j.name}.onBlocking.run: "${j.onBlocking.run}" must be a job that reads the findings`);
+  }
+  job('relayJob', wf.relayJob);
+  return out;
 }
 
 const REGROUPED_MS = 3 * 60_000;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hashText } from '../core/attempt-labels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
-import { agentStep, defaultWorkflow, type StepSettings } from './workflow.js';
+import { agentStep, defaultWorkflow, workflowViolations, type StepSettings } from './workflow.js';
 
 /**
  * The hashes of the workflow the standard pack's YAML gave, before ORC-389 removed it: the canonical one, which each ticket's
@@ -38,21 +38,22 @@ describe('defaultWorkflow (ORC-388, ORC-389)', () => {
   // What the loader refused in a YAML file, held by the TypeScript table on its own.
   it('names only jobs and statuses it has: every run, every move, the blocking findings and the relayed answer', () => {
     const wf = defaultWorkflow();
-    const runs = [
-      ...Object.values(wf.jobs).flatMap((j) => [j.onSuccess.run, j.onBlocking?.run]),
-      ...Object.values(wf.on).flatMap((rules) => rules!.map((r) => r.run)),
-      wf.relayJob,
-    ].filter((r): r is string => r !== undefined);
-    for (const run of runs) expect(wf.jobs, run).toHaveProperty([run]);
-    const moves = [...Object.values(wf.jobs).flatMap((j) => [j.onStart.move, j.onSuccess.move]), ...Object.values(wf.on).flatMap((rules) => rules!.flatMap((r) => [r.move, r.from, r.to]))];
-    for (const move of moves.filter((m) => m !== undefined)) expect(wf.states, move).toHaveProperty([move]);
-    for (const j of Object.values(wf.jobs)) if (j.onBlocking) expect(wf.jobs[j.onBlocking.run]!.input).toBe('findings');
+    expect(workflowViolations(wf)).toEqual([]);
     expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback' });
     expect(wf.jobs[wf.relayJob!]!.counter).toBeUndefined();
+    const wrong = defaultWorkflow();
+    wrong.jobs.dev!.onSuccess.run = 'reveiw';
+    wrong.on['pr.merged']![0]!.move = 'ready';
+    wrong.on['label.changed']![0]!.do = 'after_merge';
+    expect(workflowViolations(wrong)).toEqual([
+      'on.label.changed[0].do: after_merge is the step of a merged PR, on pr.merged only',
+      'on.pr.merged[0].move: no status for "ready"',
+      'jobs.dev.onSuccess.run: unknown job "reveiw"',
+    ]);
   });
 
   // What the loader refused in a job or a rule of the pack, checked on the table now that no file goes through it.
-  it('keeps the review to its jobs, read-only steps on a clone of their own, the session to the dev queue, after_merge to pr.merged', () => {
+  it('keeps the review to its jobs, read-only steps on a clone of their own, the session to the dev queue', () => {
     const wf = defaultWorkflow();
     for (const j of Object.values(wf.jobs)) {
       const review = j.step === 'review';
@@ -64,7 +65,6 @@ describe('defaultWorkflow (ORC-388, ORC-389)', () => {
       const step = j.step === undefined ? undefined : agentStep(j.step);
       if (step?.type === 'agent_step' && step.readOnly && step.writes === 'nothing' && !review) expect(j.workspace, `${j.name}.workspace`).toBe('trunk-readonly');
     }
-    for (const [type, rules] of Object.entries(wf.on)) for (const r of rules!) if (r.do === 'after_merge') expect(type).toBe('pr.merged');
   });
 
   it('gives each call a workflow of its own: a test that changes a job, a rule or a limit changes no other workflow', () => {
