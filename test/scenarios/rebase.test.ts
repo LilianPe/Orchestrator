@@ -56,14 +56,15 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
   it('a publication that pushed nothing is not the head a rebase replaces: the last commit the factory pushed is (ORC-402)', async () => {
     const h = createHarness();
     await inReview(h);
-    // Human feedback whose fix moves the branch back to its base: nothing to push, `publish.done` says it empty.
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Reverted.' }] });
-    h.workspaces.heads.set(WORKTREE, 'base1');
+    // Human feedback whose fix leaves the branch on the default branch, which already holds the work: nothing more than the base
+    // to push, `publish.done` says it empty.
+    h.runner.enqueue({ events: [{ kind: 'text', text: 'Already on main.' }] });
+    h.workspaces.heads.set(WORKTREE, 'main2');
     h.publisher.refuseNext('empty');
-    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Undo the export.', author: 'L', kind: 'instruction' });
+    await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Take main in.', author: 'L', kind: 'instruction' });
     await h.advance(180_000);
-    const empty = (await h.store.recentEvents(200, 'REL-1')).find((e) => e.type === 'publish.done' && (e.payload as { empty?: true }).empty);
-    expect(empty?.payload).toMatchObject({ sha: 'base1' });
+    const empty = (await h.store.recentEvents(200, 'REL-1')).find((e) => e.type === 'publish.done' && e.payload.empty);
+    expect(empty?.payload).toMatchObject({ sha: 'main2' });
 
     h.runner.enqueue({ output: DONE, events: [{ kind: 'text', text: 'Rebased.' }] });
     h.workspaces.heads.set(WORKTREE, 'rebased1');

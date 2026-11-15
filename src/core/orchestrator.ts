@@ -107,7 +107,7 @@ import { isTestFile } from '../checks/test-files.js';
 import { ANTI_CHEAT_CHECK, ANTI_CHEAT_OK } from '../checks/anti-cheat.js';
 import { mdCode } from '../checks/markdown.js';
 import { captureArtifactId, captureLabel, scenarioPath, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
-import { changelogEntry, deliveredBody, mergedWork, type MergedPr } from './changelog.js';
+import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from './changelog.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { parseStatus } from '../adapters/workspace/git-workspaces.js';
 import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
@@ -2420,10 +2420,7 @@ export class Orchestrator {
    * (ORC-402). The one head a rebase may replace.
    */
   private async lastPublished(projectId: string, ticketId: string): Promise<string | undefined> {
-    const pushed = (await this.d.store.ticketJournal(projectId, ticketId))
-      .map((e) => (e.event.type === 'publish.done' ? (e.event.payload as EventPayloads['publish.done']) : undefined))
-      .findLast((p) => p && !p.empty);
-    return pushed?.sha;
+    return lastPushed((await this.d.store.ticketJournal(projectId, ticketId)).map((j) => upcast(j.event)))?.sha;
   }
 
   /**
