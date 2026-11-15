@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server';
 import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
+import { githubAuthorizeUrl, githubSignIn } from '../adapters/forge/github-login.js';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
@@ -32,11 +33,11 @@ import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { SecretReader } from '../adapters/secrets/reader.js';
 import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
-import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf } from '../config/factory-yml.js';
+import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens } from '../config/instance.js';
-import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
+import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, type InstanceConfig } from '../config/instance.js';
+import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { asFantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow } from '../presets/workflow.js';
@@ -52,7 +53,7 @@ import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
-import { agentOnly, createApp, isLoopbackHost } from '../server/app.js';
+import { agentOnly, createApp, GITHUB_CALLBACK_PATH, isLoopbackHost, type ServerDeps } from '../server/app.js';
 import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
@@ -65,11 +66,29 @@ export interface BootOptions {
   fakeRunner?: boolean;
   port?: number;
   log?: (m: string) => void;
-  /** Defaults to process.env; read for FACTORY_UI_PASSWORD. */
+  /** Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
 
 const FACTORY_LABELS = ['agent:stop', BLOCKED_LABEL];
+
+/**
+ * The dashboard's GitHub sign-in off the loopback (ORC-399): the factory App's OAuth client, who factory.yml lets in, and
+ * the HTTPS public URL GitHub calls back to. Undefined on the loopback, where nobody signs in; one missing refuses the start.
+ */
+function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, client: { clientId: string; clientSecret: string } | undefined): ServerDeps['githubLogin'] {
+  if (isLoopbackHost(instance.host)) return undefined;
+  const exposed = `host: ${instance.host} exposes the interface and the API of ${PRODUCT_NAME} outside this machine, behind a GitHub sign-in through the factory's App`;
+  if (!client) {
+    throw new Error(`${exposed}: set the App's OAuth client (github.client_id and github.client_secret in factory.yml, or GH_APP_CLIENT_ID and GH_APP_CLIENT_SECRET), or set host: 127.0.0.1 back in config.yaml.`);
+  }
+  if (!yml?.dashboard) throw new Error(`${exposed}: name who may sign in, dashboard: { logins, org, team } in factory.yml.`);
+  if (!instance.publicUrl?.startsWith('https://')) throw new Error(`${exposed}: set publicUrl to its https:// address, where GitHub calls the sign-in back and the session cookie is sent.`);
+  // A publicUrl written with its trailing slash must still give the callback URL the App declares.
+  const redirectUri = `${instance.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
+  const options = { ...client, redirectUri, access: yml.dashboard };
+  return { authorizeUrl: (state) => githubAuthorizeUrl({ clientId: client.clientId, redirectUri, state }), signIn: (code) => githubSignIn(options, code) };
+}
 
 export async function startFactory(o: BootOptions): Promise<{ url: string; stop(): Promise<void> }> {
   const log = o.log ?? ((m: string) => console.log(`[factoryd] ${m}`));
@@ -83,13 +102,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const instance = effectiveInstance(o.home, yml);
   // Opened now, read at each setup (ORC-308): only the references' syntax is checked at the start.
   const repoSecrets = new SecretReader(openSecretSources(yml?.secretSources, SECRET_SOURCE_KINDS, env));
-  const uiPassword = isLoopbackHost(instance.host) ? undefined : env['FACTORY_UI_PASSWORD'] || undefined;
-  if (!isLoopbackHost(instance.host) && !uiPassword) {
-    throw new Error(
-      `host: ${instance.host} exposes the interface and the API of ${PRODUCT_NAME} outside this machine. ` +
-        'Set the FACTORY_UI_PASSWORD environment variable (the interface password), or set host: 127.0.0.1 back in config.yaml.',
-    );
-  }
+  const oauthClient = githubOAuthClient(instance, env);
+  const githubLogin = dashboardLogin(instance, yml, oauthClient);
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
   if (!o.fakeRunner) checkHostRuns(env);
   const paths = homePaths(o.home);
@@ -170,7 +184,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     // A repository's secrets: its env ones from the start, the others by the values its setups read (ORC-308), a rotated one included.
-    const daemonSecrets = () => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : [])];
+    const daemonSecrets = () => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
@@ -406,7 +420,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       }),
       transcriptsDir: paths.transcripts,
       webDir: existsSync(webDir) ? webDir : undefined,
-      uiPassword,
+      githubLogin,
       configProblems: problems,
       heldRows: (ticketId) => orchestrator.heldRows(ticketId),
       secrets: () => transcriptSecrets(env, daemonSecrets()),

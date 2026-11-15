@@ -15,7 +15,6 @@ The two instance files are read **at startup** of `relais up`: restart after a c
 | Variable | Read by | Default | Effect | Secret |
 |---|---|---|---|---|
 | `RELAIS_HOME` | all `relais` commands | `$HOME/.relais` | Instance directory (see [`installation.md`](installation.md#the-daemons-home-directory)). | no |
-| `RELAIS_UI_PASSWORD` | `relais up`, `relais status/pause/resume/stop` | — | HTTP Basic password for the UI and the API. **Required** as soon as `host` is not a loopback address: without it, `relais up` refuses to start. Ignored when `host` is loopback. See [`interface-and-security.md`](interface-and-security.md). | **yes** |
 | `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Postgres connection string (`postgres://user:password@host:5432/database`). When set, the daemon keeps its state in Postgres (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`relais plan` reads it without migrating it); an unreachable database prevents startup, with no fallback to SQLite. Absent: SQLite database `relais.db`, until it is removed (ORC-178); in production (`NODE_ENV=production`, set by the image) its absence prevents startup, unless `FACTORY_STORE=sqlite` (ORC-350). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
 | `FACTORY_STORE` | `relais up`, `relais plan` | — | `sqlite`: in production, without `FACTORY_DATABASE_URL`, start on the SQLite database all the same (ORC-350). Otherwise a production start without `FACTORY_DATABASE_URL` is refused, so that a variable lost in a deployment never starts the factory on an empty database. No effect outside production or with `FACTORY_DATABASE_URL`. The commands that open the store (`plan`, `replay --export`, `run repair`…) refuse the same way. | no |
 | `FACTORY_CONTAINER_CLI` | `relais up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` runs there too. Absent: `relais up` refuses to start, unless `FACTORY_ALLOW_HOST_RUNS=1` (ORC-349). No effect with `--fake-runner`. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
@@ -41,6 +40,8 @@ The two instance files are read **at startup** of `relais up`: restart after a c
 | `GH_APP_ID` | daemon (fallback for `github.appId`) | — | Identifier of the factory's GitHub App. | no |
 | `GH_APP_KEY` | daemon (fallback for `github.privateKey`) | — | PEM private key of the GitHub App, or path to the `.pem` file. | **yes** |
 | `GH_APP_INSTALLATION_ID` | daemon (fallback for `github.installationId`) | — | App installation to use; optional, the daemon can find it per repository. | no |
+| `GH_APP_CLIENT_ID` | daemon (fallback for `github.clientId`) | — | Client id of the GitHub App, for the dashboard's GitHub sign-in (ORC-399). **Required**, with its secret, as soon as `host` is not a loopback address. | no |
+| `GH_APP_CLIENT_SECRET` | daemon (fallback for `github.clientSecret`) | — | Client secret of the GitHub App, for the dashboard's GitHub sign-in (ORC-399). | **yes** |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (inherited by runs) | the machine's git identity; in Docker `Relais <relais@localhost>` | Identity of the agents' commits. | no |
 | `PATH` | the daemon | — | Must contain `claude`, `gh`, `git`. Relais adds Relais's `bin/` to it for runs. | no |
 
@@ -55,7 +56,7 @@ Written by `relais init`, editable by hand. Missing file = all default values. A
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `port` | integer > 0 | `4100` | HTTP server port (UI, API, webhooks, OAuth). Also the port the CLI queries (`http://127.0.0.1:<port>`). |
-| `host` | text | `127.0.0.1` | Listen address. Any value other than loopback (`localhost`, `127.x.x.x`, `::1`) requires `RELAIS_UI_PASSWORD`. In Docker: `0.0.0.0`. |
+| `host` | text | `127.0.0.1` | Listen address. Any value other than loopback (`localhost`, `127.x.x.x`, `::1`) puts the interface behind a GitHub sign-in (ORC-399): it requires the App's OAuth client, `dashboard` in `factory.yml` and an `https://` `publicUrl`, see [`interface-and-security.md`](interface-and-security.md#network-exposure-and-github-sign-in). In Docker: `0.0.0.0`. |
 | `publicUrl` | URL | — | Public HTTPS URL of Relais: the server's domain, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or a development tunnel. If set, it is used as the base for the OAuth callback URL (`<publicUrl>/oauth/callback`) and the webhook URL (`<publicUrl>/webhooks/linear`), and `relais init` does not create a smee channel. Without it: `http://localhost:<port>`. |
 | `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay, for a workstation only: `none` on the server. `relais init` creates a smee.io channel when there is neither `publicUrl` nor a relay. See [`linear.md`](linear.md#3-webhooks-production-and-development). |
 | `projects` | list of `{ id, repoPath, linearTeamKey, authz?, effects?, preset? }` | `[]` | One project = one local repository + one Linear team. See [`projects-and-workspaces.md`](projects-and-workspaces.md). `authz`: see [Authorization](#authorization). `effects: none`: nothing of the project leaves the factory, its effects kept as artifacts; `preset: factory/fantome`: the replay of closed tickets, always without effects, whose tickets only the daemon delegates, never Linear (ORC-231, ORC-376, [ghost-replay.md](ghost-replay.md)). |
@@ -99,6 +100,7 @@ The `github` section configures the **daemon**'s identity on GitHub. It is optio
 | `github.privateKey` | text | — | PEM private key **inline**, or path to a `.pem` file (recommended, mode `0600`). |
 | `github.installationId` | text or integer | discovered per repository | Installation to use. Absent: the daemon calls `GET /repos/{owner}/{repo}/installation`. |
 | `github.webhookSecret` | text | `GH_WEBHOOK_SECRET` | GitHub webhook secret (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent: the `GH_WEBHOOK_SECRET` variable; without either, every GitHub webhook is refused (401). See [`github.md`](github.md#github-webhooks). |
+| `github.clientId`, `github.clientSecret` | text | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | The App's OAuth client, for the dashboard's GitHub sign-in off the loopback (ORC-399). One without the other prevents startup. In `factory.yml`: `client_id`, `client_secret: env:NAME`. |
 
 The `GH_APP_ID`, `GH_APP_KEY` and `GH_APP_INSTALLATION_ID` variables serve as a fallback, field by field. A partial configuration (`appId` without a key, or the reverse) prevents startup: Relais does not silently switch to `gh`.
 
@@ -163,7 +165,8 @@ Rerunning `relais init` with the **same** client ID keeps the tokens; with a dif
 
 ```yaml
 linear:   { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }
-github:   { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY, webhook_secret: env:GH_WEBHOOK_SECRET }
+github:   { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY, webhook_secret: env:GH_WEBHOOK_SECRET, client_id: Iv1.0123456789abcdef, client_secret: env:GH_APP_CLIENT_SECRET }
+dashboard: { logins: [armand], org: acme, team: acme/factory-ops }   # who may sign in off the loopback (ORC-399): any of them
 claude:
   runtime: claude-code
   accounts:
@@ -188,7 +191,8 @@ egress: { max_versions_per_package: 10, max_assets_per_repo: 5 }   # caps of the
 
 | Section | Effect today |
 | -- | -- |
-| `github` | **Applied**: its keys replace those of `github` in `config.yaml`; a key it does not declare (`installation_id`, `webhook_secret`) stays the one from `config.yaml`. |
+| `github` | **Applied**: its keys replace those of `github` in `config.yaml`; a key it does not declare (`installation_id`, `webhook_secret`, `client_id`, `client_secret`) stays the one from `config.yaml`. `client_id` and `client_secret` are the App's OAuth client of the dashboard's GitHub sign-in (ORC-399). |
+| `dashboard` | **Applied** (ORC-399), off the loopback: who may sign in to the dashboard with GitHub. `logins` (a list of GitHub logins, compared whatever their case), `org` (its active members) and `team` (`<org>/<team-slug>`, its active members): any of them lets a person in, and at least one must be given. An org or a team asks the App for the organization permission *Members: read* ([`github.md`](github.md#creating-the-app)). Required when `host` is not a loopback address; ignored on the loopback. Read at each sign-in; a change counts from the next startup. |
 | `linear` | **Applied**: `app_client_id`, `client_secret` and `webhook_secret` replace those in `secrets.json`. The OAuth tokens stay in `secrets.json`, written by « Connect Linear ». |
 | `claude` | **`accounts` and `active` applied** (ORC-211): the active account's token is the runner's only credential. **`effort` applied** (ORC-136): `per_step` replaces a preset step's effort, `default` is used for jobs outside the preset (`ask`). **A change of `active` counts from the next launch, without a restart** (ORC-215): the `claude` section alone is validated again at each launch, so an invalid key elsewhere in the file does not stop a switch (a file that is no longer YAML does); a section that no longer parses, or a file gone, keeps the last account, with a `Warning: factory.yml: the Claude account is not read again, <name> stays active: …` in the daemon's log. A run keeps the account it was launched on: a usage limit it hits holds that account, whatever is active by then. The tokens are read from the daemon's environment, so a new account's variable must be set before the daemon starts. |
 | `concurrency` | **Applied** (ORC-203): capacity of the `dev` queue, 3 by default; the workflow's `limits.parallel_sessions` is no longer read (ORC-390). The `questions` queue has a fixed capacity of 2. |

@@ -35,6 +35,9 @@ const githubSchema = z.object({
   privateKey: z.string().min(1),
   installationId: idSchema.optional(),
   webhookSecret: z.string().optional(),
+  /** The App's OAuth client, for the dashboard's GitHub sign-in (ORC-399). */
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
 });
 
 const instanceSchema = z.object({
