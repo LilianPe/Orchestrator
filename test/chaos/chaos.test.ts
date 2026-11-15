@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { allEffects, checkChain, settled, type VisibleCall } from '../helpers/faults.js';
-import { createTestDatabase, PG_URL } from '../helpers/pg-database.js';
+import { createTestSchema, PG_URL } from '../helpers/pg-database.js';
 import { storeAt } from '../helpers/store-at.js';
 import { CHAOS_LEASE_MS, chaosEvents, rng, ticketIds, type ChaosEvent, type ChaosMessage, type DaemonMessage } from './events.js';
 
@@ -100,7 +100,7 @@ describe('chaos: kill -9 at random moments (ORC-163)', () => {
     let target: string;
     let drop = async () => {};
     if (PG_URL) {
-      const db = await createTestDatabase('factory_chaos');
+      const db = await createTestSchema('factory_chaos');
       const pool = new Pool({ connectionString: db.url, max: 1 });
       await migratePgStore(pool).finally(() => pool.end());
       target = db.url;

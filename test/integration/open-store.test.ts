@@ -7,29 +7,28 @@ import { saveInstance } from '../../src/config/instance.js';
 import { DATABASE_URL_ENV, openStore } from '../../src/store/open.js';
 import { PgStore } from '../../src/store/pg/pg-store.js';
 import { PG_TABLE_NAMES } from '../../src/store/pg/schema.js';
-import { createTestDatabase, PG_URL, queryOn } from '../helpers/pg-database.js';
+import { createTestSchema, type TestSchema, PG_URL, queryOn } from '../helpers/pg-database.js';
 
 const migrationsFolder = join(import.meta.dirname, '../../drizzle');
 
 describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
-  type TestDatabase = Awaited<ReturnType<typeof createTestDatabase>>;
-  let db: TestDatabase;
-  /** Left unmigrated. Made and dropped in the hooks, which have 60 s: a drop waits for a checkpoint, past a test's 30 s on a loaded machine (ORC-290). */
-  let other: TestDatabase;
+  let db: TestSchema;
+  /** Left unmigrated. */
+  let other: TestSchema;
 
   beforeAll(async () => {
     // Each assigned as soon as made: if the other fails, afterAll still drops it.
-    await Promise.all([createTestDatabase('factory_open').then((d) => (db = d)), createTestDatabase('factory_nomigrate').then((d) => (other = d))]);
+    await Promise.all([createTestSchema('factory_open').then((d) => (db = d)), createTestSchema('factory_nomigrate').then((d) => (other = d))]);
   });
 
   afterAll(async () => {
-    const made: (TestDatabase | undefined)[] = [db, other];
+    const made: (TestSchema | undefined)[] = [db, other];
     await Promise.all(made.map((d) => d?.drop()));
   });
 
   const tablesOf = (url: string) =>
     queryOn(url, async (c) =>
-      (await c.query<{ name: string }>(`select table_name as name from information_schema.tables where table_schema = 'public'`)).rows.map((r) => r.name),
+      (await c.query<{ name: string }>(`select table_name as name from information_schema.tables where table_schema = current_schema()`)).rows.map((r) => r.name),
     );
 
   it('opens Postgres without migrating it with `migrate: false` (factory plan)', async () => {

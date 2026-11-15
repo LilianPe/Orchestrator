@@ -807,13 +807,12 @@ describe('server', () => {
       }
     });
 
-    it('lists exactly submit_result, with the output JSON Schema, ask and kb_search', async () => {
+    it('lists exactly submit_result, with the output JSON Schema, and kb_search: no ask (ORC-400)', async () => {
       const { app } = await setup();
       const { tools } = (await (await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()).result;
-      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'ask', 'kb_search']);
+      expect(tools.map((t: { name: string }) => t.name)).toEqual(['submit_result', 'kb_search']);
       expect(tools[0].inputSchema).toMatchObject({ type: 'object', required: expect.arrayContaining(['status', 'summary', 'review_hints']), additionalProperties: false });
-      expect(tools[1].inputSchema).toMatchObject({ type: 'object', required: ['text'] });
-      expect(tools[2].inputSchema).toMatchObject({ type: 'object', required: ['query'] });
+      expect(tools[1].inputSchema).toMatchObject({ type: 'object', required: ['query'] });
     });
 
     it('kb_search answers with the notes the server searched, the runner reading no repository (ORC-232)', async () => {
@@ -867,13 +866,6 @@ describe('server', () => {
       expect(await store.getMeta('agent-output:r1')).toBeUndefined();
     });
 
-    it('ask journals the question, and tells nothing itself (the server reads no tracker): `decide` blocks and the outbox writes it', async () => {
-      const { app, submitted } = await setup();
-      expect((await call(app, 'ask', { text: 'Quelle base ?' })).isError).toBeUndefined();
-      expect(submitted).toEqual([expect.objectContaining({ type: 'agent.asked', projectId: 'p', ticketId: 'REL-1', payload: { question: 'Quelle base ?', job: expect.any(String), linearSessionId: 'ls-1' } })]);
-      expect((await call(app, 'ask', {})).isError).toBe(true);
-    });
-
     it('answers 401 without a valid run token, -32601 on an unknown method, -32602 on an unknown tool', async () => {
       const { app } = await setup();
       expect((await rpc(app, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, 'nope')).status).toBe(401);
@@ -881,6 +873,9 @@ describe('server', () => {
       expect(unknown).toMatchObject({ jsonrpc: '2.0', id: 7, error: { code: -32601 } });
       const tool = await (await rpc(app, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'rm', arguments: {} } })).json();
       expect(tool.error.code).toBe(-32602);
+      // No ask (ORC-400): a question ends the run with a blocked submit_result.
+      const ask = await (await rpc(app, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'ask', arguments: { text: 'Quelle base ?' } } })).json();
+      expect(ask.error).toMatchObject({ code: -32602, message: 'Unknown tool: ask' });
     });
   });
 

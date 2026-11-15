@@ -9,6 +9,9 @@ import { CachedRoleResolver } from '../../src/adapters/roles/cached.js';
 import type { ProjectAuthz } from '../../src/adapters/roles/types.js';
 import { FakeRunner } from '../../src/adapters/runner/fake.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
+import { SecretReader } from '../../src/adapters/secrets/reader.js';
+import { openSecretSources, SECRET_SOURCE_KINDS } from '../../src/adapters/secrets/registry.js';
+import type { SecretSource } from '../../src/adapters/secrets/types.js';
 import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../../src/adapters/workspace/fake.js';
 import { loadWorkflow } from '../../src/config/load-workflow.js';
@@ -250,6 +253,10 @@ export function createHarness(
     fullReadPaths?: OrchestratorDeps['fullReadPaths'];
     /** What the runner gets of the repository (ORC-211), from the config the launch read. */
     repoVariables?: OrchestratorDeps['repoVariables'];
+    /** The sources the setup reads besides `env`, always open as in production (ORC-308). */
+    secretSources?: Record<string, SecretSource>;
+    /** The daemon's environment the `env` source reads (ORC-308): empty by default, so an `env:` secret fails its setup. */
+    secretEnv?: NodeJS.ProcessEnv;
     /** `.factory/config.yml` as the launch reads it on the default branch (ORC-209 C); the socle by default. */
     repoConfig?: OrchestratorDeps['repoConfig'];
     /** `budgets.per_ticket_tokens` and `budgets.on_usage_limit` of factory.yml (ORC-340, ORC-216). */
@@ -294,6 +301,7 @@ export function createHarness(
   const workspaces = new FakeWorkspaces();
   const checks = new FakeCheckRunner(opts.verify);
   const sandboxes = new FakeSandboxProvider();
+  const secrets = new SecretReader({ ...openSecretSources(undefined, SECRET_SOURCE_KINDS, opts.secretEnv ?? {}), ...opts.secretSources });
   const publisher = new FakePublisher(forge);
   const sessionsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-sessions-')) : undefined;
   const runsDir = opts.sandboxed ? mkdtempSync(join(tmpdir(), 'factory-runs-')) : undefined;
@@ -369,6 +377,7 @@ export function createHarness(
     labelsWritten: (projectId, ticketId, written) => recordWrite(store, projectId, ticketId, written),
     fullReadPaths: opts.fullReadPaths,
     repoVariables: opts.repoVariables,
+    readSecrets: (refs) => secrets.read(refs),
     repoConfig: opts.repoConfig,
     perTicketTokens: opts.perTicketTokens,
     onUsageLimit: opts.onUsageLimit,
@@ -439,7 +448,7 @@ export function createHarness(
   }
 
   return {
-    clock, tracker, forge, runner, workspaces, checks, sandboxes, publisher, sessionsDir, runsDir, logs,
+    clock, tracker, forge, runner, workspaces, checks, sandboxes, secrets, publisher, sessionsDir, runsDir, logs,
     send, advance, restart, another, project,
     /** One pass of the daemon's delegation of the replayed tickets (ORC-376), and what it started. */
     async delegateReplays(): Promise<void> {

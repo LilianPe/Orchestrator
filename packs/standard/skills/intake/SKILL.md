@@ -26,7 +26,7 @@ If the prompt carries a "Feedback to address" block: these are humans' answers t
 
 ## Forbidden
 
-Do not ask with `mcp__factory__ask`: your questions go in `missing`, the factory asks them.
+Do not ask with a `blocked` result: your questions go in `missing`, the factory asks them.
 
 ## End of turn: `submit_result`
 

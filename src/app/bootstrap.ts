@@ -31,6 +31,8 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
+import { SecretReader } from '../adapters/secrets/reader.js';
+import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
@@ -97,6 +99,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // runs is never half-read by a request; config.yaml with what it declares over it.
   const yml = loadFactoryYml(o.home, env);
   const instance = effectiveInstance(o.home, yml);
+  // Opened now, read at each setup (ORC-308): only the references' syntax is checked at the start.
+  const repoSecrets = new SecretReader(openSecretSources(yml?.secretSources, SECRET_SOURCE_KINDS, env));
   const oauthClient = githubOAuthClient(instance, env);
   const githubLogin = dashboardLogin(instance, yml, oauthClient);
   // Before anything opens: no agent on the host but by choice (ORC-349). --fake-runner launches none.
@@ -178,7 +182,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       return a.name ? a.token : undefined;
     };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
-    const daemonSecrets = () => [...daemonSecretValues(o.home, yml), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
+    // A repository's secrets: its env ones from the start, the others by the values its setups read (ORC-308), a rotated one included.
+    const daemonSecrets = () => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
@@ -304,6 +309,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       claudeAccount: () => claudeAccount().name,
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
+      readSecrets: (refs) => repoSecrets.read(refs),
       repoConfig: makeRepoConfig({ log }),
       originUrl,
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
