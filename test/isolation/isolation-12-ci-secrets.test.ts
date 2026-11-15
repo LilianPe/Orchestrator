@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GitHubAppApi } from '../../src/adapters/forge/github-app-api.js';
-import { runDoctor } from '../../src/cli/doctor.js';
+import { checkHost, runDoctor } from '../../src/cli/doctor.js';
 import { appOptions, gate, gh, GITHUB_ENV, LiveForge, REPO } from './github-live.js';
 
 /**
@@ -36,14 +36,18 @@ describe.skipIf(skip)(title, () => {
   }, 120_000);
 
   it("doctor accepts the test repository, whose CI reads a secret behind a human's approval; without it, refuses", async () => {
-    const api = new GitHubAppApi(appOptions());
+    const live = new GitHubAppApi(appOptions());
+    // The CI secret check alone: the host and the branch protection (ORC-208) are other verdicts, held accepted here.
+    const branchProtection = async () => ({ branch: 'main', classic: false, rules: ['pull_request'] });
+    const host = checkHost(() => 'cpu memory pids', 0);
+    const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection };
     const lines: string[] = [];
-    expect(await runDoctor({ repoPath: REPO, api, out: (l) => lines.push(l), json: true }), lines.join('\n')).toBe(0);
+    expect(await runDoctor({ repoPath: REPO, api, host, out: (l) => lines.push(l), json: true }), lines.join('\n')).toBe(0);
     const report = JSON.parse(lines.join('\n')) as { workflows: { path: string; secrets: boolean; verdict: string }[] };
     expect(report.workflows, `${CANARY} is missing from the test repository`).toContainEqual(expect.objectContaining({ path: CANARY, secrets: true, verdict: 'accepted' }));
     // The control: the same workflows, the environment without its reviewer.
-    const unprotected = { listWorkflows: (p: string) => api.listWorkflows(p), listEnvironments: async () => [{ name: ENVIRONMENT, requiredReviewers: false }] };
-    expect(await runDoctor({ repoPath: REPO, api: unprotected, out: () => {}, json: true })).toBe(1);
+    const unprotected = { ...api, listEnvironments: async () => [{ name: ENVIRONMENT, requiredReviewers: false }] };
+    expect(await runDoctor({ repoPath: REPO, api: unprotected, host, out: () => {}, json: true })).toBe(1);
   }, 120_000);
 
   it("a factory PR's CI does not run the job that reads the secret: it waits for the reviewer", async () => {

@@ -217,3 +217,28 @@ describe('GitHubAppApi', () => {
     expect((error as Error).message).not.toContain('ghs_api_secret');
   });
 });
+
+describe('GitHubAppApi.branchProtection (ORC-208)', () => {
+  const protectionRoutes = (branch: unknown, rules: unknown, repo: unknown = { default_branch: 'main' }): Route[] => [
+    tokenRoute(),
+    (url) => (url.pathname === '/repos/acme/app' ? { body: repo } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: branch } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: rules } : undefined),
+  ];
+
+  it('reads the default branch, its classic protection flag and the rule types its active rulesets apply, once each', async () => {
+    const calls: Call[] = [];
+    const rules = [{ type: 'pull_request', ruleset_id: 1 }, { type: 'deletion', ruleset_id: 1 }, { type: 'pull_request', ruleset_id: 2 }];
+    const protection = await makeApi(protectionRoutes({ name: 'main', protected: false }, rules), calls).branchProtection('/repo');
+    expect(protection).toEqual({ branch: 'main', classic: false, rules: ['deletion', 'pull_request'] });
+    expect(calls.every((call) => !call.url.includes('/protection'))).toBe(true);
+  });
+
+  it.each([
+    ['a repository without its default branch', { name: 'app' }, { protected: true }, []],
+    ['a branch without its protected flag', { default_branch: 'main' }, { name: 'main' }, []],
+    ['rules that are not a list of typed rules', { default_branch: 'main' }, { protected: true }, [{ ruleset_id: 1 }]],
+  ])('rejects, never reads "protected", %s', async (_case, repo, branch, rules) => {
+    await expect(makeApi(protectionRoutes(branch, rules, repo)).branchProtection('/repo')).rejects.toThrow(/unreadable answer/);
+  });
+});

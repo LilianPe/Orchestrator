@@ -4,15 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import type { EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
+import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
 import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
-import { runDoctor, runDoctorCommand, type DoctorApi } from './doctor.js';
+import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
   failEnvironments?: boolean;
+  failProtection?: boolean;
+  protection?: BranchProtection;
 }
 
 class FakeApi implements DoctorApi {
@@ -36,7 +38,15 @@ class FakeApi implements DoctorApi {
     if (this.options.failEnvironments) throw new Error('403 Resource not accessible');
     return this.environments;
   }
+
+  async branchProtection(): Promise<BranchProtection> {
+    if (this.options.failProtection) throw new Error('403 Resource not accessible');
+    return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'] };
+  }
 }
+
+/** A host as the factory needs it: cgroup v2, its controllers delegated to the daemon's user. */
+const goodHost: HostReport = checkHost(() => 'cpuset cpu io memory pids', 1000);
 
 function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowSource {
   return { path, content };
@@ -45,13 +55,14 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string; commands?: Record<string, string> } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string; commands?: Record<string, string>; host?: HostReport } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
   const code = await runDoctor({
     repoPath: options.repoPath ?? '/repo',
     api,
+    host: options.host ?? goodHost,
     out: (line) => lines.push(line),
     ...(options.json ? { json: true } : {}),
     ...(options.naming ? { naming: options.naming } : {}),
@@ -410,6 +421,9 @@ jobs:
           ? { body: { type: 'file', encoding: 'base64', content: Buffer.from(ci).toString('base64') } }
           : undefined,
       (url) => (url.pathname === '/repos/acme/app/environments' ? { body: { total_count: 0, environments: [] } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app' ? { body: { default_branch: 'main' } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: { name: 'main', protected: false } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request' }] } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -439,8 +453,12 @@ jobs:
       http,
       exec,
       now: () => now,
+      readHostFile: () => 'cpu memory pids',
+      uid: 1000,
     });
     expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('Host: accepted');
+    expect(lines.join('\n')).toContain('Default branch main: accepted');
     expect(lines.join('\n')).toContain('verdict: accepted');
     // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
     expect(lines).toContain(MISSING_TEST_COMMAND);
@@ -703,5 +721,86 @@ jobs:
       expect((await doctor([], [], { commands: { test: 'npm test' } })).text).not.toContain('commands.test');
       expect(JSON.parse((await doctor([], [], { commands: { test: 'npm test' }, json: true })).text)).not.toHaveProperty('warnings');
     });
+  });
+});
+
+describe('the host: cgroup v2 and its controllers (ORC-208, criterion 1)', () => {
+  const ROOT = '/sys/fs/cgroup/cgroup.controllers';
+  const USER = '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers';
+  const files = (entries: Record<string, string>) => (path: string) => entries[path];
+
+  it('refuses a host without cgroup v2: no cgroup.controllers at the root (cgroups v1 or hybrid)', async () => {
+    const host = checkHost(files({}), 1000);
+    expect(host.verdict).toBe('refused');
+    const result = await doctor([], [], { host });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('cgroup v2');
+    expect(result.text).toContain('Result: refused');
+  });
+
+  it('refuses a cgroup v2 host that lacks one of pids, memory and cpu, and names it', () => {
+    const host = checkHost(files({ [ROOT]: 'cpuset cpu io memory', [USER]: 'cpu memory' }), 1000);
+    expect(host.verdict).toBe('refused');
+    expect(host.reasons.join(' ')).toContain('pids');
+  });
+
+  it("refuses a rootless daemon whose user has no delegated cgroup, or not every controller in it", () => {
+    const none = checkHost(files({ [ROOT]: 'cpu memory pids' }), 1000);
+    expect(none.verdict).toBe('refused');
+    expect(none.reasons.join(' ')).toContain('loginctl enable-linger');
+    const partial = checkHost(files({ [ROOT]: 'cpu memory pids', [USER]: 'memory pids' }), 1000);
+    expect(partial.verdict).toBe('refused');
+    expect(partial.reasons.join(' ')).toMatch(/delegated.*cpu/);
+  });
+
+  it('accepts cgroup v2 with the three controllers, delegated to the user; a root daemon reads the root only', () => {
+    expect(checkHost(files({ [ROOT]: 'cpuset cpu io memory hugetlb pids', [USER]: 'cpu memory pids' }), 1000)).toMatchObject({ verdict: 'accepted', cgroupV2: true });
+    expect(checkHost(files({ [ROOT]: 'cpu memory pids' }), 0).verdict).toBe('accepted');
+  });
+
+  it('puts the host in the JSON report', async () => {
+    const result = await doctor([], [], { json: true, host: checkHost(files({}), 1000) });
+    const report = JSON.parse(result.text) as { accepted: boolean; host: HostReport };
+    expect(report.accepted).toBe(false);
+    expect(report.host).toMatchObject({ cgroupV2: false, verdict: 'refused' });
+  });
+});
+
+describe("the default branch's protection (ORC-208, criterion 2)", () => {
+  const protection = (p: Partial<BranchProtection>): { fake: FakeOptions } => ({ fake: { protection: { branch: 'main', classic: false, rules: [], ...p } } });
+
+  it('refuses a repository whose default branch has neither branch protection nor a ruleset that requires a pull request', async () => {
+    const result = await doctor([], [], protection({}));
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('main');
+    expect(result.text).toContain('not protected');
+    expect(result.text).toContain('Result: refused');
+  });
+
+  it('refuses rulesets that do not require a pull request: a direct push still lands', async () => {
+    const result = await doctor([], [], protection({ rules: ['deletion', 'non_fast_forward'] }));
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('pull_request');
+  });
+
+  it('accepts a ruleset that requires a pull request, and a classic protection, whose rules the App cannot read, saying so', async () => {
+    const ruleset = await doctor([], [], protection({ rules: ['pull_request'] }));
+    expect(ruleset.code).toBe(0);
+    const classic = await doctor([], [], protection({ classic: true }));
+    expect(classic.code).toBe(0);
+    expect(classic.text).toContain('Administration');
+  });
+
+  it('fails closed when the protection cannot be read', async () => {
+    const result = await doctor([], [], { fake: { failProtection: true } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('Cannot read the protection of the default branch');
+  });
+
+  it('puts the protection in the JSON report', async () => {
+    const result = await doctor([], [], { json: true, ...protection({ rules: ['deletion'] }) });
+    const report = JSON.parse(result.text) as { accepted: boolean; branchProtection: { branch: string; verdict: string } };
+    expect(report.accepted).toBe(false);
+    expect(report.branchProtection).toMatchObject({ branch: 'main', verdict: 'refused' });
   });
 });

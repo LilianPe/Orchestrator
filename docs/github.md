@@ -185,7 +185,7 @@ The merge push may arrive before the `pr.merged` of the same merge: it is then l
 
 Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). A local or remote branch with the same name is reused. The `not_started` check refuses to take a ticket that already has a `factory/<ticket>-…` branch on the forge; with `intake` on, it is part of intake's duplicate search ([preset](preset.md#duplicates-existing-code-and-scope-orc-207)).
 
-## Branch protection (strongly recommended)
+## Branch protection (required by `factory doctor`)
 
 The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](pack-and-skills.md#permissions)), but these refusals are a **guard against mistakes, not a barrier**: they depend on Claude Code and on how the command is written, and an agent that runs code can bypass them. A push fails for want of means: no token in a sandbox, and on the host a git config that sends every push nowhere, which an agent under the daemon's user can still undo (ORC-349, [`interface-and-security.md`](interface-and-security.md#known-limitations)). It is GitHub that guarantees only humans merge. On the default branch of each repository:
 
@@ -196,9 +196,20 @@ The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](
 
 The knowledge repository (`relais-knowledge`) deserves the same protection: a human merges there.
 
-## `factory doctor`: CI secrets and factory branches
+`factory doctor` refuses a repository whose default branch has neither (ORC-208). It reads, with the App's read permissions only (*Metadata*): `GET /repos/{owner}/{repo}` for the default branch, `GET /repos/{owner}/{repo}/branches/{branch}` for the classic protection's `protected` flag, and `GET /repos/{owner}/{repo}/rules/branches/{branch}` for the rules the repository's **active** rulesets apply to it (a ruleset in *Evaluate* mode applies none). Accepted:
 
-`factory doctor [repo] [--json]` (current repository by default) checks, before entrusting a repository, that no CI can expose secrets to the factory's branches. The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
+- a ruleset with the **Require a pull request before merging** rule (`pull_request`): `doctor` can read it, it is the recommended form;
+- a classic branch protection: its rules need the *Administration* permission, which the App does not have, so `doctor` credits its flag alone and says so; check by hand that it requires a pull request.
+
+Refused: no protection and no ruleset, or rulesets without the `pull_request` rule (blocking force pushes or deletion alone still lets a direct push land). An unreadable answer refuses too.
+
+## `factory doctor`: host, branch protection, CI secrets and factory branches
+
+`factory doctor [repo] [--json]` (current repository by default), run on the server as the daemon's user, checks before entrusting a repository that the host can limit the sandbox, that the default branch is protected ([above](#branch-protection-required-by-factory-doctor)), and that no CI can expose secrets to the factory's branches. Each check has its verdict; one refusal refuses.
+
+**The host (ORC-208).** The attempt containers are limited in processes, memory and CPUs through cgroups ([`tests.md`](tests.md), isolation 9). `doctor` refuses a host without cgroup v2 (no `/sys/fs/cgroup/cgroup.controllers`: cgroups v1 or the hybrid layout), or whose root lacks one of the `cpu`, `memory` and `pids` controllers. Run as any user but root (a rootless engine), it also reads the cgroup systemd delegates to that user, `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/cgroup.controllers`, and refuses when it is absent (no systemd user session: `sudo loginctl enable-linger <user>`) or lacks one of the three. A host where the limits are removed (`FACTORY_SANDBOX_*=none`) is refused all the same: the sandbox would have no protection against resource exhaustion.
+
+**CI secrets.** The check lives in `doctor`, not only in the `fix-ci` skill: a factory PR must never trigger a job that reads the repository's secrets without a human having approved it.
 
 Since ORC-283 the factory's branches follow the team's convention, `feat/<id>-<slug>` or `fix/<id>-<slug>` by default, or the repository's own `branches.pattern` ([repository configuration](repository-configuration.md#branch-names)). They no longer live in a space of their own: a branch filter can no longer tell them from a human's. So `doctor` accepts a job that sees a secret or a writable `GITHUB_TOKEN` on these branches only if a human approves each of its runs: the job runs under an environment with required reviewers. A condition on the actor (`if: github.actor != '<app-slug>[bot]'`) is not credited: a human can start a run on the agent's code (a push on top of its commits, re-opening or labelling its PR), and that run's actor is the human. A ticket whose PR was already open on `factory/<id>-<slug>` keeps that branch, so `doctor` still counts `factory/*` among the factory's branches.
 
@@ -268,7 +279,7 @@ jobs:
 
 `factory doctor` then displays `secrets: yes`, `protected environment: yes` and `verdict: accepted`. The CI without secrets can still run on the factory's branches beside it, in another job or workflow, without approval.
 
-`--json` produces the same verdict in an object `{ repoPath, accepted, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
+`--json` produces the same verdict in an object `{ repoPath, accepted, host: { cgroupV2, controllers, delegated?, verdict, reasons }, branchProtection: { branch, classic, rules, verdict, reasons }, workflows: [{ path, triggers, secrets, githubToken, factoryBranches, environments, protected, verdict, reasons }] }`, without any secret value (`githubToken`: the jobs whose token can write, with their rights).
 
 ### Limitations
 

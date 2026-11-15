@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { parseAllDocuments } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import {
   GitHubAppApi,
+  type BranchProtection,
   type EnvironmentProtection,
   type WorkflowSource,
 } from '../adapters/forge/github-app-api.js';
@@ -44,11 +46,106 @@ function factoryBranches(naming: BranchNaming): FactoryBranches {
 export interface DoctorApi {
   listWorkflows(repoPath: string): Promise<WorkflowSource[]>;
   listEnvironments(repoPath: string): Promise<EnvironmentProtection[]>;
+  branchProtection(repoPath: string): Promise<BranchProtection>;
+}
+
+type Verdict = 'accepted' | 'refused';
+
+/** The host as the sandbox limits need it (ORC-208): cgroup v2, with the controllers the engine sets its limits through. */
+export interface HostReport {
+  cgroupV2: boolean;
+  controllers: string[];
+  /** The controllers delegated to the daemon's user, the ones a rootless engine can use; absent for root. */
+  delegated?: string[];
+  verdict: Verdict;
+  reasons: string[];
+}
+
+const CGROUP_ROOT = '/sys/fs/cgroup';
+/** The limits of an attempt's containers: processes, memory, CPUs (docs/tests.md, isolation 9). */
+const REQUIRED_CONTROLLERS = ['cpu', 'memory', 'pids'];
+
+/**
+ * Reads the host's cgroups (ORC-208): the unified hierarchy has a `cgroup.controllers` at its root, cgroups v1 and the
+ * hybrid layout have none there. A rootless engine (any `uid` but 0) creates its containers under the user's systemd
+ * service, which holds only the controllers systemd delegates to it. `read`: a file's text, undefined when absent.
+ */
+export function checkHost(read: (path: string) => string | undefined, uid: number | undefined): HostReport {
+  const root = read(`${CGROUP_ROOT}/cgroup.controllers`);
+  if (root === undefined) {
+    return {
+      cgroupV2: false,
+      controllers: [],
+      verdict: 'refused',
+      reasons: [`no cgroup v2: ${CGROUP_ROOT}/cgroup.controllers is absent (cgroups v1 or hybrid), the sandbox cannot limit processes, memory and CPUs`],
+    };
+  }
+  const missing = (text: string) => {
+    const present = text.split(/\s+/);
+    return REQUIRED_CONTROLLERS.filter((controller) => !present.includes(controller));
+  };
+  const controllers = root.split(/\s+/).filter(Boolean);
+  const reasons: string[] = [];
+  const absent = missing(root);
+  if (absent.length > 0) reasons.push(`cgroup v2 without the ${absent.join(', ')} controller(s)`);
+  let delegated: string[] | undefined;
+  if (uid !== undefined && uid !== 0) {
+    const text = read(`${CGROUP_ROOT}/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`);
+    if (text === undefined) {
+      reasons.push(`no cgroup delegated to user ${uid}: a rootless engine cannot set the limits (sudo loginctl enable-linger <user>, docs/tests.md)`);
+    } else {
+      delegated = text.split(/\s+/).filter(Boolean);
+      const undelegated = missing(text);
+      if (undelegated.length > 0) reasons.push(`controller(s) not delegated to user ${uid}: ${undelegated.join(', ')}`);
+    }
+  }
+  const delegation = uid !== undefined && uid !== 0 ? `, delegated to user ${uid}` : '';
+  return {
+    cgroupV2: true,
+    controllers,
+    ...(delegated ? { delegated } : {}),
+    verdict: reasons.length > 0 ? 'refused' : 'accepted',
+    reasons: reasons.length > 0 ? reasons : [`cgroup v2 with ${REQUIRED_CONTROLLERS.join(', ')}${delegation}`],
+  };
+}
+
+export interface BranchProtectionReport extends BranchProtection {
+  verdict: Verdict;
+  reasons: string[];
+}
+
+/**
+ * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, or the
+ * classic protection, whose rules the App cannot read (credited on its flag, docs/github.md says what it must hold).
+ */
+function judgeProtection(protection: BranchProtection): BranchProtectionReport {
+  const rules = protection.rules.join(', ');
+  if (protection.rules.includes('pull_request')) {
+    return { ...protection, verdict: 'accepted', reasons: [`a ruleset requires a pull request (rules: ${rules})`] };
+  }
+  if (protection.classic) {
+    return {
+      ...protection,
+      verdict: 'accepted',
+      reasons: ['branch protection on; its rules need the Administration permission, which the App does not have: check it requires a pull request (docs/github.md)'],
+    };
+  }
+  return {
+    ...protection,
+    verdict: 'refused',
+    reasons: [
+      protection.rules.length > 0
+        ? `not protected: its rulesets (${rules}) do not require a pull request (\`pull_request\` rule), a direct push still lands`
+        : 'not protected: no branch protection and no ruleset',
+    ],
+  };
 }
 
 export interface DoctorOptions {
   repoPath: string;
   api: DoctorApi;
+  /** The host the daemon runs on (`checkHost`). */
+  host: HostReport;
   out: (line: string) => void;
   json?: boolean;
   /** The repository's branch naming (`.factory/config.yml`, ORC-283): the team's convention without it. */
@@ -497,15 +594,25 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
       return failure(`Cannot read the environments: ${errorMessage(error)}`);
     }
   }
+  let protection: BranchProtectionReport;
+  try {
+    protection = judgeProtection(await api.branchProtection(repoPath));
+  } catch (error) {
+    return failure(`Cannot read the protection of the default branch: ${errorMessage(error)}`);
+  }
+  const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
   const reports = workflows.map((workflow) => analyzeWorkflow(workflow, environmentMap, factory));
-  const accepted = reports.every((report) => report.verdict === 'accepted');
   const refused = reports.filter((report) => report.verdict === 'refused').length;
+  const accepted = refused === 0 && host.verdict === 'accepted' && protection.verdict === 'accepted';
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, host, branchProtection: protection, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
+    out(`Host: ${host.verdict} — ${host.reasons.join(' ')}`);
+    out(`Default branch ${protection.branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`);
+    out('');
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
       out(`GitHub Actions workflows: ${reports.length}`);
@@ -530,10 +637,15 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
         out('');
       }
     }
+    const refusals = [
+      ...(host.verdict === 'refused' ? ['the host cannot limit the sandbox'] : []),
+      ...(protection.verdict === 'refused' ? [`the default branch ${protection.branch} is not protected`] : []),
+      ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
+    ];
     out(
       accepted
-        ? "Result: accepted — no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
-        : `Result: refused — ${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches.`,
+        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
+        : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
   return accepted ? 0 : 1;
@@ -560,12 +672,24 @@ export interface DoctorCommandOptions {
   http?: HttpClient;
   exec?: Exec;
   now?: () => number;
+  /** A host file's text, undefined when absent: the cgroup files by default. */
+  readHostFile?: (path: string) => string | undefined;
+  /** The daemon's user: this process's by default (doctor runs on the server, as that user). */
+  uid?: number;
+}
+
+function readIfPresent(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
 }
 
 /**
- * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the repository's
- * branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last fetched it, then runs the same
- * analysis as `runDoctor`.
+ * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the host's cgroups, the
+ * repository's branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last fetched it, then runs
+ * the same analysis as `runDoctor`.
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
@@ -610,6 +734,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   return runDoctor({
     repoPath: options.repoPath,
     api,
+    host: checkHost(options.readHostFile ?? readIfPresent, options.uid ?? process.getuid?.()),
     out,
     naming: config.branches,
     commands: config.commands,
