@@ -26,7 +26,7 @@ import { HUMAN_EVENTS, mayCheck } from '../core/engine.js';
 import type { KbIndex } from '../knowledge/kb.js';
 import type { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { samePending } from '../core/reduce.js';
-import { upcast, type StoredEvent } from '../core/upcast.js';
+import type { StoredEvent } from '../core/upcast.js';
 import type { Scheduler } from './capacity.js';
 import { CREATES_TICKET, type EventPayloads, type IssueSnapshot, type LogicalState, type FactoryEvent, type RunOutcome, type TicketState, TRUSTED } from '../core/types.js';
 import type { RegistryOpener } from '../checks/registry.js';
@@ -219,17 +219,6 @@ export interface TakeOverDesk {
   attach(projectId: string, ticketId: string): Promise<SpawnCommand | undefined>;
   /** A bundle handed back, kept where the factory reads it (`<runsDir>/bundle-<project>-<ticket>/`): its path. */
   keepBundle(projectId: string, ticketId: string, bytes: Uint8Array): Promise<string>;
-}
-
-/**
- * The heads the factory pushed to the ticket's branch, oldest first, read from its journal: the sha of each `publish.done`
- * that pushed something (an `empty` one pushed nothing, ORC-402). The GitHub reconciliation tells a human's push from them (ORC-281).
- */
-export async function publishedHeads(store: Store, projectId: string, ticketId: string): Promise<string[]> {
-  return (await store.ticketJournal(projectId, ticketId)).flatMap(({ event }) => {
-    const e = upcast(event);
-    return e.type === 'publish.done' && !e.payload.empty ? [e.payload.sha] : [];
-  });
 }
 
 export class Daemon extends DaemonLaunch {

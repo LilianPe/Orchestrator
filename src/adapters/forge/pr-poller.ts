@@ -1,6 +1,8 @@
 import type { Clock } from "../../core/clock.js";
-import { publishedHeads, type ProjectRuntime } from "../../runtime/daemon.js";
+import { pushedPublications } from "../../core/changelog.js";
+import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
+import { upcast } from "../../core/upcast.js";
 import type { Store } from "../../store/types.js";
 import { checksEventId, prEventId, pushEventId } from "./github-webhook.js";
 import type { Forge, PrInfo } from "./types.js";
@@ -105,7 +107,7 @@ export class PrPoller {
     if (!head || head === t.verifiedSha || head === t.humanHead) return;
     const seenKey = `lost-push:${t.projectId}:${t.ticketId}`;
     if ((await this.d.store.getMeta(seenKey)) === head) return;
-    const heads = await publishedHeads(this.d.store, t.projectId, t.ticketId);
+    const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event))).map((p) => p.sha);
     const published = heads.at(-1);
     if (published && !heads.includes(head))
       await this.d.submit({

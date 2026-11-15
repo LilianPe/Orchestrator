@@ -8,9 +8,14 @@ import type { EventPayloads, FactoryEvent, TicketState } from './types.js';
 /** What the `after_merge` step (ORC-197) is given of the merge. */
 export type MergedPr = Extract<Effect, { kind: 'after_merge' }>;
 
-/** The factory's last publication that reached the forge: an `empty` one pushed nothing (ORC-402). */
+/** The factory's publications that reached the forge, oldest first: an `empty` one pushed nothing (ORC-402). */
+export function pushedPublications(events: readonly FactoryEvent[]): EventPayloads['publish.done'][] {
+  return events.filter((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty).map((e) => e.payload);
+}
+
+/** The factory's last publication that reached the forge. */
 export function lastPushed(events: readonly FactoryEvent[]): EventPayloads['publish.done'] | undefined {
-  return events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty)?.payload;
+  return pushedPublications(events).at(-1);
 }
 
 /**
