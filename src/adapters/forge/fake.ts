@@ -1,11 +1,11 @@
 import { branchOf } from './active-work.js';
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { ReviewLinesRefused, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
+import { ArtifactsRefused, ReviewLinesRefused, type ArtifactHost, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type HostedFile, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
 
 export type FakeCheckRun = CheckRunRequest & { id: number };
 
-export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
+export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissions {
   private prs = new Map<string, PrInfo>();
   /** The PRs `ensurePr` opened, in order. */
   opened: (PrRequest & { number: number })[] = [];
@@ -171,5 +171,28 @@ export class FakeForge implements Forge, ForgeWriter, RepoPermissions {
     const id = this.reviews.length + 1;
     this.reviews.push({ ...req, comments: req.comments.map((c) => ({ ...c })), number, id });
     return { id, deduplicated: false };
+  }
+
+  /** The files on `factory/artifacts` (ORC-407), by path, and how many commits put them there. */
+  artifacts = new Map<string, Uint8Array>();
+  artifactCommits = 0;
+  /** A refusal of the forge, as a protection rule gives one: every write of the branch rejects `ArtifactsRefused` with it. */
+  artifactsRefusal: string | undefined;
+
+  async hostArtifacts(_repoPath: string, files: readonly HostedFile[]): Promise<string[]> {
+    this.answer();
+    if (this.artifactsRefusal) throw new ArtifactsRefused(this.artifactsRefusal);
+    if (files.some((f) => !this.artifacts.has(f.path))) this.artifactCommits++;
+    for (const f of files) this.artifacts.set(f.path, f.content);
+    return files.map((f) => `${this.repoUrl}/blob/c${this.artifactCommits}/${f.path}?raw=true`);
+  }
+
+  async pruneArtifacts(_repoPath: string, expired: (folder: string) => Promise<boolean>): Promise<string[]> {
+    this.answer();
+    const removed: string[] = [];
+    for (const folder of new Set([...this.artifacts.keys()].map((p) => p.split('/')[0]!))) if (await expired(folder)) removed.push(folder);
+    for (const p of [...this.artifacts.keys()]) if (removed.includes(p.split('/')[0]!)) this.artifacts.delete(p);
+    if (removed.length) this.artifactCommits++;
+    return removed;
   }
 }

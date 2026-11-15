@@ -6,8 +6,8 @@ import { spentTokens } from '../core/types.js';
 import { OUTPUT_LIMITS } from './output-limits.js';
 
 /**
- * A visual-proof capture once published (ORC-176): where the image is, at the width it was shot at. ORC-176 takes them and
- * hosts them; the description only shows them.
+ * A visual-proof capture once published (ORC-176): where the image is, at the width it was shot at. ORC-176 takes them, ORC-407
+ * hosts them on the repository's `factory/artifacts` branch; the description only shows them.
  */
 export interface PublishedCapture {
   width: number;
@@ -28,6 +28,8 @@ export interface PrFacts {
   /** Where `verify` took the command that starts the application from (ORC-386), for a proof it found required. */
   start?: VisualProof['start'];
   captures?: readonly PublishedCapture[];
+  /** Why the captures `verify` took are not shown (ORC-407): the forge refused to host them, or nothing here can. */
+  unhosted?: string;
 }
 
 /**
@@ -93,14 +95,11 @@ export const START_SAID = {
 function evidence(o: AgentOutput | undefined, f: PrFacts): string {
   const parts = [`**Checked by the factory**: ${verifySummary(f.sha, f.commands).summary}`];
   if (o) parts.push(`**Tests added**, as stated by the agent:\n${testsList(o)}`);
-  if (f.visualProof === 'required') {
-    const shots = [...(f.captures ?? [])].sort((a, b) => a.width - b.width);
-    parts.push(
-      shots.length
-        ? `**Screens**:\n${shots.map((c) => `![${entry(c.caption).replace(/[[\]]/g, '')} (${c.width} px)](${linkUrl(c.url)})`).join('\n')}`
-        : '**Screens**: the visual proof is required for this ticket, and no capture was taken.',
-    );
-  }
+  const shots = [...(f.captures ?? [])].sort((a, b) => a.width - b.width);
+  // A proof `visual_paths` required has captures without the ticket asking at intake: they show all the same (ORC-407).
+  if (shots.length) parts.push(`**Screens**:\n${shots.map((c) => `![${entry(c.caption).replace(/[[\]]/g, '')} (${c.width} px)](${linkUrl(c.url)})`).join('\n')}`);
+  else if (f.unhosted) parts.push(`**Screens**: taken by the factory, not shown here: ${entry(f.unhosted)}`);
+  else if (f.visualProof === 'required') parts.push('**Screens**: the visual proof is required for this ticket, and no capture was taken.');
   // Set by `verify` whenever the proof was required, by `visual_paths` as by intake.
   if (f.start) parts.push(`**Start command**: ${START_SAID[f.start]}`);
   return parts.join('\n\n');

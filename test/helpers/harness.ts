@@ -318,6 +318,8 @@ export function createHarness(
       runner: life.gate(view ? view.runner(runner) : runner),
       forge: life.gate(forge),
       forgeWriter: life.gate(forge),
+      // The visual proof's captures, on the fake forge's `factory/artifacts` (ORC-407).
+      captureHost: life.gate(forge),
       ...(opts.noPublisher ? {} : { publisher: life.gate(publisher) }),
       workspaces: life.gate(workspaces),
       verify: life.gate(checks.run),
