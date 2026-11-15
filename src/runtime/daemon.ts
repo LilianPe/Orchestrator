@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Forge, ForgeWriter } from '../adapters/forge/types.js';
+import type { ArtifactHost, Forge, ForgeWriter } from '../adapters/forge/types.js';
 import type { SecretRef } from '../adapters/secrets/types.js';
 import type { Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -67,6 +67,11 @@ export interface DaemonDeps {
   labelsWritten?: (projectId: string, ticketId: string, written: LabelsWritten) => Promise<void>;
   /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
   forgeWriter?: ForgeWriter;
+  /**
+   * Where the visual proof's captures are shown from in a PR (ORC-407): the repository's `factory/artifacts` branch, by the GitHub
+   * App. Absent: a PR says its captures were taken and not shown.
+   */
+  captureHost?: ArtifactHost;
   /**
    * The policy in front of every text the orchestrator publishes (ORC-214): its comments and activities, the PR's text. Absent: one
    * without gitleaks, for a test or the fake runner's daemon; the daemon's scans in its sandboxes.

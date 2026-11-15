@@ -74,6 +74,24 @@ describe('describePr (ORC-195)', () => {
     expect(describePr(full, facts()).body).not.toMatch(/capture|visual proof/i);
   });
 
+  it('ORC-407: captures show whenever they were hosted, a proof that visual_paths required included, and their links pass the output policy', async () => {
+    const commit = 'a'.repeat(40);
+    const url = (side: string) => `https://github.com/LilianPe/Orchestrator/blob/${commit}/REL-1/${side}-1280-0123456789abcdef.png?raw=true`;
+    const captures = [
+      { width: 1280, caption: 'Before, 0123456789ab', url: url('before') },
+      { width: 1280, caption: 'After, abc123def456', url: url('after') },
+    ];
+    const pr = describePr(full, facts({ captures }));
+    expect(sections(pr.body).at(-1)!.text).toContain(`**Screens**:\n![Before, 0123456789ab (1280 px)](${url('before')})\n![After, abc123def456 (1280 px)](${url('after')})`);
+    await expect(new OutputPolicy().pr(pr)).resolves.toEqual(pr);
+  });
+
+  it('ORC-407: captures taken but not hosted say why, never that none was taken', () => {
+    const evidence = sections(describePr(full, facts({ visualProof: 'required', unhosted: 'GitHub refuses to write factory/artifacts: 422 Repository rule violations found' })).body).at(-1)!.text;
+    expect(evidence).toContain('**Screens**: taken by the factory, not shown here: GitHub refuses to write factory/artifacts: 422 Repository rule violations found');
+    expect(evidence).not.toMatch(/no capture was taken/);
+  });
+
   it('the evidence: what the factory checked, on which commit, apart from what the agent says it added', () => {
     const evidence = (f: Partial<PrFacts>) => sections(describePr(full, facts(f)).body).at(-1)!.text;
     expect(evidence({})).toContain('Green on abc123def456, in a fresh clone, without network');
