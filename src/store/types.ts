@@ -13,7 +13,6 @@ import type { ReviewFinding } from '../core/review.js';
 import type { CountedRead } from '../network/reads.js';
 import { TRUSTED, type Blocker, type EffectResultPayload, type InputKind, type TimerFired, type QueueName, type FactoryEvent, type OverBudget, type RunOutcome, type Stagnation, type TicketState, type TokenUsage } from '../core/types.js';
 import { upcastTicket, type StoredEvent } from '../core/upcast.js';
-import { factoryDefault } from '../presets/factory-default.js';
 
 /**
  * Lease of a claimed outbox row or queue item (ORC-129): 60 s, renewed every 20 s by its holder
@@ -25,11 +24,6 @@ export const LEASE_MS = 60_000;
 export const RUN_BEAT_MS = 30_000;
 /** Lease of an attempt: three beats, as for an outbox row (`LEASE_MS`), so one missed beat is no expiry. */
 export const RUN_LEASE_MS = 3 * RUN_BEAT_MS;
-/**
- * How long an attempt may write nothing and keep its lease (ORC-344), when its workflow sets no silence bound
- * (`silentAfterMs`, ORC-136): that of `factory/default`. Alive is not progress: past it, the beat renews it no more.
- */
-export const RUN_SILENT_MS = factoryDefault.silentRun.minutes * 60_000;
 /**
  * Automatic relaunches after a cut, per ticket and per sliding window (ORC-220): a crash loop must not launch an
  * agent at each restart, without limit and out of the budget's reach. Read by `decide`: changing them changes what

@@ -20,7 +20,7 @@ export type Effect =
   | { kind: 'run_verify'; runId: string; job: string; output?: AgentOutput; head?: string }
   /**
    * The verified commit out to the forge (ORC-125), by the factory alone, then `publish.done` or `publish.refused`. `output`: for
-   * the `post_output` the job's `on_success` writes once it is out. `rewrite`: the commit of a rebase (ORC-146), which may
+   * the `post_output` the job's end writes once it is out. `rewrite`: the commit of a rebase (ORC-146), which may
    * replace the head the factory published last, and that head only.
    */
   | { kind: 'publish'; runId: string; job: string; sha: string; output?: AgentOutput; commands?: readonly string[]; rewrite?: true; visualProof?: VisualProof }
@@ -38,7 +38,7 @@ export type Effect =
   | { kind: 'ack'; body: string; linearSessionId: string; comment?: true; plan?: true; commentId?: string }
   /** `options`: an elicitation answered by picking one (`select`, ORC-210). */
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string; options?: readonly string[] }
-  | { kind: 'post_output'; style: 'summary' | 'reply' | 'synthesis'; runId: string; output?: AgentOutput }
+  | { kind: 'post_output'; style: 'summary' | 'reply'; runId: string; output?: AgentOutput }
   /**
    * An AI review lens's findings on the published commit `sha`, kept (ORC-183); `publish`: then every lens's findings on it go
    * out as one GitHub review with inline comments, and `factory/review`, failed on a blocking one.

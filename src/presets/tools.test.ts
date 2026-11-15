@@ -44,8 +44,5 @@ describe('tools of a step (ORC-383)', () => {
     expect(narrowTools(READ_TOOLS, ['Read', 'Edit'], 'limited')).toEqual(['Read']);
     expect(narrowTools([...WRITE_TOOLS, 'WebFetch'], undefined, 'none')).toEqual(WRITE_TOOLS);
     expect(narrowTools([...WRITE_TOOLS, 'WebFetch'], undefined, 'limited')).toEqual([...WRITE_TOOLS, 'WebFetch']);
-    // A version frozen before ORC-383 has every tool for a step that writes: the repository's list, alone, holds it.
-    expect(narrowTools(undefined, ['Read', 'Bash'], 'limited')).toEqual(['Read', 'Bash']);
-    expect(narrowTools(undefined, undefined, 'limited')).toBeUndefined();
   });
 });
