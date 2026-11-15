@@ -13,10 +13,23 @@ import { reduce } from '../core/reduce.js';
 import type { StoredEvent } from '../core/upcast.js';
 import type { InternalEvent, QueueName, FactoryEvent, TicketState } from '../core/types.js';
 import type { EgressPolicy } from '../network/levels.js';
-import type { DaemonDeps, ProjectRuntime } from './daemon.js';
+import type { DaemonDeps, ProjectRuntime, StartFrom, StartOpts, StartOutcome } from './daemon.js';
 
 /** Meta key of the head a ticket's tests step started on (ORC-123). */
 export const redBaseKey = (projectId: string, ticketId: string): string => `red-base:${projectId}:${ticketId}`;
+
+/** A read or write of the factory's state, as its caller takes its failure (`sessionFor`, `move`): as it is by default. */
+export type StateIo = <T>(io: Promise<T>) => Promise<T>;
+
+export interface EffectKey {
+  id: string;
+  replay: boolean;
+  /** The inbox event the effect's decision came from. */
+  eventId: string;
+}
+
+/** The sandboxes of the take-overs (ORC-234): one per ticket, `take-over-<project>-<ticket>`, no attempt of an agent. */
+export const takeOverKey = (projectId: string, ticketId: string): string => `take-over-${projectId}-${ticketId}`;
 
 /** The daemon's state and what every part of it uses (ORC-394): the projects' workflows, a ticket's projection and its changes, the log. */
 export abstract class DaemonBase {
@@ -242,7 +255,10 @@ export abstract class DaemonBase {
    */
 
   // Provided by the classes above (ORC-394), each in its module.
+  abstract accept(event: FactoryEvent | StoredEvent): Promise<boolean>;
+  abstract wake(): void;
   protected abstract submitResult(event: FactoryEvent): Promise<void>;
+  protected abstract stopRun(runId: string): void;
   protected abstract destroySandbox(id: string, runId: string, owner?: RunRecord): Promise<void>;
   protected abstract openSandbox(sandboxes: SandboxProvider, project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, ticketSession: boolean, policy: EgressPolicy, services?: readonly string[]): Promise<Sandbox>;
   protected abstract prepared(event: FactoryEvent): Promise<FactoryEvent>;
@@ -252,4 +268,6 @@ export abstract class DaemonBase {
   protected abstract execute(row: OutboxRow): Promise<EffectOutcome | void>;
   protected abstract keep(row: OutboxRow, dir: string): Promise<void>;
   protected abstract drain(queue: QueueName): Promise<void>;
+  protected abstract startRun(project: ProjectRuntime, ticketId: string, opts: StartOpts, from?: StartFrom): Promise<StartOutcome>;
+  protected abstract startHandled(mark: string): Promise<boolean>;
 }
