@@ -660,13 +660,16 @@ const CONFLICTS: Record<ConflictCase, string> = {
 const triedFailures = (failures: VerifyFailure[]): string[] => failures.map((f) => `\`${f.command}\` (code ${f.exitCode ?? 'timeout'})`);
 
 /**
- * The blocks that drop the `done` of the dev run they caught in flight (ORC-403). A stop, a pause, a take-over, a closed PR
- * and a human's push stopped the run: what it did after is not the factory's to publish, and a push's own check is under way.
- * A question journaled before ORC-400 (`asked`) is the run's own: its turn ended on it. A block from before kinds (ORC-345)
- * keeps what it decided. Any other block leaves the work to be checked and published, the ticket still blocked.
+ * The blocks that leave the `done` of a code run they caught in flight to be checked and published, the ticket still blocked
+ * (ORC-403): none of them stopped the run. The others drop it. A stop, a pause, a take-over, a closed PR and a human's push
+ * stopped the run: what it did after is not the factory's to publish, and a push's own check is under way. A question
+ * journaled before ORC-400 (`asked`) is the run's own: its turn ended on it. A block from before kinds (ORC-345), or of a kind
+ * this version does not know, keeps what it decided.
  */
-const DROPS_DONE = new Set<BlockKind>(['stopped', 'paused', 'taken_over', 'pr_closed', 'human_push', 'asked']);
-const dropsDone = (kind: BlockKind | undefined): boolean => !kind || DROPS_DONE.has(kind);
+const KEEPS_DONE = new Set<BlockKind>(['question', 'contested', 'conflict', 'red', 'infra', 'limit', 'loop', 'failed', 'pickup', 'repo_config', 'dead_letter', 'other', 'stuck', 'ci_bound', 'budget']);
+
+/** Whether the `done` of `job`'s run is dropped on `ticket`, blocked meanwhile: an intake, a spec or a lens publishes nothing, as before. */
+const dropsDone = (ticket: TicketState, job: JobSpec): boolean => !publishes(job) || !ticket.blockKind || !KEEPS_DONE.has(ticket.blockKind);
 
 /**
  * A dev run's end read through its closed outcome (ORC-289): the `RunOutcome` it decides as, or the block
@@ -2039,7 +2042,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // Already blocked (a human's stop, a question journaled before ORC-400…): it keeps its reason and gets no second notice.
       if (typeof outcome === 'object') return ticket?.blocked ? out : block(out, workflow, { ...outcome, job: jobName });
       // A run that ended well on a ticket blocked meanwhile is kept, its block shown still (ORC-403), unless that block dropped it.
-      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev' && dropsDone(ticket.blockKind)) return out;
+      if (event.payload.outcome === 'success' && ticket?.blocked && job.queue === 'dev' && dropsDone(ticket, job)) return out;
       if (outcome === 'success') {
         if (job.step === 'intake') return intakeEnd(out, { event, ticket, workflow }, job, event.payload);
         if (job.step === 'spec_draft') return specEnd(out, { event, ticket, workflow }, job, event.payload);
@@ -2161,6 +2164,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
     case 'verify.failed': {
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
+      // The check of a done kept on a blocked ticket (ORC-403): its block keeps its reason, no second notice, and no fix starts
+      // on it. The reply that lifts it resumes its step, whose commit is checked again.
+      if (ticket?.blocked) {
+        out.trace.push(`verify.failed: ticket already blocked (${ticket.blockReason ?? 'no reason'}), reason kept`);
+        return out;
+      }
       const checked = workflow.jobs[job];
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
       if (checked?.verifyFailure === 'block') {

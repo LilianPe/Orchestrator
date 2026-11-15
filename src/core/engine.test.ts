@@ -603,7 +603,7 @@ describe('decide — built-ins', () => {
       ticket({ logical: 'dev', activeRunId: 'r1', activeJob: 'dev', prNumber: 7, blocked: true, blockReason: 'x', ...(kind ? { blockKind: kind } : {}), ...patch });
 
     // Nothing of these stops the run: its work is checked and published, and the block stays shown until a human lifts it.
-    const kept: BlockKind[] = ['infra', 'dead_letter', 'ci_bound', 'conflict', 'loop', 'budget', 'limit', 'failed', 'red', 'contested', 'repo_config', 'stuck', 'pickup', 'other'];
+    const kept: BlockKind[] = ['infra', 'dead_letter', 'ci_bound', 'conflict', 'loop', 'budget', 'limit', 'failed', 'red', 'contested', 'repo_config', 'stuck', 'pickup', 'question', 'other'];
     it.each(kept)('blocked as %s: its done is kept, verified, the block left as it is', (kind) => {
       const out = decide(blockedBy(kind), done, workflow);
       expect(out).toEqual(decision({ events: [{ type: 'verify.started', runId: 'r1' }], effects: [{ kind: 'run_verify', runId: 'r1', job: 'dev' }] }));
@@ -611,11 +611,30 @@ describe('decide — built-ins', () => {
 
     // A stop, a pause, a take-over, a closed PR and a human's push stop the run: what it did after is not the factory's to publish.
     // A question journaled before ORC-400 (`asked`), or a block from before kinds (ORC-345), wins over the end of its turn, as it did.
-    const dropped: (BlockKind | undefined)[] = ['stopped', 'paused', 'taken_over', 'pr_closed', 'human_push', 'asked', undefined];
+    // A kind this version does not know (written by a newer one) drops it too: publishing is never the guess.
+    const dropped = ['stopped', 'paused', 'taken_over', 'pr_closed', 'human_push', 'asked', undefined, 'from_a_newer_version' as BlockKind];
     it.each(dropped)('blocked as %s: its done is dropped, the block holds', (kind) => {
       expect(decide(blockedBy(kind), done, workflow)).toEqual(decision());
     });
 
+    it('an intake or a lens of the AI review publishes nothing: its end on a blocked ticket stays dropped', () => {
+      const lens = Object.values(workflow.jobs).find((j) => j.lens)!;
+      const intake = Object.values(workflow.jobs).find((j) => j.step === 'intake')!;
+      for (const job of [lens, intake]) {
+        expect(job.queue).toBe('dev');
+        const end = ev('run.finished', { runId: 'r1', job: job.name, outcome: 'success', costUsd: 1, turns: 3, lastText: 'ok' });
+        expect(decide(blockedBy('dead_letter', { activeJob: job.name }), end, workflow)).toEqual(decision());
+      }
+    });
+
+    it('a check of the done kept that fails leaves the block as it is: no second block, no notice, no fix started on it', () => {
+      const failed = ev('verify.failed', { runId: 'r1', job: 'dev', failures: [{ command: 'npm test', exitCode: 1, output: 'rouge' }] });
+      const blocked = blockedBy('dead_letter', { activeRunId: undefined, verifyingRunId: 'r1', blockedEvent: 'e-dead', verifyAttempts: 9 });
+      expect(decide(blocked, failed, workflow)).toEqual(decision());
+      expect(decide({ ...blocked, verifyAttempts: 0 }, failed, workflow)).toEqual(decision());
+    });
+
+    // Its move is made; the next step's start is refused by the launch on a blocked ticket, as for a block that comes during verify.
     it('the done kept goes out to the end: published and moved on, the ticket still blocked, its label untouched', () => {
       const passed = decide(blockedBy('infra', { activeRunId: undefined, verifyingRunId: 'r1' }), ev('verify.passed', { runId: 'r1', job: 'dev', sha: 'abc' }), workflow);
       expect(passed.effects).toContainEqual(expect.objectContaining({ kind: 'publish', runId: 'r1', job: 'dev', sha: 'abc' }));
