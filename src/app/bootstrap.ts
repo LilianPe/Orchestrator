@@ -36,7 +36,7 @@ import { SecretReader } from '../adapters/secrets/reader.js';
 import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { claudeAccountReader, disabledControls, loadFactoryYml, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables } from './repo-variables.js';
+import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
@@ -55,6 +55,7 @@ import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, GITHUB_CALLBACK_PATH, isLoopbackHost, type ServerDeps } from '../server/app.js';
+import { listenCliSocket } from '../server/cli-socket.js';
 import { EventBus } from '../server/live-feed.js';
 import { openStore } from '../store/open.js';
 import { RUN_BEAT_MS } from '../store/types.js';
@@ -239,7 +240,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
     const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
     if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
-    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health and the diagnosis tell why.
+    // A configuration under which every ticket would be blocked launches no run (ORC-350): /health says so, the log and the diagnosis why.
     const hostChecks = !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1';
     const problems = configProblems({
       fakeRunner: !!o.fakeRunner,
@@ -287,7 +288,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // Pulled and read on the server at each launch (ORC-232): the session gets the index in its system prompt, never the repository.
       // A replayed ticket's (ORC-376): its checkout at transaction time, read as it is, never pulled.
       // The factory's one write to it (ORC-386): the start recipes it validated, in the same clone, one git at a time with the pull.
-      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()), previewRecipes: new PreviewRecipes(kb) } : {}),
+      ...(kb ? { knowledgeIndex: async (repo?: string) => (repo ? new KnowledgeBase(repo).readIndex() : kb.refresh()), previewRecipes: new PreviewRecipes(kb), startFingerprint: makeStartFingerprint({ log }) } : {}),
       store,
       clock,
       bus,
@@ -466,6 +467,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       (e: unknown) => log(`webhooks kept before the stop not read: ${(e as Error).message}`),
     );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
+    // The CLI on this server (ORC-405): its socket in FACTORY_HOME, the factory user's alone, without the GitHub sign-in.
+    // Never throws: without it, the CLI keeps HTTP on the loopback.
+    const cliServer = await listenCliSocket(app, paths.socket, { log });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
     if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);
@@ -495,7 +499,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
           (s as unknown as { closeAllConnections(): void }).closeAllConnections();
         });
-      await Promise.all([close(server), ...(agentServer ? [close(agentServer)] : [])]);
+      await Promise.all([server, agentServer, cliServer].filter((s) => s !== undefined).map(close));
     };
     try {
       timers.start();

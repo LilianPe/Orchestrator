@@ -7,7 +7,8 @@
 
 /**
  * Roles resolved for an actor on a project (`RoleResolver`): Linear team, GitHub rights, designations of the configuration.
- * `operator` is the dashboard's (ORC-301): given by its guard, the GitHub sign-in or the loopback (ORC-399), never by a resolver.
+ * `operator` is the dashboard's (ORC-301): given by its guard, the GitHub sign-in or the loopback (ORC-399), or by the CLI's
+ * socket (ORC-405), never by a resolver.
  */
 export const ROLES = ['team_member', 'repo_writer', 'repo_merger', 'maintainer', 'validator', 'operator'] as const;
 export type Role = (typeof ROLES)[number];
@@ -21,6 +22,8 @@ export type Relation = 'requester';
  */
 export const githubActor = (login: string): string => `github:${login}`;
 export const githubLogin = (actor: string): string | undefined => (actor.startsWith('github:') ? actor.slice('github:'.length) : undefined);
+/** Whoever runs the CLI on the daemon's server, through its Unix socket (ORC-405): the file's mode says who may, the host where. */
+export const cliActor = (host: string): string => `cli:${host}`;
 
 export const AUTHZ_ACTIONS = ['trigger', 'answer_clarify', 'validate_spec', 'refreeze', 'relaunch_blocked', 'done_merge', 'review_feedback', 'pause_run', 'stop_run', 'take_over'] as const;
 export type AuthzAction = (typeof AUTHZ_ACTIONS)[number];

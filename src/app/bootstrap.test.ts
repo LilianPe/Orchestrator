@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -16,6 +16,7 @@ import { saveInstance, saveSecrets } from '../config/instance.js';
 import { posixPath } from '../config/run-settings.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { startFactory } from './bootstrap.js';
+import { runQueueCommand, runStatusCommand } from '../cli/control.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { TrackerSwitch } from './tracker-switch.js';
 
@@ -319,14 +320,10 @@ describe('bootstrap', () => {
     try {
       const res = await fetch('http://127.0.0.1:4176/health');
       expect(res.status).toBe(503);
-      const body = await res.json();
-      expect(body).toMatchObject({ ok: false, store: 'ok', takingTickets: false });
-      expect(body.configProblems.slice(0, 2)).toEqual([
-        'verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1',
-        'publication impossible: it needs the sandboxes and the GitHub App',
-      ]);
+      // The state alone (ORC-405): the reasons are the start's log, and each ticket's diagnosis'.
+      expect(await res.json()).toEqual({ ok: false, store: 'ok', takingTickets: false });
       // No budget in factory.yml: refused as `factory validate` refuses it.
-      expect(body.configProblems[2]).toMatch(/^factory\.yml: budgets\.per_step_tokens\./);
+      expect(logs.some((l) => /factory\.yml: budgets\.per_step_tokens\./.test(l))).toBe(true);
       expect(logs).toContain('Invalid configuration, no run is launched until it is fixed and the factory restarted: verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
     } finally {
       await app.stop();
@@ -340,7 +337,7 @@ describe('bootstrap', () => {
     try {
       const res = await fetch('http://127.0.0.1:4175/health');
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ ok: true, store: 'ok', takingTickets: true, configProblems: [], linearConnected: false });
+      expect(await res.json()).toEqual({ ok: true, store: 'ok', takingTickets: true });
     } finally {
       await app.stop();
     }
@@ -357,9 +354,21 @@ describe('bootstrap', () => {
       // No password opens it any more.
       const auth = { authorization: `Basic ${Buffer.from('x:pw').toString('base64')}` };
       expect((await fetch('http://127.0.0.1:4195/api/state', { headers: auth })).status).toBe(401);
-      // The health check and the diagnosis too (ORC-350): what blocks a ticket is the operators'.
-      expect((await fetch('http://127.0.0.1:4195/health')).status).toBe(401);
+      // The diagnosis too (ORC-350): what blocks a ticket is the operators'. The health check is open, the state alone (ORC-405).
       expect((await fetch('http://127.0.0.1:4195/tickets/REL-1/diagnosis')).status).toBe(401);
+      expect(await (await fetch('http://127.0.0.1:4195/health')).json()).toEqual({ ok: true, store: 'ok', takingTickets: true });
+      // On the server, the CLI goes through the socket in FACTORY_HOME, the factory user's alone (ORC-405): no GitHub sign-in.
+      if (process.platform !== 'win32') {
+        const socket = join(home, 'cli', 'factory.sock');
+        expect(statSync(socket).mode & 0o777).toBe(0o600);
+        expect(statSync(join(home, 'cli')).mode & 0o777).toBe(0o700);
+        const lines: string[] = [];
+        const cli = { api: 'http://127.0.0.1:4195', socket, out: (l: string) => void lines.push(l) };
+        expect(await runQueueCommand(cli, 'pause')).toBe(0);
+        expect(await runStatusCommand(cli)).toBe(0);
+        expect(lines[0]).toBe('Queue paused.');
+        expect(lines[1]).toMatch(/^Linear: not connected · queue: /);
+      }
       // A page sends the browser to GitHub, to the App's authorization, coming back to the public URL.
       const page = await fetch('http://127.0.0.1:4195/', { headers: { accept: 'text/html' }, redirect: 'manual' });
       expect(page.status).toBe(302);
