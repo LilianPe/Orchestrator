@@ -117,6 +117,32 @@ describe('worker: per-ticket lock and decision transaction', () => {
     expect(h.runner.requests).toHaveLength(2);
   });
 
+  it('refuses a ticket frozen on a workflow of format 1, with a line in the daemon log, and decides the others (ORC-393)', async () => {
+    const h = createHarness();
+    const current = h.project.workflow;
+    // A version stored before ORC-393: its format, 1, is what this factory no longer reads.
+    h.project.workflow = { ...current, version: 1 } as unknown as typeof current;
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    h.tracker.addIssue({ identifier: 'REL-2', title: 'Import CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const frozen = (await h.ticket()).workflowHash;
+    h.project.workflow = current;
+    await h.restart();
+
+    await h.send('control.stop', {});
+    await h.orch.drained();
+    expect(h.logs).toContainEqual({ level: 'error', message: expect.stringMatching(new RegExp(`^REL-1 refused: workflow version ${frozen!.slice(0, 12)} is of format 1, not 2`)) });
+    // Each of its events is set aside, the stop and what the restart's recovery sent alike: none is decided.
+    const dead = await h.store.deadLetters('REL-1');
+    expect(dead.map((d) => d.event.type)).toContain('control.stop');
+    expect(dead.every((d) => d.error.includes('frozen before ORC-393, its ticket is refused'))).toBe(true);
+    expect((await h.ticket()).workflowHash).toBe(frozen);
+    // A ticket started now is frozen on the current version, and decided on it.
+    await h.send('ticket.delegated', { linearSessionId: 'ls-2' }, 'REL-2');
+    expect((await h.ticket('REL-2')).workflowHash).not.toBe(frozen);
+    expect(await h.ticket('REL-2')).toMatchObject({ delegated: true, blocked: false });
+  });
+
   it('keeps a ticket on the workflow version it started with when the workflow changes (criterion 4)', async () => {
     const version = (comment: string): WorkflowOverrides => ({ effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'comment', body: comment }] } } });
     const h = createHarness({ workflow: version('ancienne version') });

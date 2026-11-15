@@ -31,7 +31,7 @@ import type { AckMode } from '../config/factory-yml.js';
 import type { EffectRetry } from '../runtime/outbox.js';
 import { attemptsFor, backoff, isTransient, TRANSIENT_WINDOW_MS, type RetryPolicy } from '../runtime/transient.js';
 import { Worker } from '../runtime/worker.js';
-import { workflowVersion } from '../runtime/workflow-version.js';
+import { frozenWorkflow, workflowVersion } from '../runtime/workflow-version.js';
 import {
   KEPT_PR,
   LEASE_MS,
@@ -1616,10 +1616,16 @@ export class Orchestrator {
     return v;
   }
 
-  private workflowOf(version: WorkflowVersion): Workflow {
+  /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket, in the daemon's log (ORC-393). */
+  private workflowOf(version: WorkflowVersion, ticketId: string | undefined): Workflow {
     let wf = this.workflows.get(version.hash);
     if (!wf) {
-      wf = version.definition as Workflow;
+      try {
+        wf = frozenWorkflow(version);
+      } catch (err) {
+        this.log('error', `${ticketId ?? 'an event'} refused: ${(err as Error).message}`);
+        throw err;
+      }
       this.workflows.set(version.hash, wf);
     }
     return wf;
@@ -1639,7 +1645,7 @@ export class Orchestrator {
     if (!workflow) {
       const stored = await this.d.store.getWorkflowVersion(hash);
       if (!stored) throw new Error(`workflow version ${hash} of ${ticketId} is not stored`);
-      workflow = this.workflowOf(stored);
+      workflow = this.workflowOf(stored, ticketId);
     }
     return { ...project, workflow };
   }
@@ -1739,7 +1745,7 @@ export class Orchestrator {
       workflow: this.currentVersion(project),
       // By the ticket's team, not the event's project: a delegation may come here from a team believed to have no repo (ORC-171).
       peers: this.d.projects.filter((p) => p.id !== event.projectId && p.teamKey === event.ticketId?.split('-')[0]).map((p) => p.id),
-      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version), hash: version.hash, now }),
+      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version, event.ticketId), hash: version.hash, now }),
     };
   }
 

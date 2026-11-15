@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Workflow } from '../core/workflow.js';
+import { WORKFLOW_FORMAT, type Workflow } from '../core/workflow.js';
 import type { WorkflowVersion } from '../store/types.js';
 
 /** JSON with sorted keys: the same workflow always gives the same text, whatever its key order. */
@@ -22,4 +22,16 @@ export function hashCanonical(value: unknown): string {
 /** The version a ticket is frozen on (ORC-149): the workflow and the sha256 of its canonical JSON. */
 export function workflowVersion(workflow: Workflow): WorkflowVersion & { definition: Workflow } {
   return { hash: hashCanonical(workflow), definition: workflow };
+}
+
+/**
+ * The workflow a ticket is frozen on, read back (ORC-393). A version of another format than this factory's, the v1 ones frozen
+ * before the preset drove the chain, throws: its ticket is refused rather than decided on rules it no longer has.
+ */
+export function frozenWorkflow(version: WorkflowVersion): Workflow {
+  const format = (version.definition as { version?: unknown } | null)?.version;
+  if (format !== WORKFLOW_FORMAT) {
+    throw new Error(`workflow version ${version.hash.slice(0, 12)} is of format ${String(format)}, not ${WORKFLOW_FORMAT}: frozen before ORC-393, its ticket is refused`);
+  }
+  return version.definition as Workflow;
 }
