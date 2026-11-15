@@ -363,8 +363,9 @@ describe('bootstrap', () => {
         expect(statSync(socket).mode & 0o777).toBe(0o600);
         expect(statSync(join(home, 'cli')).mode & 0o777).toBe(0o700);
         const lines: string[] = [];
-        expect(await runQueueCommand({ api: 'http://127.0.0.1:4195', socket, out: (l) => void lines.push(l) }, 'pause')).toBe(0);
-        expect(await runStatusCommand({ api: 'http://127.0.0.1:4195', socket, out: (l) => void lines.push(l) })).toBe(0);
+        const cli = { api: 'http://127.0.0.1:4195', socket, out: (l: string) => void lines.push(l) };
+        expect(await runQueueCommand(cli, 'pause')).toBe(0);
+        expect(await runStatusCommand(cli)).toBe(0);
         expect(lines[0]).toBe('Queue paused.');
         expect(lines[1]).toMatch(/^Linear: not connected · queue: /);
       }

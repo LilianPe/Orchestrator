@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { request } from 'node:http';
 import { PRODUCT_NAME } from '../product.js';
 import type { RunRecord } from '../store/types.js';
@@ -71,7 +70,7 @@ function formatStatus(s: State, now: number): string[] {
  * cannot give: it sends no credential.
  */
 async function ask(d: ControlDeps, path: string, init: RequestInit = {}): Promise<Response | undefined> {
-  if (d.socket && existsSync(d.socket)) {
+  if (d.socket) {
     try {
       return await viaSocket(d.socket, path, init);
     } catch (err) {

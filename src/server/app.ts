@@ -184,10 +184,12 @@ function isPublicPath(method: string, path: string): boolean {
 const CLI_HOST = Symbol('cliHost');
 const cliHostOf = (c: Context): string | undefined => (c.env as { [CLI_HOST]?: string } | undefined)?.[CLI_HOST];
 
-/** What `factory status|stop|pause|resume` call (src/cli/control.ts), and the health check. */
+/** What no guard of the interface holds: a public path, or a request of the CLI's socket (ORC-405). */
+const unguarded = (c: Context) => isPublicPath(c.req.method, c.req.path) || cliHostOf(c) !== undefined;
+
+/** What `factory status|stop|pause|resume` call (src/cli/control.ts). */
 const CLI_ROUTES: readonly (readonly [string, RegExp])[] = [
   ['GET', /^\/api\/state$/],
-  ['GET', /^\/health$/],
   ['POST', /^\/api\/control\/(pause|resume)$/],
   ['POST', /^\/api\/tickets\/[^/]+\/[^/]+\/stop$/],
 ];
@@ -245,7 +247,7 @@ export function createApp(d: ServerDeps): Hono {
   if (d.githubLogin) {
     const github = d.githubLogin;
     app.use('*', async (c, next) => {
-      if (isPublicPath(c.req.method, c.req.path) || cliHostOf(c) !== undefined) return next();
+      if (unguarded(c)) return next();
       const login = readSession(getCookie(c, SESSION_COOKIE), sessionKey, d.clock.now());
       if (login) {
         c.set('githubLogin', login);
@@ -281,7 +283,7 @@ export function createApp(d: ServerDeps): Hono {
     // that name, Origin and Host alike. Without a password, only a name of the loopback is answered.
     app.use('*', async (c, next) => {
       // The CLI's socket is no page a browser opens: no name to rebind.
-      if (isPublicPath(c.req.method, c.req.path) || cliHostOf(c) !== undefined) return next();
+      if (unguarded(c)) return next();
       if (!isLoopbackHost((c.req.header('host') ?? new URL(c.req.url).host).replace(/:\d*$/, ''))) return c.text('Unknown host', 403);
       return next();
     });

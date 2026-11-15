@@ -14,22 +14,28 @@ import { createHarness, heldRun } from '../helpers/harness.js';
 
 type H = ReturnType<typeof createHarness>;
 
-/** The two commands against the daemon's own API, in this process, as ORC-220's criterion 4 asks. */
-function control(h: H): ControlDeps & { lines: string[] } {
+/** The two commands against the daemon's own API, in this process, as ORC-220's criterion 4 asks; what they submit, kept. */
+function control(h: H, extra: Partial<ServerDeps> = {}) {
+  const submitted: FactoryEvent[] = [];
   const app = createApp({
     store: h.store,
     bus: new EventBus(),
     clock: h.clock,
-    submit: (e) => h.orch.accept(e),
+    submit: (e) => {
+      submitted.push(e);
+      return h.orch.accept(e);
+    },
     isPaused: () => h.orch.isPaused(),
     linearWebhook: () => ({ status: 200 }),
     githubWebhook: async () => ({ status: 200 }),
     linearConnected: () => true,
     capacity: () => ({ dev: { used: 1, total: 3 }, questions: { used: 0, total: 2 } }),
     transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-cli-')),
+    ...extra,
   });
   const lines: string[] = [];
-  return { api: 'http://127.0.0.1:4100', out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init), lines };
+  const deps: ControlDeps = { api: 'http://127.0.0.1:4100', out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init) };
+  return { ...deps, lines, app, submitted };
 }
 
 describe('factory status and factory stop (ORC-220)', () => {
@@ -123,31 +129,12 @@ describe('factory status and factory stop (ORC-220)', () => {
 // Unix socket in FACTORY_HOME instead, which the file's mode guards.
 describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix socket (ORC-405)", () => {
   /** An exposed daemon's app, with its socket in a fresh FACTORY_HOME; every HTTP request refused as the sign-in refuses it. */
-  async function exposed(extra: Partial<ServerDeps> = {}) {
+  async function exposed() {
     const h = createHarness();
-    const submitted: FactoryEvent[] = [];
-    const app = createApp({
-      store: h.store,
-      bus: new EventBus(),
-      clock: h.clock,
-      submit: (e) => {
-        submitted.push(e);
-        return h.orch.accept(e);
-      },
-      isPaused: () => h.orch.isPaused(),
-      linearWebhook: () => ({ status: 200 }),
-      githubWebhook: async () => ({ status: 200 }),
-      linearConnected: () => true,
-      capacity: () => ({ dev: { used: 0, total: 3 }, questions: { used: 0, total: 2 } }),
-      transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-cli-')),
-      githubLogin: { authorizeUrl: () => 'https://github.test/authorize', signIn: async (login) => ({ login, allowed: false }) },
-      ...extra,
-    });
+    const { app, submitted, lines, ...http } = control(h, { githubLogin: { authorizeUrl: () => 'https://github.test/authorize', signIn: async (login) => ({ login, allowed: false }) } });
     const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'cli', 'factory.sock');
     const server = await listenCliSocket(app, socket, { host: 'srv-1', log: () => {} });
-    const lines: string[] = [];
-    const deps: ControlDeps = { api: 'http://127.0.0.1:4100', socket, out: (l) => void lines.push(l), fetch: (url, init) => app.request(url, init) };
-    return { h, app, server: server!, socket, submitted, lines, deps };
+    return { h, app, server: server!, socket, submitted, lines, deps: { ...http, socket } };
   }
   const close = (s: Server) => new Promise((r) => s.close(r));
 

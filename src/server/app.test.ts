@@ -1012,7 +1012,6 @@ describe('server', () => {
       const viaSocket = cliOnly(app, 'srv-1');
       const ask = (path: string, method = 'GET') => viaSocket(new Request(`http://localhost${path}`, { method }));
       expect((await ask('/api/state')).status).toBe(200);
-      expect((await (await ask('/health')).json())).toEqual({ ok: true, store: 'ok', takingTickets: true });
       for (const path of ['/api/control/pause', '/api/control/resume', '/api/tickets/p/REL-1/stop']) expect((await ask(path, 'POST')).status, path).toBe(200);
       expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
         ['control.pause', 'cli:srv-1', ['operator']],
@@ -1020,7 +1019,7 @@ describe('server', () => {
         ['control.stop', 'cli:srv-1', ['operator']],
       ]);
       // The CLI's routes alone: the dashboard, a run's controls, the diagnosis and the rest are not reached this way.
-      for (const [path, method] of [['/', 'GET'], ['/api/runs/r1', 'GET'], ['/api/runs/r1/stop', 'POST'], ['/api/runs/r1/take-over', 'POST'], ['/tickets/REL-1/diagnosis', 'GET'], ['/api/state', 'POST'], ['/api/control/pause', 'GET']]) {
+      for (const [path, method] of [['/', 'GET'], ['/api/runs/r1', 'GET'], ['/api/runs/r1/stop', 'POST'], ['/api/runs/r1/take-over', 'POST'], ['/tickets/REL-1/diagnosis', 'GET'], ['/health', 'GET'], ['/api/state', 'POST'], ['/api/control/pause', 'GET']]) {
         expect((await ask(path!, method)).status, `${method} ${path}`).toBe(404);
       }
       expect(submitted).toHaveLength(3);

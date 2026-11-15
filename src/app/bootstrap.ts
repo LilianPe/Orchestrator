@@ -460,8 +460,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     );
     const server = serve({ fetch: app.fetch, port, hostname: instance.host });
     // The CLI on this server (ORC-405): its socket in FACTORY_HOME, the factory user's alone, without the GitHub sign-in.
-    // Never throws: without it, the CLI keeps HTTP on the loopback. Not on Windows, whose sockets are named pipes.
-    const cliServer = process.platform === 'win32' ? undefined : await listenCliSocket(app, paths.socket, { log });
+    // Never throws: without it, the CLI keeps HTTP on the loopback.
+    const cliServer = await listenCliSocket(app, paths.socket, { log });
     // Only with sandboxes: the agent API on a listener of its own, for them alone (ORC-204), reached through the egress proxy.
     const agentServer = sandboxes ? serve({ fetch: agentOnly(app), port: agentPort, hostname: agentListenHost }) : undefined;
     if (agentServer) log(`Sandbox agent API: ${agentListenHost}:${agentPort}, reached at http://${agentHostInSandbox}:${agentPort}/agent`);
@@ -491,7 +491,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
           // Long-lived SSE streams (/api/events) would otherwise keep close() pending forever.
           (s as unknown as { closeAllConnections(): void }).closeAllConnections();
         });
-      await Promise.all([close(server), ...(agentServer ? [close(agentServer)] : []), ...(cliServer ? [close(cliServer)] : [])]);
+      await Promise.all([server, agentServer, cliServer].filter((s) => s !== undefined).map(close));
     };
     try {
       timers.start();
