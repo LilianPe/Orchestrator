@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defaultWorkflow } from '../../presets/workflow.js';
 import { FakeClock } from '../../core/clock.js';
-import { newTicketState, type FactoryEvent } from '../../core/types.js';
+import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../core/types.js';
 import { SqliteStore } from '../../store/sqlite-store.js';
 import { FakeForge } from './fake.js';
 import { PrPoller } from './pr-poller.js';
@@ -98,6 +98,64 @@ describe('PrPoller', () => {
     await poller.pollOnce();
     expect(findPr).toHaveBeenCalledTimes(4);
     expect(findPr.mock.calls.map((c) => c[1])).toEqual(['b', 'b', 'b', 'b']);
+  });
+
+  describe('a head the factory neither pushed nor heard of (ORC-281)', () => {
+    const [PUBLISHED, VERIFIED, HUMAN, OTHER] = ['p', 'v', 'h', 'o'].map((c) => c.repeat(40)) as [string, string, string, string];
+    const published = (sha: string, n = 1): FactoryEvent<'publish.done'> => ({ ...TRUSTED, id: `publish-done:${n}`, type: 'publish.done', at: n, projectId: 'p', ticketId: 'REL-1', payload: { runId: `r${n}`, job: 'dev', sha } });
+    async function headIs(head: string | undefined, ticket: Partial<TicketState> = {}, publications: string[] = [PUBLISHED]) {
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED, ...ticket });
+      for (const [i, sha] of publications.entries()) await s.store.recordEvent(published(sha, i + 1));
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', ...(head ? { headSha: head } : {}), checks: 'none', failedChecks: [] });
+      await s.poller.pollOnce('p');
+      return s.events.filter((e) => e.type === 'push.human');
+    }
+
+    it('is a human push, under the id of its webhook, after the head last known', async () => {
+      expect(await headIs(HUMAN, {}, [OTHER, PUBLISHED])).toEqual([
+        { ...TRUSTED, taint: 'untrusted', at: 100, projectId: 'p', ticketId: 'REL-1', id: `push:REL-1:${HUMAN}`, type: 'push.human', payload: { branch: 'b', sha: HUMAN, author: 'unknown', before: PUBLISHED } },
+      ]);
+      // A human head no publication carries yet is the last known.
+      expect((await headIs(OTHER, { humanHead: HUMAN }))[0]?.payload).toMatchObject({ sha: OTHER, before: HUMAN });
+    });
+
+    it('is no push when the factory pushed it, or the factory knows it already', async () => {
+      // Its last publication, while a commit verified since waits to go out.
+      expect(await headIs(PUBLISHED)).toEqual([]);
+      // The one before: the forge may still read the PR on it, just after a push.
+      expect(await headIs(OTHER, {}, [OTHER, PUBLISHED])).toEqual([]);
+      // Verified last: published, its `publish.done` not yet read, or a human's whose check passed.
+      expect(await headIs(VERIFIED)).toEqual([]);
+      // A human's the inbox has already, and no publication carries yet.
+      expect(await headIs(HUMAN, { humanHead: HUMAN })).toEqual([]);
+    });
+
+    it('judges each head once: the journal is read again only for a new head', async () => {
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED });
+      await s.store.recordEvent(published(PUBLISHED));
+      const journal = vi.spyOn(s.store, 'ticketJournal');
+      for (const head of [PUBLISHED, PUBLISHED, HUMAN, HUMAN]) {
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
+        await s.poller.pollOnce('p');
+      }
+      expect(journal).toHaveBeenCalledTimes(2);
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN })]);
+    });
+
+    it('is not told with no publication of the factory to compare with, nor without a head', async () => {
+      expect(await headIs(HUMAN, {}, [])).toEqual([]);
+      // An `empty` publication pushed nothing (ORC-402): its sha is no head of the factory's.
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED });
+      await s.store.recordEvent(published(PUBLISHED, 1));
+      await s.store.recordEvent({ ...published(OTHER, 2), payload: { ...published(OTHER, 2).payload, empty: true } });
+      s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: OTHER, checks: 'none', failedChecks: [] });
+      await s.poller.pollOnce('p');
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: OTHER, before: PUBLISHED })]);
+      expect(await headIs(undefined)).toEqual([]);
+    });
   });
 
   it('start() survives a rejecting pollOnce', async () => {

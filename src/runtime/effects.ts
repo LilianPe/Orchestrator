@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ArtifactsRefused, ReviewLinesRefused, type MergeResult } from '../adapters/forge/types.js';
-import { prEventId } from '../adapters/forge/github-webhook.js';
+import { prEventId, pushEventId } from '../adapters/forge/github-webhook.js';
 import { PublishRefused } from '../adapters/publisher/types.js';
 import { DEFAULT_REQUIREMENTS, WORKSPACE_TARGET } from '../adapters/sandbox/types.js';
 import type { ActivityInput } from '../adapters/tracker/types.js';
@@ -684,7 +684,7 @@ export abstract class DaemonEffects extends DaemonChecks {
         const pushed = await publisher.publishBundle({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: bundleKey(project.id, t.ticketId), branch: t.branch, bundle: c.file });
         await this.closeTakeOver(project.id, t.ticketId);
         const payload = { branch: t.branch, sha: pushed.sha, author: c.by, ...(pushed.before ? { before: pushed.before } : {}) };
-        await this.accept({ schemaVersion: SCHEMA_VERSION, taint: 'untrusted', projectId: project.id, ticketId: t.ticketId, id: `push:${t.ticketId}:${pushed.sha}`, type: 'push.human', at: this.d.clock.now(), payload });
+        await this.accept({ schemaVersion: SCHEMA_VERSION, taint: 'untrusted', projectId: project.id, ticketId: t.ticketId, id: pushEventId(t.ticketId, pushed.sha), type: 'push.human', at: this.d.clock.now(), payload });
         return;
       } catch (err) {
         if (!(err instanceof PublishRefused)) throw err;

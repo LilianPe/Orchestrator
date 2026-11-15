@@ -1,9 +1,9 @@
 import type { Clock } from "../../core/clock.js";
-import type { ProjectRuntime } from "../../runtime/daemon.js";
+import { publishedHeads, type ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import type { Store } from "../../store/types.js";
-import { checksEventId, prEventId } from "./github-webhook.js";
-import type { Forge } from "./types.js";
+import { checksEventId, prEventId, pushEventId } from "./github-webhook.js";
+import type { Forge, PrInfo } from "./types.js";
 
 export class PrPoller {
   private handle: NodeJS.Timeout | undefined;
@@ -75,6 +75,7 @@ export class PrPoller {
         return;
       }
       if (done) return;
+      await this.lostPush(t, pr, at);
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
       const last = await this.d.store.getMeta(metaKey);
@@ -93,6 +94,33 @@ export class PrPoller {
         await this.d.store.setMeta(metaKey, pr.checks);
       }
     }
+  }
+
+  /**
+   * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
+   * (ORC-281), under the webhook's id. Each head is judged once: the journal is read again only for a new one.
+   */
+  private async lostPush(t: TicketState, pr: PrInfo, at: number): Promise<void> {
+    const head = pr.headSha;
+    if (!head || head === t.verifiedSha || head === t.humanHead) return;
+    const seenKey = `lost-push:${t.projectId}:${t.ticketId}`;
+    if ((await this.d.store.getMeta(seenKey)) === head) return;
+    const heads = await publishedHeads(this.d.store, t.projectId, t.ticketId);
+    const published = heads.at(-1);
+    if (published && !heads.includes(head))
+      await this.d.submit({
+        ...TRUSTED,
+        // What the push brought was verified by no one in the factory (I12).
+        taint: "untrusted",
+        at,
+        projectId: t.projectId,
+        ticketId: t.ticketId,
+        id: pushEventId(t.ticketId, head),
+        type: "push.human",
+        // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
+        payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
+      });
+    await this.d.store.setMeta(seenKey, head);
   }
 
   start(intervalMs = 30_000): void {
