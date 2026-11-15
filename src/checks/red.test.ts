@@ -317,8 +317,9 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     const ran = async (command: string) => {
       const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, pkg);
       const result = await checkRed(command, d);
-      expect(result.command, command).toBe(d.commands[0]);
-      return d.commands[0]!;
+      // What it ran, the runner's report flags aside.
+      expect(d.commands[0], command).toContain(result.command);
+      return result.command;
     };
     expect(await ran('npm test')).toBe("npm test -- 'src/export.test.ts'");
     expect(await ran('pnpm run test --silent')).toBe("pnpm run test --silent -- 'src/export.test.ts'");
@@ -329,6 +330,13 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     expect(await ran('npx mocha')).toBe("npx mocha 'src/export.test.ts'");
     expect(await ran('make test')).toBe("make test 'src/export.test.ts'");
     expect(await ran('npmx test')).toBe("npmx test 'src/export.test.ts'");
+    // The last command of the line is the one the files reach, past its variables.
+    expect(await ran('cd web && CI=1 npm test')).toBe("cd web && CI=1 npm test -- 'src/export.test.ts'");
+    expect(await ran('npm run build -- --prod && npm test')).toBe("npm run build -- --prod && npm test -- 'src/export.test.ts'");
+    expect(await ran('npm ci && npx vitest run')).toBe("npm ci && npx vitest run 'src/export.test.ts'");
+    // `exec` and `dlx` run a program, not a script.
+    expect(await ran('pnpm exec vitest run')).toBe("pnpm exec vitest run 'src/export.test.ts'");
+    expect(await ran('yarn dlx jest')).toBe("yarn dlx jest 'src/export.test.ts'");
   });
 
   it('through `npm test` without `--`, reads the runner of the test script and asks it for its report (ORC-412)', async () => {
