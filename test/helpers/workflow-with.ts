@@ -1,7 +1,8 @@
 import { parseCondition } from '../../src/core/conditions.js';
 import type { EventType } from '../../src/core/types.js';
 import type { JobSpec, Limits, PickupCheck, Rule, Workflow } from '../../src/core/workflow.js';
-import { defaultWorkflow, workflowViolations } from '../../src/presets/workflow.js';
+import { compilePreset, type Preset } from '../../src/presets/preset.js';
+import { defaultWorkflow, preset, presetWorkflow, workflowViolations } from '../../src/presets/workflow.js';
 
 /** A rule as a test writes it: its condition in the `when` grammar, parsed as the engine's rules are (`whenSrc` kept). */
 export type RuleOverride = Omit<Rule, 'when' | 'whenSrc'> & { when?: string };
@@ -30,8 +31,9 @@ function rule({ when, ...r }: RuleOverride): Rule {
   return when === undefined ? r : { ...r, when: parseCondition(when), whenSrc: when };
 }
 
-export function workflowWith(o: WorkflowOverrides = {}): Workflow {
-  const wf = defaultWorkflow();
+/** Over `base`, `factory/default`'s workflow by default. */
+export function workflowWith(o: WorkflowOverrides = {}, base: Workflow = defaultWorkflow()): Workflow {
+  const wf = base;
   for (const name of Object.keys(o.jobs ?? {})) if (!wf.jobs[name]) throw new Error(`workflowWith: jobs.${name}: unknown job`);
   const given = Object.entries(o.on ?? {}).filter((e): e is [string, RuleOverride[]] => e[1] !== undefined);
   const on: Workflow['on'] = { ...wf.on, ...Object.fromEntries(given.map(([type, rules]) => [type, rules.map(rule)])) };
@@ -51,6 +53,23 @@ export function workflowWith(o: WorkflowOverrides = {}): Workflow {
   if (refused.length) throw new Error(`workflowWith: ${refused.join('; ')}`);
   return out;
 }
+
+/**
+ * `factory/default` without its AI review on the way (ORC-183): `publish` leads to the merge gate, and a fix's publication ends
+ * its run (`publish_fix`), its reply posted and the ticket left where it is, as before ORC-184. The review step stays: a human's
+ * move to AI Review still starts it.
+ */
+export const withoutAiReview: Preset = compilePreset({
+  ...preset,
+  name: 'test/without-ai-review',
+  steps: [
+    ...preset.steps.map((s) => (s.id === 'publish' ? { ...s, next: 'human_review' } : s.id === 'verify_fix' ? { ...s, next: 'publish_fix' } : s)),
+    { id: 'publish_fix', type: 'publish', mode: 'push', next: null },
+  ],
+}).preset;
+
+/** The workflow of `withoutAiReview`, its chain starting at `build` as the default's does. */
+export const workflowWithoutAiReview = (): Workflow => presetWorkflow(withoutAiReview, {}, 'build');
 
 /** When a delegation starts work, as the default's rule says it. */
 export const DELEGATED = defaultWorkflow().on['ticket.delegated']![0]!.whenSrc!;

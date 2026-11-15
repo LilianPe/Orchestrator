@@ -72,6 +72,7 @@ import { transcriptTail } from '../adapters/runner/transcript.js';
 import { carriedAtLaunch, forAgent } from './human-message.js';
 import { branchAnew, heldByOther, pendingOf, reduce, samePending } from './reduce.js';
 import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from './session-plan.js';
+import { startMove } from './chain.js';
 import { formatSpec } from './spec.js';
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal, type StoredEvent } from './upcast.js';
 import type { Scheduler } from '../runtime/capacity.js';
@@ -1136,11 +1137,14 @@ export class Orchestrator {
    * factory's repository; its uncommitted files and its tests run in a sandbox of their own without network, on the
    * host as `verify` without sandboxes. A check that cannot run gives no verdict on the tests: `infra`.
    */
-  private async checkRed(project: ProjectRuntime, run: RunRecord, command: string, alreadyFrozen: boolean): Promise<RedResult & { frozen?: FrozenTests }> {
+  private async checkRed(project: ProjectRuntime, run: RunRecord, alreadyFrozen: boolean): Promise<RedResult & { frozen?: FrozenTests }> {
     const sandboxes = this.d.sandboxes;
     const redRunId = `${run.id}-red`;
     let sandbox: Sandbox | undefined;
     try {
+      // The repository's test command (ORC-391), as the launch read `.factory/config.yml`: no command, no red to check.
+      const command = (run.repoConfig ?? (await this.repoConfigOf(project, { fetch: false }))).commands['test'];
+      if (!command) throw new Error('`.factory/config.yml` has no `commands.test` to run the tests with');
       const base = await this.d.store.getMeta(redBaseKey(project.id, run.ticketId));
       if (!base) throw new Error('the starting commit of the step is not recorded');
       const diff = await this.d.workspaces.stepDiff(project.repoPath, run.cwd, base);
@@ -2050,10 +2054,10 @@ export class Orchestrator {
         const job = project.workflow.jobs[c.job];
         // No longer awaited (a stop, a verdict): a replayed effect checks nothing, and moves no plan.
         if (!run || !job || t.verifyingRunId !== c.runId) return;
-        if (planStepOfJob(job) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
+        if (planStepOfJob(job, project.workflow) === 'Build') await this.updatePlan(t, (plan) => advancePlan(plan, 'Verify'));
         this.withSlot(project, t.ticketId, job.queue, c.runId, async (now) => {
           if (job.red) {
-            const red = await this.checkRed(project, run, job.red.command, !!now.frozenTests);
+            const red = await this.checkRed(project, run, !!now.frozenTests);
             const base = { ...TRUSTED, at: clock.now(), projectId: project.id, ticketId, id: `check:${run.id}` };
             const failures = [{ command: red.command || 'factory/red', exitCode: red.exitCode, output: red.detail }];
             const common = { runId: run.id, job: job.name, red: red.cause, ...(red.frozen ? { frozen: red.frozen } : {}) };
@@ -3012,7 +3016,8 @@ export class Orchestrator {
       // branch holds nothing of the old one's: the old mark and human pushes end (ORC-358).
       const newBranch = ws.fresh && !ws.ahead && branchAnew(t) !== t;
       if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch, ...(newBranch ? { newBranch } : {}) }));
-      if (job.onStart.move && t.logical !== job.onStart.move) await this.move(project, t, job.onStart.move, undefined, state);
+      const moves = startMove(wf, job);
+      if (moves && t.logical !== moves) await this.move(project, t, moves, undefined, state);
       t = await state(this.ticket(project.id, ticketId));
 
       // A relaunch reads what the lost attempt read, whatever came in since stays for the next run (ORC-220).
@@ -3198,7 +3203,7 @@ export class Orchestrator {
       if (consumes) await this.apply(await this.ticket(project.id, ticketId), { type: 'feedback.consumed', items: t.humanInbox });
       // Handed to this run: its end answers them (`decide`), a question relayed since waits for the next launch.
       if (relayed.length) await this.apply(await this.ticket(project.id, ticketId), { type: 'relay.handed', runIds: relayed.map((q) => q.id), to: runId });
-      const step = planStepOfJob(job);
+      const step = planStepOfJob(job, wf);
       if (step) await this.updatePlan(t, (plan) => advancePlan(plan, step));
       // The run is written: a queued item it came from leaves the queue now (a crash from here on is recover()'s).
       // Logged, not thrown: the run is launched either way, and a queue item left behind is refused

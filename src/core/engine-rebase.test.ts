@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision } from './decision.js';
+import { nextOf, startMove } from './chain.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
 import { newTicketState, SCHEMA_VERSION, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
@@ -45,8 +46,9 @@ describe('a conflict with the default branch is handled by a rebase step the eng
 
   it('criterion 1: the rebase step runs in the sandbox of the ticket, the step of the preset that writes its code, and moves nothing', () => {
     const job = workflow.jobs['rebase']!;
-    expect(job.onStart).toEqual({});
-    expect(job.onSuccess).toEqual({});
+    expect(startMove(workflow, job)).toBeUndefined();
+    // No AI review after a rebase (decided 14/11): its publication ends the run, the ticket stays where it was.
+    expect(nextOf(workflow, job)).toEqual({ step: null });
     expect(job.input).toBeUndefined();
   });
 

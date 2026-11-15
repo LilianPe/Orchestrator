@@ -173,8 +173,8 @@ describe('standard workflow', () => {
   });
 
   it('a merge keeps a question waiting for an answer slot: only the dev work stops (ORC-268)', async () => {
-    // Two answers at once, whatever the workflow's `questionSessions` (ORC-390): the third question waits for a slot, and the merge leaves it there.
-    const h = createHarness({ workflow: { limits: { questionSessions: 1 } } });
+    // Two answers at once (ORC-390): the third question waits for a slot, and the merge leaves it there.
+    const h = createHarness();
     await delegatedAndInReview(h);
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
     h.tracker.addIssue({ identifier: 'REL-3', title: 'Trois' });
@@ -406,8 +406,8 @@ describe('standard workflow', () => {
   });
 
   it('respects the parallel cap and drains the queue', async () => {
-    // The dev slots are factory.yml's `concurrency` alone: the workflow's `parallelSessions` is read no more (ORC-390).
-    const h = createHarness({ concurrency: 2, workflow: { limits: { parallelSessions: 1 } } });
+    // The dev slots are factory.yml's `concurrency` alone (ORC-390).
+    const h = createHarness({ concurrency: 2 });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Un' });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'Deux' });
     h.tracker.addIssue({ identifier: 'REL-3', title: 'Trois' });

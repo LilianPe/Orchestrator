@@ -2,6 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Rule, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
+import { blockingFix, hasReviewLoop, humanRoundJob, nextOf } from './chain.js';
 import { evalCondition } from './conditions.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
@@ -66,23 +67,24 @@ function stop(out: Decision, workflow: Workflow, reason = STOPPED, body = `Stopp
 }
 
 /**
- * The job's `on_success`, its `run` included (ORC-123: `tests` starts `dev`). Without a run that ended (a gate passed,
- * ORC-212), there is nothing to post.
+ * The end of the job's step (`nextOf`): the move to the status of the step it reaches, what the step posts, and the job of
+ * that step (ORC-123: `tests` starts `dev`). Without a run that ended (the spec's gate passed, ORC-212), there is nothing to post.
  */
-function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId?: string, output?: AgentOutput): Decision {
-  const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+function success(out: Decision, at: { event: FactoryEvent; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, runId?: string, output?: AgentOutput, gatePassed = false): Decision {
+  const end = nextOf(at.workflow, job, gatePassed);
+  const next = end.run;
   // An end that would start the AI review with nothing new for it moves nothing and starts nothing (ORC-170).
   const idle = !job.lens && next?.lens ? nothingToReview(at) : undefined;
   if (idle) out.trace.push(`review: nothing new at the end of ${job.name} (${idle}), the ticket stays where it is`);
   const stays = !!idle;
   // A fix of the review loop ends in AI Review already (ORC-184): no move to the state the ticket is in.
-  if (!stays && job.onSuccess.move && job.onSuccess.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: job.onSuccess.move });
+  if (!stays && end.move && end.move !== at.ticket?.logical) out.effects.push({ kind: 'move', to: end.move });
   // `review`: the findings, published by the `review` effect (`reviewEnd`); nothing of the lens's summary goes to Linear.
-  if (job.onSuccess.post && job.onSuccess.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId, ...(output ? { output } : {}) });
+  if (end.post && end.post !== 'review' && runId) out.effects.push({ kind: 'post_output', style: end.post, runId, ...(output ? { output } : {}) });
   if (idle === NO_PR && at.event.type === 'publish.done' && at.event.payload.empty && !at.ticket?.blocked && !awaitsAgent(at.ticket?.humanInbox ?? [])) return nothingDone(out, at.workflow, job.name);
   if (next && !stays) startRun(out, at.event, at.ticket, next, { input: next.input });
   // A move owed by an earlier job is made by this end too (`publish.done`), unless nothing new goes to the review.
-  else handOver(out, at, job, stays ? at.ticket?.logical : (job.onSuccess.move ?? at.ticket?.owedMove ?? undefined));
+  else handOver(out, at, job, stays ? at.ticket?.logical : (end.move ?? at.ticket?.owedMove ?? undefined));
   return out;
 }
 
@@ -182,10 +184,10 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
   }
   if (!checks.length && !findings.length && a.complete) {
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
-    const next = job.onSuccess.run ? at.workflow.jobs[job.onSuccess.run] : undefined;
+    const { run: next, post } = nextOf(at.workflow, job);
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
-    // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (`dev`'s `on_start`).
-    if (job.onSuccess.post && job.onSuccess.post !== 'review') out.effects.push({ kind: 'post_output', style: job.onSuccess.post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
+    // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (the chain's entry).
+    if (post && post !== 'review') out.effects.push({ kind: 'post_output', style: post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }
   // Incomplete: the questions come first, blocked by a ticket or not; intake runs again after the last answer and comes back here.
@@ -336,15 +338,15 @@ function reviewEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     const reason = sha ? `The AI review ${job.name} returned no findings list.` : `The AI review ${job.name} has no published commit to review.`;
     return block(out, workflow, { kind: 'failed', reason, body: `${reason} Reply in this thread and I will resume.`, job: job.name, tried: [`Started the run ${job.name} (${lens} lens).`] });
   }
-  const publishes = job.onSuccess.post === 'review';
+  const publishes = nextOf(workflow, job).post === 'review';
   out.effects.push({ kind: 'review', runId: p.runId, lens, sha, findings, ...(publishes ? { publish: true as const } : {}) });
-  if (!Object.values(workflow.jobs).some((j) => j.onBlocking)) return success(out, at, job, p.runId, p.output);
+  if (!hasReviewLoop(workflow)) return success(out, at, job, p.runId, p.output);
   // Each lens's count on the commit, the lens that publishes reading their sum.
   const counts = { ...(ticket?.reviewBlocking?.sha === sha ? ticket.reviewBlocking.counts : {}), [lens]: findings.filter(isBlocking).length };
   // What the fix contested of the previous round, its lenses have read now: the findings standing are this review's.
   out.events.push({ type: 'ticket.patched', patch: { reviewBlocking: { sha, counts }, ...(publishes && ticket?.contested ? { contested: null } : {}) } });
   const blocking = publishes ? blockingTotal(counts) : 0;
-  const fix = job.onBlocking && workflow.jobs[job.onBlocking.run];
+  const fix = blockingFix(workflow, job);
   if (!fix || !blocking) return success(out, at, job, p.runId, p.output);
   if (refusal(at.event, ticket, fix)) {
     out.trace.push(`review: ${fix.name} refused, the PR is merged`);
@@ -448,7 +450,8 @@ function specCommand(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
   out.events.push({ type: 'ticket.patched', patch: { spec: { ...spec, approval: { author, ...(event.actor ? { authorId: event.actor } : {}), at: event.at } }, ...(ticket.specChanges ? { specChanges: 0 } : {}) } });
   out.trace.push(`spec_review: version ${spec.version} approved by ${event.actor}`);
   answer(`Spec version ${spec.version} approved by ${author}: its acceptance criteria become the tests.`);
-  return success(out, { event, ticket, workflow }, job);
+  // The approval is the gate passing: the chain goes on past `spec_review`.
+  return success(out, { event, ticket, workflow }, job, undefined, undefined, true);
 }
 
 /** `/changes <comment>`: the comment goes to the drafting agent through the human inbox (ORC-180), as an instruction. */
@@ -1372,7 +1375,7 @@ function applyRule(out: Decision, rule: Rule, event: FactoryEvent, ticket: Ticke
  * A start refused anyway (merged PR) is no round: `refusesDevWork`, the only refusal of a job that writes code.
  */
 function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, job: JobSpec, start: () => void): void {
-  if (job.counter !== 'human_review' || workflow.limits.humanReviewRounds === undefined || refusesDevWork(ticket, job) === 'merged') {
+  if (!humanRoundJob(workflow, job) || workflow.limits.humanReviewRounds === undefined || refusesDevWork(ticket, job) === 'merged') {
     start();
     return;
   }
@@ -2106,9 +2109,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!job) return out;
       // The commit found green goes out, and the job ends once it is out: until then the ticket stays held, and a stop fences the result. No sha: no commit to publish.
       const toPublish = publishes(job) ? event.payload.sha : undefined;
+      const owes = nextOf(workflow, job).move;
       // The class verify read of this commit; a commit found green again keeps the one read of it before (ORC-198).
       const diffClass = event.payload.diffClass ?? (event.payload.sha && event.payload.sha === ticket?.verifiedSha ? ticket.diffClass : undefined);
-      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(event.payload.sha && diffClass !== ticket?.diffClass ? { diffClass: diffClass ?? null } : {}), ...(toPublish && job.onSuccess.move ? { owedMove: job.onSuccess.move } : {}) };
+      const patch = { verifyAttempts: 0, ...(ticket?.repeatedFailure ? { repeatedFailure: null } : {}), ...(ticket?.redAttempts ? { redAttempts: 0 } : {}), ...(event.payload.sha ? { verifiedSha: event.payload.sha } : {}), ...(event.payload.sha && diffClass !== ticket?.diffClass ? { diffClass: diffClass ?? null } : {}), ...(toPublish && owes ? { owedMove: owes } : {}) };
       out.events.push({ type: 'ticket.patched', patch });
       // A relaunch on failures still pending goes with them: settle would start it on a green check, in a loop just started over (ORC-360).
       const pending = ticket?.pendingJob;
@@ -2130,15 +2134,15 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!job) return out;
       // Owed by an earlier job of the ticket, whose publication was refused: first, as the job's own would be.
       const owed = ticket?.owedMove;
+      const end = nextOf(workflow, job);
       if (owed) {
         out.events.push({ type: 'ticket.patched', patch: { owedMove: null } });
-        if (!job.onSuccess.move) out.effects.push({ kind: 'move', to: owed });
+        if (!end.move) out.effects.push({ kind: 'move', to: owed });
       }
       success(out, { event, ticket, workflow }, job, event.payload.runId, event.payload.output);
       // What the owed move came with: `dev`'s AI review (ORC-183), started as that job's own end would have, or the ticket
       // would sit in AI Review with no review.
-      const then = owed && !job.onSuccess.run ? Object.values(workflow.jobs).find((j) => j.onSuccess.move === owed && j.onSuccess.run)?.onSuccess.run : undefined;
-      const next = then ? workflow.jobs[then] : undefined;
+      const next = owed && !end.run ? Object.values(workflow.jobs).map((j) => nextOf(workflow, j)).find((e) => e.move === owed && e.run)?.run : undefined;
       if (next) startRun(out, event, ticket, next, { input: next.input });
       return out;
     }
@@ -2217,7 +2221,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         return out;
       }
       // Armed in Human Review, a round of human feedback starts there only: the ticket moved since (Done, In Progress) keeps the feedback.
-      if (job.counter === 'human_review' && ticket?.logical !== 'human_review') {
+      if (humanRoundJob(workflow, job) && ticket?.logical !== 'human_review') {
         out.trace.push(`timer.fired debounce: ${job.name} not started, the ticket left Human Review`);
         return out;
       }
