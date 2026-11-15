@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { packDir as pack } from '../test/helpers/harness.js';
 
-const deny: string[] = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8')).permissions.deny;
+const { deny, allow } = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8')).permissions as { deny: string[]; allow: string[] };
 
 /** Runs the PreToolUse hook on one tool call, as Claude Code does: the call as JSON on stdin. */
 function guard(tool_input: Record<string, unknown>, env: Record<string, string> = {}, tool_name = 'Bash') {
@@ -193,8 +193,12 @@ describe("a tool off the step's list (ORC-383)", () => {
   it("lets through the step's tools and the factory's MCP tools, and judges them as before", () => {
     expect(guard({ pattern: 'x' }, tools, 'Grep').denied).toBe(false);
     expect(guard({ status: 'done' }, tools, 'mcp__factory__submit_result')).toMatchObject({ denied: false, lines: [] });
+    // Each factory MCP tool the settings allow, the hook lets through: one list, kept in step.
+    for (const tool of allow.filter((r) => r.startsWith('mcp__factory__'))) expect(guard({}, tools, tool).denied, tool).toBe(false);
     // Another MCP server's tool is not the factory's.
     expect(guard({}, tools, 'mcp__other__submit_result').denied).toBe(true);
+    // Nor is a tool the factory's MCP no longer has (ORC-400): a question is a blocked submit_result.
+    expect(guard({ text: 'Laquelle ?' }, tools, 'mcp__factory__ask')).toMatchObject({ denied: true, lines: [expect.objectContaining({ tool: 'mcp__factory__ask', rule: 'tool-not-allowed' })] });
     // Its own rules still apply to a tool it has.
     expect(bash('rm -rf /', { FACTORY_TOOLS: 'Bash' }).lines).toEqual([expect.objectContaining({ rule: 'rm-root' })]);
   });
