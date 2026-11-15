@@ -31,7 +31,7 @@ What the proxy must do, and nothing more:
 - **not forward `/agent`**: the run-token agent API, which the runners reach through the `proxy` service on port 4101, never through the public name. The examples below and the `tls` profile answer it 404;
 - **not buffer the live stream** (`/api/events`, server-sent events, one `ping` every 15 s): nginx needs `proxy_buffering off;`. Caddy flushes it on its own.
 
-`factoryd` reads no `X-Forwarded-*` header: it decides nothing on the client's address or scheme, and `publicUrl` already gives the URLs it hands out. A forged `X-Forwarded-Host` changes nothing. The interface stays behind `FACTORY_UI_PASSWORD`; the webhooks, the OAuth callback and the agent API answer to their own guards (signatures, `state`, run token).
+`factoryd` reads no `X-Forwarded-*` header: it decides nothing on the client's address or scheme, and `publicUrl` already gives the URLs it hands out. A forged `X-Forwarded-Host` changes nothing. The interface stays behind the GitHub sign-in (ORC-399, [interface and security](interface-and-security.md#network-exposure-and-github-sign-in)); the webhooks, the OAuth callbacks and the agent API answer to their own guards (signatures, `state`, run token).
 
 An nginx on the host, with a certificate from certbot:
 
@@ -68,7 +68,7 @@ usine.exemple.fr {
 }
 ```
 
-Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS -u x:"$FACTORY_UI_PASSWORD" https://usine.exemple.fr/health` answers the JSON of the health check (401 without the password), and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
+Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers 401 `{"error":"sign in with GitHub first"}` (from `factoryd`, not the proxy), and `docker compose exec factoryd wget -qO- http://127.0.0.1:4100/health` would too: the health check is the operators', behind the sign-in, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
 
 **Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
 
@@ -109,7 +109,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | one of these means | Tokens for the Claude Code accounts, read by `factory.yml` (`token: env:CLAUDE_TOKEN_1`); the `claude.active` account is the runs' only credential. |
 | `ANTHROPIC_API_KEY` | one of these means | Claude Code authentication without an active account, for the runs of this container, which still run next to the daemon (until ORC-179). Compose no longer requires it: without either, runs fail at authentication. |
 | `GH_TOKEN` | yes | `gh` and HTTPS reads, until ORC-181; publishing goes through the GitHub App. Permissions: [`github.md`](github.md#permissions-required-for-the-gh-fallback). |
-| `FACTORY_UI_PASSWORD` | yes | UI password (the container listens beyond loopback). |
+| `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | yes | The GitHub App's OAuth client, for the dashboard's GitHub sign-in (ORC-399): the container listens beyond loopback. |
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |
@@ -148,7 +148,11 @@ On the server, with the user's rootless engine running:
    ```yaml
    # data/factory.yml: one ticket at a time to start with
    concurrency: 1
+   # who may sign in to the dashboard with GitHub (ORC-399): logins, or an org, or a team
+   dashboard: { logins: [armand] }
    ```
+
+   The App's *Callback URL* is `https://usine.exemple.fr/auth/github/callback` ([`github.md`](github.md#creating-the-app)).
 
    Then give it all to the containers' uid 1000. In a rootless engine, this is a sub-uid of the user, not the user: only a container can do it. From then on, these directories are only modified from a container (`docker compose exec factoryd ...`).
 
@@ -165,7 +169,7 @@ On the server, with the user's rootless engine running:
    ```
 
 4. Point the host's reverse proxy at `http://127.0.0.1:4100`, or the port of `FACTORY_LOOPBACK_PORT` ([TLS](#tls-and-webhooks)), then `docker compose up -d`. Without a reverse proxy on the server: `docker compose --profile tls up -d`, with `FACTORY_PUBLIC_HOST`.
-5. Open `https://usine.exemple.fr` (password `FACTORY_UI_PASSWORD`), click **Connect Linear**.
+5. Open `https://usine.exemple.fr`, sign in with GitHub (a login of `dashboard`), click **Connect Linear**.
 
 `factoryd` refuses to start on an engine that is not rootless: holding its socket would give root on the host.
 
