@@ -1,6 +1,6 @@
 import { WORKFLOW_FORMAT, type JobSpec, type Limits, type RunLimits, type Workflow } from '../core/workflow.js';
-import { blockingFix, nextOf, startingJob } from '../core/chain.js';
-import { REACTION_JOBS } from '../core/engine.js';
+import { blockingFix, nextOf, REACTION_LINKS, reactionJob, startingJob } from '../core/chain.js';
+import { UNLINKED_REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, isAgentStep, mergeGate, type AgentStep, type Effort, type Preset } from './preset.js';
 import { BINDINGS, type Binding } from './runtime-bindings.js';
@@ -102,7 +102,8 @@ function jobOf(p: Preset, name: string, b: Binding, perRun: RunLimits, settings:
 /**
  * What the loader of the former pack refused in a workflow, now that none goes through it: a job or the relayed answer that
  * names nothing, a job whose step the preset lacks, a review whose fix does not read the findings; and a job a reaction of
- * `decide` starts that the workflow lacks (but at the Rapide level, where only the delegation reacts).
+ * `decide` starts that the workflow lacks, or a link of the preset it reads that starts none (but at the Rapide level, where
+ * only the delegation reacts).
  */
 export function workflowViolations(wf: Workflow): string[] {
   const out: string[] = [];
@@ -124,7 +125,10 @@ export function workflowViolations(wf: Workflow): string[] {
   else if (!startingJob(Object.values(wf.jobs), entry)) out.push(`entry: ${wf.entry} has no job that starts it`);
   job('relayJob', wf.relayJob);
   if (wf.level !== 'rapide') {
-    for (const name of REACTION_JOBS) job('reactions', name);
+    for (const name of UNLINKED_REACTION_JOBS) job('reactions', name);
+    // The other reactions read their job on the preset's links (ORC-417): a link to no job would start nothing, silently.
+    // A link absent (a merge gate with no way back) starts nothing, by design: only a link to no job is refused.
+    for (const link of REACTION_LINKS) if (reactionJob(wf, link) === undefined) out.push(`reactions: ${link} starts no job`);
     // A question relayed to the agent that implements starts its job: only the Rapide level, where nobody asks, has none.
     if (wf.relayJob === undefined) out.push('relayJob: missing, the questions relayed to the agent that implements would start no job');
   }
