@@ -10,7 +10,7 @@ import { execFailure, type Exec } from '../adapters/exec.js';
 import { GitHubApiError } from '../adapters/forge/github-app.js';
 import { LinearApi, type FetchLike } from '../adapters/tracker/linear/api.js';
 import { fetchOrigin } from '../adapters/workspace/git-workspaces.js';
-import { START_RETRY } from '../core/orchestrator.js';
+import { START_RETRY } from './launch.js';
 import { EFFECT_RETRY } from './outbox.js';
 import { attemptsFor, backoff, isTransient, retryWindow, TRANSIENT_WINDOW_MS } from './transient.js';
 import { PROCESS_RETRY } from './worker.js';

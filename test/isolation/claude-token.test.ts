@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SANDBOX_CLAUDE_TOKEN } from '../../src/adapters/runner/claude-code.js';
 import type { Sandbox } from '../../src/adapters/sandbox/types.js';
-import { CLAUDE_RUN_ENV } from '../../src/core/orchestrator.js';
+import { CLAUDE_RUN_ENV } from '../../src/runtime/launch.js';
 import { EgressProxy, type EgressEntry } from '../../src/network/proxy.js';
 import { httpsUpstream } from '../helpers/egress-upstream.js';
 import { cli, enabled, useSandboxes } from './helpers.js';

@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { githubDelivery } from '../../test/helpers/github-webhook.js';
 import { signLinear } from '../../test/helpers/linear-webhook.js';
-import { Orchestrator, type OrchestratorDeps } from '../core/orchestrator.js';
+import { Daemon, type DaemonDeps } from '../runtime/daemon.js';
 import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
@@ -97,9 +97,9 @@ describe('bootstrap', () => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
       saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
       if (yml) writeFileSync(join(home, 'factory.yml'), yml);
-      let deps: OrchestratorDeps | undefined;
-      const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockImplementation(async function (this: Orchestrator) {
-        deps = (this as unknown as { d: OrchestratorDeps }).d;
+      let deps: DaemonDeps | undefined;
+      const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
+        deps = (this as unknown as { d: DaemonDeps }).d;
       });
       const app = await startFactory({ home, fakeRunner: true, log: () => {}, env: {} });
       await app.stop();
@@ -128,9 +128,9 @@ describe('bootstrap', () => {
     writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n');
     saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }], limits: {} });
     writeFileSync(join(home, 'factory.yml'), 'budgets: { max_turns: { build: 40 } }\n');
-    let deps: OrchestratorDeps | undefined;
-    const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockImplementation(async function (this: Orchestrator) {
-      deps = (this as unknown as { d: OrchestratorDeps }).d;
+    let deps: DaemonDeps | undefined;
+    const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
+      deps = (this as unknown as { d: DaemonDeps }).d;
     });
     const logs: string[] = [];
     try {
@@ -240,7 +240,7 @@ describe('bootstrap', () => {
   it('closes the store it opened when the start fails afterwards', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4185, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    const recover = vi.spyOn(Orchestrator.prototype, 'recover').mockRejectedValue(new Error('boom'));
+    const recover = vi.spyOn(Daemon.prototype, 'recover').mockRejectedValue(new Error('boom'));
     const close = vi.spyOn(SqliteStore.prototype, 'close');
     try {
       await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow('boom');
@@ -277,7 +277,7 @@ describe('bootstrap', () => {
   it('ticks the orchestrator every minute until stopped', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4198, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    const tick = vi.spyOn(Orchestrator.prototype, 'tick').mockResolvedValue();
+    const tick = vi.spyOn(Daemon.prototype, 'tick').mockResolvedValue();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
       const app = await startFactory({ home, fakeRunner: true, log: () => {} });

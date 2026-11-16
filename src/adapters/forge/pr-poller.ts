@@ -1,5 +1,5 @@
 import type { Clock } from "../../core/clock.js";
-import type { ProjectRuntime } from "../../core/orchestrator.js";
+import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import type { Store } from "../../store/types.js";
 import { checksEventId, prEventId } from "./github-webhook.js";
