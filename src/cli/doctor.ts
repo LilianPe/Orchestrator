@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import {
@@ -8,7 +9,7 @@ import {
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, loadInstance, validatorWarnings } from '../config/instance.js';
+import { effectiveInstance, validatorWarnings } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -586,17 +587,15 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     // An invalid factory.yml: said just below, by the load the check needs.
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
-  // The projects whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
-  let validators: string[] = [];
-  try {
-    validators = validatorWarnings(loadInstance(options.home).projects);
-  } catch {
-    // An invalid config.yaml: said just below, by the load the check needs.
-  }
-  if (!options.json) for (const line of validators) out(line);
   let githubApp;
+  let validators: string[];
   try {
-    githubApp = resolveGithubApp(effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml), env);
+    const instance = effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml);
+    // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
+    const repoPath = resolve(options.repoPath);
+    validators = validatorWarnings(instance.projects.filter((p) => resolve(p.repoPath) === repoPath));
+    if (!options.json) for (const line of validators) out(line);
+    githubApp = resolveGithubApp(instance, env);
   } catch (error) {
     out(errorMessage(error));
     return 1;

@@ -728,10 +728,17 @@ jobs:
       expect((await cli(homeWith([]))).filter((l) => l.includes('authz.validators'))).toEqual(warned);
     });
 
-    it('warns of a lone validator, who cannot approve the tickets they delegate', async () => {
+    it('warns of a lone validator, who cannot approve the tickets they delegate, one id twice counting once', async () => {
       const warned = (await cli(homeWith(['u-1']))).filter((l) => l.includes('authz.validators'));
       expect(warned).toHaveLength(1);
       expect(warned[0]).toMatch(/^Warning: app: one spec validator \(authz\.validators in config\.yaml\)/);
+      expect((await cli(homeWith(['u-1', 'u-1']))).filter((l) => l.includes('authz.validators'))).toEqual(warned);
+    });
+
+    it("says nothing of another repository's project", async () => {
+      const lines: string[] = [];
+      await runDoctorCommand({ repoPath: '/other', home: homeWith(), env: {}, out: (line) => lines.push(line) });
+      expect(lines.join('\n')).not.toContain('authz.validators');
     });
 
     it('says nothing with two validators, nor of the replay of closed tickets, which approves its own specs', async () => {

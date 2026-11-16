@@ -5,7 +5,6 @@ import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import type { FactoryYml } from './factory-yml.js';
 import { isSealed, openSecretsFile, sealSecretsFile } from './secrets-file.js';
-import { isFantome } from '../presets/fantome.js';
 
 /**
  * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml`
@@ -188,8 +187,9 @@ export function effectiveInstance(home: string, yml: FactoryYml | undefined): In
  */
 export function validatorWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'authz' | 'preset'>[]): string[] {
   return projects.flatMap((p) => {
-    if (isFantome(p)) return [];
-    const count = p.authz?.validators.length ?? 0;
+    if (p.preset === 'factory/fantome') return [];
+    // By id, as the role resolver reads them: one id twice is one validator.
+    const count = new Set(p.authz?.validators).size;
     if (count === 0) return [`Warning: ${p.id}: no spec validator (authz.validators in config.yaml): every ticket waits at the spec gate for a designated validator's \`/approve\`, which its initiator cannot give, and stops there. Designate validators by their Linear user ids.`];
     if (count === 1) return [`Warning: ${p.id}: one spec validator (authz.validators in config.yaml): a ticket they delegate themselves stops at the spec gate, as no one may approve the spec of a run they launched. Designate a second validator.`];
     return [];
