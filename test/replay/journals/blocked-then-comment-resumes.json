@@ -1539,9 +1539,6 @@
         "projectId": "p",
         "ticketId": "REL-1",
         "actor": "user-validator",
-        "roles": [
-          "validator"
-        ],
         "payload": {
           "name": "/approve",
           "body": "",
@@ -1550,7 +1547,10 @@
           "kind": "command"
         },
         "schemaVersion": 3,
-        "taint": "trusted"
+        "taint": "trusted",
+        "roles": [
+          "validator"
+        ]
       },
       "decision": {
         "eventId": "t-2",
