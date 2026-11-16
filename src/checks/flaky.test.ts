@@ -125,7 +125,7 @@ describe('runAndRerun', () => {
   it('reruns nothing for a passing command, a command without a runner or a report naming its failing tests', async () => {
     expect(await runAndRerun('npx vitest run', 'vitest', fakeRun(ran({ 'cart ok': 'passed' })), NONE)).toBeUndefined();
     const plain = fakeRun({ exitCode: 2, output: 'lint error', ms: 5 });
-    expect(await runAndRerun('npm run lint', undefined, plain, NONE)).toEqual({ command: 'npm run lint', exitCode: 2, output: 'lint error', tests: [], notRerun: 0 });
+    expect(await runAndRerun('npm run lint', undefined, plain, NONE)).toEqual({ command: 'npm run lint', line: 'npm run lint', exitCode: 2, output: 'lint error', tests: [], notRerun: 0 });
     expect(plain.lines).toEqual(['npm run lint']);
     const unloaded = fakeRun({ exitCode: 1, output: 'Transform failed', report: '{}', ms: 5 });
     expect((await runAndRerun('npx vitest run', 'vitest', unloaded, NONE))!.tests).toEqual([]);
@@ -154,6 +154,7 @@ describe('runAndRerun', () => {
 
 const failing = (names: string[], command = 'npx vitest run'): CommandRun => ({
   command,
+  line: command,
   runner: 'vitest',
   exitCode: 1,
   output: 'whole run',
@@ -245,7 +246,7 @@ describe('settle', () => {
   });
 
   it('keeps a failure without tests as it is', () => {
-    const plain: CommandRun = { command: 'npm run lint', exitCode: 2, output: 'lint error', tests: [], notRerun: 0 };
+    const plain: CommandRun = { command: 'npm run lint', line: 'npm run lint', exitCode: 2, output: 'lint error', tests: [], notRerun: 0 };
     expect(settle([plain], NONE)).toEqual({ failures: [{ command: 'npm run lint', exitCode: 2, output: 'lint error' }], flaky: [] });
   });
 });
