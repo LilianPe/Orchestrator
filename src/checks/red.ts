@@ -3,6 +3,7 @@
 // when the runner wrote none; it never takes the agent's word.
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
+import { isRecord } from '../adapters/graphql-pages.js';
 import { ANSI } from './log-excerpt.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
 import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
@@ -209,6 +210,16 @@ const hasSeparator = (args: string): boolean => /(?:^|\s)--(?:\s|$)/.test(args);
 
 type PackageJson = { scripts?: Record<string, unknown>; packageManager?: unknown };
 
+/** The repository's `package.json`: empty without one, undefined when it does not parse as an object. */
+async function readPackageJson(deps: Pick<RedDeps, 'showAtHead'>): Promise<PackageJson | undefined> {
+  try {
+    const pkg: unknown = JSON.parse((await deps.showAtHead('package.json')) ?? '{}');
+    return isRecord(pkg) ? pkg : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Whether the repository runs Yarn 2 or later (Berry), which passes a `--` on to the script where Yarn 1 strips it: by the
  * major of its `packageManager` field, or by a `.yarnrc.yml` when that names no Yarn.
@@ -229,19 +240,16 @@ export async function testCommand(command: string, deps: Pick<RedDeps, 'showAtHe
   const ran = (line: string, runner: Runner | undefined) => ({ line, ...(runner ? { runner } : {}) });
   const call = packageCall(command);
   if (!call) return ran(command, runnerOf(command));
-  let pkg: PackageJson | undefined;
-  try {
-    pkg = JSON.parse((await deps.showAtHead('package.json')) ?? '{}') as PackageJson;
-  } catch {
-    pkg = undefined;
-  }
+  const pkg = await readPackageJson(deps);
   const script = /^(?:run(?:-script)?\s+)?(\w[\w:.-]*)(?:\s|$)/.exec(call.args)?.[1];
-  const body = script && pkg?.scripts?.[script === 't' ? 'test' : script];
+  const body = script ? pkg?.scripts?.[script === 't' ? 'test' : script] : undefined;
+  const named = typeof body === 'string' ? body : undefined;
   // No such script in the `package.json` read: a program pnpm or yarn runs (`pnpm vitest run`), named in the command, which
   // takes the files as they are. One that cannot be read: a script, presumably.
-  if (pkg && typeof body !== 'string') return ran(command, runnerOf(command));
-  const line = call.tool === 'yarn' && (await isYarnBerry(pkg, deps)) ? command.replace(/\s+--\s*$/, '') : hasSeparator(call.args) ? command : `${command.trimEnd()} --`;
-  return ran(line, runnerOf(typeof body === 'string' ? body : command));
+  if (pkg && named === undefined) return ran(command, runnerOf(command));
+  const runner = runnerOf(named ?? command);
+  if (call.tool === 'yarn' && (await isYarnBerry(pkg, deps))) return ran(command.replace(/\s+--\s*$/, ''), runner);
+  return ran(hasSeparator(call.args) ? command : `${command.trimEnd()} --`, runner);
 }
 
 const TS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'];

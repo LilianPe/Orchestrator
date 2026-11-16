@@ -66,8 +66,8 @@ export type Run = (line: string, runner: Runner | undefined) => Promise<TestRun>
 /** A command that failed, and its failing tests with their reruns; none when its report named none. */
 export interface CommandRun {
   command: string;
-  /** The command as it runs, when it differs: with the `--` its script needs before the files (ORC-420). */
-  line?: string;
+  /** The command as it runs, which files and flags are appended to: with the `--` its script needs (`testCommand`, ORC-420). */
+  line: string;
   runner?: Runner;
   exitCode: number | null;
   output: string;
@@ -202,10 +202,7 @@ export async function runAndRerun(command: string, runner: Runner | undefined, r
   const first = await run(line, runner);
   if (first.exitCode === 0) return undefined;
   const failed = runner && first.exitCode !== null ? (readTests(first.report)?.filter((t) => t.status === 'failed') ?? []) : [];
-  const res: CommandRun = {
-    command, ...(line === command ? {} : { line }), ...(runner ? { runner } : {}),
-    exitCode: first.exitCode, output: first.output, tests: [], notRerun: Math.max(0, failed.length - MAX_RERUNS),
-  };
+  const res: CommandRun = { command, line, ...(runner ? { runner } : {}), exitCode: first.exitCode, output: first.output, tests: [], notRerun: Math.max(0, failed.length - MAX_RERUNS) };
   const rerun = failed.slice(0, MAX_RERUNS);
   if (!rerun.length) return res;
   const again = attemptsIn('head', 2, await run(rerunLine(line, runner!, rerun), runner));
@@ -241,7 +238,7 @@ export async function rerunOnBase(runs: readonly CommandRun[], run: Run, at: Sta
     const tests = chosen.filter((c) => c.r === r).map((c) => c.t);
     r.notOnBase = all.filter((c) => c.r === r).length - tests.length;
     if (!tests.length) continue;
-    const onBase = attemptsIn('base', 1, await run(rerunLine(r.line ?? r.command, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner));
+    const onBase = attemptsIn('base', 1, await run(rerunLine(r.line, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner));
     for (const t of tests) t.attempts.push(onBase(t.test));
   }
 }
