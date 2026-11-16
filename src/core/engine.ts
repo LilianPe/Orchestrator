@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJobs } from './chain.js';
+import { blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, type ReactionLink } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
@@ -960,9 +960,6 @@ const ASK = 'ask';
 /** Every workflow but one at the Rapide level has them (`workflowViolations`), or a reaction would start nothing in silence. */
 export const UNLINKED_REACTION_JOBS: readonly string[] = [DEV_FEEDBACK, ASK];
 
-/** What a reaction starts: a job the preset's links name (`reactionJobs`), or one of `UNLINKED_REACTION_JOBS`. */
-type ReactionJob = keyof ReturnType<typeof reactionJobs> | typeof DEV_FEEDBACK | typeof ASK;
-
 /**
  * The default reactions (ORC-392): what a human's event, or a fact of the PR, starts or does once the built-ins have decided
  * it. Each is a function of its own, read on the ticket as the event leaves it, not a table: the `on` rules of the former pack
@@ -986,19 +983,20 @@ const rapide = (workflow: Workflow): boolean => workflow.level === 'rapide';
 const regroupMs = (workflow: Workflow): number => workflow.preset.regroup.minutes * 60_000;
 
 /**
- * The job a reaction starts. A workflow lacking it is refused at its build (`workflowViolations`): deciding on one is a bug,
- * not a version to honour.
+ * The job a reaction starts: one of `UNLINKED_REACTION_JOBS` by its name, or the one of a link of the preset. A workflow lacking
+ * it is refused at its build (`workflowViolations`): deciding on one is a bug, not a version to honour.
  */
-function reactionJob(workflow: Workflow, which: ReactionJob): JobSpec {
-  const job = which === DEV_FEEDBACK || which === ASK ? workflow.jobs[which] : reactionJobs(workflow)[which];
+function required(job: JobSpec | null | undefined, which: string): JobSpec {
   if (!job) throw new Error(`the workflow has no job for ${which}, which a reaction starts`);
   return job;
 }
+const named = (workflow: Workflow, name: string): JobSpec => required(workflow.jobs[name], name);
+const linked = (workflow: Workflow, link: ReactionLink): JobSpec => required(reactionJob(workflow, link), link);
 
 /** A reaction that starts `job`: a ticket not delegated only ever gets the questions queue's work. */
-function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: TicketState | undefined, debounceMs?: number, input?: InputKind): Reaction | undefined {
+function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: TicketState | undefined, debounceMs?: number): Reaction | undefined {
   if (ticket && !ticket.delegated && event.type !== 'ticket.delegated' && job.queue !== 'questions') return undefined;
-  return { index, job, debounceMs, ...(input ? { input } : {}) };
+  return { index, job, debounceMs };
 }
 
 /** The delegation, on a ticket not blocked, in Todo or In Progress (any status at the Rapide level): the chain's entry job. */
@@ -1006,7 +1004,7 @@ function onDelegated(event: FactoryEvent, ticket: TicketState | undefined, workf
   const state = ticket?.logical ?? 'todo';
   if (ticket?.blocked || (!rapide(workflow) && state !== 'todo' && state !== 'dev')) return undefined;
   const job = delegatedJob(workflow);
-  return job ? reaction(0, workflow.jobs[job]!, event, ticket) : undefined;
+  return job ? reaction(0, job, event, ticket) : undefined;
 }
 
 /**
@@ -1014,7 +1012,7 @@ function onDelegated(event: FactoryEvent, ticket: TicketState | undefined, workf
  * the review (ORC-148), which reads it on the ticket as such a move would leave it.
  */
 function reviewAgain(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
-  return reviewsAgain(event, workflow) ? reaction(0, reactionJob(workflow, 'review'), event, ticket) : undefined;
+  return reviewsAgain(event, workflow) ? reaction(0, linked(workflow, 'review'), event, ticket) : undefined;
 }
 
 /** A move to AI Review, but at the Rapide level: it starts the review again (`reviewAgain`). */
@@ -1038,21 +1036,21 @@ function replyReaction(event: FactoryEvent, ticket: TicketState | undefined, wor
  * The reply to a block, in the ticket's session or on the ticket (ORC-196): `dev-feedback`, at once. It stands for the step the
  * ticket blocked on, which `startReaction` resumes in its place (`resumedJob`), and for a block with no step of its own.
  */
-const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => reaction(0, reactionJob(workflow, DEV_FEEDBACK), event, ticket);
+const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => reaction(0, named(workflow, DEV_FEEDBACK), event, ticket);
 
 /**
  * Human feedback in Human Review (ORC-190): a round of the merge gate's fix (`fix-human`), on its counter, once the messages are
  * regrouped. A preset with no round of human review starts nothing, as for a review on the PR (`humanReview`): it waits in the inbox.
  */
 const humanFeedback = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  hasHumanRounds(workflow) ? reaction(1, reactionJob(workflow, 'humanFeedback'), event, ticket, regroupMs(workflow)) : undefined;
+  hasHumanRounds(workflow) ? reaction(1, linked(workflow, 'humanFeedback'), event, ticket, regroupMs(workflow)) : undefined;
 
 /** An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any counter. */
 const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  reaction(2, reactionJob(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
+  reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
 
 /** A mention asks a question: the answer agent, at once (ORC-182). The memory in writing sleeps (ORC-193): a `retiens` is a message as any other. */
-const askQuestion = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined => reaction(0, reactionJob(workflow, ASK), event, ticket);
+const askQuestion = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined => reaction(0, named(workflow, ASK), event, ticket);
 
 /**
  * Red CI, merge gate included, on a ticket under review and not blocked: the job of the preset's `redCi` (`fix-ci`), a round
@@ -1063,7 +1061,9 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
   const state = ticket?.logical ?? 'todo';
   const conflict = event.type === 'pr.conflicted';
   if (ticket?.blocked || !(state === 'human_review' || state === 'ai_review' || (conflict && state === 'dev'))) return undefined;
-  return conflict ? reaction(0, reactionJob(workflow, 'conflict'), event, ticket) : reaction(0, reactionJob(workflow, 'redCi'), event, ticket, undefined, 'ci_failures');
+  if (conflict) return reaction(0, linked(workflow, 'conflict'), event, ticket);
+  const r = reaction(0, linked(workflow, 'redCi'), event, ticket);
+  return r && { ...r, input: 'ci_failures' };
 }
 
 /** The label `agent:stop` stops the ticket's work, as the stop of its session does (until ORC-201 removes the `agent:*` labels). */
@@ -1544,7 +1544,7 @@ function reviewCiLoop(out: Decision, r: Reaction, event: FactoryEvent<'pr.checks
   return loopRound(out, ticket, workflow, 'ciFixAttempts', () => startReaction(out, event, ticket, workflow, r), (bound) => {
     const conflict = event.type === 'pr.conflicted';
     out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
-    const past = event.type === 'pr.conflicted' ? conflictBound(event, workflow, bound) : redCiBound(event, job, bound);
+    const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
     return block(out, workflow, { ...past, job: job.name, attempts: bound });
   });
 }
@@ -1560,14 +1560,13 @@ function redCiBound(event: FactoryEvent<'pr.checks_failed'>, job: JobSpec, bound
 }
 
 /** A conflict past the bound (ORC-146): a block of the conflict's own kind, which a green CI says nothing of. */
-function conflictBound(event: FactoryEvent<'pr.conflicted'>, workflow: Workflow, bound: number): RunBlock {
+function conflictBound(event: FactoryEvent<'pr.conflicted'>, bound: number): RunBlock {
   const { number, baseRef, headSha } = event.payload;
-  const { redCi, conflict } = reactionJobs(workflow);
   const reason = `Conflict with ${baseRef}, and the review and CI loop has used its ${bound} runs: I am not starting a rebase.`;
   return {
     kind: 'conflict',
     reason,
-    tried: [`PR #${number} conflicts with ${baseRef} at ${headSha.slice(0, 12)}.`, `${bound} run(s) of the review and CI loop (${redCi?.name}, ${conflict?.name}).`],
+    tried: [`PR #${number} conflicts with ${baseRef} at ${headSha.slice(0, 12)}.`, `${bound} run(s) of the review and CI loop (fix-ci, rebase).`],
   };
 }
 

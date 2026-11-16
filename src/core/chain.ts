@@ -85,9 +85,9 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
 }
 
 /** The job a delegation starts: the chain's entry's (ORC-395), `intake` for `factory/default`. */
-export function delegatedJob(wf: Workflow): string | undefined {
+export function delegatedJob(wf: Workflow): JobSpec | undefined {
   const entry = stepById(wf, wf.entry);
-  return entry && jobStarting(wf, entry)?.name;
+  return entry && jobStarting(wf, entry);
 }
 
 /** The move the launch of `job` makes: the chain's entry shows its status from its first run on. */
@@ -117,27 +117,35 @@ export function blockingFix(wf: Workflow, job: JobSpec): JobSpec | undefined {
   return Object.values(wf.jobs).find((j) => j.step === to && j.cause === 'review');
 }
 
-/** The job an edge of the preset starts (ORC-417): the fix's job for `cause`, the job that starts any other step. */
-function edgeJob(wf: Workflow, edge: FailureEdge | undefined, cause?: FixCause): JobSpec | undefined {
-  const step = stepById(wf, edge?.goto);
-  if (!step) return undefined;
-  const jobs = Object.values(wf.jobs);
-  return step.type === 'fix' ? jobs.find((j) => j.step === step.id && j.cause === cause) : startingJob(jobs, step);
+/** The job an edge of the preset starts (ORC-417): the fix's job for `cause`, the job that starts any other step; null with no edge. */
+function edgeJob(wf: Workflow, edge: FailureEdge | undefined, cause?: FixCause): JobSpec | null | undefined {
+  if (!edge) return null;
+  const step = stepById(wf, edge.goto);
+  if (step?.type !== 'fix') return step && jobStarting(wf, step);
+  return Object.values(wf.jobs).find((j) => j.step === step.id && j.cause === cause);
 }
 
+/** The links of the preset the reactions of `decide` read their job on (ORC-417). */
+export const REACTION_LINKS = ['redCi', 'conflict', 'humanFeedback', 'review'] as const;
+export type ReactionLink = (typeof REACTION_LINKS)[number];
+
 /**
- * The jobs the reactions of `decide` start, read on the preset's links (ORC-417), so that a preset of its own is followed: red
- * CI's `redCi`, a conflict's `conflict`, human feedback's merge gate failure edge, and the first lens of the review a move to
- * AI Review starts again. Undefined: the preset has no such link, or no job for it (`workflowViolations` refuses it).
+ * The job the reaction on `link` starts, so that a preset of its own is followed (ORC-417): red CI's `redCi`, a conflict's
+ * `conflict`, human feedback's merge gate failure edge, and the review a move to AI Review starts again, its first lens. Null:
+ * the preset has no such link (only the merge gate's way back is optional); undefined: the link starts no job, which
+ * `workflowViolations` refuses.
  */
-export function reactionJobs(wf: Workflow): Record<'redCi' | 'conflict' | 'humanFeedback' | 'review', JobSpec | undefined> {
-  const review = wf.preset.steps.find((s) => s.type === 'review');
-  return {
-    redCi: edgeJob(wf, wf.preset.redCi, 'ci'),
-    conflict: edgeJob(wf, wf.preset.conflict),
-    humanFeedback: edgeJob(wf, mergeGate(wf.preset)?.onFailure, 'human'),
-    review: review && startingJob(Object.values(wf.jobs), review),
-  };
+export function reactionJob(wf: Workflow, link: ReactionLink): JobSpec | null | undefined {
+  switch (link) {
+    case 'redCi':
+      return edgeJob(wf, wf.preset.redCi, 'ci');
+    case 'conflict':
+      return edgeJob(wf, wf.preset.conflict);
+    case 'humanFeedback':
+      return edgeJob(wf, mergeGate(wf.preset)?.onFailure, 'human');
+    case 'review':
+      return jobEntering(wf, 'ai_review');
+  }
 }
 
 /** The preset has rounds of human review feedback (ORC-190): its merge gate sends the run back to a fix. */

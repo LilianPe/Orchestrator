@@ -83,7 +83,7 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     expect(defaultWorkflow().jobs.dev!.skill).toBe('factory:dev');
     expect(defaultWorkflow().preset!.steps.find((s) => s.id === 'review')!.next).toBe('human_review');
     // The delegation starts the preset's entry (ORC-395).
-    expect(delegatedJob(defaultWorkflow())).toBe('intake');
+    expect(delegatedJob(defaultWorkflow())?.name).toBe('intake');
     expect(defaultWorkflow().limits).toMatchObject({ verifyAttempts: 4, perRun: { turns: 150 } });
   });
 
