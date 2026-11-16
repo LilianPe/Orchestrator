@@ -3,7 +3,7 @@
   "projectId": "p",
   "ticketId": "REL-1",
   "workflows": {
-    "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6": {
+    "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91": {
       "version": 2,
       "tracker": {
         "kind": "linear",
@@ -692,7 +692,7 @@
           }
         ]
       },
-      "entry": "build"
+      "entry": "intake"
     }
   },
   "entries": [
@@ -726,7 +726,7 @@
         "ticketId": "REL-1",
         "seq": 1,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -743,12 +743,12 @@
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6"
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91"
         },
         "effects": [
           {
             "kind": "start_run",
-            "job": "dev"
+            "job": "intake"
           }
         ],
         "timers": [],
@@ -780,12 +780,12 @@
         "ticketId": "REL-1",
         "seq": 2,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "todo",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -797,23 +797,18 @@
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-          "worktreePath": "/tmp/factory-fake/p/REL-1",
-          "port": 4200,
-          "branch": "feat/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
           "activeRunId": "id-1",
-          "activeJob": "dev",
-          "claudeSessionId": "id-2",
+          "activeJob": "intake",
           "activeStart": {
-            "job": "dev"
+            "job": "intake"
           }
         },
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "dev",
+          "logical": "todo",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -825,16 +820,11 @@
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-          "worktreePath": "/tmp/factory-fake/p/REL-1",
-          "port": 4200,
-          "branch": "feat/rel-1-export-csv",
-          "recordedStatus": "dev",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
           "activeRunId": "id-1",
-          "activeJob": "dev",
-          "claudeSessionId": "id-2",
+          "activeJob": "intake",
           "activeStart": {
-            "job": "dev"
+            "job": "intake"
           }
         },
         "effects": [],
@@ -856,6 +846,2263 @@
         "ticketId": "REL-1",
         "payload": {
           "runId": "id-1",
+          "job": "intake",
+          "outcome": "success",
+          "costUsd": 0.1,
+          "turns": 1,
+          "lastText": "Done.",
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Read.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": [],
+            "intake": {
+              "size": "s",
+              "risk": "low",
+              "complete": true,
+              "missing": [],
+              "screen": false
+            }
+          }
+        }
+      },
+      "decision": {
+        "eventId": "attempt:id-1:finished",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 3,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "activeRunId": "id-1",
+          "activeJob": "intake",
+          "activeStart": {
+            "job": "intake"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low"
+        },
+        "effects": [
+          {
+            "kind": "start_run",
+            "job": "spec"
+          },
+          {
+            "kind": "settle"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in run.finished"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:3:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:3:1",
+          "kind": "start_run",
+          "eventId": "attempt:id-1:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:3:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 4,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "activeRunId": "id-4",
+          "activeJob": "spec",
+          "activeStart": {
+            "job": "spec"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "activeRunId": "id-4",
+          "activeJob": "spec",
+          "activeStart": {
+            "job": "spec"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "attempt:id-4:finished",
+        "type": "run.finished",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "payload": {
+          "runId": "id-4",
+          "job": "spec",
+          "outcome": "success",
+          "costUsd": 0.1,
+          "turns": 1,
+          "lastText": "Done.",
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Drafted.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": [],
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            }
+          }
+        }
+      },
+      "decision": {
+        "eventId": "attempt:id-4:finished",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 5,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "activeRunId": "id-4",
+          "activeJob": "spec",
+          "activeStart": {
+            "job": "spec"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "effects": [
+          {
+            "kind": "activity",
+            "type": "response",
+            "body": "Spec published (risk: low). 1 acceptance criterion → tests. Version 1, waiting for review.\n\n**Goal**\nExport the audits as CSV.\n\n**Out of scope**\n- XLSX\n\n**Acceptance criteria**\n1. Given 2 audits, when I click CSV, then a file of 3 lines downloads.\n\n**Files**\n- src/export.ts\n\n**Architecture impact**\nNone.\n\n**Risks**\n- (none)\n\n**Assumed without verification**\n- The browser saves a text/csv response as a file.\n\nReply `/approve` to approve this version, `/changes <comment>` to ask for a new one, or `/reject`. Approval is reserved for the validators designated by the project, never the run's initiator."
+          },
+          {
+            "kind": "settle"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in run.finished",
+          "spec_review: version 1 published, waiting for a validator"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:3:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:3:2",
+          "kind": "settle",
+          "eventId": "attempt:id-1:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:3:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 6,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:5:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:5:1",
+          "kind": "activity",
+          "eventId": "attempt:id-4:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:5:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 7,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:5:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:5:2",
+          "kind": "settle",
+          "eventId": "attempt:id-4:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:5:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 8,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "id": "t-2",
+        "type": "command",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "actor": "user-validator",
+        "roles": [
+          "validator"
+        ],
+        "payload": {
+          "name": "/approve",
+          "body": "",
+          "linearSessionId": "ls-1",
+          "author": "Validator",
+          "kind": "command"
+        },
+        "schemaVersion": 3,
+        "taint": "trusted"
+      },
+      "decision": {
+        "eventId": "t-2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 9,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          }
+        },
+        "effects": [
+          {
+            "kind": "activity",
+            "type": "response",
+            "body": "Spec version 1 approved by Validator: its acceptance criteria become the tests.",
+            "linearSessionId": "ls-1"
+          },
+          {
+            "kind": "start_run",
+            "job": "tests"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "spec_review: version 1 approved by user-validator"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:9:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:9:1",
+          "kind": "activity",
+          "eventId": "t-2",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:9:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 10,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "activeRunId": "id-7",
+          "activeJob": "tests",
+          "claudeSessionId": "id-8",
+          "activeStart": {
+            "job": "tests"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "activeRunId": "id-7",
+          "activeJob": "tests",
+          "claudeSessionId": "id-8",
+          "activeStart": {
+            "job": "tests"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:9:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:9:2",
+          "kind": "start_run",
+          "eventId": "t-2",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:9:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 11,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "activeRunId": "id-7",
+          "activeJob": "tests",
+          "claudeSessionId": "id-8",
+          "activeStart": {
+            "job": "tests"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "activeRunId": "id-7",
+          "activeJob": "tests",
+          "claudeSessionId": "id-8",
+          "activeStart": {
+            "job": "tests"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "attempt:id-7:finished",
+        "type": "run.finished",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "payload": {
+          "runId": "id-7",
+          "job": "tests",
+          "outcome": "success",
+          "costUsd": 0.1,
+          "turns": 1,
+          "lastText": "Done.",
+          "attempt": "succeeded",
+          "output": {
+            "status": "done",
+            "summary": "Done.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
+        }
+      },
+      "decision": {
+        "eventId": "attempt:id-7:finished",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 12,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.2,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "activeRunId": "id-7",
+          "activeJob": "tests",
+          "claudeSessionId": "id-8",
+          "activeStart": {
+            "job": "tests"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "verifyingRunId": "id-7"
+        },
+        "effects": [
+          {
+            "kind": "run_verify",
+            "runId": "id-7",
+            "job": "tests",
+            "output": {
+              "status": "done",
+              "summary": "Done.",
+              "tests_added": [],
+              "why": "",
+              "assumptions": [],
+              "risks": [],
+              "untested": [],
+              "review_hints": []
+            }
+          },
+          {
+            "kind": "settle"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in run.finished"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:12:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:12:1",
+          "kind": "run_verify",
+          "eventId": "attempt:id-7:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:12:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 13,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "verifyingRunId": "id-7"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "verifyingRunId": "id-7"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "id": "check:id-7",
+        "type": "verify.passed",
+        "payload": {
+          "runId": "id-7",
+          "job": "tests",
+          "red": "assertion",
+          "frozen": {
+            "sha": "head",
+            "files": {},
+            "rules": 2
+          },
+          "output": {
+            "status": "done",
+            "summary": "Done.",
+            "tests_added": [],
+            "why": "",
+            "assumptions": [],
+            "risks": [],
+            "untested": [],
+            "review_hints": []
+          }
+        }
+      },
+      "decision": {
+        "eventId": "check:id-7",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 14,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "verifyingRunId": "id-7"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "todo",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          }
+        },
+        "effects": [
+          {
+            "kind": "move",
+            "to": "dev"
+          },
+          {
+            "kind": "start_run",
+            "job": "dev"
+          },
+          {
+            "kind": "settle"
+          }
+        ],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in verify.passed"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:12:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:12:2",
+          "kind": "settle",
+          "eventId": "attempt:id-7:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:12:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 15,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
+          "activeJob": "dev",
+          "activeStart": {
+            "job": "dev"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
+          "activeJob": "dev",
+          "activeStart": {
+            "job": "dev"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:14:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:14:1",
+          "kind": "move",
+          "eventId": "check:id-7",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:14:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 16,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
+          "activeJob": "dev",
+          "activeStart": {
+            "job": "dev"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
+          "activeJob": "dev",
+          "activeStart": {
+            "job": "dev"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:14:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:14:2",
+          "kind": "start_run",
+          "eventId": "check:id-7",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:14:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 17,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
+          "activeJob": "dev",
+          "activeStart": {
+            "job": "dev"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.30000000000000004,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
+          "activeJob": "dev",
+          "activeStart": {
+            "job": "dev"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "attempt:id-10:finished",
+        "type": "run.finished",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "payload": {
+          "runId": "id-10",
           "job": "dev",
           "outcome": "limit",
           "costUsd": 0.1,
@@ -875,12 +3122,12 @@
         }
       },
       "decision": {
-        "eventId": "attempt:id-1:finished",
+        "eventId": "attempt:id-10:finished",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 3,
+        "seq": 18,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -891,20 +3138,68 @@
           "blocked": false,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0,
+          "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "activeRunId": "id-1",
+          "untrustedSince": null,
+          "activeRunId": "id-10",
           "activeJob": "dev",
-          "claudeSessionId": "id-2",
           "activeStart": {
             "job": "dev"
           }
@@ -919,18 +3214,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -970,191 +3313,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:3:1",
+        "id": "effect:REL-1:14:3",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:3:1",
-          "kind": "block_comment",
-          "eventId": "attempt:id-1:finished",
-          "attempts": 1
-        }
-      },
-      "decision": {
-        "eventId": "effect:REL-1:3:1",
-        "projectId": "p",
-        "ticketId": "REL-1",
-        "seq": 4,
-        "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-        "before": {
-          "projectId": "p",
-          "ticketId": "REL-1",
-          "title": "Export CSV",
-          "logical": "dev",
-          "delegated": true,
-          "questionSessionIds": [],
-          "blocked": true,
-          "verifyAttempts": 0,
-          "ciFixAttempts": 0,
-          "humanInbox": [],
-          "priority": 0,
-          "costUsd": 0.1,
-          "updatedAt": 1791622800000,
-          "linearSessionId": "ls-1",
-          "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-          "worktreePath": "/tmp/factory-fake/p/REL-1",
-          "port": 4200,
-          "branch": "feat/rel-1-export-csv",
-          "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
-          "blockReason": "The run dev reached a limit (turns, duration or budget).",
-          "blockKind": "limit",
-          "blockedJob": "dev"
-        },
-        "ticket": {
-          "projectId": "p",
-          "ticketId": "REL-1",
-          "title": "Export CSV",
-          "logical": "dev",
-          "delegated": true,
-          "questionSessionIds": [],
-          "blocked": true,
-          "verifyAttempts": 0,
-          "ciFixAttempts": 0,
-          "humanInbox": [],
-          "priority": 0,
-          "costUsd": 0.1,
-          "updatedAt": 1791622800000,
-          "linearSessionId": "ls-1",
-          "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-          "worktreePath": "/tmp/factory-fake/p/REL-1",
-          "port": 4200,
-          "branch": "feat/rel-1-export-csv",
-          "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
-          "blockReason": "The run dev reached a limit (turns, duration or budget).",
-          "blockKind": "limit",
-          "blockedJob": "dev"
-        },
-        "effects": [],
-        "timers": [],
-        "clearTimers": false,
-        "trace": [
-          "built-in effect.done"
-        ]
-      }
-    },
-    {
-      "event": {
-        "schemaVersion": 3,
-        "taint": "trusted",
-        "id": "effect:REL-1:3:2",
-        "at": 1791622800000,
-        "projectId": "p",
-        "ticketId": "REL-1",
-        "type": "effect.done",
-        "payload": {
-          "effectId": "REL-1:3:2",
-          "kind": "labels",
-          "eventId": "attempt:id-1:finished",
-          "attempts": 1
-        }
-      },
-      "decision": {
-        "eventId": "effect:REL-1:3:2",
-        "projectId": "p",
-        "ticketId": "REL-1",
-        "seq": 5,
-        "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-        "before": {
-          "projectId": "p",
-          "ticketId": "REL-1",
-          "title": "Export CSV",
-          "logical": "dev",
-          "delegated": true,
-          "questionSessionIds": [],
-          "blocked": true,
-          "verifyAttempts": 0,
-          "ciFixAttempts": 0,
-          "humanInbox": [],
-          "priority": 0,
-          "costUsd": 0.1,
-          "updatedAt": 1791622800000,
-          "linearSessionId": "ls-1",
-          "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-          "worktreePath": "/tmp/factory-fake/p/REL-1",
-          "port": 4200,
-          "branch": "feat/rel-1-export-csv",
-          "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
-          "blockReason": "The run dev reached a limit (turns, duration or budget).",
-          "blockKind": "limit",
-          "blockedJob": "dev"
-        },
-        "ticket": {
-          "projectId": "p",
-          "ticketId": "REL-1",
-          "title": "Export CSV",
-          "logical": "dev",
-          "delegated": true,
-          "questionSessionIds": [],
-          "blocked": true,
-          "verifyAttempts": 0,
-          "ciFixAttempts": 0,
-          "humanInbox": [],
-          "priority": 0,
-          "costUsd": 0.1,
-          "updatedAt": 1791622800000,
-          "linearSessionId": "ls-1",
-          "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
-          "worktreePath": "/tmp/factory-fake/p/REL-1",
-          "port": 4200,
-          "branch": "feat/rel-1-export-csv",
-          "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
-          "blockReason": "The run dev reached a limit (turns, duration or budget).",
-          "blockKind": "limit",
-          "blockedJob": "dev"
-        },
-        "effects": [],
-        "timers": [],
-        "clearTimers": false,
-        "trace": [
-          "built-in effect.done"
-        ]
-      }
-    },
-    {
-      "event": {
-        "schemaVersion": 3,
-        "taint": "trusted",
-        "id": "effect:REL-1:3:3",
-        "at": 1791622800000,
-        "projectId": "p",
-        "ticketId": "REL-1",
-        "type": "effect.done",
-        "payload": {
-          "effectId": "REL-1:3:3",
+          "effectId": "REL-1:14:3",
           "kind": "settle",
-          "eventId": "attempt:id-1:finished",
+          "eventId": "check:id-7",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:3:3",
+        "eventId": "effect:REL-1:14:3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 6,
+        "seq": 19,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1165,18 +3342,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1191,18 +3416,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1217,7 +3490,544 @@
     },
     {
       "event": {
-        "id": "t-2",
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:18:1",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:18:1",
+          "kind": "block_comment",
+          "eventId": "attempt:id-10:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:18:1",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 20,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": true,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.4,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
+          "blockedJob": "dev"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": true,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.4,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
+          "blockedJob": "dev"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:18:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:18:2",
+          "kind": "labels",
+          "eventId": "attempt:id-10:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:18:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 21,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": true,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.4,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
+          "blockedJob": "dev"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": true,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.4,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
+          "blockedJob": "dev"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:18:3",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:18:3",
+          "kind": "settle",
+          "eventId": "attempt:id-10:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:18:3",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 22,
+        "at": 1791622800000,
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": true,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.4,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
+          "blockedJob": "dev"
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "dev",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": true,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
+          "priority": 0,
+          "costUsd": 0.4,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "initiatorId": "user-lilian",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
+          "recordedStatus": "dev",
+          "untrustedSince": null,
+          "blockReason": "The run dev reached a limit (turns, duration or budget).",
+          "blockKind": "limit",
+          "blockedJob": "dev"
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "id": "t-3",
         "type": "ticket.commented",
         "at": 1791622800000,
         "projectId": "p",
@@ -1233,12 +4043,12 @@
         "roles": []
       },
       "decision": {
-        "eventId": "t-2",
+        "eventId": "t-3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 7,
+        "seq": 23,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1249,18 +4059,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1275,18 +4133,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1308,25 +4214,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:7:1",
+        "id": "effect:REL-1:23:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:7:1",
+          "effectId": "REL-1:23:1",
           "kind": "comment",
-          "eventId": "t-2",
+          "eventId": "t-3",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:7:1",
+        "eventId": "effect:REL-1:23:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 8,
+        "seq": 24,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1337,18 +4243,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1363,18 +4317,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1389,7 +4391,7 @@
     },
     {
       "event": {
-        "id": "t-3",
+        "id": "t-4",
         "type": "ticket.commented",
         "at": 1791622800000,
         "projectId": "p",
@@ -1409,12 +4411,12 @@
         ]
       },
       "decision": {
-        "eventId": "t-3",
+        "eventId": "t-4",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 9,
+        "seq": 25,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1425,18 +4427,66 @@
           "blocked": true,
           "verifyAttempts": 0,
           "ciFixAttempts": 0,
-          "humanInbox": [],
+          "humanInbox": [
+            {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            }
+          ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
+          "untrustedSince": null,
           "blockReason": "The run dev reached a limit (turns, duration or budget).",
           "blockKind": "limit",
           "blockedJob": "dev"
@@ -1453,6 +4503,15 @@
           "ciFixAttempts": 0,
           "humanInbox": [
             {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "body": "/approve",
+              "at": 1791622800000,
+              "source": "session",
+              "taint": "trusted",
+              "kind": "command"
+            },
+            {
               "author": "Lilian",
               "authorId": "user-lilian",
               "body": "Reprends.",
@@ -1463,16 +4522,54 @@
             }
           ],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2"
+          "untrustedSince": null
         },
         "effects": [
           {
@@ -1499,25 +4596,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:9:1",
+        "id": "effect:REL-1:25:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:9:1",
+          "effectId": "REL-1:25:1",
           "kind": "start_run",
-          "eventId": "t-3",
+          "eventId": "t-4",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:9:1",
+        "eventId": "effect:REL-1:25:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 10,
+        "seq": 26,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1530,18 +4627,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "activeRunId": "id-4",
+          "activeRunId": "id-12",
           "activeJob": "dev",
           "activeStart": {
             "job": "dev",
@@ -1560,18 +4694,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "activeRunId": "id-4",
+          "activeRunId": "id-12",
           "activeJob": "dev",
           "activeStart": {
             "job": "dev",
@@ -1590,13 +4761,13 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "attempt:id-4:finished",
+        "id": "attempt:id-12:finished",
         "type": "run.finished",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "payload": {
-          "runId": "id-4",
+          "runId": "id-12",
           "job": "dev",
           "outcome": "success",
           "costUsd": 0.1,
@@ -1616,12 +4787,12 @@
         }
       },
       "decision": {
-        "eventId": "attempt:id-4:finished",
+        "eventId": "attempt:id-12:finished",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 11,
+        "seq": 27,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1634,18 +4805,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.1,
+          "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "activeRunId": "id-4",
+          "activeRunId": "id-12",
           "activeJob": "dev",
           "activeStart": {
             "job": "dev",
@@ -1664,23 +4872,60 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "verifyingRunId": "id-4"
+          "verifyingRunId": "id-12"
         },
         "effects": [
           {
             "kind": "run_verify",
-            "runId": "id-4",
+            "runId": "id-12",
             "job": "dev",
             "output": {
               "status": "done",
@@ -1708,25 +4953,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:9:2",
+        "id": "effect:REL-1:25:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:9:2",
+          "effectId": "REL-1:25:2",
           "kind": "labels",
-          "eventId": "t-3",
+          "eventId": "t-4",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:9:2",
+        "eventId": "effect:REL-1:25:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 12,
+        "seq": 28,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1739,18 +4984,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "verifyingRunId": "id-4"
+          "verifyingRunId": "id-12"
         },
         "ticket": {
           "projectId": "p",
@@ -1764,18 +5046,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "verifyingRunId": "id-4"
+          "verifyingRunId": "id-12"
         },
         "effects": [],
         "timers": [],
@@ -1789,25 +5108,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:11:1",
+        "id": "effect:REL-1:27:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:11:1",
+          "effectId": "REL-1:27:1",
           "kind": "run_verify",
-          "eventId": "attempt:id-4:finished",
+          "eventId": "attempt:id-12:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:11:1",
+        "eventId": "effect:REL-1:27:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 13,
+        "seq": 29,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1820,18 +5139,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "verifyingRunId": "id-4"
+          "verifyingRunId": "id-12"
         },
         "ticket": {
           "projectId": "p",
@@ -1845,18 +5201,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "verifyingRunId": "id-4"
+          "verifyingRunId": "id-12"
         },
         "effects": [],
         "timers": [],
@@ -1873,10 +5266,10 @@
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
-        "id": "check:id-4",
+        "id": "check:id-12",
         "type": "verify.passed",
         "payload": {
-          "runId": "id-4",
+          "runId": "id-12",
           "job": "dev",
           "commands": [],
           "output": {
@@ -1896,12 +5289,12 @@
         }
       },
       "decision": {
-        "eventId": "check:id-4",
+        "eventId": "check:id-12",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 14,
+        "seq": 30,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -1914,18 +5307,55 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null,
-          "verifyingRunId": "id-4"
+          "verifyingRunId": "id-12"
         },
         "ticket": {
           "projectId": "p",
@@ -1939,16 +5369,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "dev",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "effects": [
@@ -1959,7 +5426,7 @@
           {
             "kind": "post_output",
             "style": "summary",
-            "runId": "id-4",
+            "runId": "id-12",
             "output": {
               "status": "done",
               "summary": "Repris.",
@@ -1986,25 +5453,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:11:2",
+        "id": "effect:REL-1:27:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:11:2",
+          "effectId": "REL-1:27:2",
           "kind": "settle",
-          "eventId": "attempt:id-4:finished",
+          "eventId": "attempt:id-12:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:11:2",
+        "eventId": "effect:REL-1:27:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 15,
+        "seq": 31,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2017,16 +5484,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "ticket": {
@@ -2041,16 +5545,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "effects": [],
@@ -2065,25 +5606,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:14:1",
+        "id": "effect:REL-1:30:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:14:1",
+          "effectId": "REL-1:30:1",
           "kind": "move",
-          "eventId": "check:id-4",
+          "eventId": "check:id-12",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:14:1",
+        "eventId": "effect:REL-1:30:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 16,
+        "seq": 32,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2096,16 +5637,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "ticket": {
@@ -2120,16 +5698,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "effects": [],
@@ -2144,25 +5759,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:14:2",
+        "id": "effect:REL-1:30:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:14:2",
+          "effectId": "REL-1:30:2",
           "kind": "post_output",
-          "eventId": "check:id-4",
+          "eventId": "check:id-12",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:14:2",
+        "eventId": "effect:REL-1:30:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 17,
+        "seq": 33,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2175,16 +5790,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "ticket": {
@@ -2199,16 +5851,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "effects": [],
@@ -2223,25 +5912,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:14:3",
+        "id": "effect:REL-1:30:3",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:14:3",
+          "effectId": "REL-1:30:3",
           "kind": "settle",
-          "eventId": "check:id-4",
+          "eventId": "check:id-12",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:14:3",
+        "eventId": "effect:REL-1:30:3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 18,
+        "seq": 34,
         "at": 1791622800000,
-        "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+        "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2254,16 +5943,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "ticket": {
@@ -2278,16 +6004,53 @@
           "ciFixAttempts": 0,
           "humanInbox": [],
           "priority": 0,
-          "costUsd": 0.2,
+          "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
           "initiatorId": "user-lilian",
-          "workflowHash": "b4de9c39bab3dd68cc090305b25b2018f3d886b33055027a950c93ca9808a8e6",
+          "workflowHash": "131bde12286c258e4b6bf3330d62c5495010c0ea57bf8bf07881ea808cdb7f91",
+          "size": "s",
+          "risk": "low",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
+          "spec": {
+            "job": "spec",
+            "version": 1,
+            "spec": {
+              "goal": "Export the audits as CSV.",
+              "out_of_scope": [
+                "XLSX"
+              ],
+              "criteria": [
+                "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+              ],
+              "files": [
+                "src/export.ts"
+              ],
+              "architecture": "None.",
+              "risks": [],
+              "assumed": [
+                "The browser saves a text/csv response as a file."
+              ]
+            },
+            "at": 1791622800000,
+            "approval": {
+              "author": "Validator",
+              "authorId": "user-validator",
+              "at": 1791622800000
+            }
+          },
+          "claudeSessionId": "id-8",
+          "frozenTests": {
+            "sha": "head",
+            "files": {},
+            "rules": 2,
+            "criteria": [
+              "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
+            ]
+          },
           "recordedStatus": "human_review",
-          "claudeSessionId": "id-2",
           "untrustedSince": null
         },
         "effects": [],
