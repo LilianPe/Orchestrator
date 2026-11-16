@@ -110,7 +110,7 @@ describe('replay oracle (ORC-174)', () => {
   it('what-if: stops at the first event whose decision differs under a modified preset, and names it', async () => {
     const journal = await record('check-failed-then-feedback');
     // Recorded with two check attempts: the failed check resumed the run. With one, it blocks the ticket.
-    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).workflow) });
+    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset({ verifyAttempts: 1 }).workflow, { fullChain: true }) });
     const failed = journal.entries.find((e) => e.event.type === 'verify.failed')!;
     expect(new Set(report.divergences.map((d) => d.eventId))).toEqual(new Set([failed.event.id]));
     expect(report.divergences[0]).toMatchObject({ eventType: 'verify.failed', seq: failed.decision!.seq });
@@ -122,7 +122,7 @@ describe('replay oracle (ORC-174)', () => {
 
   it('what-if under the same preset finds no divergence', async () => {
     const journal = await record('check-failed-then-feedback');
-    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset().workflow) });
+    const report = replayJournal(journal, { mode: 'what-if', workflow: loadTestWorkflow(testPreset().workflow, { fullChain: true }) });
     expect(report.divergences).toEqual([]);
     expect(report.replayed).toBe(journal.entries.length);
   });
@@ -198,11 +198,13 @@ describe('recorded journals (test/replay/journals)', () => {
     ]);
     expect(delegations[0]!.decision?.trace).toContainEqual(expect.stringMatching(/^authz: refused trigger to user-armand/));
     expect(delegations[0]!.decision?.effects).toEqual([expect.objectContaining({ kind: 'activity', linearSessionId: 'ls-1', body: expect.stringMatching(/^Refused:/) })]);
-    expect(delegations[1]!.decision?.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
+    // The delegation starts the preset's entry (ORC-395).
+    expect(delegations[1]!.decision?.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'intake' }));
     const replies = journal.entries.filter((e) => e.event.type === 'session.prompted');
     expect(replies.map((e) => e.event.actor)).toEqual(['user-stranger', 'user-armand']);
     expect(replies[0]!.decision?.trace).toContainEqual(expect.stringMatching(/^authz: refused answer_clarify to user-stranger/));
-    expect(upcastTicket(replies[1]!.decision!.ticket!).humanInbox.map((f) => f.body)).toEqual(['le bouton export est mal placé']);
+    // The spec's approval is kept as any message (ORC-212), a command no agent reads (`forAgent`).
+    expect(upcastTicket(replies[1]!.decision!.ticket!).humanInbox.map((f) => f.body)).toEqual(['/approve', 'le bouton export est mal placé']);
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
     // A refusal recorded on other roles is caught at its exact event: the roles are part of what is replayed.
     delegations[0]!.event.roles = ['team_member', 'repo_writer'];
@@ -236,7 +238,7 @@ describe('recorded journals (test/replay/journals)', () => {
     const prompted = journal.entries.filter((e) => e.event.type === 'session.prompted');
     expect(prompted.map((e) => e.decision?.effects.map((x) => x.kind))).toEqual([['ack'], ['ack', 'start_run']]);
     expect(journal.entries.find((e) => e.event.type === 'timer.fired')!.decision?.effects).toEqual([]);
-    expect(journal.entries.flatMap((e) => e.decision?.effects ?? []).filter((x) => x.kind === 'start_run').map((x) => (x as { job: string }).job)).toEqual(['dev', 'ask', 'fix-human']);
+    expect(journal.entries.flatMap((e) => e.decision?.effects ?? []).filter((x) => x.kind === 'start_run').map((x) => (x as { job: string }).job)).toEqual(['intake', 'spec', 'tests', 'dev', 'ask', 'fix-human']);
     expect(replayJournal(journal)).toMatchObject({ divergences: [], replayed: journal.entries.length });
   });
 

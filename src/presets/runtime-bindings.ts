@@ -25,7 +25,8 @@ const REVIEW = { step: 'review', queue: 'dev', model: 'opus', workspace: 'publis
 export const BINDINGS: Readonly<Record<string, Binding>> = {
   // `intake` (ORC-206), on a fresh clone of the trunk.
   intake: { step: 'intake', queue: 'dev', model: 'sonnet', workspace: 'trunk-readonly', session: 'new', pickup: false, structuredOutput: true },
-  // The build; the guard's checks run at its launch while it is the chain's entry (`pickup`).
+  // The build. `pickup`: it runs the ticket session, and the guard's checks at its launch when no step took the ticket before it
+  // (a chain started at `build`); after `tests`, which starts that session (ORC-217), they do not run again.
   dev: { ...WRITES, step: 'build', session: 'new', pickup: true, structuredOutput: true },
   // `spec_draft` (ORC-212): the spec through `submit_result`.
   spec: { step: 'spec_draft', queue: 'dev', model: 'sonnet', workspace: 'worktree', session: 'new', pickup: false, structuredOutput: true },

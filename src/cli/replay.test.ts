@@ -38,7 +38,8 @@ describe('factory replay (ORC-174)', () => {
     const { code, out } = await run([join(journals, 'check-failed-then-feedback.json'), '--what-if', 'factory/fantome']);
     expect(code).toBe(1);
     expect(out).toContain('stopped at the first divergence');
-    expect(out).toMatch(/event \S+ \(ticket\.delegated, #1 of the journal\): effects\[0\]\.job recorded "dev", replayed "intake"/);
+    // Both start at intake (ORC-395): they part at the spec's end, which the Rapide level approves itself instead of publishing it.
+    expect(out).toMatch(/event \S+ \(run\.finished, #5 of the journal\): effects\[0\]\.kind recorded "activity", replayed "start_run"/);
   });
 
   it('--what-if refuses a preset the binary does not have, a workflow file included (ORC-389); exit code 2', async () => {

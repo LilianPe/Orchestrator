@@ -35,12 +35,8 @@ const stepOfJob = (wf: Workflow, job: Pick<JobSpec, 'step'>): Step | undefined =
 /** An optional step with no job of its own is passed: `clarify` asks the guard's questions with no run (ORC-210). */
 const passed = (wf: Workflow, s: Step): boolean => ranByEngine(s) || (s.type === 'agent_step' && !!s.optional && !startingJob(Object.values(wf.jobs), s));
 
-/**
- * The step after `from` that waits, past the engine's own. The preset's entry, run before the chain's entry (`intake`
- * before `build` until ORC-395, ORC-206), is that entry's guard: it hands over to it.
- */
+/** The step after `from` that waits, past the engine's own. */
 function reached(wf: Workflow, from: Step): Step | null {
-  if (from.id === wf.preset.entry && wf.entry !== from.id) return stepById(wf, wf.entry) ?? null;
   for (let s = stepById(wf, from.next); s; s = stepById(wf, s.next)) if (!passed(wf, s)) return s;
   return null;
 }
@@ -88,9 +84,8 @@ export function nextOf(wf: Workflow, job: JobSpec, gatePassed = false): JobEnd {
   return { ...(run ? { run } : {}), ...(move ? { move } : {}), ...(post ? { post } : {}), step: next };
 }
 
-/** The job a delegation starts (ORC-392): the one a test names (`delegated`), else the chain's entry's. */
+/** The job a delegation starts: the chain's entry's (ORC-395), `intake` for `factory/default`. */
 export function delegatedJob(wf: Workflow): string | undefined {
-  if (wf.delegated) return wf.delegated;
   const entry = stepById(wf, wf.entry);
   return entry && jobStarting(wf, entry)?.name;
 }
