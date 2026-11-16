@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkRed, readTestRun, type RedDeps } from './red.js';
+import { checkRed, readTestRun, runnerOfCommand, type RedDeps } from './red.js';
 
 // Trimmed outputs of each runner, as they print them.
 const VITEST_ASSERTION = `
@@ -309,8 +309,49 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     expect(await ran('npm test --', 'tsc --noEmit && vitest run')).toContain("npm test -- 'src/export.test.ts' --reporter=default --reporter=json");
     // The flags would go to another command, or to npm itself: the text output is read.
     expect(await ran('npm test --', 'vitest run && echo done')).toBe("npm test -- 'src/export.test.ts'");
-    expect(await ran('npm test', 'vitest run')).toBe("npm test 'src/export.test.ts'");
     expect(await ran('npm test --', 'mocha')).toBe("npm test -- 'src/export.test.ts'");
+  });
+
+  it('adds the `--` a command run by npm, pnpm or yarn lacks, so the test files reach the script (ORC-412)', async () => {
+    const pkg = { head: { 'package.json': JSON.stringify({ scripts: { test: 'mocha' } }) } };
+    const ran = async (command: string) => {
+      const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, pkg);
+      const result = await checkRed(command, d);
+      // What it ran, the runner's report flags aside.
+      expect(d.commands[0], command).toContain(result.command);
+      return result.command;
+    };
+    expect(await ran('npm test')).toBe("npm test -- 'src/export.test.ts'");
+    expect(await ran('pnpm run test --silent')).toBe("pnpm run test --silent -- 'src/export.test.ts'");
+    expect(await ran('yarn test')).toBe("yarn test -- 'src/export.test.ts'");
+    expect(await ran('npm ci && npm test ')).toBe("npm ci && npm test -- 'src/export.test.ts'");
+    // One that has its `--`, or that npm, pnpm or yarn does not run, is left as it is.
+    expect(await ran('npm test -- --run')).toBe("npm test -- --run 'src/export.test.ts'");
+    expect(await ran('npx mocha')).toBe("npx mocha 'src/export.test.ts'");
+    expect(await ran('make test')).toBe("make test 'src/export.test.ts'");
+    expect(await ran('npmx test')).toBe("npmx test 'src/export.test.ts'");
+    // The last command of the line is the one the files reach, past its variables.
+    expect(await ran('cd web && CI=1 npm test')).toBe("cd web && CI=1 npm test -- 'src/export.test.ts'");
+    expect(await ran('npm run build -- --prod && npm test')).toBe("npm run build -- --prod && npm test -- 'src/export.test.ts'");
+    expect(await ran('npm ci && npx vitest run')).toBe("npm ci && npx vitest run 'src/export.test.ts'");
+    // `exec` and `dlx` run a program, not a script.
+    expect(await ran('pnpm exec vitest run')).toBe("pnpm exec vitest run 'src/export.test.ts'");
+    expect(await ran('yarn dlx jest')).toBe("yarn dlx jest 'src/export.test.ts'");
+  });
+
+  it('through `npm test` without `--`, reads the runner of the test script and asks it for its report (ORC-412)', async () => {
+    const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, { head: { 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }) } });
+    expect(await checkRed('npm test', d)).toMatchObject({ command: "npm test -- 'src/export.test.ts'" });
+    expect(d.commands[0]).toContain("npm test -- 'src/export.test.ts' --reporter=default --reporter=json");
+  });
+
+  it('reads the script of the last command, through yarn too, past its variables (ORC-412)', async () => {
+    const runner = (command: string) => runnerOfCommand(command, { showAtHead: async () => JSON.stringify({ scripts: { test: 'vitest run' } }) });
+    expect(await runner('cd web && CI=1 npm test --')).toBe('vitest');
+    expect(await runner('npm ci && npm test --')).toBe('vitest');
+    expect(await runner('yarn test --')).toBe('vitest');
+    expect(await runner('yarn jest --')).toBe('jest');
+    expect(await runner('npm test')).toBeUndefined();
   });
 
   it('reads a test file that did not load from the report: a missing module', async () => {

@@ -5,7 +5,8 @@ import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH } from '../config/repo-config.js';
+import { makeRepoConfig } from '../app/repo-variables.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
 
@@ -145,8 +146,15 @@ export async function runInit(d: InitDeps): Promise<void> {
   // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
   // default branch, which `init` proposes and leaves to commit.
   for (const file of ignoredWorkflowFiles(repoPath)) io.print(ignoredWorkflowWarning(file));
-  const proposed = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : proposal(detect(repoPath));
+  const detected = existsSync(join(repoPath, REPO_CONFIG_PATH)) ? undefined : detect(repoPath);
+  const proposed = detected && proposal(detected);
   if (proposed) io.print(proposed);
+  // The red check's command (ORC-412), in what it proposes or, as the daemon reads it, on the default branch: without it,
+  // every ticket blocks at the tests step. A file git cannot read there is `factory validate`'s and `factory doctor`'s to name.
+  const commands = detected
+    ? detected.commands
+    : await makeRepoConfig({ exec: d.exec })({ repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
+  for (const warning of testCommandWarnings(commands)) io.print(warning);
 
   saveInstance(d.home, cfg);
   io.print(
