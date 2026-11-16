@@ -126,7 +126,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
 function internal(t: TicketState, e: InternalEvent): TicketState {
   switch (e.type) {
     case 'ticket.blocked':
-      return { ...t, blocked: true, blockReason: e.reason, blockKind: e.kind, blockedEvent: e.eventId, blockedJob: e.job, nextJob: undefined };
+      return { ...t, blocked: true, blockReason: e.reason, blockKind: e.kind, blockedEvent: e.eventId, blockedJob: e.job };
     case 'ticket.unblocked':
       return { ...t, ...UNBLOCKED };
     case 'ticket.patched':
@@ -142,7 +142,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'feedback.appended':
       return { ...t, humanInbox: withinBound([...t.humanInbox, e.item]) };
     case 'work.cancelled':
-      return { ...t, pendingJob: undefined, verifyingRunId: undefined };
+      return { ...t, pendingJob: undefined, verifyingRunId: undefined, nextJob: undefined };
     case 'verify.started':
       return { ...t, verifyingRunId: e.runId };
     case 'status.recorded':

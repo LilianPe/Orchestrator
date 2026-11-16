@@ -562,7 +562,10 @@ export interface TicketState {
   blockedEvent?: string;
   /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job. */
   blockedJob?: string;
-  /** The next step a run's end asked for while the ticket was blocked (ORC-416): the launch refuses it, so the lift of the block starts it. */
+  /**
+   * The next step a run's end asked for while the ticket was blocked (ORC-416): the launch refuses it, so the lift of the block
+   * starts it. Kept by a new block (a failed effect's), cleared with the block and when the work stops (`work.cancelled`).
+   */
   nextJob?: string;
   claudeSessionId?: string;
   linearSessionId?: string;
