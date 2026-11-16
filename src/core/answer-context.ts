@@ -3,7 +3,7 @@ import type { Blocker, TicketState } from './types.js';
 
 /**
  * What the answer agent reads of the run beside the question (ORC-182): its state as the projection has it, the transcript
- * of the session at work, the linked tickets. Pure; `Orchestrator.launch` reads their sources.
+ * of the session at work, the linked tickets. Pure; `Daemon.launch` reads their sources.
  */
 
 /** Characters of the transcript the prompt carries, its end kept: the reasoning that led to where the agent is now. */

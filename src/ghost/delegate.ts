@@ -54,7 +54,7 @@ export interface ReplayedTicket {
   knowledge?: string;
 }
 
-/** Where a replayed ticket of a project runs (`Orchestrator`'s `replays`): undefined for any other ticket. */
+/** Where a replayed ticket of a project runs (`Daemon`'s `replays`): undefined for any other ticket. */
 export interface ReplaySource {
   of(projectId: string, ticketId: string): Promise<ReplayedTicket | undefined>;
 }

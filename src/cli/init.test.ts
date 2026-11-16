@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
-import { parseRepoConfig } from '../config/repo-config.js';
+import { MISSING_TEST_COMMAND, parseRepoConfig } from '../config/repo-config.js';
 import { PROPOSAL_HEADER, runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
@@ -18,8 +18,19 @@ function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   };
 }
 
-const gitTop: (repo: string) => Exec = (repo) => async (cmd, args) =>
-  cmd === 'git' && args[0] === 'rev-parse' ? { stdout: `${repo}\n`, stderr: '', code: 0 } : { stdout: '', stderr: '', code: 0 };
+/** git for init: the repository's top, and its `.factory/config.yml` on the default branch as the working copy has it, unless `uncommitted`. */
+const gitTop =
+  (repo: string, o: { uncommitted?: boolean } = {}): Exec =>
+  async (cmd, args) => {
+    const ok = (stdout: string) => ({ stdout, stderr: '', code: 0 });
+    const file = join(repo, '.factory/config.yml');
+    if (cmd !== 'git') return ok('');
+    if (args[0] === 'rev-parse') return ok(`${repo}\n`);
+    if (args.includes('symbolic-ref')) return ok('refs/remotes/origin/main\n');
+    if (args.includes('ls-tree')) return ok(o.uncommitted || !existsSync(file) ? '' : args.at(-1) === '.factory' ? '040000 tree 1a\t.factory\0' : '100644 blob 2b\t.factory/config.yml\0');
+    if (args.includes('cat-file')) return ok(readFileSync(file, 'utf8'));
+    return ok('');
+  };
 
 const NPM = { 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }), 'package-lock.json': '{}' };
 const PNPM_LOCK = { 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" };
@@ -28,7 +39,7 @@ const PNPM_LOCK = { 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" };
  * Runs init on a repository of `files` (over the Python fixture with `python`): the `.factory/config.yml` it proposed, read as
  * the factory reads one, and whether it wrote a file in the repository.
  */
-async function initProposal(files: Record<string, string>, o: { python?: boolean } = {}) {
+async function initProposal(files: Record<string, string>, o: { python?: boolean; uncommitted?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
   const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   if (o.python) copyPythonRepo(repo);
@@ -36,7 +47,7 @@ async function initProposal(files: Record<string, string>, o: { python?: boolean
   if (factoryBefore) mkdirSync(join(repo, '.factory'));
   for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
   const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-  await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) });
+  await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo, o) });
   const proposal = io.printed.find((p) => p.startsWith(PROPOSAL_HEADER));
   return {
     config: proposal === undefined ? undefined : parseRepoConfig(proposal.slice(PROPOSAL_HEADER.length)),
@@ -111,6 +122,17 @@ describe('factory init', () => {
     const { proposal, printed } = await initProposal({ ...NPM, '.factory/config.yml': 'commands: { test: npm test }\n', '.factory/workflow.yml': 'version: 1\n' });
     expect(proposal).toBeUndefined();
     expect(printed).toContain('Warning: .factory/workflow.yml is ignored: the workflow is the factory/default preset. Delete it; its setup and checks go in .factory/config.yml.');
+  });
+
+  it('warns when the repository will have no `commands.test`, proposed or on the default branch (ORC-412)', async () => {
+    expect((await initProposal({}, { python: true })).printed).toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal({ '.factory/config.yml': 'commands: { lint: npm run lint }\n' })).printed).toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal(NPM)).printed).not.toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal({ '.factory/config.yml': 'commands: { test: npm test }\n' })).printed).not.toContain(MISSING_TEST_COMMAND);
+    // An invalid file is `factory validate`'s to name.
+    expect((await initProposal({ '.factory/config.yml': 'commands: [\n' })).printed).not.toContain(MISSING_TEST_COMMAND);
+    // Read where the daemon reads it: one not committed on the default branch yet is not there.
+    expect((await initProposal({ '.factory/config.yml': 'commands: { test: npm test }\n' }, { uncommitted: true })).printed).toContain(MISSING_TEST_COMMAND);
   });
 
   it('stops before asking anything when secrets.json is encrypted at rest (ORC-398)', async () => {

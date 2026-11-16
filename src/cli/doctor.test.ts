@@ -7,6 +7,7 @@ import type { Exec } from '../adapters/exec.js';
 import type { EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
 import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
+import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
 import { runDoctor, runDoctorCommand, type DoctorApi } from './doctor.js';
 
 interface FakeOptions {
@@ -44,7 +45,7 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string; commands?: Record<string, string> } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
@@ -54,6 +55,7 @@ async function doctor(
     out: (line) => lines.push(line),
     ...(options.json ? { json: true } : {}),
     ...(options.naming ? { naming: options.naming } : {}),
+    ...(options.commands ? { commands: options.commands } : {}),
   });
   return { code, lines, text: lines.join('\n'), api };
 }
@@ -440,6 +442,8 @@ jobs:
     });
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('verdict: accepted');
+    // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
+    expect(lines).toContain(MISSING_TEST_COMMAND);
     expect(gitCalls.some((a) => a.includes('fetch'))).toBe(false);
     // The App's key in a file config.yaml names (ORC-398): said after the visual proof, never part of the verdict.
     expect(lines.slice(1, 3)).toEqual([
@@ -679,6 +683,25 @@ jobs:
     it('says nothing of a repository without one', async () => {
       const result = await doctor([], [], { repoPath: repoWith([]) });
       expect(result.text).not.toContain('workflow.yml');
+    });
+  });
+
+  describe("a repository without `commands.test`, the red check's command (ORC-412)", () => {
+    it('warns, naming the key, without changing the verdict', async () => {
+      const result = await doctor([], [], { commands: { lint: 'npm run lint' } });
+      expect(result.code).toBe(0);
+      expect(result.lines).toContain(MISSING_TEST_COMMAND);
+      expect(MISSING_TEST_COMMAND).toContain('commands.test');
+    });
+
+    it('lists it in the JSON report', async () => {
+      const result = await doctor([], [], { commands: {}, json: true });
+      expect(JSON.parse(result.text)).toMatchObject({ accepted: true, warnings: [MISSING_TEST_COMMAND] });
+    });
+
+    it('says nothing when the repository has one', async () => {
+      expect((await doctor([], [], { commands: { test: 'npm test' } })).text).not.toContain('commands.test');
+      expect(JSON.parse((await doctor([], [], { commands: { test: 'npm test' }, json: true })).text)).not.toHaveProperty('warnings');
     });
   });
 });

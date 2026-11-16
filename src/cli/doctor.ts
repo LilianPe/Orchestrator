@@ -11,7 +11,7 @@ import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecr
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
-import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
+import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
 /**
@@ -53,6 +53,8 @@ export interface DoctorOptions {
   json?: boolean;
   /** The repository's branch naming (`.factory/config.yml`, ORC-283): the team's convention without it. */
   naming?: BranchNaming;
+  /** The repository's commands (`.factory/config.yml`): a warning without `test`, the red check's command (ORC-412). */
+  commands?: Readonly<Record<string, string>>;
   /**
    * Whether this instance can take the visual proof (ORC-404), `browserImage`'s answer, for the JSON report, failures included:
    * never part of the verdict. In text, `runDoctorCommand` says it first.
@@ -477,8 +479,10 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const { repoPath, api, out } = options;
   // A workflow file an older factory read (ORC-388): named whatever the verdict, never read.
   const ignored = ignoredWorkflowFiles(repoPath);
-  if (!options.json) for (const file of ignored) out(ignoredWorkflowWarning(file));
-  const failure = (message: string) => doctorFailure(options, message, ignored);
+  // Neither is part of the verdict: said whatever it is.
+  const warnings = testCommandWarnings(options.commands);
+  if (!options.json) for (const line of [...ignored.map(ignoredWorkflowWarning), ...warnings]) out(line);
+  const failure = (message: string) => doctorFailure(options, message, ignored, warnings);
   let workflows: WorkflowSource[];
   try {
     workflows = await api.listWorkflows(repoPath);
@@ -500,7 +504,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
 
   if (options.json) {
-    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...(ignored.length ? { ignored } : {}), ...instanceReportOf(options) }, null, 2));
+    out(JSON.stringify({ repoPath, accepted, workflows: reports, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
     if (reports.length === 0) out('No GitHub Actions workflow found.');
     else {
@@ -535,9 +539,12 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   return accepted ? 0 : 1;
 }
 
-function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>, message: string, ignored: string[] = []): number {
+/** The ignored workflow files and the warnings in the JSON report, each only when there is one. */
+const notes = (ignored: string[], warnings: string[]) => ({ ...(ignored.length ? { ignored } : {}), ...(warnings.length ? { warnings } : {}) });
+
+function doctorFailure(options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>, message: string, ignored: string[] = [], warnings: string[] = []): number {
   if (options.json) {
-    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...(ignored.length ? { ignored } : {}), ...instanceReportOf(options) }, null, 2));
+    options.out(JSON.stringify({ repoPath: options.repoPath, accepted: false, error: message, ...notes(ignored, warnings), ...instanceReportOf(options) }, null, 2));
   } else {
     options.out(message);
   }
@@ -557,7 +564,8 @@ export interface DoctorCommandOptions {
 
 /**
  * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the repository's
- * branch naming on its default branch as the clone last fetched it (ORC-283), then runs the same analysis as `runDoctor`.
+ * branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last fetched it, then runs the same
+ * analysis as `runDoctor`.
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
@@ -593,9 +601,9 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
-  let naming: BranchNaming;
+  let config: RepoConfig;
   try {
-    naming = (await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false })).branches;
+    config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });
   } catch (error) {
     return doctorFailure({ repoPath: options.repoPath, out, visualProof, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
@@ -603,7 +611,8 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     repoPath: options.repoPath,
     api,
     out,
-    naming,
+    naming: config.branches,
+    commands: config.commands,
     visualProof,
     ...(serverSecrets ? { serverSecrets } : {}),
     ...(options.json ? { json: true } : {}),

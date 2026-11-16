@@ -108,7 +108,7 @@ function nothingDone(out: Decision, workflow: Workflow, job: string): Decision {
 /**
  * The step boundary with no step behind it (ORC-180): the factory's work ended, and messages wait for the agent. It
  * is resumed on them by the job the workflow answers a reply with, on the ticket as this end leaves it, once its
- * outputs are posted. The boundary with a step behind it carries them itself (`Orchestrator.launch`). Not on a job of
+ * outputs are posted. The boundary with a step behind it carries them itself (`Daemon.launch`). Not on a job of
  * the questions queue, whose end is no step of the ticket; not behind a pending job, which the end of the run starts.
  * A question relayed while a step that does not resume the session ran (the AI review) resumes it too, as no round of
  * human review: it answers a question (ORC-374).
@@ -907,7 +907,7 @@ function anyUntrusted(items: readonly FeedbackItem[]): boolean {
  * The sensitive paths of a run at its launch (I12, ORC-274): when its start was decided with them, or
  * when what the launch reads or empties is untrusted. A launch reads the feedback when it starts, not when
  * `decide` started it: a job kept pending or queued meanwhile reads the replies that came in since.
- * `Orchestrator.launch` applies it to every start (a `start_run`, the pending job by `settle`, the queue).
+ * `Daemon.launch` applies it to every start (a `start_run`, the pending job by `settle`, the queue).
  */
 export function sensitivePathsAtLaunch(decided: readonly string[] | undefined, read: readonly FeedbackItem[]): readonly string[] | undefined {
   return decided?.length || anyUntrusted(read) ? SENSITIVE_PATHS : undefined;
@@ -915,7 +915,7 @@ export function sensitivePathsAtLaunch(decided: readonly string[] | undefined, r
 
 /**
  * Why a dev-queue job may not run on the ticket at all: its PR is merged (I8 b), or it is not delegated.
- * `decide` and `Orchestrator.startRun` (for the starts `decide` does not see) both apply it.
+ * `decide` and `Daemon.startRun` (for the starts `decide` does not see) both apply it.
  */
 export function refusesDevWork(ticket: TicketState | undefined, job: JobSpec): 'undelegated' | 'merged' | undefined {
   if (job.queue !== 'dev' || !ticket) return undefined;
@@ -926,7 +926,7 @@ export function refusesDevWork(ticket: TicketState | undefined, job: JobSpec): '
 /**
  * A relaunch on the failures of a verify loop that a green check started over since (ORC-362): `verify.passed` resets the
  * `verifyAttempts` its `verify.failed` counted. Kept pending, `decide` takes it off the ticket with that check (ORC-360);
- * already in the queue (`settle` or a start found no slot), `Orchestrator.startRun` refuses it at its launch. Not the red
+ * already in the queue (`settle` or a start found no slot), `Daemon.startRun` refuses it at its launch. Not the red
  * check's returns: a human relaunch resets their count as well.
  */
 export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKind | undefined): boolean {
@@ -1232,7 +1232,7 @@ function stopQuestion(out: Decision, sessionId: string): Decision {
 
 /**
  * A question the answer agent could not answer from what it read (ORC-182): into the run inbox, for the agent that implements
- * at its next step boundary (`Orchestrator.launch`), the human told so where they asked. The agents never speak to each other:
+ * at its next step boundary (`Daemon.launch`), the human told so where they asked. The agents never speak to each other:
  * the engine routes. A ticket no agent implements, not delegated or delivered, has nobody to ask; a blocked one will not ask it
  * (ORC-374), the human hears no answer will come. When nothing is at work, the reply's job starts at once to ask it, as no
  * round of human review unless human feedback waits beside it, which that job reads (`resume`).

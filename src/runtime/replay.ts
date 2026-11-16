@@ -135,7 +135,7 @@ function rerun(event: FactoryEvent, decision: DecisionRecord, journal: ExportedJ
  * recorded timers go through `upcastTimer` and recorded tickets through `upcastTicket`, as the events go through `upcast`.
  *
  * Each decision starts from its own recorded projection, not from the previous decision's output:
- * the shell also changes the projection between decisions (`Orchestrator.apply`, a run's start,
+ * the shell also changes the projection between decisions (`Daemon.apply`, a run's start,
  * a prepared workspace), and those changes are not decisions.
  */
 export function replayJournal(journal: ExportedJournal, options: ReplayOptions = {}): ReplayReport {

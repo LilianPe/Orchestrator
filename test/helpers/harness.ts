@@ -18,7 +18,7 @@ import { parseRepoConfig, type RepoConfig } from '../../src/config/repo-config.j
 import { saveAgentOutput } from '../../src/core/agent-output.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { FakeClock } from '../../src/core/clock.js';
-import { Orchestrator, type OrchestratorDeps, type ProjectRuntime } from '../../src/core/orchestrator.js';
+import { Daemon, type DaemonDeps, type ProjectRuntime } from '../../src/runtime/daemon.js';
 import { queueCapacity, Scheduler } from '../../src/runtime/capacity.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import { fantome } from '../../src/presets/fantome.js';
@@ -239,30 +239,30 @@ export function createHarness(
     reconcile?: (project: ProjectRuntime) => Promise<void>;
     /** Runs in `sandboxes` (ORC-204), the ticket's session dirs in a temporary dir; on the host otherwise. */
     sandboxed?: boolean;
-    fullReadPaths?: OrchestratorDeps['fullReadPaths'];
+    fullReadPaths?: DaemonDeps['fullReadPaths'];
     /** What the runner gets of the repository (ORC-211), from the config the launch read. */
-    repoVariables?: OrchestratorDeps['repoVariables'];
+    repoVariables?: DaemonDeps['repoVariables'];
     /** The sources the setup reads besides `env`, always open as in production (ORC-308). */
     secretSources?: Record<string, SecretSource>;
     /** The daemon's environment the `env` source reads (ORC-308): empty by default, so an `env:` secret fails its setup. */
     secretEnv?: NodeJS.ProcessEnv;
     /** `.factory/config.yml` as the launch reads it on the default branch (ORC-209 C); the socle by default. */
-    repoConfig?: OrchestratorDeps['repoConfig'];
+    repoConfig?: DaemonDeps['repoConfig'];
     /** `budgets.per_ticket_tokens` and `budgets.on_usage_limit` of factory.yml (ORC-340, ORC-216). */
     perTicketTokens?: number;
     onUsageLimit?: 'wait';
     /** `acknowledge` of factory.yml (ORC-380): a comment by default. */
-    acknowledge?: OrchestratorDeps['acknowledge'];
+    acknowledge?: DaemonDeps['acknowledge'];
     /** Why the configuration lets no ticket reach its end (ORC-350): no launch while any. */
     configProblems?: readonly string[];
     /** The policy in front of every text it publishes (ORC-214); without a secret scan by default. */
-    outputPolicy?: OrchestratorDeps['outputPolicy'];
+    outputPolicy?: DaemonDeps['outputPolicy'];
     /** The browser of the visual proof (ORC-176), with sandboxes; its captures kept in a temporary dir. */
     visualShooter?: VisualShooter;
     /** The start recipes of the knowledge base (ORC-386). */
-    previewRecipes?: OrchestratorDeps['previewRecipes'];
+    previewRecipes?: DaemonDeps['previewRecipes'];
     /** The fingerprint of the files that decide how the application starts (ORC-406); none by default. */
-    startFingerprint?: OrchestratorDeps['startFingerprint'];
+    startFingerprint?: DaemonDeps['startFingerprint'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its skills and settings. */
@@ -349,7 +349,7 @@ export function createHarness(
   let n = 0;
   // The bus of the process alive now, which a dashboard reads (ORC-301): each life has its own, as a process does.
   let bus: EventBus;
-  const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Orchestrator({
+  const build = ({ store, outside, gate }: ReturnType<typeof connect>) => new Daemon({
     store,
     clock,
     bus: (() => {
@@ -440,7 +440,7 @@ export function createHarness(
   }
 
   /** Another daemon over the same database, alive beside this one (ORC-344): its own connection, its own memory, the same runner and engine. */
-  function another(): Orchestrator {
+  function another(): Daemon {
     return build(connect());
   }
 
