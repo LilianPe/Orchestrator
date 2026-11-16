@@ -126,7 +126,7 @@ function external(t: TicketState, e: FactoryEvent): TicketState {
 function internal(t: TicketState, e: InternalEvent): TicketState {
   switch (e.type) {
     case 'ticket.blocked':
-      return { ...t, blocked: true, blockReason: e.reason, blockKind: e.kind, blockedEvent: e.eventId, blockedJob: e.job };
+      return { ...t, blocked: true, blockReason: e.reason, blockKind: e.kind, blockedEvent: e.eventId, blockedJob: e.job, nextJob: undefined };
     case 'ticket.unblocked':
       return { ...t, ...UNBLOCKED };
     case 'ticket.patched':
