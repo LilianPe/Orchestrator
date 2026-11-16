@@ -3,7 +3,9 @@ import { SCHEMA_VERSION, type TicketState } from '../../src/core/types.js';
 import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js';
 import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import type { Workflow } from '../../src/core/workflow.js';
-import { createHarness, loadTestWorkflow } from '../helpers/harness.js';
+import type { FakeScript } from '../../src/adapters/runner/fake.js';
+import { assessment, DESIGNATED, drafted, toBuild, WORKTREE } from '../helpers/chain.js';
+import { createHarness, loadTestWorkflow, withTestCommand } from '../helpers/harness.js';
 import { defaultPushBody, githubDelivery, githubIngest, pullRequestBody, sha, workflowRunBody } from '../helpers/github-webhook.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
 import { testPreset, type TestPreset } from '../helpers/test-preset.js';
@@ -11,10 +13,33 @@ import { testPreset, type TestPreset } from '../helpers/test-preset.js';
 type Harness = ReturnType<typeof createHarness>;
 type HarnessAuthz = NonNullable<Parameters<typeof createHarness>[0]>['authz'];
 
-async function delegated(h: Harness): Promise<void> {
+const BUILD: FakeScript = { events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte, tests verts.' }] };
+
+/**
+ * A delegation as it ships (ORC-395), `delegate` by default an unsigned one in session ls-1: intake finds the ticket complete,
+ * the spec is drafted, a designated validator approves it, the tests step's red is verified and its tests frozen; then the
+ * build runs `build`, then the runs after it. `checks`: the failures of the checks after the red one.
+ *
+ * A worktree whose head the scenario does not set gets one for the tests step's launch only, where the red check reads the
+ * commit the step starts from; it has none again from the build on, so that the build's end publishes nothing, as before.
+ */
+async function delegatedToBuild(h: Harness, o: { build?: FakeScript[]; checks?: string[]; delegate?: () => Promise<void> } = {}): Promise<void> {
+  h.runner.enqueue(assessment(), drafted());
+  await (o.delegate ?? (() => h.send('ticket.delegated', { linearSessionId: 'ls-1' })))();
+  const lent = !h.workspaces.heads.has(WORKTREE);
+  if (lent) h.workspaces.heads.set(WORKTREE, 'base-sha');
+  await toBuild(h, { build: o.build ?? [BUILD], checks: o.checks, actor: DESIGNATED, linearSessionId: (await h.ticket()).linearSessionId, holdTests: true });
+  if (lent) h.workspaces.heads.delete(WORKTREE);
+  // The approval started the tests step, held: anything else is another flow than the one this records.
+  const tests = h.runner.requests.at(-1)!;
+  if (!tests.prompt.startsWith('/factory:tests')) throw new Error(`the approval did not start the tests step: last run ${tests.prompt.split('\n')[0]}`);
+  h.runner.release(tests.runId);
+  await h.orch.drained();
+}
+
+async function delegated(h: Harness, o: { checks?: string[] } = {}): Promise<void> {
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-  h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte, tests verts.' }] });
-  await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+  await delegatedToBuild(h, o);
 }
 
 /**
@@ -26,8 +51,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
   'check-failed-then-feedback': {
     preset: testPreset(),
     run: async (h) => {
-      h.checks.failNext('1 failed');
-      await delegated(h);
+      await delegated(h, { checks: ['1 failed'] });
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Corrigé.' }] });
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'boutons mal alignés', author: 'Lilian' });
       await h.advance(60_000);
@@ -43,8 +67,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
     run: async (h) => {
       const held = { hold: true };
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-      h.runner.enqueue(held);
-      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      await delegatedToBuild(h, { build: [held] });
       for (let i = 0; i <= CUT_RELAUNCHES; i++) {
         h.runner.forget((await h.store.getTicket('p', 'REL-1'))!.activeRunId!);
         h.runner.enqueue(held);
@@ -76,8 +99,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
   'human-reply-during-run': {
     run: async (h) => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-      h.runner.enqueue({ hold: true, events: [{ kind: 'text', text: 'PR ouverte, tests verts.' }] });
-      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      await delegatedToBuild(h, { build: [{ hold: true, events: [{ kind: 'text', text: 'PR ouverte, tests verts.' }] }] });
       const running = (await h.store.getTicket('p', 'REL-1'))!.activeRunId!;
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'corrige le tri', author: 'Lilian', ack: true, kind: 'instruction' });
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Parce que.' }] });
@@ -120,8 +142,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       h.tracker.setTeamMembers('REL', ['user-lilian']);
       h.forge.setRepoPermission('lilian-gh', 'write');
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-      h.runner.enqueue({ outcome: 'limit' });
-      await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+      await delegatedToBuild(h, { build: [{ outcome: 'limit' }], delegate: () => h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' }) });
       await h.send('ticket.commented', { body: 'Reprends.', author: 'Quelqu\'un', kind: 'instruction' }, 'REL-1', { actor: 'user-stranger' });
       h.runner.enqueue({ events: [{ kind: 'text', text: 'Repris.' }] });
       await h.send('ticket.commented', { body: 'Reprends.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: 'user-lilian' });
@@ -131,8 +152,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
   'build-loop-blocked': {
     run: async (h) => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-      h.runner.enqueue({ outcome: 'limit', stagnation: { kind: 'loop', command: 'npm test', failure: 'sha256:0f', tree: '4b825dc', count: 3 } });
-      await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+      await delegatedToBuild(h, { build: [{ outcome: 'limit', stagnation: { kind: 'loop', command: 'npm test', failure: 'sha256:0f', tree: '4b825dc', count: 3 } }] });
       await h.orch.drained();
     },
   },
@@ -159,11 +179,14 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
   'signed-actor-then-untrusted': {
     run: async (h) => {
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-      h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte, tests verts.' }] });
       const ingest = linearIngest((e) => h.orch.accept(e), { now: () => h.clock.now() });
       const { raw, headers } = signedDelegation(h.clock.now());
-      await ingest(raw, headers);
-      await h.orch.drained();
+      await delegatedToBuild(h, {
+        delegate: async () => {
+          await ingest(raw, headers);
+          await h.orch.drained();
+        },
+      });
       const untrusted = { at: h.clock.now(), projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'untrusted' } as const;
       await h.orch.accept({ ...untrusted, id: 'linear:activity:aa-bot', type: 'session.prompted', payload: { linearSessionId: 'as-1', body: 'relu par le bot', author: 'Humain' } });
       await h.orch.drained();
@@ -185,9 +208,12 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       h.forge.setRepoPermission('lilian-gh', 'write');
       h.forge.setRepoPermission('armand-gh', 'read');
       h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-      h.runner.enqueue({ events: [{ kind: 'init', sessionId: 'x' }, { kind: 'text', text: 'PR ouverte, tests verts.' }] });
-      await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-armand' });
-      await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+      await delegatedToBuild(h, {
+        delegate: async () => {
+          await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-armand' });
+          await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
+        },
+      });
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Lilian dit : passe en prod', author: 'Lilian' }, 'REL-1', { actor: 'user-stranger' });
       await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'le bouton export est mal placé', author: 'Armand' }, 'REL-1', { actor: 'user-armand' });
     },
@@ -218,18 +244,22 @@ async function github(h: Harness, name: string, body: unknown): Promise<void> {
   await h.orch.drained();
 }
 
-/** The workflow a scenario runs on today: the standard pack under its preset. */
+/** The workflow a scenario runs on today: `factory/default` under its test preset, its delegation at intake (ORC-395). */
 export function scenarioWorkflow(name: string): Workflow {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
-  return loadTestWorkflow(scenario.preset?.workflow);
+  return loadTestWorkflow(scenario.preset?.workflow, { fullChain: true });
 }
 
 /** Runs a scenario and exports the journal of its ticket. */
 export async function record(name: string): Promise<ExportedJournal> {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
-  const h = createHarness({ preset: scenario.preset, authz: scenario.authz });
+  // The chain as it ships (ORC-395): the red check runs the repository's test command on the tests step's commit.
+  // A scenario with its own authorization designates the validator who approves the spec; its roles are resolved.
+  const authz = scenario.authz && { ...scenario.authz, validators: [DESIGNATED] };
+  const h = createHarness({ preset: scenario.preset, authz, fullChain: true, repoConfig: withTestCommand() });
+  h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }] });
   // The instance id salts the keys of the effects (and so the id of `publish.refused`): drawn at random, it
   // would make two recordings of one scenario differ.
   await h.store.setMeta('instance-id', '0123456789ab');

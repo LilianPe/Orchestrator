@@ -120,11 +120,9 @@ export interface Workflow {
   relayJob?: string;
   /** The preset the workflow runs (ORC-391): the end of each job walks its steps (`step.next`). */
   preset: Preset;
-  /** The step the chain starts at: `build` for `factory/default` until ORC-395, the preset's entry otherwise. */
-  entry: string;
   /**
-   * The job a delegation starts in place of the entry's (ORC-392): only tests set it, to start at `intake`, `spec` or `tests`
-   * while `factory/default`'s chain starts at `build`. Goes when the delegation starts at the preset's entry (ORC-395).
+   * The step the chain starts at, whose job a delegation starts: the preset's entry (`intake` for `factory/default`, ORC-395).
+   * Only tests start it later, at `build`, for the steps after it.
    */
-  delegated?: string;
+  entry: string;
 }

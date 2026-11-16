@@ -1,27 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
-import type { AgentOutput } from '../../src/core/agent-output.js';
 import { causeOf } from '../../src/core/block-cause.js';
+import { assessment, drafted, SPEC } from '../helpers/chain.js';
 import { createHarness } from '../helpers/harness.js';
-import { delegationStarts } from '../helpers/workflow-with.js';
 
-/** A repository that makes delegation start with `intake` (ORC-206). */
-const INTAKE_FIRST = delegationStarts('intake');
 const DESCRIPTION = 'Rate-limit the public API.\n\nAcceptance criteria:\n1. More than 100 requests a minute get a 429.';
 const HOUR = 3_600_000;
 const RATE = { question: 'Does the rate limit apply to admin accounts too?', options: ['Yes, to everyone', 'No, admins are exempt'] };
 const WINDOW = { question: 'Per minute, sliding or fixed?', options: ['Sliding', 'Fixed'] };
 
-const assessment = (patch: Partial<NonNullable<AgentOutput['intake']>> = {}) => ({
-  output: {
-    status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [],
-    intake: { size: 's', risk: 'low', complete: true, missing: [], screen: false, ...patch },
-  } satisfies AgentOutput,
-});
-const DEV = { events: [{ kind: 'text' as const, text: 'Done.' }] };
+/** The spec the step after the guard drafts: the answers carried as its decisions, or spec_check sends it back (ORC-212). */
+const SPEC_DECIDED = drafted({ ...SPEC, decisions: [{ question: RATE.question, answer: 'Yes, to everyone' }, { question: WINDOW.question, answer: 'Sliding' }] });
 
+/** Delegation starts with `intake` (ORC-206), the entry of `factory/default` (ORC-395). */
 function setup() {
-  const h = createHarness({ workflow: INTAKE_FIRST, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+  const h = createHarness({ fullChain: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Rate limit', description: DESCRIPTION });
   h.tracker.setTeamMembers('REL', ['user-lilian', 'user-armand']);
   h.forge.setRepoPermission('lilian-gh', 'write');
@@ -63,7 +56,7 @@ describe('clarify, end to end (ORC-210)', () => {
     expect(h.runner.requests).toHaveLength(1);
   });
 
-  it('refuses an answer from outside the team, takes the requester\'s, then intake reads them and dev gets the decisions; the timers find nothing left to do', async () => {
+  it('refuses an answer from outside the team, takes the requester\'s, then intake reads them and the spec gets the decisions; the timers find nothing left to do', async () => {
     const h = setup();
     await asked(h);
     await answer(h, 'No, admins are exempt', 'user-stranger');
@@ -72,17 +65,17 @@ describe('clarify, end to end (ORC-210)', () => {
     expect(refusal).toMatchObject({ type: 'session.prompted', roles: [] });
     expect((await h.ticket()).clarify).toMatchObject({ answered: 0 });
 
-    h.runner.enqueue(assessment(), DEV);
+    h.runner.enqueue(assessment(), SPEC_DECIDED);
     await answer(h, 'Yes, to everyone', 'user-lilian');
     expect(h.runner.requests).toHaveLength(1);
     expect(elicitations(h).at(-1)).toMatchObject({ body: expect.stringContaining(WINDOW.question), options: WINDOW.options });
     await answer(h, 'Sliding', 'user-armand');
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:intake', '/factory:dev']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:intake', '/factory:spec']);
     expect(h.runner.requests[1]!.prompt).toContain('Yes, to everyone');
     expect(h.runner.requests[1]!.prompt).not.toContain('No, admins are exempt');
     // Intake reads the answers as its feedback, once: the decisions are for the steps after the guard.
     expect(h.runner.requests[1]!.prompt).not.toContain('## Decisions');
-    // The decisions go to the steps that write the tests and the code.
+    // The decisions go to the steps after the guard: the spec first (ORC-395).
     expect(h.runner.requests[2]!.prompt).toMatch(/## Decisions[\s\S]*Does the rate limit apply to admin accounts too\?[\s\S]*Yes, to everyone/);
     expect((await h.ticket()).decisions).toHaveLength(2);
 
@@ -95,7 +88,7 @@ describe('clarify, end to end (ORC-210)', () => {
 
 describe('clarify and the wait on a « blocked by » ticket (ORC-210, ORC-363)', () => {
   it('an incomplete ticket with an open blocker is asked its questions first, then waits for the blocker, then starts once it is Done', async () => {
-    const h = createHarness({ workflow: INTAKE_FIRST, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
+    const h = createHarness({ fullChain: true, authz: { githubLogins: { 'user-lilian': 'lilian-gh' } } });
     h.tracker.addIssue({ identifier: 'REL-2', title: 'API gateway', stateName: 'In Progress', stateType: 'started' });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Rate limit', description: DESCRIPTION, delegateId: 'app' });
     h.tracker.blocks('REL-2', 'REL-1');
@@ -118,13 +111,13 @@ describe('clarify and the wait on a « blocked by » ticket (ORC-210, ORC-363)',
     expect(asking.waitingOn ?? undefined).toBeUndefined();
     expect(waits()).toEqual([]);
 
-    // Answered, intake reads the ticket again, finds it complete: the blocker is still open, so dev waits for it.
+    // Answered, intake reads the ticket again, finds it complete: the blocker is still open, so the spec waits for it.
     h.runner.enqueue(assessment());
     await answer(h, 'Yes, to everyone', 'user-lilian');
     await answer(h, 'Sliding', 'user-armand');
     expect(skills()).toEqual(['/factory:intake', '/factory:intake']);
     const waiting = await h.ticket();
-    expect(waiting).toMatchObject({ blocked: false, logical: 'todo', waitingOn: { blockers: ['REL-2'], start: { job: 'dev' } } });
+    expect(waiting).toMatchObject({ blocked: false, logical: 'todo', waitingOn: { blockers: ['REL-2'], start: { job: 'spec' } } });
     expect(waiting.clarify ?? undefined).toBeUndefined();
     expect(waiting.decisions).toHaveLength(2);
     expect(waits()).toEqual([{ type: 'thought', body: expect.stringContaining('In Progress') }]);
@@ -132,13 +125,13 @@ describe('clarify and the wait on a « blocked by » ticket (ORC-210, ORC-363)',
     await reconcile();
     expect(skills()).toEqual(['/factory:intake', '/factory:intake']);
 
-    // The blocker Done: the reconciliation resumes, dev starts with the decisions and moves the ticket to In Progress.
+    // The blocker Done: the reconciliation resumes, the spec starts with the decisions; the ticket stays in Todo until the build (ORC-395).
     Object.assign(h.tracker.issues.get('REL-2')!, { stateName: 'Done', stateType: 'completed' });
-    h.runner.enqueue(DEV);
+    h.runner.enqueue(SPEC_DECIDED);
     await reconcile();
-    expect(skills()).toEqual(['/factory:intake', '/factory:intake', '/factory:dev']);
+    expect(skills()).toEqual(['/factory:intake', '/factory:intake', '/factory:spec']);
     expect(h.runner.requests[2]!.prompt).toMatch(/## Decisions[\s\S]*Yes, to everyone/);
-    expect(moves()[0]).toBe('In Progress');
+    expect(moves()).toEqual([]);
     expect((await h.ticket()).waitingOn ?? undefined).toBeUndefined();
 
     // The clarify timers of the answered round find nothing to do.

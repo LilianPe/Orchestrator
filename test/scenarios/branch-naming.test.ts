@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { createHarness } from '../helpers/harness.js';
-import { delegationStarts } from '../helpers/workflow-with.js';
+import { assessment } from '../helpers/chain.js';
 
 /** ORC-283: the ticket's branch by the team's convention, or the repository's, given once and kept. */
 describe("the ticket's branch name", () => {
@@ -78,13 +78,14 @@ describe("the ticket's branch name", () => {
 
   it("leaves the ticket's own branch and PR out of intake's duplicates by the repository's naming, `not_started` checked or not", async () => {
     const h = createHarness({
-      workflow: delegationStarts('intake', { pickupChecks: ['has_description'] }),
+      fullChain: true,
+      workflow: { pickupChecks: ['has_description'] },
       repoConfig: async () => parseRepoConfig('branches: { pattern: "agent/{id}" }\n'),
     });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.forge.branchNames = ['main', 'agent/rel-1', 'wip/other'];
     h.forge.openPullRequests = [{ number: 4, url: 'https://github.com/acme/app/pull/4', title: 'REL-1', branch: 'agent/rel-1', fork: false, files: ['a.ts'], filesTotal: 1 }];
-    h.runner.enqueue({ output: { ...DONE, tests_added: [], intake: { size: 's', risk: 'low', complete: true, missing: [], screen: false } } });
+    h.runner.enqueue(assessment());
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const prompt = h.runner.requests[0]!.prompt;
     expect(prompt).toContain('wip/other');

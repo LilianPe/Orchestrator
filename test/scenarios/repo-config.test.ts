@@ -10,7 +10,8 @@ import { causeOf } from '../../src/core/block-cause.js';
 import { TRUSTED } from '../../src/core/types.js';
 import { WRITE_TOOLS } from '../../src/presets/tools.js';
 import { createHarness } from '../helpers/harness.js';
-import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
+import { approveSpec, assessment, chainHarness, delegate as delegated, drafted, RED_ASSERTION } from '../helpers/chain.js';
+import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 const VERIFIED: WorkflowOverrides = { verify: ['npm test'] };
 const SETUP: WorkflowOverrides = { workspace: { setup: ['npm ci'] } };
@@ -90,20 +91,24 @@ describe("the repository's config at the launch", () => {
     // The test command the red check runs (ORC-391).
     const before = 'env: [NODE_ENV]\ncommands: { test: npm test -- }\n';
     const merged = 'env: [API_URL]\ncommands: { test: npm test -- }\n';
+    // Merged once the tests step's launch has read it: every read before it, intake's and the spec's included, reads `before`.
     let reads = 0;
-    const repoConfig = async () => parseRepoConfig(reads++ === 0 ? before : merged);
+    let mergedFrom = Infinity;
+    const repoConfig = async () => parseRepoConfig(reads++ < mergedFrom ? before : merged);
     const given: string[][] = [];
     const repoVariables = async (_: unknown, config: RepoConfig): Promise<RepoVariables> => (given.push(config.env), { env: {}, setupSecrets: {}, missing: [] });
-    const h = createHarness({ sandboxed, repoConfig, repoVariables, workflow: delegationStarts('tests') });
+    const h = chainHarness({ sandboxed, repoConfig, repoVariables });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-    h.workspaces.heads.set('/tmp/factory-fake/p/REL-1', 'base-sha');
-    h.workspaces.steps.set('/tmp/factory-fake/p/REL-1', { changed: [{ path: 'src/export.test.ts', deleted: false }] });
-    h.checks.failNext('AssertionError: expected 1 to be 2');
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    h.runner.enqueue(assessment(), drafted());
+    await delegated(h);
+    const [readsAtGate, givenAtGate] = [reads, given.length];
+    mergedFrom = reads + 1;
+    h.checks.failNext(RED_ASSERTION);
+    await approveSpec(h);
     // The tests step's launch, then its red check on the host: the same config. The dev step's launch reads the merge.
-    expect(given.slice(0, 3)).toEqual([['NODE_ENV'], ['NODE_ENV'], ['API_URL']]);
-    expect(reads).toBe(2);
-    expect((await h.store.getRun(h.runner.requests[0]!.runId))?.repoConfig).toEqual(parseRepoConfig(before));
+    expect(given.slice(givenAtGate, givenAtGate + 3)).toEqual([['NODE_ENV'], ['NODE_ENV'], ['API_URL']]);
+    expect(reads - readsAtGate).toBe(2);
+    expect((await h.store.getRun(h.runner.requests[2]!.runId))?.repoConfig).toEqual(parseRepoConfig(before));
   });
 
   it("reads a question's config without a fetch of its own: its trunk was just fetched", async () => {
