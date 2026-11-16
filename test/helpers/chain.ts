@@ -69,6 +69,13 @@ export const approveSpec = (h: Harness, actor = VALIDATOR, linearSessionId = 'ls
   h.send('command', { name: '/approve', body: '', linearSessionId, author: actor === VALIDATOR ? 'Lilian' : 'Armand', kind: 'command' }, 'REL-1', { actor });
 
 /**
+ * `/approve` by a designated validator in a harness without `authz`: the command carries the role the daemon's resolver
+ * would have stamped on it (ORC-186), the other events no role, as such a harness decides them.
+ */
+export const approvedByValidator = (h: Harness, linearSessionId = 'ls-1') =>
+  h.send('command', { name: '/approve', body: '', linearSessionId, author: 'Validator', kind: 'command' }, 'REL-1', { actor: 'user-validator', roles: ['validator'] });
+
+/**
  * From the spec's gate to the build: the red check verified (`RED_ASSERTION`), then `checks`, the failures of the checks after
  * it; the tests step's run, then `build`, the runs after it; and the validator's `/approve`.
  */

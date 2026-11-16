@@ -24,6 +24,7 @@ import { TimerService } from '../../src/runtime/timers.js';
 import { fantome } from '../../src/presets/fantome.js';
 import { preset, presetWorkflow } from '../../src/presets/workflow.js';
 import { Replays } from '../../src/ghost/delegate.js';
+import type { Role } from '../../src/core/authz.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { VisualShooter } from '../../src/adapters/browser/types.js';
 import type { CleanVerifier, CleanVerifyRequest } from '../../src/core/clean-verify.js';
@@ -401,8 +402,11 @@ export function createHarness(
     life.kill();
   });
 
-  /** `signed`: the event's signed actor and taint, as the Linear ingestion stamps them (ORC-160). */
-  async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1', signed: { actor?: string; taint?: Taint } = {}): Promise<void> {
+  /**
+   * `signed`: the event's signed actor and taint, as the Linear ingestion stamps them (ORC-160); and its roles, as the daemon's
+   * resolver stamps them (ORC-186), for a harness without `authz`, which resolves none.
+   */
+  async function send<T extends EventType>(type: T, payload: EventPayloads[T], ticketId = 'REL-1', signed: { actor?: string; taint?: Taint; roles?: readonly Role[] } = {}): Promise<void> {
     await orch.accept({ id: `t-${++seq}`, type, at: clock.now(), projectId: 'p', ticketId, ...signed, payload } as FactoryEvent);
     await orch.drained();
   }
