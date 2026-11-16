@@ -119,6 +119,8 @@ The daemon exchanges an RS256 JWT for an **installation token limited to the req
 | `authz.validators` | list of Linear ids | `[]` | Designated validators: only they will be able to validate a spec, never one from a run they launched: `/approve`, `/changes`, `/reject` of the spec gate (ORC-212). |
 | `authz.githubLogins` | map Linear id → GitHub login | `{}` | The GitHub login of each Linear user whose permissions on the repository matter. Without an entry, a user has no GitHub permissions, and therefore cannot trigger the agent nor (with ORC-148) merge through *Done*. |
 
+A project whose `authz.validators` is empty, or holds a single id, cannot get every spec approved: the initiator of a run never approves its spec, so with none every ticket stops at the spec gate, and with one the tickets that validator delegates. `factory doctor` and the daemon's start warn of each such project, naming `authz.validators` (ORC-421); a project on `factory/fantome` approves its own specs.
+
 Linear team members and GitHub permissions are not configured: they are read (Linear, then the GitHub App or `gh`) and read again every 60 s. The App only needs read access to *Metadata* to read a user's permission.
 
 > **Target.** These designations will move to `.factory/config.yml` (ORC-209), and the matrix itself to the `factory/default` preset (ORC-187).

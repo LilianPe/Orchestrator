@@ -704,4 +704,51 @@ jobs:
       expect(JSON.parse((await doctor([], [], { commands: { test: 'npm test' }, json: true })).text)).not.toHaveProperty('warnings');
     });
   });
+
+  describe('a project whose spec gate no validator can pass (ORC-421)', () => {
+    const homeWith = (validators?: string[], preset?: string) => {
+      const home = tempHome();
+      const authz = validators ? `\n    authz:\n      validators: ${JSON.stringify(validators)}` : '';
+      const ghost = preset ? `\n    preset: ${preset}` : '';
+      writeFileSync(join(home, 'config.yaml'), `projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP${authz}${ghost}\n`);
+      return home;
+    };
+    const cli = async (home: string) => {
+      const lines: string[] = [];
+      await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) });
+      return lines;
+    };
+
+    it('warns, naming authz.validators, of the instance before it needs the GitHub App, without validators', async () => {
+      const lines = await cli(homeWith());
+      const warned = lines.filter((l) => l.includes('authz.validators'));
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toMatch(/^Warning: app: no spec validator \(authz\.validators in config\.yaml\)/);
+      expect(lines.indexOf(warned[0]!)).toBeLessThan(lines.findIndex((l) => l.includes('GitHub App not configured')));
+      expect((await cli(homeWith([]))).filter((l) => l.includes('authz.validators'))).toEqual(warned);
+    });
+
+    it('warns of a lone validator, who cannot approve the tickets they delegate', async () => {
+      const warned = (await cli(homeWith(['u-1']))).filter((l) => l.includes('authz.validators'));
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toMatch(/^Warning: app: one spec validator \(authz\.validators in config\.yaml\)/);
+    });
+
+    it('says nothing with two validators, nor of the replay of closed tickets, which approves its own specs', async () => {
+      expect((await cli(homeWith(['u-1', 'u-2']))).join('\n')).not.toContain('authz.validators');
+      expect((await cli(homeWith(undefined, 'factory/fantome'))).join('\n')).not.toContain('authz.validators');
+    });
+
+    it('lists them in the JSON report, whatever the verdict, and only when there is one', async () => {
+      const report = async (api: FakeApi, validatorWarnings?: string[]) => {
+        const json: string[] = [];
+        await runDoctor({ repoPath: '/repo', api, json: true, out: (line) => json.push(line), ...(validatorWarnings ? { validatorWarnings } : {}) });
+        return JSON.parse(json.join('\n')) as unknown;
+      };
+      expect(await report(new FakeApi([]), ['Warning: app: x'])).toMatchObject({ accepted: true, validatorWarnings: ['Warning: app: x'] });
+      expect(await report(new FakeApi([], [], { failWorkflows: true }), ['Warning: app: x'])).toMatchObject({ accepted: false, validatorWarnings: ['Warning: app: x'] });
+      expect(await report(new FakeApi([]), [])).not.toHaveProperty('validatorWarnings');
+      expect(await report(new FakeApi([]))).not.toHaveProperty('validatorWarnings');
+    });
+  });
 });
