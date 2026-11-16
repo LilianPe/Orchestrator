@@ -384,14 +384,16 @@ What a human's event, or a fact of the PR, starts or does is coded in `decide` (
 | Reaction | Event | When | What it does |
 | -- | -- | -- | -- |
 | `onDelegated` | `ticket.delegated` | the ticket in Todo or In Progress, not blocked (any status at the Rapide level) | starts the job of the chain's entry, the preset's: `intake` (ORC-395) |
-| `reviewAgain` | `status.changed` to AI Review | a human's move; a merge refused for a push since the review reads it too (ORC-148) | starts the review again on the published commit, the first lens |
+| `reviewAgain` | `status.changed` to AI Review | a human's move; a merge refused for a push since the review reads it too (ORC-148) | starts the review again on the published commit, the first lens of the preset's review |
 | `resumeBlocked` | `session.prompted`, `ticket.commented` | the ticket blocked | at once, the blocked step's job (`blockedJob`, [resuming](#resuming-the-blocked-step-orc-196)), `dev-feedback` for a block with no step of its own; lifts the block |
-| `humanFeedback` | `session.prompted`, an instruction in `session.mentioned`, `pr.reviewed` | the ticket in Human Review | after the regrouping (`regroup`: 3 min), `fix-human`, a round of human feedback (ORC-190) |
+| `humanFeedback` | `session.prompted`, an instruction in `session.mentioned`, `pr.reviewed` | the ticket in Human Review | after the regrouping (`regroup`: 3 min), the job of the merge gate's `onFailure` (`fix-human`: the fix for the cause `human`), a round of human feedback (ORC-190) |
 | `instruction` | `session.prompted`, an instruction in `session.mentioned` | the ticket In Progress | after the regrouping, `dev-feedback`, no round of any counter (ORC-180) |
 | `askQuestion` | `session.mentioned` | always | the answer agent, `ask`, at once (ORC-182) |
 | `stopped` | `label.changed` (`agent:stop` added), `session.stopped` | always | stops the work and blocks the ticket until a reply (the label until ORC-201) |
-| `prFailed` | `pr.checks_failed`, `pr.conflicted` | red CI: the ticket in AI Review or Human Review, not blocked; a conflict: In Progress too | `fix-ci` or `rebase`, a round of the review and CI loop (`review_ci`), past its bound a block |
+| `prFailed` | `pr.checks_failed`, `pr.conflicted` | red CI: the ticket in AI Review or Human Review, not blocked; a conflict: In Progress too | the job of `redCi.goto` (`fix-ci`: the fix for the cause `ci`) or of `conflict.goto` (`rebase`), a round of the review and CI loop (`review_ci`), past its bound a block |
 | `merged` | `pr.merged` | always, after the merge's own stop | Done, the `after_merge` step (the requester told, the changelog entry), then the cleanup |
+
+The jobs in brackets are `factory/default`'s. The reactions read them on the preset's links (ORC-417): an edge to a `fix` step starts its job for the edge's cause, an edge to another step the job that starts it, so a preset whose `redCi.goto` points elsewhere starts that step's job on a red CI. Only `dev-feedback` (a message during the work or a reply to a block, which takes no edge) and `ask` (out of the preset's steps) are named in `decide`. A workflow whose link starts no job is refused at its build (`workflowViolations`).
 
 A reply to a blocked ticket is never regrouped. The regrouping timer is armed by `humanFeedback` and `instruction` only; a run in progress is not interrupted, its end hands the messages over. A message in another state (Todo, AI Review, Done) waits in `humanInbox` for the next run.
 

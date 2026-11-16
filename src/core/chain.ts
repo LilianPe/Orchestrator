@@ -1,4 +1,4 @@
-import { isAgentStep, mergeGate, type Step } from '../presets/preset.js';
+import { isAgentStep, mergeGate, type FailureEdge, type FixCause, type Step } from '../presets/preset.js';
 import type { LogicalState } from './types.js';
 import type { JobSpec, Post, Workflow } from './workflow.js';
 
@@ -115,6 +115,29 @@ export function blockingFix(wf: Workflow, job: JobSpec): JobSpec | undefined {
   if (step?.type !== 'review' || !step.onFailure || !publishesReview(wf, job)) return undefined;
   const to = step.onFailure.goto;
   return Object.values(wf.jobs).find((j) => j.step === to && j.cause === 'review');
+}
+
+/** The job an edge of the preset starts (ORC-417): the fix's job for `cause`, the job that starts any other step. */
+function edgeJob(wf: Workflow, edge: FailureEdge | undefined, cause?: FixCause): JobSpec | undefined {
+  const step = stepById(wf, edge?.goto);
+  if (!step) return undefined;
+  const jobs = Object.values(wf.jobs);
+  return step.type === 'fix' ? jobs.find((j) => j.step === step.id && j.cause === cause) : startingJob(jobs, step);
+}
+
+/**
+ * The jobs the reactions of `decide` start, read on the preset's links (ORC-417), so that a preset of its own is followed: red
+ * CI's `redCi`, a conflict's `conflict`, human feedback's merge gate failure edge, and the first lens of the review a move to
+ * AI Review starts again. Undefined: the preset has no such link, or no job for it (`workflowViolations` refuses it).
+ */
+export function reactionJobs(wf: Workflow): Record<'redCi' | 'conflict' | 'humanFeedback' | 'review', JobSpec | undefined> {
+  const review = wf.preset.steps.find((s) => s.type === 'review');
+  return {
+    redCi: edgeJob(wf, wf.preset.redCi, 'ci'),
+    conflict: edgeJob(wf, wf.preset.conflict),
+    humanFeedback: edgeJob(wf, mergeGate(wf.preset)?.onFailure, 'human'),
+    review: review && startingJob(Object.values(wf.jobs), review),
+  };
 }
 
 /** The preset has rounds of human review feedback (ORC-190): its merge gate sends the run back to a fix. */

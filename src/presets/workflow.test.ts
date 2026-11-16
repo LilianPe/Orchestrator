@@ -45,7 +45,7 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     wrong.jobs['answer-relayed']!.step = 'fxi';
     wrong.entry = 'intak';
     delete wrong.jobs['fix-human'];
-    expect(workflowViolations(wrong)).toEqual(['jobs.answer-relayed.step: fxi is not a step of factory/default', 'entry: intak is not a step of factory/default', 'reactions: unknown job "fix-human"']);
+    expect(workflowViolations(wrong)).toEqual(['jobs.answer-relayed.step: fxi is not a step of factory/default', 'entry: intak is not a step of factory/default', 'reactions: humanFeedback starts no job']);
   });
 
   // What the loader refused in a job or a rule of the pack, checked on the table now that no file goes through it.
