@@ -1435,6 +1435,23 @@ describe('flaky tests in verify (ORC-164)', () => {
     expect(res.flaky).toEqual([expect.objectContaining({ test: 'src/a.test.ts > cart total', indicative: true })]);
   });
 
+  it('through `npm test`, asks the script for its report and reruns its failing test past the `--` (ORC-420)', async () => {
+    const state = mkdtempSync(join(tmpdir(), 'factory-flaky-'));
+    const plan = { head: { 'cart total': ['failed' as const, 'passed' as const] }, base: { 'cart total': ['passed' as const] } };
+    const files = { 'bin/vitest': fakeVitest(state, plan), 'package.json': JSON.stringify({ scripts: { test: 'node bin/vitest run' } }) };
+    const { sandboxes, req } = setup({ commands: ['npm test'] }, undefined, files);
+    const res = await runCleanVerify(req);
+    expect(res.flaky).toEqual([
+      expect.objectContaining({
+        command: 'npm test', test: 'src/a.test.ts > cart total',
+        attempts: [expect.objectContaining({ on: 'head', outcome: 'failed' }), expect.objectContaining({ on: 'head', outcome: 'passed' }), expect.objectContaining({ on: 'base', outcome: 'passed' })],
+      }),
+    ]);
+    expect(res.failures.map((f) => f.command)).toEqual(['npm test']);
+    const lines = sandboxes.ran.filter((r) => r.command.includes('npm test')).map((r) => r.command);
+    expect(lines.some((l) => l.includes("npm test -- 'src/a.test.ts' -t 'cart total' --reporter=default"))).toBe(true);
+  });
+
   it('a passing run reruns nothing', async () => {
     const { sandboxes, req } = withVitest({ head: { 'cart ok': ['passed'] }, base: {} });
     const res = await runCleanVerify(req);

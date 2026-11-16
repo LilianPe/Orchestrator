@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkRed, readTestRun, runnerOfCommand, type RedDeps } from './red.js';
+import { checkRed, readTestRun, testCommand, type RedDeps } from './red.js';
 
 // Trimmed outputs of each runner, as they print them.
 const VITEST_ASSERTION = `
@@ -345,13 +345,33 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     expect(d.commands[0]).toContain("npm test -- 'src/export.test.ts' --reporter=default --reporter=json");
   });
 
+  it('adds no `--` for Yarn Berry, which passes it on to the script, and still reads the runner of its script (ORC-420)', async () => {
+    const ran = async (head: Record<string, string>, command = 'yarn test') => {
+      const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, { head: { 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }), ...head } });
+      await checkRed(command, d);
+      return d.commands[0]!;
+    };
+    const berry = "yarn test 'src/export.test.ts' --reporter=default --reporter=json";
+    // Berry, by the `packageManager` field or by its `.yarnrc.yml`: the files reach vitest, filtered.
+    expect(await ran({ 'package.json': JSON.stringify({ packageManager: 'yarn@4.5.0', scripts: { test: 'vitest run' } }) })).toContain(berry);
+    expect(await ran({ '.yarnrc.yml': 'nodeLinker: node-modules\n' })).toContain(berry);
+    expect(await ran({ '.yarnrc.yml': '' }, 'cd web && yarn run test')).toContain("cd web && yarn run test 'src/export.test.ts' --reporter=default");
+    // Yarn 1 strips the `--`; npm and pnpm need it whatever Yarn's files say.
+    expect(await ran({ 'package.json': JSON.stringify({ packageManager: 'yarn@1.22.22', scripts: { test: 'vitest run' } }), '.yarnrc.yml': '' })).toContain("yarn test -- 'src/export.test.ts' --reporter=default");
+    expect(await ran({})).toContain("yarn test -- 'src/export.test.ts' --reporter=default");
+    expect(await ran({ '.yarnrc.yml': '' }, 'npm test')).toContain("npm test -- 'src/export.test.ts' --reporter=default");
+    // `yarn dlx` runs a program, as before.
+    expect(await ran({ '.yarnrc.yml': '' }, 'yarn dlx vitest run')).toContain("yarn dlx vitest run 'src/export.test.ts' --reporter=default");
+  });
+
   it('reads the script of the last command, through yarn too, past its variables (ORC-412)', async () => {
-    const runner = (command: string) => runnerOfCommand(command, { showAtHead: async () => JSON.stringify({ scripts: { test: 'vitest run' } }) });
+    const runner = async (command: string) => (await testCommand(command, { showAtHead: async (p) => (p === 'package.json' ? JSON.stringify({ scripts: { test: 'vitest run' } }) : undefined) })).runner;
     expect(await runner('cd web && CI=1 npm test --')).toBe('vitest');
     expect(await runner('npm ci && npm test --')).toBe('vitest');
     expect(await runner('yarn test --')).toBe('vitest');
     expect(await runner('yarn jest --')).toBe('jest');
-    expect(await runner('npm test')).toBeUndefined();
+    expect(await runner('npm test')).toBe('vitest');
+    expect(await runner('npm run lint')).toBeUndefined();
   });
 
   it('reads a test file that did not load from the report: a missing module', async () => {

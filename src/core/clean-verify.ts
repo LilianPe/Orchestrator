@@ -13,7 +13,7 @@ import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type Flak
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { REPORT_FLAGS, runnerOfCommand, type Runner } from '../checks/red.js';
+import { REPORT_FLAGS, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
@@ -269,7 +269,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
-        const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
+        const test = runners.get(command);
+        const failed = await runAndRerun(command, test?.runner, reportRun(sandboxes, id, env), standing, test?.line);
         if (failed) ran.push(failed);
       }
     }, withServices);
@@ -335,12 +336,15 @@ function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): R
   };
 }
 
-/** The runner of each command that names one, from the commit's `package.json` for an npm script: read before any of its code runs. */
-async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, Runner>> {
-  const runners = new Map<string, Runner>();
+/**
+ * The runner of each command that names one, from the commit's `package.json` for a script npm, pnpm or yarn runs, with the
+ * line its files and flags are appended to, as the red check's (`testCommand`, ORC-420): read before any of its code runs.
+ */
+async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, { line: string; runner: Runner }>> {
+  const runners = new Map<string, { line: string; runner: Runner }>();
   for (const command of commands) {
-    const runner = await runnerOfCommand(command, { showAtHead: (p) => show(git, sha, p) });
-    if (runner) runners.set(command, runner);
+    const { line, runner } = await testCommand(command, { showAtHead: (p) => show(git, sha, p) });
+    if (runner) runners.set(command, { line, runner });
   }
   return runners;
 }
