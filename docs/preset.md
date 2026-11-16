@@ -156,7 +156,7 @@ A new run starts again from its own level (ORC-365). A delegation whose decision
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev`: until the delegation starts at `intake` (ORC-395), the chain's entry is `build`, and intake, run before it, is its guard and hands over to it (ORC-391). `dev` moves the ticket to In Progress at its launch. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts the spec (ORC-395). The guard's deterministic checks and the « blocked by » wait hold before the ticket's first run only: a ticket delegated again, whose ticket session the tests step started (ORC-217), is not checked again, nor is `dev` after `tests`.
 
 `intake` is the preset's entry, and a delegation starts it (ORC-395): its end goes on to `clarify`, then to the spec. Until the build, the ticket stays in Todo: the end that reaches `build` moves it to In Progress. A chain started at `build`, as only tests start it, has no intake before it: `dev`'s pickup checks then block directly, as before.
 

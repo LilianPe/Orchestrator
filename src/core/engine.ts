@@ -176,7 +176,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
     const { run: next, post } = nextOf(at.workflow, job);
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
-    // Its assessment is posted now; a move it owes waits with the start, which moves the ticket itself (the chain's entry).
+    // Its assessment is posted now. What it starts has no status of its own in factory/default (the spec, ORC-395): no move waits.
     if (post && post !== 'review') out.effects.push({ kind: 'post_output', style: post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }

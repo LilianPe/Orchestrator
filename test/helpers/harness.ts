@@ -456,6 +456,8 @@ export function createHarness(
   return {
     clock, tracker, forge, runner, workspaces, checks, sandboxes, secrets, publisher, sessionsDir, runsDir, logs,
     send, advance, restart, another, project,
+    /** The project's authorization, when the harness resolves roles (`authz`). */
+    authz,
     /** One pass of the daemon's delegation of the replayed tickets (ORC-376), and what it started. */
     async delegateReplays(): Promise<void> {
       await life.outside.replays?.delegate();

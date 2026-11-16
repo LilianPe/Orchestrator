@@ -68,12 +68,15 @@ export const RED_ASSERTION = 'AssertionError: expected 1 to be 2';
 export const approveSpec = (h: Harness, actor = VALIDATOR, linearSessionId = 'ls-1') =>
   h.send('command', { name: '/approve', body: '', linearSessionId, author: actor === VALIDATOR ? 'Lilian' : 'Armand', kind: 'command' }, 'REL-1', { actor });
 
+/** The validator `approvedByValidator` signs for: a harness with `authz` must designate it. */
+export const DESIGNATED = 'user-validator';
+
 /**
- * `/approve` by a designated validator in a harness without `authz`: the command carries the role the daemon's resolver
- * would have stamped on it (ORC-186), the other events no role, as such a harness decides them.
+ * `/approve` by `DESIGNATED`. A harness with `authz` resolves its roles; one without stamps on the command the role the
+ * daemon's resolver would have (ORC-186), the other events carrying none, as such a harness decides them.
  */
 export const approvedByValidator = (h: Harness, linearSessionId = 'ls-1') =>
-  h.send('command', { name: '/approve', body: '', linearSessionId, author: 'Validator', kind: 'command' }, 'REL-1', { actor: 'user-validator', roles: ['validator'] });
+  h.send('command', { name: '/approve', body: '', linearSessionId, author: 'Validator', kind: 'command' }, 'REL-1', { actor: DESIGNATED, ...(h.authz ? {} : { roles: ['validator'] as const }) });
 
 /**
  * From the spec's gate to the build: the red check verified (`RED_ASSERTION`), then `checks`, the failures of the checks after

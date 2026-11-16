@@ -4,7 +4,7 @@ import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js
 import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import type { Workflow } from '../../src/core/workflow.js';
 import type { FakeScript } from '../../src/adapters/runner/fake.js';
-import { approvedByValidator, assessment, drafted, RED_ASSERTION, WORKTREE } from '../helpers/chain.js';
+import { approvedByValidator, assessment, DESIGNATED, drafted, RED_ASSERTION, WORKTREE } from '../helpers/chain.js';
 import { createHarness, loadTestWorkflow, withTestCommand } from '../helpers/harness.js';
 import { defaultPushBody, githubDelivery, githubIngest, pullRequestBody, sha, workflowRunBody } from '../helpers/github-webhook.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
@@ -33,7 +33,10 @@ async function delegatedToBuild(h: Harness, o: { build?: FakeScript[]; checks?: 
   h.runner.enqueue({ hold: true }, ...(o.build ?? [BUILD]));
   await approvedByValidator(h, (await h.ticket()).linearSessionId);
   if (lent) h.workspaces.heads.delete(WORKTREE);
-  h.runner.release(h.runner.requests.at(-1)!.runId);
+  // The approval started the tests step, held: anything else is another flow than the one this records.
+  const tests = h.runner.requests.at(-1)!;
+  if (!tests.prompt.startsWith('/factory:tests')) throw new Error(`the approval did not start the tests step: last run ${tests.prompt.split('\n')[0]}`);
+  h.runner.release(tests.runId);
   await h.orch.drained();
 }
 
@@ -256,7 +259,9 @@ export async function record(name: string): Promise<ExportedJournal> {
   const scenario = SCENARIOS[name];
   if (!scenario) throw new Error(`unknown scenario ${name}`);
   // The chain as it ships (ORC-395): the red check runs the repository's test command on the tests step's commit.
-  const h = createHarness({ preset: scenario.preset, authz: scenario.authz, fullChain: true, repoConfig: withTestCommand() });
+  // A scenario with its own authorization designates the validator who approves the spec; its roles are resolved.
+  const authz = scenario.authz && { ...scenario.authz, validators: [DESIGNATED] };
+  const h = createHarness({ preset: scenario.preset, authz, fullChain: true, repoConfig: withTestCommand() });
   h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }] });
   // The instance id salts the keys of the effects (and so the id of `publish.refused`): drawn at random, it
   // would make two recordings of one scenario differ.
