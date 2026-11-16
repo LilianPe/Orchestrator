@@ -3,6 +3,7 @@
 // when the runner wrote none; it never takes the agent's word.
 import { randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
+import { isRecord } from '../adapters/graphql-pages.js';
 import { ANSI } from './log-excerpt.js';
 import { isTestFile, isTestSpec, normalizePath } from './test-files.js';
 import { exportedNames, importedFrom, isPython, parse } from './ts-ast.js';
@@ -197,33 +198,58 @@ function runnerOf(line: string): Runner | undefined {
 }
 
 /**
- * The arguments of the last command of a line when it runs a script through npm, pnpm or yarn, past its variables:
- * undefined for another program, and for `exec` or `dlx`, which run one.
+ * The package manager and the arguments of the last command of a line when it runs a script through npm, pnpm or yarn,
+ * past its variables: undefined for another program, and for `exec` or `dlx`, which run one.
  */
-function packageArgs(line: string): string | undefined {
-  const args = /^(?:\w+=\S*\s+)*(?:npm|pnpm|yarn)(?:\s+|$)(.*)$/.exec(lastCommand(line))?.[1];
-  return args === undefined || /^(?:exec|dlx)(?:\s|$)/.test(args) ? undefined : args;
+function packageCall(line: string): { tool: string; args: string } | undefined {
+  const call = /^(?:\w+=\S*\s+)*(npm|pnpm|yarn)(?:\s+|$)(.*)$/.exec(lastCommand(line));
+  return !call || /^(?:exec|dlx)(?:\s|$)/.test(call[2]!) ? undefined : { tool: call[1]!, args: call[2]! };
 }
 
 const hasSeparator = (args: string): boolean => /(?:^|\s)--(?:\s|$)/.test(args);
 
-/**
- * The runner of the repository's test command: named in it, or in the `package.json` script it runs through npm, pnpm
- * or yarn past a `--` (`npm test --`, `pnpm run test --`). Undefined when the flags would reach another program: the
- * text output is read.
- */
-export async function runnerOfCommand(command: string, deps: Pick<RedDeps, 'showAtHead'>): Promise<Runner | undefined> {
-  const args = packageArgs(command);
-  const script = args !== undefined && hasSeparator(args) ? /^(?:run(?:-script)?\s+)?(\w[\w:.-]*)\s/.exec(args)?.[1] : undefined;
-  if (!script) return runnerOf(command);
+type PackageJson = { scripts?: Record<string, unknown>; packageManager?: unknown };
+
+/** The repository's `package.json`: empty without one, undefined when it does not parse as an object. */
+async function readPackageJson(deps: Pick<RedDeps, 'showAtHead'>): Promise<PackageJson | undefined> {
   try {
-    const scripts = (JSON.parse((await deps.showAtHead('package.json')) ?? '{}') as { scripts?: Record<string, unknown> }).scripts;
-    const body = scripts?.[script === 't' ? 'test' : script];
-    // No such script: a program pnpm or yarn runs (`yarn vitest run --`), named in the command.
-    return typeof body === 'string' ? runnerOf(body) : runnerOf(command);
+    const pkg: unknown = JSON.parse((await deps.showAtHead('package.json')) ?? '{}');
+    return isRecord(pkg) ? pkg : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Whether the repository runs Yarn 2 or later (Berry), which passes a `--` on to the script where Yarn 1 strips it: by the
+ * major of its `packageManager` field, or by a `.yarnrc.yml` when that names no Yarn.
+ */
+async function isYarnBerry(pkg: PackageJson | undefined, deps: Pick<RedDeps, 'showAtHead'>): Promise<boolean> {
+  const major = typeof pkg?.packageManager === 'string' ? /^yarn@(\d+)/.exec(pkg.packageManager)?.[1] : undefined;
+  return major ? Number(major) >= 2 : (await deps.showAtHead('.yarnrc.yml')) !== undefined;
+}
+
+/**
+ * The repository's test command as files are appended to it, and the runner it runs (ORC-412, ORC-420). When its last command
+ * runs a script through npm, pnpm or yarn, a `--` is added if it has none, so the files reach the script; under Yarn Berry,
+ * which would pass the `--` on (`isYarnBerry`), none is added and one the line ends with is dropped. Its runner is the one that
+ * script names in `package.json`. Otherwise the line is left as it is, and its runner is the one it names. No runner when the
+ * flags would reach another program: the text output is read.
+ */
+export async function testCommand(command: string, deps: Pick<RedDeps, 'showAtHead'>): Promise<{ line: string; runner?: Runner }> {
+  const ran = (line: string, runner: Runner | undefined) => ({ line, ...(runner ? { runner } : {}) });
+  const call = packageCall(command);
+  if (!call) return ran(command, runnerOf(command));
+  const pkg = await readPackageJson(deps);
+  const script = /^(?:run(?:-script)?\s+)?(\w[\w:.-]*)(?:\s|$)/.exec(call.args)?.[1];
+  const body = script ? pkg?.scripts?.[script === 't' ? 'test' : script] : undefined;
+  const named = typeof body === 'string' ? body : undefined;
+  // No such script in the `package.json` read: a program pnpm or yarn runs (`pnpm vitest run`), named in the command, which
+  // takes the files as they are. One that cannot be read: a script, presumably.
+  if (pkg && named === undefined) return ran(command, runnerOf(command));
+  const runner = runnerOf(named ?? command);
+  if (call.tool === 'yarn' && (await isYarnBerry(pkg, deps))) return ran(command.replace(/\s+--\s*$/, ''), runner);
+  return ran(hasSeparator(call.args) ? command : `${command.trimEnd()} --`, runner);
 }
 
 const TS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'];
@@ -301,18 +327,8 @@ export interface RedResult {
 
 export const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
-/**
- * The repository's test command with the `--` npm, pnpm or yarn need before the test files appended to it (ORC-412): added
- * when its last command runs a script through one of them (`packageArgs`) and has none. Any other command is left as it is.
- */
-export function withScriptArgs(command: string): string {
-  const args = packageArgs(command);
-  return args !== undefined && !hasSeparator(args) ? `${command.trimEnd()} --` : command;
-}
-
 /** Runs the tests the step added with the repository's test command, and says whether they are red for the right reason. */
 export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedResult> {
-  const command = withScriptArgs(repoCommand);
   const verdict = (cause: RedCause, detail: string, ran = '', exitCode: number | null = null): RedResult => ({
     verified: RED_VERIFIED.has(cause),
     cause,
@@ -325,8 +341,9 @@ export async function checkRed(repoCommand: string, deps: RedDeps): Promise<RedR
   const tests = deps.changed.filter((f) => !f.deleted && isTestSpec(f.path)).map((f) => normalizePath(f.path));
   if (tests.length === 0) return verdict('no_tests', 'The tests step committed no test.');
 
-  const ran = `${command} ${tests.map(quote).join(' ')}`;
-  const { exitCode, output, report } = await runWithReport(ran, await runnerOfCommand(command, deps), deps);
+  const { line, runner } = await testCommand(repoCommand, deps);
+  const ran = `${line} ${tests.map(quote).join(' ')}`;
+  const { exitCode, output, report } = await runWithReport(ran, runner, deps);
   const read = exitCode === null || exitCode === 0 || report === undefined ? undefined : parseReport(report);
   const reading = read ? readReport(read) : readTestRun(exitCode, output);
   const tail = output.slice(-4000);

@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
-import { MISSING_TEST_COMMAND, parseRepoConfig } from '../config/repo-config.js';
-import { PROPOSAL_HEADER, runInit, type InitIO } from './init.js';
+import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
+import { PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   const printed: string[] = [];
@@ -87,11 +87,14 @@ describe('factory init', () => {
     expect(existsSync(join(home, 'config.yaml'))).toBe(true);
   });
 
-  it('criterion 1 (ORC-172): a Python repository with no config gets uv sync --frozen, ruff, mypy and pytest', async () => {
-    const { config, wrote } = await initProposal({}, { python: true });
+  it('criterion 1 (ORC-172): a Python repository with no config gets uv sync --frozen, ruff, mypy and pytest, as its `test` (ORC-420)', async () => {
+    const { config, wrote, printed } = await initProposal({}, { python: true });
     expect(wrote).toBe(false);
     expect(config?.setup).toBe('uv sync --frozen');
-    expect(config?.commands).toEqual({ ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' });
+    expect(config?.commands).toEqual({ ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', test: 'uv run --frozen pytest' });
+    // What it proposes, the red check can run: no warning right after it.
+    expect(printed).not.toContain(MISSING_TEST_COMMAND);
+    expect(testCommandWarnings(config?.commands)).toEqual([]);
   });
 
   it('a pyproject.toml without uv.lock proposes nothing: a `uv run` would write a lockfile into the worktree', async () => {
@@ -100,10 +103,13 @@ describe('factory init', () => {
     expect(wrote).toBe(false);
   });
 
-  it('a repository with both proposes both', async () => {
-    const { config } = await initProposal(NPM, { python: true });
+  it('a repository with both proposes both: pytest under its own name, said not to be the red check\'s (ORC-420)', async () => {
+    const { config, printed } = await initProposal(NPM, { python: true });
     expect(config?.setup).toBe('npm ci && uv sync --frozen');
     expect(config?.commands).toEqual({ test: 'npm test', ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' });
+    expect(printed).toContain(PYTEST_BESIDE_TEST);
+    expect(printed).not.toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal({}, { python: true })).printed).not.toContain(PYTEST_BESIDE_TEST);
   });
 
   it('a TypeScript repository with a pnpm-lock.yaml gets pnpm commands', async () => {
@@ -125,7 +131,7 @@ describe('factory init', () => {
   });
 
   it('warns when the repository will have no `commands.test`, proposed or on the default branch (ORC-412)', async () => {
-    expect((await initProposal({}, { python: true })).printed).toContain(MISSING_TEST_COMMAND);
+    expect((await initProposal({ 'package.json': JSON.stringify({ scripts: { lint: 'eslint .' } }), 'package-lock.json': '{}' })).printed).toContain(MISSING_TEST_COMMAND);
     expect((await initProposal({ '.factory/config.yml': 'commands: { lint: npm run lint }\n' })).printed).toContain(MISSING_TEST_COMMAND);
     expect((await initProposal(NPM)).printed).not.toContain(MISSING_TEST_COMMAND);
     expect((await initProposal({ '.factory/config.yml': 'commands: { test: npm test }\n' })).printed).not.toContain(MISSING_TEST_COMMAND);
