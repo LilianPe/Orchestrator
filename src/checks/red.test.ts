@@ -362,6 +362,20 @@ describe('checkRed reads the runner report (ORC-342)', () => {
     expect(await ran({ '.yarnrc.yml': '' }, 'npm test')).toContain("npm test -- 'src/export.test.ts' --reporter=default");
     // `yarn dlx` runs a program, as before.
     expect(await ran({ '.yarnrc.yml': '' }, 'yarn dlx vitest run')).toContain("yarn dlx vitest run 'src/export.test.ts' --reporter=default");
+    // A `--` the command ends with would reach the script: dropped.
+    expect(await ran({ '.yarnrc.yml': '' }, 'yarn test --')).toContain(berry);
+  });
+
+  it('adds no `--` to a program pnpm or yarn runs, which no script names; reads the one the command names past an unreadable package.json (ORC-420)', async () => {
+    const ran = async (pkg: string, command: string) => {
+      const d = reporting(['src/export.test.ts'], 1, VITEST_ASSERTION, undefined, { head: { 'package.json': pkg } });
+      await checkRed(command, d);
+      return d.commands[0]!;
+    };
+    const scripts = JSON.stringify({ scripts: { test: 'mocha' } });
+    expect(await ran(scripts, 'pnpm vitest run')).toContain("pnpm vitest run 'src/export.test.ts' --reporter=default");
+    expect(await ran(scripts, 'yarn jest')).toContain("yarn jest 'src/export.test.ts' --json");
+    expect(await ran('{', 'yarn jest')).toContain("yarn jest -- 'src/export.test.ts' --json");
   });
 
   it('reads the script of the last command, through yarn too, past its variables (ORC-412)', async () => {

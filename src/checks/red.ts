@@ -220,28 +220,28 @@ async function isYarnBerry(pkg: PackageJson | undefined, deps: Pick<RedDeps, 'sh
 
 /**
  * The repository's test command as files are appended to it, and the runner it runs (ORC-412, ORC-420). When its last command
- * runs a script through npm, pnpm or yarn, a `--` is added if it has none, so the files reach the script, but for Yarn Berry,
- * which would pass the `--` on (`isYarnBerry`); its runner is the one that script names in `package.json`. Otherwise the line
- * is left as it is, and its runner is the one it names. No runner when the flags would reach another program: the text output
- * is read.
+ * runs a script through npm, pnpm or yarn, a `--` is added if it has none, so the files reach the script; under Yarn Berry,
+ * which would pass the `--` on (`isYarnBerry`), none is added and one the line ends with is dropped. Its runner is the one that
+ * script names in `package.json`. Otherwise the line is left as it is, and its runner is the one it names. No runner when the
+ * flags would reach another program: the text output is read.
  */
 export async function testCommand(command: string, deps: Pick<RedDeps, 'showAtHead'>): Promise<{ line: string; runner?: Runner }> {
+  const ran = (line: string, runner: Runner | undefined) => ({ line, ...(runner ? { runner } : {}) });
   const call = packageCall(command);
-  const runner = (r: Runner | undefined) => (r ? { runner: r } : {});
-  if (!call) return { line: command, ...runner(runnerOf(command)) };
+  if (!call) return ran(command, runnerOf(command));
   let pkg: PackageJson | undefined;
   try {
     pkg = JSON.parse((await deps.showAtHead('package.json')) ?? '{}') as PackageJson;
   } catch {
     pkg = undefined;
   }
-  const passesArgs = hasSeparator(call.args) || (call.tool === 'yarn' && (await isYarnBerry(pkg, deps)));
-  const line = passesArgs ? command : `${command.trimEnd()} --`;
-  if (!pkg) return { line };
   const script = /^(?:run(?:-script)?\s+)?(\w[\w:.-]*)(?:\s|$)/.exec(call.args)?.[1];
-  const body = script && pkg.scripts?.[script === 't' ? 'test' : script];
-  // No such script: a program pnpm or yarn runs (`yarn vitest run`), named in the command.
-  return { line, ...runner(typeof body === 'string' ? runnerOf(body) : runnerOf(command)) };
+  const body = script && pkg?.scripts?.[script === 't' ? 'test' : script];
+  // No such script in the `package.json` read: a program pnpm or yarn runs (`pnpm vitest run`), named in the command, which
+  // takes the files as they are. One that cannot be read: a script, presumably.
+  if (pkg && typeof body !== 'string') return ran(command, runnerOf(command));
+  const line = call.tool === 'yarn' && (await isYarnBerry(pkg, deps)) ? command.replace(/\s+--\s*$/, '') : hasSeparator(call.args) ? command : `${command.trimEnd()} --`;
+  return ran(line, runnerOf(typeof body === 'string' ? body : command));
 }
 
 const TS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.mjs', '.cts', '.cjs'];
