@@ -8,7 +8,7 @@ import { CAPTURES_KEPT_MS } from '../../src/runtime/effects.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean-verify.js';
 import type { FakeScript } from '../../src/adapters/runner/fake.js';
-import { chainHarness, delegate as delegated, drafted, toBuild } from '../helpers/chain.js';
+import { assessment, chainHarness, delegate as delegated, drafted, toBuild, WORKTREE } from '../helpers/chain.js';
 import type { createHarness } from '../helpers/harness.js';
 
 /**
@@ -18,12 +18,8 @@ import type { createHarness } from '../helpers/harness.js';
 type Harness = ReturnType<typeof createHarness>;
 const SHA = 'c0ffee'.padEnd(40, '0');
 const BASE = 'ba5e'.padEnd(40, '0');
-const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
-const intake = (screen: boolean) => ({
-  output: { status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], intake: { size: 's', risk: 'low', complete: true, missing: [], screen } } satisfies AgentOutput,
-});
 /** The dev run's result, with the page to shoot: `submit_result` has no field that could say `not_applicable` (`visual-proof.test.ts`). */
 const dev = {
   output: { status: 'done', summary: 'Button restyled.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], visual_scenario: { url: '/settings', steps: ['open'] } } satisfies AgentOutput,
@@ -52,7 +48,7 @@ function visual(result: (req: CleanVerifyRequest) => Partial<CleanVerifyResult> 
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Restyle the button', description: 'Restyle the settings button.\n\nAcceptance criteria:\n1. It is blue.' });
   h.workspaces.heads.set(WORKTREE, SHA);
-  h.runner.enqueue(intake(screen), drafted());
+  h.runner.enqueue(assessment({ screen }), drafted());
   return { h, asked };
 }
 

@@ -4,7 +4,7 @@ import { exportJournal, type ExportedJournal } from '../../src/runtime/replay.js
 import { CUT_RELAUNCHES } from '../../src/store/types.js';
 import type { Workflow } from '../../src/core/workflow.js';
 import type { FakeScript } from '../../src/adapters/runner/fake.js';
-import { approvedByValidator, assessment, DESIGNATED, drafted, RED_ASSERTION, WORKTREE } from '../helpers/chain.js';
+import { assessment, DESIGNATED, drafted, toBuild, WORKTREE } from '../helpers/chain.js';
 import { createHarness, loadTestWorkflow, withTestCommand } from '../helpers/harness.js';
 import { defaultPushBody, githubDelivery, githubIngest, pullRequestBody, sha, workflowRunBody } from '../helpers/github-webhook.js';
 import { linearIngest, signedDelegation } from '../helpers/linear-webhook.js';
@@ -26,12 +26,9 @@ const BUILD: FakeScript = { events: [{ kind: 'init', sessionId: 'x' }, { kind: '
 async function delegatedToBuild(h: Harness, o: { build?: FakeScript[]; checks?: string[]; delegate?: () => Promise<void> } = {}): Promise<void> {
   h.runner.enqueue(assessment(), drafted());
   await (o.delegate ?? (() => h.send('ticket.delegated', { linearSessionId: 'ls-1' })))();
-  h.checks.failNext(RED_ASSERTION);
-  for (const output of o.checks ?? []) h.checks.failNext(output);
   const lent = !h.workspaces.heads.has(WORKTREE);
   if (lent) h.workspaces.heads.set(WORKTREE, 'base-sha');
-  h.runner.enqueue({ hold: true }, ...(o.build ?? [BUILD]));
-  await approvedByValidator(h, (await h.ticket()).linearSessionId);
+  await toBuild(h, { build: o.build ?? [BUILD], checks: o.checks, actor: DESIGNATED, linearSessionId: (await h.ticket()).linearSessionId, holdTests: true });
   if (lent) h.workspaces.heads.delete(WORKTREE);
   // The approval started the tests step, held: anything else is another flow than the one this records.
   const tests = h.runner.requests.at(-1)!;

@@ -64,27 +64,25 @@ export const drafted = (spec: Spec = SPEC): FakeScript => ({ output: { ...result
 /** The red check verified: the tests step's added test fails on an assertion (ORC-123). */
 export const RED_ASSERTION = 'AssertionError: expected 1 to be 2';
 
-/** `/approve` in the ticket's session, by `actor`. */
-export const approveSpec = (h: Harness, actor = VALIDATOR, linearSessionId = 'ls-1') =>
-  h.send('command', { name: '/approve', body: '', linearSessionId, author: actor === VALIDATOR ? 'Lilian' : 'Armand', kind: 'command' }, 'REL-1', { actor });
-
-/** The validator `approvedByValidator` signs for: a harness with `authz` must designate it. */
+/** A validator the recorded journals' approvals sign for: a scenario's own `authz` designates it. */
 export const DESIGNATED = 'user-validator';
 
+const AUTHORS: Readonly<Record<string, string>> = { [REQUESTER]: 'Armand', [VALIDATOR]: 'Lilian', [DESIGNATED]: 'Validator' };
+
 /**
- * `/approve` by `DESIGNATED`. A harness with `authz` resolves its roles; one without stamps on the command the role the
- * daemon's resolver would have (ORC-186), the other events carrying none, as such a harness decides them.
+ * `/approve` in the ticket's session, by `actor`. A harness with `authz` resolves the actor's roles; one without stamps on
+ * the command the validator's role the daemon's resolver would have (ORC-186), the other events carrying none.
  */
-export const approvedByValidator = (h: Harness, linearSessionId = 'ls-1') =>
-  h.send('command', { name: '/approve', body: '', linearSessionId, author: 'Validator', kind: 'command' }, 'REL-1', { actor: DESIGNATED, ...(h.authz ? {} : { roles: ['validator'] as const }) });
+export const approveSpec = (h: Harness, actor = VALIDATOR, linearSessionId = 'ls-1') =>
+  h.send('command', { name: '/approve', body: '', linearSessionId, author: AUTHORS[actor] ?? actor, kind: 'command' }, 'REL-1', { actor, ...(h.authz ? {} : { roles: ['validator'] as const }) });
 
 /**
  * From the spec's gate to the build: the red check verified (`RED_ASSERTION`), then `checks`, the failures of the checks after
- * it; the tests step's run, then `build`, the runs after it; and the validator's `/approve`.
+ * it; the tests step's run, held if `holdTests`, then `build`, the runs after it; and `actor`'s `/approve`.
  */
-export async function toBuild(h: Harness, o: { build?: FakeScript[]; checks?: string[]; linearSessionId?: string } = {}): Promise<void> {
+export async function toBuild(h: Harness, o: { build?: FakeScript[]; checks?: string[]; linearSessionId?: string; actor?: string; holdTests?: boolean } = {}): Promise<void> {
   h.checks.failNext(RED_ASSERTION);
   for (const output of o.checks ?? []) h.checks.failNext(output);
-  h.runner.enqueue({}, ...(o.build ?? []));
-  await approveSpec(h, VALIDATOR, o.linearSessionId);
+  h.runner.enqueue(o.holdTests ? { hold: true } : {}, ...(o.build ?? []));
+  await approveSpec(h, o.actor, o.linearSessionId);
 }

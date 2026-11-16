@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fingerprint, FREEZE_CHECK, REFREEZE } from '../../src/checks/freeze.js';
 import type { EventPayloads } from '../../src/core/types.js';
 import { exportJournal } from '../../src/runtime/replay.js';
-import { approveSpec, assessment, drafted, RED_ASSERTION } from '../helpers/chain.js';
+import { assessment, drafted, RED_ASSERTION, toBuild } from '../helpers/chain.js';
 import { createHarness, withTestCommand } from '../helpers/harness.js';
 import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
@@ -47,9 +47,7 @@ async function frozenThenDev(): Promise<Harness> {
   const h = ticketWithBranch({ effects: { command: { command: 'retester', unblocks: true, effects: [retest] } } }, true);
   h.runner.enqueue(assessment(), drafted());
   await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });
-  h.checks.failNext(RED_ASSERTION);
-  h.runner.enqueue({}, { hold: true });
-  await approveSpec(h, MEMBER, 'as-1');
+  await toBuild(h, { build: [{ hold: true }], actor: MEMBER, linearSessionId: 'as-1' });
   // Sorted: a projection read from jsonb has its keys by length, not as written, and nothing reads the freeze in order.
   expect(Object.keys((await h.ticket()).frozenTests!.files).sort()).toEqual(['src/export.test.ts', 'vitest.config.ts']);
   return h;
@@ -61,7 +59,7 @@ async function commitThenFinish(h: Harness, files: Record<string, string>): Prom
   const head = { ...AT_FREEZE, ...files };
   h.workspaces.steps.set(`${WORKTREE}@sha-freeze`, { changed: Object.keys(files).map((path) => ({ path, deleted: false })), head });
   h.workspaces.steps.set(`${WORKTREE}@sha-dev`, { changed: [], head });
-  h.runner.release(h.runner.requests[3]!.runId);
+  h.runner.release(h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!.runId);
   await h.orch.drained();
 }
 
@@ -131,7 +129,7 @@ describe('the freeze of the tests (ORC-131)', () => {
     await commitThenFinish(h, added);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     h.workspaces.steps.set(`${WORKTREE}@sha-dev`, { changed: Object.keys(added).map((path) => ({ path, deleted: false })), head: { ...AT_FREEZE, ...added } });
-    h.checks.failNext('AssertionError: expected 1 to be 2');
+    h.checks.failNext(RED_ASSERTION);
     h.runner.enqueue({});
     h.runner.enqueue({}, { hold: true });
     await h.send('command', { name: 'retester', body: '', linearSessionId: 'as-t', author: 'X' }, 'REL-1', { actor: LEAD });

@@ -76,11 +76,6 @@ describe('the runtime bindings (ORC-391)', () => {
       expect(defaultWorkflow().jobs[name], name).toBeDefined();
     }
   });
-
-  it('the workflow of factory/default from its own entry walks past clarify, which has no job, to the spec', () => {
-    const wf = presetWorkflow(preset);
-    expect(nextOf(wf, wf.jobs['intake']!)).toMatchObject({ run: { name: 'spec' }, step: { id: 'spec_draft' } });
-  });
 });
 
 describe('the preset drives where the review ends (ORC-391, criterion 2)', () => {

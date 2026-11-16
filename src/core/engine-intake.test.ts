@@ -138,8 +138,6 @@ describe('intake: duplicates, existing code and scope (ORC-207)', () => {
 });
 
 describe('the run boundary of the risk (ORC-365)', () => {
-  // Delegation starts with intake, the preset's entry (ORC-395).
-  const withIntake = workflow;
   /** A chain that starts at `build`, as a preset with no intake would. */
   const atBuild: Workflow = presetWorkflow(preset, {}, 'build');
   const delegation = (extra: Partial<FactoryEvent> = {}) =>
@@ -149,7 +147,7 @@ describe('the run boundary of the risk (ORC-365)', () => {
   /** The run's intake, started by the delegation. */
   const intakeOf = (t: TicketState) => ({ ...t, activeRunId: 'r1', activeJob: 'intake' });
   /** Whether the decision of `e` touches the risk: a delegation does only to mark a new run. */
-  const marks = (t: TicketState | undefined, e: FactoryEvent) => decide(t, e, withIntake).events.some((x) => x.type === 'ticket.patched' && 'risk' in x.patch);
+  const marks = (t: TicketState | undefined, e: FactoryEvent) => decide(t, e, workflow).events.some((x) => x.type === 'ticket.patched' && 'risk' in x.patch);
 
   it('within a run, a later intake proposing low leaves a high risk high (criterion 1)', () => {
     const first = after(ticket(), finished(assessed({ risk: 'high', screen: true, complete: false, missing: ['CSV or XLSX?'] })));
@@ -159,9 +157,9 @@ describe('the run boundary of the risk (ORC-365)', () => {
   });
 
   it('a ticket delegated again takes the risk its new intake proposes, low after high, and the visual proof it plans (criterion 2)', () => {
-    expect(decide(takenBack(), delegation(), withIntake).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'intake' }));
+    expect(decide(takenBack(), delegation(), workflow).effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'intake' }));
     // The boundary: the last run's assessment does not carry over, the new run has none yet.
-    const delegated = after(takenBack(), delegation(), withIntake);
+    const delegated = after(takenBack(), delegation(), workflow);
     expect(delegated).toMatchObject({ risk: null, visualProof: null });
     const t = after(intakeOf(delegated), finished(assessed({ risk: 'low', size: 's', screen: false })));
     expect(t).toMatchObject({ risk: 'low', size: 's', visualProof: null });
@@ -172,7 +170,7 @@ describe('the run boundary of the risk (ORC-365)', () => {
   });
 
   it('a new run whose intake sees a screen requires the visual proof again', () => {
-    expect(after(intakeOf(after(takenBack(), delegation(), withIntake)), finished(assessed({ risk: 'low', screen: true }))).visualProof).toBe('required');
+    expect(after(intakeOf(after(takenBack(), delegation(), workflow)), finished(assessed({ risk: 'low', screen: true }))).visualProof).toBe('required');
   });
 
   it('a delegation straight to dev starts a new run too, with no risk until an intake assesses it', () => {

@@ -1,31 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentOutput } from '../../src/core/agent-output.js';
 import { causeOf } from '../../src/core/block-cause.js';
 import type { Spec } from '../../src/core/spec.js';
-import { assessment } from '../helpers/chain.js';
-import { createHarness, withTestCommand } from '../helpers/harness.js';
+import { assessment, chainHarness, delegate, drafted, RED_ASSERTION, REQUESTER, SPEC, VALIDATOR, WORKTREE } from '../helpers/chain.js';
+import type { createHarness } from '../helpers/harness.js';
 
 /**
  * ORC-212: `spec_draft` writes the spec, `spec_check` checks it, the factory publishes it in the ticket's session and a
  * designated validator, never the run's initiator, approves it (`/approve`), asks for changes (`/changes`) or rejects it.
  * Once approved, its criteria go to the `tests` step and are frozen with its tests.
  */
-const WORKTREE = '/tmp/factory-fake/p/REL-1';
 const TEST = "it('exports', () => expect(toCsv([])).toBe(''));\n";
-const REQUESTER = 'user-armand';
-const VALIDATOR = 'user-lilian';
-const SPEC: Spec = {
-  goal: 'Export the audits as CSV.',
-  out_of_scope: ['XLSX'],
-  criteria: ['Given 2 audits, when I click CSV, then a file of 3 lines downloads.'],
-  files: ['src/export.ts'],
-  architecture: 'None.',
-  risks: [],
-  assumed: ['The browser saves a text/csv response as a file.'],
-};
-const drafted = (spec: Spec) => ({
-  output: { status: 'done', summary: 'Drafted.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [], spec } satisfies AgentOutput,
-});
 
 type Harness = ReturnType<typeof createHarness>;
 
@@ -34,15 +18,12 @@ type Harness = ReturnType<typeof createHarness>;
  * `specs` say, one run each.
  */
 async function delegated(...specs: Spec[]): Promise<Harness> {
-  const h = createHarness({ fullChain: true, repoConfig: withTestCommand(), authz: { validators: [VALIDATOR], githubLogins: { [REQUESTER]: 'armand-gh', [VALIDATOR]: 'lilian-gh' } } });
+  const h = chainHarness();
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Export the audits as CSV from the audit list.' });
-  h.tracker.setTeamMembers('REL', [REQUESTER, VALIDATOR]);
-  h.forge.setRepoPermission('armand-gh', 'write');
-  h.forge.setRepoPermission('lilian-gh', 'write');
   h.workspaces.heads.set(WORKTREE, 'sha-tests');
   h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }], head: { 'src/export.test.ts': TEST } });
-  h.runner.enqueue(assessment(), ...specs.map(drafted));
-  await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: REQUESTER });
+  h.runner.enqueue(assessment(), ...specs.map((s) => drafted(s)));
+  await delegate(h);
   return h;
 }
 
@@ -66,7 +47,7 @@ describe('the spec and its human gate (ORC-212)', () => {
     expect((await h.ticket()).spec?.approval).toBeUndefined();
 
     // Criterion 5: the validator approves, the tests step gets the criteria, and they are frozen with its tests.
-    h.checks.failNext('AssertionError: expected 1 to be 2');
+    h.checks.failNext(RED_ASSERTION);
     h.runner.enqueue({}, { hold: true });
     await command(h, '/approve', VALIDATOR);
     expect(skills(h)).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
@@ -118,7 +99,7 @@ describe('the spec and its human gate (ORC-212)', () => {
     expect(t.spec?.approval).toBeUndefined();
     expect(said(h).filter((b) => b.startsWith('Spec published'))).toHaveLength(2);
     // Nothing goes on before the new version is approved; once it is, the tests step starts again.
-    h.checks.failNext('AssertionError: expected 1 to be 2');
+    h.checks.failNext(RED_ASSERTION);
     h.runner.enqueue({}, {});
     await command(h, '/approve', VALIDATOR);
     expect(skills(h).slice(4, 5)).toEqual(['/factory:tests']);

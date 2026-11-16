@@ -3,29 +3,18 @@ import type { RepoVariables } from '../../src/config/repo-variables.js';
 import { measureTicket } from '../../src/core/measures.js';
 import { exportJournal } from '../../src/runtime/replay.js';
 import { defaultWorkflow } from '../../src/presets/workflow.js';
-import { approveSpec, assessment, CHAIN_AUTHZ, chainTeam, delegate, drafted } from '../helpers/chain.js';
-import { createHarness, withTestCommand } from '../helpers/harness.js';
+import { approveSpec, assessment, chainHarness, delegate, drafted, WORKTREE } from '../helpers/chain.js';
+import { withTestCommand, type createHarness } from '../helpers/harness.js';
 import { pythonRepoFiles } from '../helpers/python-repo.js';
 
-const WORKTREE = '/tmp/factory-fake/p/REL-1';
 /** The `tests` job's red check, as `factory/default` has it: in measure mode, with the repository's `commands.test`. */
 const RED = defaultWorkflow().jobs.tests!.red!;
 const SYNTAX = 'FAIL src/export.test.ts\nError: Transform failed with 1 error';
 
 /** A project whose `tests` step (ORC-123) has its red check in `mode`. */
 function harness(mode: 'measure' | 'blocking' = 'measure', sandboxed = false, repoVariables?: () => Promise<RepoVariables>) {
-  const h = createHarness({
-    sandboxed,
-    repoVariables,
-    repoConfig: withTestCommand(),
-    fullChain: true,
-    authz: CHAIN_AUTHZ,
-    workflow: { jobs: { tests: { red: { ...RED, mode } } } },
-  });
-  chainTeam(h);
+  const h = chainHarness({ sandboxed, repoVariables, workflow: { jobs: { tests: { red: { ...RED, mode } } } } });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-  h.workspaces.heads.set(WORKTREE, 'base-sha');
-  h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }] });
   return h;
 }
 
@@ -134,10 +123,8 @@ ERROR tests/test_audit.py
 
   /** The fixture repository at baseSha, its tests step adding `tests/test_audit.py`, the red command `init` proposes for it. */
   function python() {
-    const h = createHarness({ repoConfig: withTestCommand('uv run --frozen pytest'), fullChain: true, authz: CHAIN_AUTHZ });
-    chainTeam(h);
+    const h = chainHarness({ repoConfig: withTestCommand('uv run --frozen pytest') });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Audit summary', description: 'Résumer les scores des audits par identifiant dans un module à part.' });
-    h.workspaces.heads.set(WORKTREE, 'base-sha');
     const base = pythonRepoFiles();
     h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'tests/test_audit.py', deleted: false }], base, head: { ...base, 'tests/test_audit.py': AUDIT_TEST } });
     return h;
