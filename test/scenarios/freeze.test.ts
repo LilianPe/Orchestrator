@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { fingerprint, FREEZE_CHECK, REFREEZE } from '../../src/checks/freeze.js';
 import type { EventPayloads } from '../../src/core/types.js';
 import { exportJournal } from '../../src/runtime/replay.js';
+import { assessment, drafted, RED_ASSERTION, toBuild } from '../helpers/chain.js';
 import { createHarness, withTestCommand } from '../helpers/harness.js';
-import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
+import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /**
  * ORC-131: after `red`, the tests and their harness are frozen; `factory/tests-gelés` blocks any change to them, the
@@ -19,11 +20,15 @@ const MEMBER = 'user-armand';
 
 type Harness = ReturnType<typeof createHarness>;
 
-/** A ticket, a designated maintainer and a member, the branch at `sha-freeze`. */
-function ticketWithBranch(workflow?: WorkflowOverrides): Harness {
+/**
+ * A ticket, a designated maintainer and a member, who validates the specs, the branch at `sha-freeze`. `fullChain`: the
+ * delegation starts at intake, as it ships (ORC-395).
+ */
+function ticketWithBranch(workflow?: WorkflowOverrides, fullChain = false): Harness {
   const h = createHarness({
-    authz: { maintainers: [LEAD], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } },
+    authz: { maintainers: [LEAD], validators: [MEMBER], githubLogins: { [LEAD]: 'lilian-gh', [MEMBER]: 'armand-gh' } },
     repoConfig: withTestCommand(),
+    fullChain,
     ...(workflow ? { workflow } : {}),
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
@@ -35,14 +40,14 @@ function ticketWithBranch(workflow?: WorkflowOverrides): Harness {
   return h;
 }
 
-/** The tests step (red measured) then dev, held so that a test can change the branch before its verification. */
+/** Intake, the spec approved, the tests step (red measured) then dev, held so that a test can change the branch before its verification. */
 async function frozenThenDev(): Promise<Harness> {
   // A command of the test's own that starts the tests step again (no command starts a step since ORC-392).
   const retest = { kind: 'start_run' as const, job: 'tests', inputText: '', linearSessionId: 'as-t' };
-  const h = ticketWithBranch(delegationStarts('tests', { effects: { command: { unblocks: true, effects: [retest] } } }));
-  h.checks.failNext('AssertionError: expected 1 to be 2');
-  h.runner.enqueue({}, { hold: true });
+  const h = ticketWithBranch({ effects: { command: { command: 'retester', unblocks: true, effects: [retest] } } }, true);
+  h.runner.enqueue(assessment(), drafted());
   await h.send('ticket.delegated', { linearSessionId: 'as-1' }, 'REL-1', { actor: LEAD });
+  await toBuild(h, { build: [{ hold: true }], actor: MEMBER, linearSessionId: 'as-1' });
   // Sorted: a projection read from jsonb has its keys by length, not as written, and nothing reads the freeze in order.
   expect(Object.keys((await h.ticket()).frozenTests!.files).sort()).toEqual(['src/export.test.ts', 'vitest.config.ts']);
   return h;
@@ -54,7 +59,7 @@ async function commitThenFinish(h: Harness, files: Record<string, string>): Prom
   const head = { ...AT_FREEZE, ...files };
   h.workspaces.steps.set(`${WORKTREE}@sha-freeze`, { changed: Object.keys(files).map((path) => ({ path, deleted: false })), head });
   h.workspaces.steps.set(`${WORKTREE}@sha-dev`, { changed: [], head });
-  h.runner.release(h.runner.requests[1]!.runId);
+  h.runner.release(h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!.runId);
   await h.orch.drained();
 }
 
@@ -124,7 +129,7 @@ describe('the freeze of the tests (ORC-131)', () => {
     await commitThenFinish(h, added);
     expect(await h.ticket()).toMatchObject({ blocked: true });
     h.workspaces.steps.set(`${WORKTREE}@sha-dev`, { changed: Object.keys(added).map((path) => ({ path, deleted: false })), head: { ...AT_FREEZE, ...added } });
-    h.checks.failNext('AssertionError: expected 1 to be 2');
+    h.checks.failNext(RED_ASSERTION);
     h.runner.enqueue({});
     h.runner.enqueue({}, { hold: true });
     await h.send('command', { name: 'retester', body: '', linearSessionId: 'as-t', author: 'X' }, 'REL-1', { actor: LEAD });

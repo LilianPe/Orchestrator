@@ -156,9 +156,9 @@ A new run starts again from its own level (ORC-365). A delegation whose decision
 
 Each later attempt of the ticket carries its risk in its labels (`risk`, ORC-226).
 
-Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts `dev`: until the delegation starts at `intake` (ORC-395), the chain's entry is `build`, and intake, run before it, is its guard and hands over to it (ORC-391). `dev` moves the ticket to In Progress at its launch. `dev` runs its own pickup checks again before its first run: they pass when the guard did, unless the ticket changed in between.
+Then the guard before In Progress: a failed deterministic check, a probable duplicate, a ticket out of scope or an incomplete ticket does not start, it goes to `clarify` ([below](#clarify-questions-reminder-and-expiry-orc-210)); nothing moves to In Progress. A complete ticket starts the spec (ORC-395). The guard's deterministic checks and the « blocked by » wait hold before the ticket's first run only: a ticket delegated again, whose ticket session the tests step started (ORC-217), is not checked again, nor is `dev` after `tests`.
 
-`intake` is off in the factory's workflow: delegation starts `dev`, until ORC-395 makes it start at the preset's entry. A repository can no longer turn it on, as its `.factory/workflow.yml` is ignored since ORC-388; the scenarios and `factory/fantome` do. Without it, `dev`'s pickup checks block directly, as before.
+`intake` is the preset's entry, and a delegation starts it (ORC-395): its end goes on to `clarify`, then to the spec. Until the build, the ticket stays in Todo: the end that reaches `build` moves it to In Progress. A chain started at `build`, as only tests start it, has no intake before it: `dev`'s pickup checks then block directly, as before.
 
 ### Waiting on a blocked-by ticket (ORC-363)
 
@@ -239,7 +239,7 @@ A command with no spec waiting (none yet, a ticket blocked or undelegated), on a
 
 **After approval.** Every later step of the ticket's dev queue reads the approved spec in its prompt (« Approved spec »): `tests` writes its criteria as the acceptance tests, the build works within it. The freeze after `red` (ORC-131) keeps the approved criteria with the frozen tests (`frozenTests.criteria`); like its files, a later freeze adds the criteria of a version approved since to those already frozen, and the tests of a changed criterion stay frozen until `/refreeze`, which keeps the criteria approved then. A new delegation clears the ticket's spec: the work starts afresh. A redraft reads its last version (« Spec under review »).
 
-`spec` is off in the factory's workflow, until ORC-395: the scenarios start it by a delegation of their own, and `factory/fantome` runs it after `intake`, its `next`; a repository no longer can (ORC-388).
+`spec` runs after `intake` and `clarify` (ORC-395): every ticket waits for a designated validator's `/approve` before its tests and its code. An instance whose `factory.yml` designates no validator (`validators`, empty by default) approves no spec: its tickets stop at the gate.
 
 **Not yet**: the « Spec » status or the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); the properties frozen as tests (ORC-261); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
 
@@ -336,7 +336,7 @@ The verdict comes back like the result of `verify`: `verify.passed` or `verify.f
 
 The flag lives in the job, frozen with each ticket's workflow version: `jobs.tests.red.mode: measure | blocking` (`measure` by default). Switching it to `blocking`, after validation on the golden tickets (ORC-236), is a change of the factory's workflow (`src/presets/workflow.ts`): a repository's `.factory/workflow.yml` is ignored since ORC-388.
 
-The workflow's `tests` job is inactive as long as the delegation starts `build`, until ORC-395: `factory/fantome` starts it on its chain, the scenarios by the job their delegation starts (`Workflow.delegated`, which only tests set); a repository no longer can (ORC-388). Jobs without `red` keep the former `dev` flow.
+The workflow's `tests` job runs once the spec is approved (ORC-395), then the red check and the freeze, then `build`; `factory/fantome` starts it on its own chain. Jobs without `red` keep the former `dev` flow.
 
 ## Freezing the tests and the harness (ORC-131)
 
@@ -383,7 +383,7 @@ What a human's event, or a fact of the PR, starts or does is coded in `decide` (
 
 | Reaction | Event | When | What it does |
 | -- | -- | -- | -- |
-| `onDelegated` | `ticket.delegated` | the ticket in Todo or In Progress, not blocked (any status at the Rapide level) | starts the job of the chain's entry: `dev` (`build`) in `factory/default` until ORC-395, `intake` in `factory/fantome` |
+| `onDelegated` | `ticket.delegated` | the ticket in Todo or In Progress, not blocked (any status at the Rapide level) | starts the job of the chain's entry, the preset's: `intake` (ORC-395) |
 | `reviewAgain` | `status.changed` to AI Review | a human's move; a merge refused for a push since the review reads it too (ORC-148) | starts the review again on the published commit, the first lens |
 | `resumeBlocked` | `session.prompted`, `ticket.commented` | the ticket blocked | at once, the next step handed to the block (`nextJob`, ORC-416), else the blocked step's job (`blockedJob`, [resuming](#resuming-the-blocked-step-orc-196)), `dev-feedback` for a block with no step of its own; lifts the block |
 | `humanFeedback` | `session.prompted`, an instruction in `session.mentioned`, `pr.reviewed` | the ticket in Human Review | after the regrouping (`regroup`: 3 min), `fix-human`, a round of human feedback (ORC-190) |
@@ -421,7 +421,7 @@ The end of a job walks its step's `next` past the steps the engine runs itself a
 
 The ticket moves to the status of the step reached (`STEP_STATUS`, ORC-170's names: `build` In Progress, `review` AI Review, `human_review` Human Review); the chain's entry moves it at its own launch instead, wherever it starts from. What is posted comes from the step that ended (`STEP_POST`): the build's summary, a fix's reply, the review (by its last lens). A review lens hands over to the next lens of its step. A relayed answer ends where it is (ORC-375). At the Rapide level nothing moves nor is posted. `/approve` passes the spec gate: the walk goes on from it.
 
-The chain's entry is `build` in `factory/default` until the delegation starts at `intake` (ORC-395): `intake`, when a test runs it, is the guard of `build` and hands over to it. The review's fix (`fix-review`) is the fix of the review step's failure edge; a round of human review (`fix-human`) is the fix of the merge gate's.
+The chain's entry is the preset's, `intake` (ORC-395); only tests start a chain later, at `build`. The entry moves the ticket at its launch to its step's status, which `intake` has none of: the ticket shows In Progress from the end that reaches `build` on. The review's fix (`fix-review`) is the fix of the review step's failure edge; a round of human review (`fix-human`) is the fix of the merge gate's.
 
 Every workflow carries its preset since ORC-393: a ticket frozen on a version from before ORC-391, whose jobs chained by their own `onSuccess`, is refused ([frozen versions](#frozen-versions-orc-393)).
 

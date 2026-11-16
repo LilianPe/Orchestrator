@@ -1,25 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentOutput } from '../../src/core/agent-output.js';
+import { assessment, chainHarness, delegate, drafted, toBuild } from '../helpers/chain.js';
 import { createHarness } from '../helpers/harness.js';
-import { delegationStarts } from '../helpers/workflow-with.js';
 
-/** A repository that makes delegation start with `intake` (ORC-206). */
-const INTAKE_FIRST = delegationStarts('intake');
+/** Delegation starts with `intake` (ORC-206), the entry of `factory/default` (ORC-395). */
 const DESCRIPTION = 'Export the audits as CSV from the audit list.\n\nAcceptance criteria:\n1. A CSV button downloads the list.';
 const PR = 'https://github.com/acme/app/pull/12';
 
-/** What intake submits: complete, size `s`, low risk, no screen, unless `patch` says otherwise. */
-const assessment = (patch: Partial<NonNullable<AgentOutput['intake']>> = {}) => ({
-  output: {
-    status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [],
-    intake: { size: 's', risk: 'low', complete: true, missing: [], screen: false, ...patch },
-  } satisfies AgentOutput,
-});
 const DEV = { events: [{ kind: 'text' as const, text: 'Done.' }] };
 const skills = (h: ReturnType<typeof createHarness>) => h.runner.requests.map((r) => r.prompt.split('\n')[0]);
 
 function harness() {
-  const h = createHarness({ workflow: INTAKE_FIRST });
+  const h = chainHarness();
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
   return h;
 }
@@ -31,7 +22,7 @@ describe('intake: duplicates (ORC-207)', () => {
     h.forge.branchNames = ['main', 'feat/csv', 'wip/other'];
     h.tracker.addIssue({ identifier: 'REL-9', title: 'Export CSV of the audits, again', description: DESCRIPTION });
     h.runner.enqueue(assessment({ duplicates: [{ url: PR, why: 'PR #12 changes src/audits/export.ts for the same export.' }] }), DEV);
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await delegate(h);
 
     // What the factory read of the work in progress is in intake's prompt: the PR with its files, the branches, the close ticket.
     const prompt = h.runner.requests[0]!.prompt;
@@ -55,7 +46,7 @@ describe('intake: duplicates (ORC-207)', () => {
     h.forge.branchNames = ['factory/rel-1-export-csv'];
     h.forge.openPullRequests = [{ number: 3, url: 'https://github.com/acme/app/pull/3', title: 'REL-1', branch: 'factory/rel-1-export-csv', fork: false, files: ['a.ts'], filesTotal: 1 }];
     h.runner.enqueue(assessment(), DEV);
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await delegate(h);
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
     expect(t.clarify?.questions[0]?.question).toContain('https://github.com/acme/app/pull/3');
@@ -65,11 +56,11 @@ describe('intake: duplicates (ORC-207)', () => {
     const h = harness();
     h.forge.offline = true;
     h.runner.enqueue(assessment(), DEV);
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await delegate(h);
     expect(h.runner.requests).toEqual([]);
   });
 
-  it('without intake, the pickup job still refuses a ticket whose branch is on the forge (the pack: not_started)', async () => {
+  it('a chain started at build, with no intake before it, still refuses a ticket whose branch is on the forge (the pack: not_started)', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
     h.forge.branchNames = ['factory/rel-1-old'];
@@ -84,10 +75,11 @@ describe('intake: duplicates (ORC-207)', () => {
 describe('intake: existing code to reuse (ORC-207)', () => {
   it('the functions intake found close to the request are in build\'s inputs as leads to reuse', async () => {
     const h = harness();
-    h.runner.enqueue(assessment({ reuse: [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Already writes a CSV line, quoting included.' }] }), DEV);
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(skills(h)).toEqual(['/factory:intake', '/factory:dev']);
-    const build = h.runner.requests[1]!.prompt;
+    h.runner.enqueue(assessment({ reuse: [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Already writes a CSV line, quoting included.' }] }), drafted());
+    await delegate(h);
+    await toBuild(h, { build: [DEV] });
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    const build = h.runner.requests[3]!.prompt;
     expect(build).toContain('## Existing code to reuse');
     expect(build).toContain('`src/csv.ts` (`toCsv`): Already writes a CSV line, quoting included.');
   });
@@ -97,7 +89,7 @@ describe('intake: scope (ORC-207)', () => {
   it('a big refactor is refused with its explanation and the split proposed, no ticket created, nothing started', async () => {
     const h = harness();
     h.runner.enqueue(assessment({ size: 'xl', scope: { refuse: 'A refactor of every adapter: too big for one PR.', split: [{ title: 'Port the forge adapters', summary: 'GitHub and gh first.' }] } }), DEV);
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await delegate(h);
     expect(skills(h)).toEqual(['/factory:intake']);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, logical: 'todo', clarify: { job: 'intake' } });

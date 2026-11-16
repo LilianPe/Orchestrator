@@ -12,8 +12,8 @@ import type { DecisionPlan, DecisionRequest, Store } from '../../src/store/types
  * before the reactions were coded in `decide`: the outbox, crash and version tests need a decision with these effects, which
  * no default reaction makes. `decide` never reads them: `withTestEffects` adds them to the plan of each decision.
  * `only`: the event decides these effects alone (the `settle` of its plan kept), in place of what `decide` decided. `unblocks`:
- * the ticket is unblocked first, as a rule that started a run did. `to` and `label`: only a move to that status, only the
- * addition of that label.
+ * the ticket is unblocked first, as a rule that started a run did. `to`, `label` and `command`: only a move to that status,
+ * only the addition of that label, only the command of that name.
  */
 export interface TestEffects {
   effects: Effect[];
@@ -21,6 +21,7 @@ export interface TestEffects {
   unblocks?: true;
   to?: LogicalState;
   label?: string;
+  command?: string;
 }
 
 /** A test's workflow: its effects ride in it, so a ticket frozen on a version keeps that version's (a hash of its own). */
@@ -31,8 +32,6 @@ export type TestWorkflow = Workflow & { testEffects?: Partial<Record<EventType, 
  * each key replaces what it names, the rest is the default's.
  */
 export interface WorkflowOverrides {
-  /** The job a delegation starts in place of `dev` (`Workflow.delegated`): the steps the default does not run yet (`intake`, `spec`, `tests`, ORC-395). */
-  delegated?: string;
   /** Effects added to the decisions of each event type named (`TestEffects`). */
   effects?: Partial<Record<EventType, TestEffects>>;
   /** Fields of each job named, in place of its own: of that job only, where the pack's `extends` passed them on (but `verify`, below). */
@@ -62,7 +61,6 @@ export function workflowWith(o: WorkflowOverrides = {}, wf: Workflow = defaultWo
     limits: { ...wf.limits, ...o.limits },
     workspace: { ...wf.workspace, ...o.workspace },
     jobs,
-    ...(o.delegated ? { delegated: o.delegated } : {}),
     ...(testEffects ? { testEffects } : {}),
   };
   const refused = workflowViolations(out);
@@ -75,6 +73,7 @@ function effectsOf(event: FactoryEvent, version: unknown): TestEffects | undefin
   const given = (version as TestWorkflow | undefined)?.testEffects?.[event.type];
   if (given?.to && (event.type !== 'status.changed' || event.payload.to !== given.to)) return undefined;
   if (given?.label && (event.type !== 'label.changed' || event.payload.change !== 'added' || event.payload.label !== given.label)) return undefined;
+  if (given?.command && (event.type !== 'command' || event.payload.name !== given.command)) return undefined;
   return given;
 }
 
@@ -135,10 +134,5 @@ const withoutAiReview: Preset = compilePreset({
   ],
 }).preset;
 
-/** The workflow of `withoutAiReview`, its chain starting at `build` as the default's does. */
-export const workflowWithoutAiReview = (): Workflow => presetWorkflow(withoutAiReview, {}, 'build');
-
-/** A delegation starts `job` instead of `dev`: the steps the default does not run yet (`intake`, `spec`, `tests`, ORC-395). */
-export function delegationStarts(job: string, o: WorkflowOverrides = {}): WorkflowOverrides {
-  return { ...o, delegated: job };
-}
+/** The workflow of `withoutAiReview`, its chain starting at `entry`: `build` by default, as most scenarios start it (`loadTestWorkflow`). */
+export const workflowWithoutAiReview = (entry = 'build'): Workflow => presetWorkflow(withoutAiReview, {}, entry);

@@ -118,9 +118,11 @@ export function workflowViolations(wf: Workflow): string[] {
     const fix = blockingFix(wf, j);
     if (fix && fix.input !== 'findings') out.push(`jobs.${j.name}: the review's fix "${fix.name}" must be a job that reads the findings`);
   }
-  if (!steps.has(wf.entry)) out.push(`entry: ${wf.entry} is not a step of ${wf.preset.name}`);
+  const entry = wf.preset.steps.find((s) => s.id === wf.entry);
+  if (!entry) out.push(`entry: ${wf.entry} is not a step of ${wf.preset.name}`);
+  // A delegation starts the entry's job: an entry without one would start nothing, silently.
+  else if (!startingJob(Object.values(wf.jobs), entry)) out.push(`entry: ${wf.entry} has no job that starts it`);
   job('relayJob', wf.relayJob);
-  job('delegated', wf.delegated);
   if (wf.level !== 'rapide') {
     for (const name of REACTION_JOBS) job('reactions', name);
     // A question relayed to the agent that implements starts its job: only the Rapide level, where nobody asks, has none.
@@ -148,8 +150,6 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
   checkStepSettings(settings);
   const perRun: RunLimits = { turns: PER_RUN_TURNS, durationMs: p.attempt.minutes * 60_000 };
   const jobs = Object.entries(BINDINGS).flatMap(([name, b]) => jobOf(p, name, b, perRun, settings) ?? []);
-  const entryStep = p.steps.find((s) => s.id === entry);
-  if (!entryStep || !startingJob(jobs, entryStep)) throw new WorkflowError(`preset ${p.name}: its entry ${entry} has no job`);
   // The bounds of the loops, read on the edges that take them: red CI's (the review and CI loop), the merge gate's (human review).
   const merge = mergeGate(p);
   const limits: Limits = {
@@ -185,9 +185,9 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
 }
 
 /**
- * The workflow of `factory/default`. Its chain starts at `build` until the delegation starts at the preset's entry (ORC-395):
- * `intake`, when a test or a project runs it, is the guard before `build` (ORC-206) and hands over to it.
+ * The workflow of `factory/default`. A delegation starts at the preset's entry (ORC-395): `intake`, then the spec and its human
+ * gate, the tests, the red check and the freeze, before `build`.
  */
 export function defaultWorkflow(settings: StepSettings = {}): Workflow {
-  return presetWorkflow(preset, settings, 'build');
+  return presetWorkflow(preset, settings);
 }
