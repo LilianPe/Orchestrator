@@ -202,14 +202,18 @@ export abstract class DaemonBase {
     return wf;
   }
 
-  /** A ticket refused for the format of its frozen version: in the daemon's log, and told on the ticket (ORC-419), once per ticket. */
+  /** A ticket refused for the format of its frozen version: in the daemon's log, and told on the ticket (ORC-419), once per ticket while its notice holds. */
   private refuse(hash: string, projectId: string, ticketId: string | undefined, err: FrozenFormatError): void {
     this.refusedVersions.set(hash, err);
     const key = `${ticketId ?? ''}:${hash}`;
     if (this.refusedTickets.has(key)) return;
     this.refusedTickets.add(key);
     this.log('error', `${ticketId ?? 'an event'} refused: ${err.message}`);
-    if (ticketId) this.track(this.tellRefusal(projectId, ticketId, hash));
+    // A notice that fails lets the ticket's next event log and tell it again.
+    if (ticketId) this.track(this.tellRefusal(projectId, ticketId, hash).catch((e: Error) => {
+      this.refusedTickets.delete(key);
+      this.log('warn', `could not post the refusal of ${ticketId}: ${e.message}`);
+    }));
   }
 
   /** The notice of a ticket refused for the format of its frozen version (ORC-419): a write to the tracker, outside any decision. */

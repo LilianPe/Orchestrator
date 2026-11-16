@@ -159,10 +159,12 @@ describe('worker: per-ticket lock and decision transaction', () => {
     await h.orch.drained();
     const notices = () => h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴 Blocked'));
     await waitFor(() => notices().length === 1);
-    const [notice] = notices();
-    expect(notice).toContain(`Reason: This ticket is frozen on workflow version ${frozen.slice(0, 12)}, of a format this factory no longer reads (format 1: frozen before ORC-393): it is refused, and none of its events is decided.`);
+    const notice = notices()[0]!;
+    expect(notice).toContain(`Reason: This ticket is frozen on workflow version ${frozen.slice(0, 12)}, of another format than the one this factory reads (2): it is refused, and none of its events is decided.`);
     expect(notice).toContain('Question: Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.');
-    expect(notice).toContain('A reply is not enough here');
+    expect(notice.split('\n').at(-1)).toBe('This ticket will not resume: a reply here changes nothing.');
+    // Its key names the ticket: Linear derives the comment's id from it, and other tickets share the version.
+    expect(await h.tracker.findComment('REL-1', `refused:REL-1:${frozen}`)).toBeDefined();
 
     // Another daemon finds the notice on the ticket and writes none again.
     await h.restart();
@@ -186,6 +188,33 @@ describe('worker: per-ticket lock and decision transaction', () => {
     await h.orch.drained();
     await waitFor(() => h.logs.some((l) => l.message === 'the refusal notice of REL-1 not made: the project has no effects'));
     expect(h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴 Blocked'))).toEqual([]);
+  });
+
+  it('tells a refused ticket again at its next event when its notice failed (ORC-419)', async () => {
+    const h = createHarness();
+    const current = h.project.workflow;
+    h.project.workflow = { ...current, version: 1 } as unknown as typeof current;
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    h.project.workflow = current;
+    const comment = h.tracker.comment.bind(h.tracker);
+    let down = true;
+    h.tracker.comment = async (identifier, body, effectId) => {
+      if (down && effectId?.startsWith('refused:')) throw new Error('Linear is down');
+      return comment(identifier, body, effectId);
+    };
+    await h.restart();
+
+    await h.send('control.stop', {});
+    await h.orch.drained();
+    await waitFor(() => h.logs.some((l) => l.message === 'could not post the refusal of REL-1: Linear is down'));
+    const notices = () => h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴 Blocked'));
+    expect(notices()).toEqual([]);
+
+    down = false;
+    await h.send('control.stop', {});
+    await h.orch.drained();
+    await waitFor(() => notices().length === 1);
   });
 
   it('keeps a ticket on the workflow version it started with when the workflow changes (criterion 4)', async () => {

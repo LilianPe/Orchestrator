@@ -18,6 +18,7 @@ import { advancePlan, closePlan, planStepOfJob, startPlan, type PlanStep } from 
 import { MERGE_PUSHED, upcast, upcastMergeRefusal, type MergeRefusal } from '../core/upcast.js';
 import { type LogicalState, type TicketState, SCHEMA_VERSION, TRUSTED } from '../core/types.js';
 import { VERIFY_CHECK } from '../core/verify.js';
+import { WORKFLOW_FORMAT } from '../core/workflow.js';
 import { REVIEW_LABELS, reviewLabel } from '../core/diff-class.js';
 import { blockingFindings, inlineComment, NO_CHANGE, onItsLine, REVIEW_CHECK, reviewBody, reviewVerdict } from '../core/review.js';
 import { FREEZE_CHECK } from '../checks/freeze.js';
@@ -141,20 +142,22 @@ export abstract class DaemonEffects extends DaemonChecks {
 
   /**
    * A ticket refused for the format of its frozen version (ORC-393), told on it (ORC-419): it is not blocked, none of its events
-   * is decided, and only a new ticket goes on with the request. Once by version, whatever the daemon: a notice found is not written again.
+   * is decided, and only a new ticket goes on with the request. Once by ticket and version, whatever the daemon: a notice found is not
+   * written again.
    */
   protected async tellRefusal(projectId: string, ticketId: string, hash: string): Promise<void> {
     if (this.silenced(projectId, `the refusal notice of ${ticketId}`)) return;
-    const key = `refused:${hash}`;
+    // By ticket as well: Linear derives the comment's id from its key, and tickets share a version.
+    const key = `refused:${ticketId}:${hash}`;
     const t = await this.d.store.getTicket(projectId, ticketId);
     if (!t || (await this.d.tracker.findComment(ticketId, key)) !== undefined) return;
     await this.tellBlock(this.project(projectId), t, {
       step: 'workflow version',
       max: 1,
-      reason: `This ticket is frozen on workflow version ${hash.slice(0, 12)}, of a format this factory no longer reads (format 1: frozen before ORC-393): it is refused, and none of its events is decided.`,
+      reason: `This ticket is frozen on workflow version ${hash.slice(0, 12)}, of another format than the one this factory reads (${WORKFLOW_FORMAT}): it is refused, and none of its events is decided.`,
       tried: ['Reading the workflow version the ticket started with.'],
       question: 'Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.',
-      waits: true,
+      waits: 'never',
     }, key);
   }
 

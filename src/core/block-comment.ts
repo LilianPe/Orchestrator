@@ -13,8 +13,11 @@ export interface BlockFacts {
   /** What was tried, facts only: as many as there are, 5 at most in the comment. */
   tried: string[];
   question: string;
-  /** Only an action lifts this block (a repo to add or to name): a reply does not resume it. */
-  waits?: true;
+  /**
+   * Only an action lifts this block (a repo to add or to name): a reply does not resume it. `never`: nothing does, the ticket is
+   * refused for good (ORC-419), and the comment promises no resumption.
+   */
+  waits?: true | 'never';
 }
 
 /** The state line, read when the comment is written: the repository and the attempts are not in the decision. */
@@ -59,6 +62,8 @@ export function composeBlockComment(facts: BlockFacts, status: BlockStatus): str
     ...facts.tried.slice(0, MAX_TRIED).map((t) => `- ${t}`),
     `Question: ${facts.question}`,
     stateLine(status),
-    facts.waits ? 'A reply is not enough here: I will resume once what is asked above is done.' : 'Reply on this ticket: I will resume as soon as you answer.',
+    facts.waits === 'never'
+      ? 'This ticket will not resume: a reply here changes nothing.'
+      : facts.waits ? 'A reply is not enough here: I will resume once what is asked above is done.' : 'Reply on this ticket: I will resume as soon as you answer.',
   ].join('\n');
 }
