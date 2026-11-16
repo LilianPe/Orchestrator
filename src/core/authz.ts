@@ -22,8 +22,12 @@ export type Relation = 'requester';
  */
 export const githubActor = (login: string): string => `github:${login}`;
 export const githubLogin = (actor: string): string | undefined => (actor.startsWith('github:') ? actor.slice('github:'.length) : undefined);
-/** Whoever runs the CLI on the daemon's server, through its Unix socket (ORC-405): the file's mode says who may, the host where. */
+/**
+ * Whoever runs the CLI on the daemon's server, through its Unix socket (ORC-405): the file's mode says who may, the host where.
+ * `isCliActor` tells it apart from the dashboard's operators (ORC-414).
+ */
 export const cliActor = (host: string): string => `cli:${host}`;
+export const isCliActor = (actor: string): boolean => actor.startsWith('cli:');
 
 export const AUTHZ_ACTIONS = ['trigger', 'answer_clarify', 'validate_spec', 'refreeze', 'relaunch_blocked', 'done_merge', 'review_feedback', 'pause_run', 'stop_run', 'take_over'] as const;
 export type AuthzAction = (typeof AUTHZ_ACTIONS)[number];

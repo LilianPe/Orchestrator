@@ -2,6 +2,7 @@ import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, OutboxRow, RunRecord } from '../store/types.js';
 import type { AgentOutput, AttemptOutcome, Finding as LensFinding } from './agent-output.js';
 import { pendingLabels } from './attempt-labels.js';
+import { githubLogin, isCliActor } from './authz.js';
 import { runMeasure, type RunMeasure } from './measures.js';
 import { addTokens, type EventType, type FactoryEvent, type LogicalState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
@@ -17,8 +18,9 @@ export interface TimelineEntry {
 }
 
 /**
- * Where a human decided: in Linear (signed webhook), on GitHub (signed webhook), from the dashboard (or `factory stop`, which
- * goes through it), or `factory run repair` on the command line.
+ * Where a human decided: in Linear (signed webhook), on GitHub (signed webhook), from the dashboard, or on the command line:
+ * `factory stop` through the daemon's socket, signed `cli:<host>` (ORC-405, ORC-414), and `factory run repair`. A pause or
+ * resume of the queue is no ticket's, so no run's.
  */
 export type DecisionChannel = 'linear' | 'github' | 'dashboard' | 'cli';
 
@@ -244,7 +246,11 @@ function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, '
     case 'control.bundle':
     case 'control.pause':
     case 'control.resume':
-      return { channel: 'dashboard', who: null };
+      // Journaled with no actor before ORC-301.
+      if (actor === null) return { channel: 'dashboard', who: null };
+      if (isCliActor(actor)) return { channel: 'cli', who: actor };
+      // The GitHub login of the dashboard's session (ORC-399); nobody on the loopback (`dashboard:local`).
+      return { channel: 'dashboard', who: githubLogin(actor) ?? null };
     case 'dead_letter.repaired':
       return { channel: 'cli', who: e.payload.by };
     default:
