@@ -479,14 +479,15 @@ function specChanges(out: Decision, event: FactoryEvent<'command'>, ticket: Tick
  */
 function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ticket: TicketState | undefined; workflow: Workflow }, job: JobSpec, red: NonNullable<JobSpec['red']>): Decision {
   const { red: cause = 'error', failures, runId } = at.event.payload;
-  if (cause === 'infra') {
-    const reason = `The red check of ${job.name} could not run: infrastructure failure, not the agent's fault.`;
-    return block(out, at.workflow, { kind: 'infra', reason, job: job.name, step: 'red', tried: triedFailures(failures) });
-  }
-  if (red.mode === 'measure') {
+  if (cause !== 'infra' && red.mode === 'measure') {
     out.trace.push(`red: would have blocked (${cause}), measure mode: the run goes on`);
     freeze(out, at.ticket, at.event.payload.frozen);
     return success(out, at, job, runId);
+  }
+  if (at.ticket?.blocked) return keepsBlock(out, job.name);
+  if (cause === 'infra') {
+    const reason = `The red check of ${job.name} could not run: infrastructure failure, not the agent's fault.`;
+    return block(out, at.workflow, { kind: 'infra', reason, job: job.name, step: 'red', tried: triedFailures(failures) });
   }
   const used = at.ticket?.redAttempts ?? 0;
   if (used + 1 < red.attempts) {
@@ -496,6 +497,15 @@ function redFailed(out: Decision, at: { event: FactoryEvent<'verify.failed'>; ti
   }
   const reason = `Red not verified after ${red.attempts} attempts of ${job.name}.`;
   return block(out, at.workflow, { kind: 'red', ...failedChecks(reason, failures), job: job.name, step: 'red', attempts: red.attempts });
+}
+
+/**
+ * A check that failed on a ticket blocked meanwhile (ORC-416): the launch would refuse its fix, so none starts and no attempt
+ * is counted, and the block there stays, a dead letter's that `factory run repair` lifts included.
+ */
+function keepsBlock(out: Decision, job: string): Decision {
+  out.trace.push(`verify.failed on ${job}: the ticket is blocked, no fix started, its block kept`);
+  return out;
 }
 
 /**
@@ -966,10 +976,15 @@ function startNext(out: Decision, event: FactoryEvent, ticket: TicketState | und
 /** The step a run's end handed to the block (`startNext`), which the block's lift starts. */
 const handedJob = (ticket: TicketState | undefined, workflow: Workflow): JobSpec | undefined => (ticket?.nextJob ? workflow.jobs[ticket.nextJob] : undefined);
 
-/** A lift of the block that starts no step of its own (a dead letter's repair, a green CI) starts the one handed to it (ORC-416). */
-function startHanded(out: Decision, event: FactoryEvent, blocked: TicketState | undefined, lifted: TicketState | undefined, workflow: Workflow): void {
+/**
+ * A lift of the block that starts no step of its own (a dead letter's repair, a green CI) starts the one handed to it (ORC-416),
+ * unless the decision starts a run, leaves work in flight (a replayed check, a pending job) or blocks again.
+ */
+function startHanded(out: Decision, event: FactoryEvent, blocked: TicketState | undefined, workflow: Workflow): void {
   const next = handedJob(blocked, workflow);
-  if (next) startRun(out, event, lifted, next, { input: next.input });
+  if (!next || out.effects.some((e) => e.kind === 'start_run')) return;
+  const left = afterDecision(blocked, event, out);
+  if (left && !left.blocked && !workInFlight(left)) startRun(out, event, left, next, { input: next.input });
 }
 
 /** The jobs the reactions start, by their runtime names as the rules named them. */
@@ -1477,6 +1492,7 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   if (pending) return startPending(out, event, ticket!, workflow, pending);
   // The step a run published during the block asked for (ORC-416): it starts as it would have, the reply left in the inbox.
   const handed = reply ? handedJob(ticket, workflow) : undefined;
+  // Read again for the run's input: only the blocked step resumed reads the reply.
   const resumed = handed ? undefined : resumedJob(reply, ticket, workflow);
   const job = handed ?? resumed ?? r.job;
   // The ticket keeps its block for a run refused, and for a run of the questions queue, which resumes no step of it (ORC-415).
@@ -1820,11 +1836,14 @@ function repair(state: TicketState | undefined, event: FactoryEvent<'dead_letter
   // Pushed, not put first: the trace of a replayed event keeps its fence first (`isFenced`).
   out.trace.push(`built-in dead_letter.repaired: ${action} ${eventId}`);
   // The step a run published during the block asked for (ORC-416), unless the replay blocked again or left work of its own.
-  const left = out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), base);
-  if (lifted && left && !left.blocked && !workInFlight(left) && !out.effects.some((e) => e.kind === 'start_run')) startHanded(out, event, state, base, workflow);
+  if (lifted) startHanded(out, event, state, workflow);
   if (lifted) out.effects.push({ kind: 'activity', type: 'response', body: `Event ${eventId} repaired by ${by} (${REPAIR_LABELS[action]}): the ticket is unblocked.` });
   return out;
 }
+
+/** The ticket as `event` and the decision `out` leave it. */
+const afterDecision = (state: TicketState | undefined, event: FactoryEvent, out: Decision): TicketState | undefined =>
+  out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event));
 
 /** Events that trigger the agent (ORC-186): a delegation, a mention, a command. */
 const TRIGGERS = new Set<EventType>(['ticket.delegated', 'session.mentioned', 'command']);
@@ -1922,7 +1941,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
   const keepLabel = event.type === 'ticket.undelegated' && event.payload.keepLabel;
   if (!trackerDown && !keepLabel) blockedLabel(out, state, event);
   // Come from a wait in another project: the label goes now, not at the pass that ends that wait.
-  if ((event.payload as { waitedIn?: string }).waitedIn && !out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event))?.blocked) {
+  if ((event.payload as { waitedIn?: string }).waitedIn && !afterDecision(state, event, out)?.blocked) {
     out.effects.push(blockedLabelChange(true, false)!);
   }
   if (event.type === 'ticket.delegated') newRun(out, state, workflow);
@@ -1939,7 +1958,7 @@ export function decide(state: TicketState | undefined, event: FactoryEvent, work
  */
 function endTakeOver(out: Decision, state: TicketState | undefined, event: FactoryEvent): void {
   if (!isTakenOver(state)) return;
-  const after = out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event));
+  const after = afterDecision(state, event, out);
   if (!isTakenOver(after) || out.effects.some((e) => e.kind === 'cleanup')) out.effects.unshift({ kind: 'close_take_over' });
 }
 
@@ -1963,7 +1982,7 @@ export const BLOCKED_LABEL = 'Bloqué';
  */
 function blockedLabel(out: Decision, state: TicketState | undefined, event: FactoryEvent): void {
   if (!state) return;
-  const after = out.events.reduce<TicketState | undefined>((t, e) => reduce(t, e), reduce(state, event));
+  const after = afterDecision(state, event, out);
   const label = blockedLabelChange(state.blocked, after?.blocked ?? false);
   if (label) out.effects.push(label);
 }
@@ -2273,13 +2292,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const used = ticket?.verifyAttempts ?? 0;
       const { failures, job } = event.payload;
       const checked = workflow.jobs[job];
-      // On a ticket blocked meanwhile (ORC-416) the launch refuses the fix: no attempt is counted, and the block there stays, a
-      // dead letter's that `factory run repair` lifts included. A red check that measures goes on, blocked or not.
-      if (ticket?.blocked && !(checked?.red?.mode === 'measure' && event.payload.red !== 'infra')) {
-        out.trace.push(`verify.failed on ${job}: the ticket is blocked, no fix started, its block kept`);
-        return out;
-      }
       if (checked?.red) return redFailed(out, { event, ticket, workflow }, checked, checked.red);
+      if (ticket?.blocked) return keepsBlock(out, job);
       const repeated = repeatedFailure(ticket, event.payload);
       if (repeated && repeated.count >= workflow.limits.repeatedFailures) {
         out.events.push({ type: 'ticket.patched', patch: { repeatedFailure: repeated } });
@@ -2502,7 +2516,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // No reaction follows, but the step a run published during the block asked for (ORC-416).
       if (ticket?.blocked && ticket.blockKind === 'ci_bound') {
         out.events.push({ type: 'ticket.unblocked' });
-        startHanded(out, event, ticket, ticket, workflow);
+        startHanded(out, event, ticket, workflow);
       }
       break;
     case 'pr.opened': {

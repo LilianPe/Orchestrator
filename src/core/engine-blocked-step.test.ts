@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
-import type { Role } from './authz.js';
 import type { BlockKind } from './block-cause.js';
 import type { Decision } from './decision.js';
 import { decide } from './engine.js';
@@ -14,15 +13,16 @@ function ev<T extends EventType>(type: T, payload: EventPayloads[T], extra: Part
   return { id: `e-${type}`, type, at: 1000, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload, ...extra } as FactoryEvent;
 }
 const ticket = (patch: Partial<TicketState> = {}): TicketState => ({ ...newTicketState('p', 'REL-1', 'Titre', 'dev', 0), delegated: true, linearSessionId: 's-dev', prNumber: 7, ...patch });
+const blockedOn = (kind: BlockKind, patch: Partial<TicketState> = {}) => ticket({ blocked: true, blockReason: 'x', blockKind: kind, blockedJob: 'dev', ...patch });
 /** A ticket blocked while the check of `r1`, a dev run that ended well, was under way (ORC-403 keeps its done). */
-const blockedDuring = (kind: BlockKind, patch: Partial<TicketState> = {}) =>
-  ticket({ blocked: true, blockReason: 'x', blockKind: kind, blockedJob: 'dev', verifyingRunId: 'r1', verifiedSha: 'abc', ...patch });
+const blockedDuring = (kind: BlockKind, patch: Partial<TicketState> = {}) => blockedOn(kind, { verifyingRunId: 'r1', verifiedSha: 'abc', ...patch });
 const after = (state: TicketState, event: FactoryEvent, d: Decision): TicketState => d.events.reduce<TicketState>((t, e) => reduce(t, e)!, reduce(state, event)!);
 const starts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run');
 const types = (d: Decision) => d.events.map((e) => e.type);
-const MEMBER: readonly Role[] = ['team_member'];
-const reply = ev('ticket.commented', { body: 'Continue', author: 'Lilian', kind: 'instruction' }, { actor: 'u-member', roles: MEMBER });
+const reply = ev('ticket.commented', { body: 'Continue', author: 'Lilian', kind: 'instruction' }, { actor: 'u-member', roles: ['team_member'] });
 const published = ev('publish.done', { runId: 'r1', job: 'dev', sha: 'abc' });
+const repairedL1 = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: ev('label.changed', { label: 'x', change: 'added' }) });
+const green = ev('pr.checks_passed', { number: 7, url: 'u', branch: 'b' });
 
 describe('a run published on a blocked ticket: its next step waits for the block, then starts (ORC-416)', () => {
   it('the publication moves the ticket and hands the review to the block: nothing starts, the block stays', () => {
@@ -44,27 +44,23 @@ describe('a run published on a blocked ticket: its next step waits for the block
   });
 
   it('acceptance 1: the repair of a dead letter that lifts the block starts the review', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'dead_letter', blockedEvent: 'l1', blockedJob: 'dev', nextJob: 'review', logical: 'ai_review' });
-    const repaired = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: ev('label.changed', { label: 'x', change: 'added' }) });
-    const out = decide(blocked, repaired, workflow);
-    expect(starts(out)).toEqual([{ kind: 'start_run', job: 'review' }]);
-    expect(reduce(blocked, repaired)).toMatchObject({ blocked: false, nextJob: undefined });
+    const blocked = blockedOn('dead_letter', { blockedEvent: 'l1', nextJob: 'review', logical: 'ai_review' });
+    expect(starts(decide(blocked, repairedL1, workflow))).toEqual([{ kind: 'start_run', job: 'review' }]);
+    expect(reduce(blocked, repairedL1)).toMatchObject({ blocked: false, nextJob: undefined });
   });
 
   it('acceptance 1: the green CI that lifts the red-CI bound starts the review', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'ci_bound', blockedJob: 'fix-ci', nextJob: 'review', logical: 'ai_review' });
-    const out = decide(blocked, ev('pr.checks_passed', { number: 7, url: 'u', branch: 'b' }), workflow);
+    const out = decide(blockedOn('ci_bound', { blockedJob: 'fix-ci', nextJob: 'review', logical: 'ai_review' }), green, workflow);
     expect(types(out)).toContain('ticket.unblocked');
     expect(starts(out)).toEqual([{ kind: 'start_run', job: 'review' }]);
   });
 
   it('a lift that starts nothing still starts nothing without a step handed to the block', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'ci_bound', blockedJob: 'fix-ci', logical: 'ai_review' });
-    expect(starts(decide(blocked, ev('pr.checks_passed', { number: 7, url: 'u', branch: 'b' }), workflow))).toEqual([]);
+    expect(starts(decide(blockedOn('ci_bound', { blockedJob: 'fix-ci', logical: 'ai_review' }), green, workflow))).toEqual([]);
   });
 
   it('a repair whose replay leaves work of its own starts no second step', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'dead_letter', blockedEvent: 'l1', blockedJob: 'dev', nextJob: 'review', verifyingRunId: 'r2' });
+    const blocked = blockedOn('dead_letter', { blockedEvent: 'l1', nextJob: 'review', verifyingRunId: 'r2' });
     const passed = { ...ev('verify.passed', { runId: 'r2', job: 'dev', sha: 'def' }), id: 'l1' };
     const out = decide(blocked, ev('dead_letter.repaired', { eventId: 'l1', action: 'replay', by: 'ops', event: passed }), workflow);
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'publish', sha: 'def' }));
@@ -72,7 +68,7 @@ describe('a run published on a blocked ticket: its next step waits for the block
   });
 
   it('the failed move of that publication blocks again: the step stays handed, the reply starts it', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'infra', blockedJob: 'dev', nextJob: 'review', logical: 'ai_review' });
+    const blocked = blockedOn('infra', { nextJob: 'review', logical: 'ai_review' });
     const failed = ev('effect.failed', { kind: 'move', effectId: 'fx1', error: 'linear down', attempts: 5, eventId: 'e-publish.done' });
     const d = decide(blocked, failed, workflow);
     expect(types(d)).toContain('ticket.blocked');
@@ -82,7 +78,7 @@ describe('a run published on a blocked ticket: its next step waits for the block
   });
 
   it('a stop ends the work: the step handed to the block goes with it, the reply resumes as on any stop', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'infra', blockedJob: 'dev', nextJob: 'review' });
+    const blocked = blockedOn('infra', { nextJob: 'review' });
     const stop = ev('session.stopped', { linearSessionId: 's-dev' });
     const stopped = after(blocked, stop, decide(blocked, stop, workflow));
     expect(stopped).toMatchObject({ blocked: true, blockKind: 'stopped', nextJob: undefined });
@@ -90,14 +86,14 @@ describe('a run published on a blocked ticket: its next step waits for the block
   });
 
   it('a step handed to the block that the workflow no longer has: the reply resumes the blocked step, as before', () => {
-    const blocked = ticket({ blocked: true, blockReason: 'x', blockKind: 'infra', blockedJob: 'dev', nextJob: 'gone' });
+    const blocked = blockedOn('infra', { nextJob: 'gone' });
     expect(starts(decide(blocked, reply, workflow))).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
   });
 
   it('a ticket not blocked starts its next step at once, as before', () => {
     const out = decide(ticket({ verifyingRunId: 'r1', verifiedSha: 'abc' }), published, workflow);
     expect(starts(out)).toEqual([{ kind: 'start_run', job: 'review' }]);
-    expect(out.events.some((e) => e.type === 'ticket.patched' && 'nextJob' in e.patch)).toBe(false);
+    expect(out.events).not.toContainEqual({ type: 'ticket.patched', patch: { nextJob: 'review' } });
   });
 });
 
@@ -119,8 +115,7 @@ describe('a check that fails on a blocked ticket: no attempt counted, the block 
     expect(out.effects.some((e) => e.kind === 'block_comment')).toBe(false);
     const kept = after(state, failed(), out);
     expect(kept).toMatchObject({ blocked: true, blockKind: 'dead_letter', blockedEvent: 'l1', blockReason: 'x' });
-    const repaired = ev('dead_letter.repaired', { eventId: 'l1', action: 'skip', by: 'ops', event: ev('label.changed', { label: 'x', change: 'added' }) });
-    expect(reduce(kept, repaired)?.blocked).toBe(false);
+    expect(reduce(kept, repairedL1)?.blocked).toBe(false);
   });
 
   it('acceptance 2: the loop guard does not replace the block either', () => {
@@ -130,14 +125,16 @@ describe('a check that fails on a blocked ticket: no attempt counted, the block 
     expect(after(state, failed({ tree: 't1' }), out)).toMatchObject({ blockKind: 'infra', blockReason: 'x' });
   });
 
-  it('acceptance 2: nor the red check, in blocking mode or when it could not run', () => {
-    const tests = workflow.jobs['tests']!;
-    const w: Workflow = { ...workflow, jobs: { ...workflow.jobs, tests: { ...tests, red: { ...tests.red!, mode: 'blocking' } } } };
-    for (const [red, used] of [['error', 0], ['error', tests.red!.attempts - 1], ['infra', 0]] as const) {
-      const out = decide(blockedDuring('infra', { redAttempts: used }), failed({ job: 'tests', red }), w);
-      expect(out.events).toEqual([]);
-      expect(out.effects).toEqual([]);
-    }
+  const tests = workflow.jobs['tests']!;
+  const blocking: Workflow = { ...workflow, jobs: { ...workflow.jobs, tests: { ...tests, red: { ...tests.red!, mode: 'blocking' } } } };
+  it.each([
+    ['under its bound', 'error', 0],
+    ['at its bound', 'error', tests.red!.attempts - 1],
+    ['that could not run', 'infra', 0],
+  ] as const)('acceptance 2: nor the red check in blocking mode %s', (_when, red, used) => {
+    const out = decide(blockedDuring('infra', { redAttempts: used }), failed({ job: 'tests', red }), blocking);
+    expect(out.events).toEqual([]);
+    expect(out.effects).toEqual([]);
   });
 
   it('a ticket not blocked: the fix starts and counts, and the bound blocks, as before', () => {

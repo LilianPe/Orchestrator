@@ -110,16 +110,16 @@ function loopBounded(r: Run, counter: 'verifyAttempts' | 'redAttempts', bound: n
     relaunches += launches(step).filter(relaunch).length;
     expect(relaunches).toBeLessThanOrEqual(bound - 1);
     if (step.kind !== 'decided' || !failure(step.event) || isFenced(step.decision)) continue;
-    if (step.before?.blocked) {
-      expect(step.decision.effects.filter(relaunch)).toEqual([]);
-      expect(step.after?.[counter] ?? 0).toBe(step.before[counter] ?? 0);
-      expect(step.decision.events.filter((e) => e.type === 'ticket.blocked' && e.kind !== 'human_push')).toEqual([]);
-      expect(step.after?.blocked).toBe(true);
+    const blocked = step.before?.blocked;
+    if (!blocked && (step.before?.[counter] ?? 0) + 1 < bound) continue;
+    expect(step.decision.effects.filter(relaunch)).toEqual([]);
+    if (!blocked) {
+      expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
       continue;
     }
-    if ((step.before?.[counter] ?? 0) + 1 < bound) continue;
-    expect(step.decision.effects.filter(relaunch)).toEqual([]);
-    expect(step.decision.events.map((e) => e.type)).toContain('ticket.blocked');
+    expect(step.after?.[counter] ?? 0).toBe(step.before?.[counter] ?? 0);
+    expect(step.decision.events.filter((e) => e.type === 'ticket.blocked' && e.kind !== 'human_push')).toEqual([]);
+    expect(step.after?.blocked).toBe(true);
   }
 }
 
