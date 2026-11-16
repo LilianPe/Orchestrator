@@ -133,7 +133,7 @@ describe.skipIf(!enabled)(`what an agent leaves in its git dir, under the factor
     const agent = await ws.prepare(ask());
     work = agent.path;
     start = (await ws.head(work))!;
-    // Its worktree alone holds its git, as `Orchestrator.openSandbox` mounts it (pinned by test/scenarios/sandbox.test.ts); the forge, here a mount, instead of its network.
+    // Its worktree alone holds its git, as `Daemon.openSandbox` mounts it (pinned by test/scenarios/sandbox.test.ts); the forge, here a mount, instead of its network.
     const box = await provider.create(request({ workspacePath: work, network: 'none', mounts: [{ host: origin, target: ORIGIN_TARGET, readOnly: false }] }));
     done = (await scripted(box.id, WORK)).out;
     plantedOut = (await scripted(box.id, PLANT)).out;

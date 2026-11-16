@@ -4,7 +4,7 @@ Before the factory works on real tickets, it is measured on tickets already solv
 the factory, from where the human started, without any effect outside the factory; then a judge compares, blind, the factory's PR
 with the human one.
 
-Code: `src/presets/fantome.ts` (the preset), `src/runtime/outbox.ts` and `Orchestrator.keep` (the no-effect mode),
+Code: `src/presets/fantome.ts` (the preset), `src/runtime/outbox.ts` and `Daemon.keep` (the no-effect mode),
 `src/ghost/history.ts` (the historical environment), `src/ghost/delegate.ts` (the daemon's delegation of the tickets, ORC-376),
 `src/ghost/replay.ts` (blind pairs, report), `src/cli/ghost.ts` (the command).
 
@@ -70,7 +70,7 @@ delegates each ticket of a replay whose environment was rebuilt and whose run ha
 (`ticket.delegated`, its id `ghost:<replay>:<ticket>`, its payload `replay`). No human sent that delegation: no matrix checks it.
 The ticket starts to do, whatever Linear says of it now (Done), and runs the fantome's pipeline without effects.
 
-- **On its clone.** The project's repository, for that ticket, is its clone (`Orchestrator.runtimeFor`): the worktree, the diffs and
+- **On its clone.** The project's repository, for that ticket, is its clone (`Daemon.runtimeFor`): the worktree, the diffs and
   the verification read it, not the project's checkout.
 - **Its text as of its start.** The run reads the title, the description, the thread and the linked tickets kept at the delegation
   (`## The ticket's thread and its linked tickets, as of its start (data)` in its prompt): the agent reads no ticket otherwise (ORC-192).

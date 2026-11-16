@@ -88,11 +88,11 @@ type StartRun = Extract<Effect, { kind: 'start_run' }>;
 
 /**
  * One step of the fold: an external event decided, an event for a ticket not tracked yet (dropped as
- * `Orchestrator.handle` drops it), a duplicate dropped by the inbox, a fact of the shell, or the start
- * of the pending job by `Orchestrator.settle` once the run and its verification are over.
+ * the inbox worker drops it), a duplicate dropped by the inbox, a fact of the shell, or the start
+ * of the pending job by `Daemon.settle` once the run and its verification are over.
  *
  * `launches` (of a decided step) and `start` (of a settled one) are the runs launched, as
- * `Orchestrator.launch` hands them to the runner: with the sensitive paths of what they read then.
+ * `Daemon.launch` hands them to the runner: with the sensitive paths of what they read then.
  */
 export type Step =
   | {
@@ -128,18 +128,18 @@ function takesDevSlot(job: string, wf: Workflow): boolean {
   return wf.jobs[job]?.queue === 'dev';
 }
 
-/** The run reads the ticket's pending feedback, as `Orchestrator.launch` decides it: the start's input, else its job's. */
+/** The run reads the ticket's pending feedback, as `Daemon.launch` decides it: the start's input, else its job's. */
 export function readsFeedback(start: StartRun, wf: Workflow): boolean {
   return (start.input ?? wf.jobs[start.job]?.input) === 'feedback';
 }
 
-/** `Orchestrator.startRun` refuses the start: dev work on a merged or undelegated ticket, or on a blocked one. */
+/** `Daemon.startRun` refuses the start: dev work on a merged or undelegated ticket, or on a blocked one. */
 function refusesStart(state: TicketState, job: JobSpec): boolean {
   return !!refusesDevWork(state, job) || (job.queue === 'dev' && state.blocked);
 }
 
 /**
- * The run `Orchestrator.launch` hands the runner for a start: with the sensitive paths of the human inbox it empties
+ * The run `Daemon.launch` hands the runner for a start: with the sensitive paths of the human inbox it empties
  * now, the feedback it reads (I12, ORC-274) or what its step boundary carries for the agent that implements (ORC-180).
  * The forge's review comments, untrusted too, are not modelled: no PR has any; nor is the branch's mark (`untrustedSince`,
  * ORC-338), which the generator's `run.started` never sets.
@@ -154,8 +154,8 @@ function launch(start: StartRun, state: TicketState, wf: Workflow): StartRun {
 
 /**
  * The step of ORC-138: a duplicate id is dropped by the inbox, otherwise `decide` runs and `reduce`
- * applies the event then the decided events, as `Orchestrator.handle` does. Facts of the shell go
- * through `reduce` only, as `Orchestrator.apply` does. Every input is frozen first.
+ * applies the event then the decided events, as the inbox worker does (`src/runtime/worker.ts`). Facts of the shell go
+ * through `reduce` only, as `Daemon.apply` does. Every input is frozen first.
  *
  * Of what the orchestrator does around `decide`, the fold keeps what changes which run starts and
  * what it reads: the facts of `move` and `cleanup`, `startRun` refusing a start or keeping a dev start

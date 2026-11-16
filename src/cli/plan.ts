@@ -1,6 +1,6 @@
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { WorkspaceManager } from '../adapters/workspace/types.js';
-import type { ProjectRuntime } from '../core/orchestrator.js';
+import type { ProjectRuntime } from '../runtime/daemon.js';
 import { DEFAULT_BRANCH_NAMING, ownBranchMatcher, type BranchNaming } from '../core/naming.js';
 import { pickupFailures } from '../core/pickup.js';
 import { repoLabel } from '../core/routing.js';

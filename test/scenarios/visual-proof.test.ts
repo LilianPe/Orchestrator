@@ -4,7 +4,7 @@ import { relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FakeShooter, fakePng } from '../../src/adapters/browser/fake.js';
 import { VISUAL_PROOF_CHECK, type VisualProof } from '../../src/checks/visual-proof.js';
-import { CAPTURES_KEPT_MS } from '../../src/core/orchestrator.js';
+import { CAPTURES_KEPT_MS } from '../../src/runtime/effects.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean-verify.js';
 import { createHarness } from '../helpers/harness.js';
