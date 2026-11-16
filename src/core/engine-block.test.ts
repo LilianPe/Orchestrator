@@ -20,6 +20,7 @@ const failure = { command: 'npm test', exitCode: 1, output: 'rouge' };
 
 const notice = (d: Decision) => d.effects.find((e) => e.kind === 'block_comment') as Extract<Decision['effects'][number], { kind: 'block_comment' }> | undefined;
 const starts = (d: Decision) => d.effects.filter((e) => e.kind === 'start_run');
+const appended = (d: Decision) => d.events.flatMap((e) => (e.type === 'feedback.appended' ? [e.item] : []));
 const MEMBER: readonly Role[] = ['team_member'];
 const signed = { actor: 'u-member', roles: MEMBER };
 /** A row journaled before ORC-180, with no class. */
@@ -204,7 +205,6 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
 
   describe('a comment enters the human inbox under the same taint rule as a reply (I12)', () => {
     const item = (taint: FeedbackItem['taint'], kind: MessageKind = 'instruction'): FeedbackItem => ({ author: 'x', body: 'b', at: 1, source: 'session', taint, kind });
-    const appended = (d: Decision) => d.events.flatMap((e) => (e.type === 'feedback.appended' ? [e.item] : []));
 
     it('it keeps its class and its taint, as a message that waits for the agent', () => {
       expect(appended(decide(blockedOn('dev'), comment({ ...signed, taint: 'untrusted' }), workflow))).toEqual([{ author: 'Lilian', authorId: 'u-member', body: 'Continue', at: 1000, source: 'session', taint: 'untrusted', kind: 'instruction' }]);
@@ -282,7 +282,6 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     const writer = { actor: 'u-member', roles: ['team_member', 'repo_writer'] as readonly Role[] };
     const mention = (kind?: MessageKind, extra: Partial<FactoryEvent> = writer) =>
       ev('session.mentioned', { linearSessionId: 's-m', body: 'Pourquoi le tri ?', author: 'Lilian', ack: true, ...(kind ? { kind } : {}) }, extra);
-    const appended = (d: Decision) => d.events.flatMap((e) => (e.type === 'feedback.appended' ? [e.item] : []));
 
     it.each([
       ['a question', mention('question')],
