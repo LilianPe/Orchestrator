@@ -246,9 +246,11 @@ function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, '
     case 'control.bundle':
     case 'control.pause':
     case 'control.resume':
-      if (actor !== null && isCliActor(actor)) return { channel: 'cli', who: actor };
-      // The GitHub login of the dashboard's session (ORC-399); nobody on the loopback (`dashboard:local`) nor before ORC-301.
-      return { channel: 'dashboard', who: actor === null ? null : (githubLogin(actor) ?? null) };
+      // Journaled with no actor before ORC-301.
+      if (actor === null) return { channel: 'dashboard', who: null };
+      if (isCliActor(actor)) return { channel: 'cli', who: actor };
+      // The GitHub login of the dashboard's session (ORC-399); nobody on the loopback (`dashboard:local`).
+      return { channel: 'dashboard', who: githubLogin(actor) ?? null };
     case 'dead_letter.repaired':
       return { channel: 'cli', who: e.payload.by };
     default:
