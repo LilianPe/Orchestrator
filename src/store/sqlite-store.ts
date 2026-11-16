@@ -46,6 +46,9 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  maturityCard,
+  type MaturityCard,
+  type MaturityPoint,
   type ChangelogEntry,
   type SecurityLog,
   type SecurityStats,
@@ -82,6 +85,7 @@ CREATE TABLE IF NOT EXISTS baselines (project_id TEXT NOT NULL, since INTEGER NO
 CREATE TABLE IF NOT EXISTS ghost_replays (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ghost_tickets (replay_id TEXT NOT NULL, ticket_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (replay_id, ticket_id));
 CREATE TABLE IF NOT EXISTS ghost_judgments (replay_id TEXT NOT NULL, ticket_id TEXT NOT NULL, side TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (replay_id, ticket_id, side));
+CREATE TABLE IF NOT EXISTS maturity_cards (project_id TEXT NOT NULL, key TEXT NOT NULL, position INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, key));
 CREATE TABLE IF NOT EXISTS known_flaky_tests (project_id TEXT NOT NULL, test TEXT NOT NULL, added_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, test));
 CREATE TABLE IF NOT EXISTS findings (project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, sha TEXT NOT NULL, lens TEXT NOT NULL, n INTEGER NOT NULL, run_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, ticket_id, sha, lens, n));
 CREATE TABLE IF NOT EXISTS review_defects (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, ticket_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL);
@@ -817,6 +821,39 @@ export class SqliteStore implements Store {
 
   async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
     return Number(this.db.prepare('DELETE FROM known_flaky_tests WHERE project_id = ? AND test = ?').run(projectId, test).changes) === 1;
+  }
+
+  async maturityCards(projectId?: string): Promise<MaturityCard[]> {
+    const rows = (
+      projectId === undefined
+        ? this.db.prepare('SELECT data FROM maturity_cards ORDER BY project_id, position').all()
+        : this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ? ORDER BY position').all(projectId)
+    ) as { data: string }[];
+    return rows.map((r) => JSON.parse(r.data) as MaturityCard);
+  }
+
+  async putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void> {
+    this.atomically(() => {
+      const before = new Map(
+        (this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ?').all(projectId) as { data: string }[]).map((r) => {
+          const c = JSON.parse(r.data) as MaturityCard;
+          return [c.key, c];
+        }),
+      );
+      this.db.prepare('DELETE FROM maturity_cards WHERE project_id = ?').run(projectId);
+      const insert = this.db.prepare('INSERT INTO maturity_cards (project_id, key, position, data) VALUES (?, ?, ?, ?)');
+      points.forEach((p, i) => insert.run(projectId, p.key, i, JSON.stringify(maturityCard(projectId, p, at, before.get(p.key)))));
+    });
+  }
+
+  async approveMaturityCard(projectId: string, key: string, by: string, at: number): Promise<MaturityCard | undefined> {
+    return this.atomically(() => {
+      const row = this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ? AND key = ?').get(projectId, key) as { data: string } | undefined;
+      if (!row) return undefined;
+      const card: MaturityCard = { ...(JSON.parse(row.data) as MaturityCard), approvedBy: by, approvedAt: at };
+      this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
+      return card;
+    });
   }
 
   async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {

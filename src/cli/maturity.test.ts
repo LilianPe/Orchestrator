@@ -1,0 +1,90 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { copyPythonRepo } from '../../test/helpers/python-repo.js';
+import { maturityReport } from './maturity.js';
+
+/** A repository of `files`, by path (directories made as needed). */
+function repoOf(files: Record<string, string>): string {
+  const repo = mkdtempSync(join(tmpdir(), 'factory-maturity-'));
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), content);
+  }
+  return repo;
+}
+
+const valueOf = (repo: string, detected = { setup: [] as string[], commands: {} as Record<string, string> }) =>
+  Object.fromEntries(maturityReport(repo, detected).map((p) => [p.key, p.value]));
+
+const REACT_APP = {
+  'package.json': JSON.stringify({ scripts: { test: 'vitest run', dev: 'vite' }, dependencies: { react: '^18.0.0', pg: '^8.0.0' } }),
+  'package-lock.json': '{}',
+  'src/components/Button.tsx': 'export {}',
+  'src/components/Button.test.tsx': 'test',
+  'src/billing/invoice.ts': 'export {}',
+  'src/auth/session.ts': 'export {}',
+  'src/auth/__tests__/session.ts': 'test',
+};
+
+describe('the maturity report (ORC-410)', () => {
+  it('reports each point in order: stack, commands, main, services, visual paths, untested areas', () => {
+    const repo = repoOf(REACT_APP);
+    const report = maturityReport(repo, { setup: ['npm ci'], commands: { test: 'npm test' }, preview: 'npm run dev' });
+    expect(report.map((p) => p.key)).toEqual(['stack', 'commands', 'main', 'services', 'visual_paths', 'untested']);
+    expect(Object.fromEntries(report.map((p) => [p.key, p.value]))).toEqual({
+      stack: 'Node (npm), React',
+      commands: 'setup: npm ci\ntest: npm test\npreview: npm run dev',
+      main: 'not checked yet: the dry run (ORC-408) runs setup, build and tests on main',
+      services: 'postgres (dependency pg)',
+      visual_paths: 'src/components/**',
+      untested: 'src/billing',
+    });
+  });
+
+  it('a Python repository: uv, its commands, no front end, its package without tests', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'factory-maturity-'));
+    copyPythonRepo(repo);
+    const v = valueOf(repo, { setup: ['uv sync --frozen'], commands: { pytest: 'uv run --frozen pytest' } });
+    expect(v['stack']).toBe('Python (uv)');
+    expect(v['commands']).toBe('setup: uv sync --frozen\npytest: uv run --frozen pytest');
+    expect(v['visual_paths']).toBe('none: no front-end framework detected');
+    expect(v['untested']).toBe('src/app; tests/ holds tests not sorted by directory: check those by hand');
+  });
+
+  it('says what it did not find rather than leaving a point out', () => {
+    const v = valueOf(repoOf({ 'README.md': '# x' }));
+    expect(v).toEqual({
+      stack: 'none detected (no package.json, no pyproject.toml)',
+      commands: 'none found: verify would have no check to run',
+      main: 'not checked yet: the dry run (ORC-408) runs setup, build and tests on main',
+      services: 'none',
+      visual_paths: 'none: no front-end framework detected',
+      untested: 'no source directory found',
+    });
+  });
+
+  it('pnpm, Next and a Postgres in docker compose; tests in a tests/ directory named after the area count', () => {
+    const v = valueOf(
+      repoOf({
+        'package.json': JSON.stringify({ dependencies: { next: '15.0.0' } }),
+        'pnpm-lock.yaml': '',
+        'docker-compose.yml': 'services:\n  db:\n    image: postgres:17-alpine\n',
+        'app/page.tsx': 'export {}',
+        'src/lib/a.ts': 'export {}',
+        'src/api/b.ts': 'export {}',
+        'tests/api/b.test.ts': 'test',
+        'node_modules/x/index.js': '',
+      }),
+    );
+    expect(v['stack']).toBe('Node (pnpm), Next.js');
+    expect(v['services']).toBe('postgres (docker-compose.yml)');
+    expect(v['visual_paths']).toBe('app/**');
+    expect(v['untested']).toBe('src/lib');
+  });
+
+  it('every area tested', () => {
+    expect(valueOf(repoOf({ 'src/a/x.ts': '', 'src/a/x.spec.ts': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
+});

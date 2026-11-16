@@ -48,6 +48,9 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  maturityCard,
+  type MaturityCard,
+  type MaturityPoint,
   type ChangelogEntry,
   type EgressRecord,
   type SecurityLog,
@@ -995,6 +998,43 @@ export class PgStore implements AsyncStore {
   async deleteKnownFlakyTest(projectId: string, test: string): Promise<boolean> {
     const rows = await this.db.execute(sql`delete from known_flaky_tests where project_id = ${projectId} and test = ${test} returning test`);
     return rows.rows.length === 1;
+  }
+
+  async maturityCards(projectId?: string): Promise<MaturityCard[]> {
+    return this.readMaturityCards(this.db, projectId);
+  }
+
+  private async readMaturityCards(db: Tx | NodePgDatabase<typeof schema>, projectId?: string): Promise<MaturityCard[]> {
+    const rows = await db.execute<{ project_id: string; key: string; title: string; value: string; detected: string | number; approved_by: string | null; approved: string | number | null }>(sql`
+      select project_id, key, title, value, round(extract(epoch from detected_at) * 1000) as detected, approved_by, round(extract(epoch from approved_at) * 1000) as approved
+      from maturity_cards ${projectId === undefined ? sql`` : sql`where project_id = ${projectId}`} order by project_id, position
+    `);
+    return rows.rows.map((r) => ({
+      projectId: r.project_id, key: r.key, title: r.title, value: r.value, detectedAt: Number(r.detected),
+      ...(r.approved_by === null || r.approved === null ? {} : { approvedBy: r.approved_by, approvedAt: Number(r.approved) }),
+    }));
+  }
+
+  async putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      // Locked for the detection: two inits at once write one set, not a mix.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`maturity:${projectId}`}))`);
+      const before = new Map((await this.readMaturityCards(tx, projectId)).map((c) => [c.key, c]));
+      await tx.execute(sql`delete from maturity_cards where project_id = ${projectId}`);
+      if (!points.length) return;
+      await tx.insert(schema.maturityCards).values(
+        points.map((p, position) => {
+          const c = maturityCard(projectId, p, at, before.get(p.key));
+          return { projectId, key: c.key, position, title: c.title, value: c.value, detectedAt: new Date(c.detectedAt), approvedBy: c.approvedBy ?? null, approvedAt: c.approvedAt === undefined ? null : new Date(c.approvedAt) };
+        }),
+      );
+    });
+  }
+
+  async approveMaturityCard(projectId: string, key: string, by: string, at: number): Promise<MaturityCard | undefined> {
+    const rows = await this.db.execute(sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key} returning key`);
+    if (!rows.rows.length) return undefined;
+    return (await this.maturityCards(projectId)).find((c) => c.key === key);
   }
 
   async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {

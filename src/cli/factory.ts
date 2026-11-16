@@ -15,7 +15,7 @@ import { openStore } from '../store/open.js';
 import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
 import { runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
-import { runInit } from './init.js';
+import { instanceCards, runInit } from './init.js';
 import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
 import { runFlakyCommand } from './flaky.js';
@@ -73,6 +73,7 @@ async function main(): Promise<number> {
         cwd: process.cwd(),
         exec: execCmd,
         createSmee: () => createSmeeChannel(),
+        storeCards: instanceCards(home),
         io: {
           ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
           print: (s) => console.log(s),

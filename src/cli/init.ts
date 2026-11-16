@@ -4,11 +4,15 @@ import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
-import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
+import { homePaths, loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
+import { repoRoot } from '../app/root.js';
 import { slugify } from '../core/naming.js';
 import { PRODUCT_NAME } from '../product.js';
+import { openStore } from '../store/open.js';
+import type { MaturityCard, MaturityPoint } from '../store/types.js';
+import { maturityReport, type DetectedChecks } from './maturity.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
@@ -21,14 +25,12 @@ export interface InitDeps {
   cwd: string;
   createSmee: () => Promise<string>;
   exec: Exec;
+  /** Stores the maturity cards of a detection (ORC-410) and gives them back as stored, approvals kept: absent, none is stored. */
+  storeCards?: (projectId: string, points: readonly MaturityPoint[]) => Promise<MaturityCard[]>;
 }
 
 /** What `init` proposes for a repository's `.factory/config.yml`: its install, its checks by name, and what starts the application. */
-interface Detected {
-  setup: string[];
-  commands: Record<string, string>;
-  preview?: string;
-}
+type Detected = DetectedChecks;
 
 /**
  * The scripts of the repository's package.json, those that are a command: none without one, or with one that does not parse
@@ -103,6 +105,47 @@ function proposal({ setup, commands, preview }: Detected): string | undefined {
   return text ? PROPOSAL_HEADER + text : undefined;
 }
 
+/** What `init` prints before the maturity cards (ORC-410), followed by the dashboard page where a person approves them. */
+export const MATURITY_HEADER = 'Maturity report, one card per point to approve on the dashboard: ';
+
+/** A card as init prints it: approved or not, its value under its title, a value of several lines indented. */
+function cardLine(c: MaturityPoint & { approvedBy?: string }): string {
+  const status = c.approvedBy === undefined ? '[to approve]' : `[approved by ${c.approvedBy}]`;
+  const lines = c.value.split('\n');
+  return lines.length === 1 ? `  ${status} ${c.title}: ${c.value}` : [`  ${status} ${c.title}:`, ...lines.map((l) => `    ${l}`)].join('\n');
+}
+
+/** The maturity report of the repository, stored as cards when it can be: a store that fails leaves init to finish, and says so. */
+async function printMaturity(d: InitDeps, projectId: string, points: MaturityPoint[], dashboard: string): Promise<void> {
+  let cards: (MaturityPoint & { approvedBy?: string })[] = points;
+  let failure: string | undefined;
+  if (d.storeCards) {
+    try {
+      cards = await d.storeCards(projectId, points);
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+    }
+  }
+  d.io.print(['', `${MATURITY_HEADER}${dashboard}/#maturity`, ...cards.map(cardLine)].join('\n'));
+  if (failure !== undefined) d.io.print(`Cards not stored (${failure}): run factory init again once the database is reachable.`);
+}
+
+/**
+ * The maturity cards in the instance's store (ORC-410), opened for the write and closed: Postgres brought to the latest
+ * migration first, as init may run before the daemon ever did.
+ */
+export const instanceCards =
+  (home: string) =>
+  async (projectId: string, points: readonly MaturityPoint[]): Promise<MaturityCard[]> => {
+    const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle') });
+    try {
+      await store.putMaturityCards(projectId, points, Date.now());
+      return await store.maturityCards(projectId);
+    } finally {
+      await store.close();
+    }
+  };
+
 /** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
 function samePath(a: string, b: string): boolean {
   const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
@@ -162,6 +205,8 @@ export async function runInit(d: InitDeps): Promise<void> {
     : await makeRepoConfig({ exec: d.exec })({ repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
   for (const warning of testCommandWarnings(commands)) io.print(warning);
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
+  // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
+  if (detected) await printMaturity(d, id, maturityReport(repoPath, detected), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
 
   saveInstance(d.home, cfg);
   io.print(
