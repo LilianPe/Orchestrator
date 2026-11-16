@@ -2,6 +2,7 @@ import type { RedCause } from '../checks/red.js';
 import type { MeasureFacts, OutboxRow, RunRecord } from '../store/types.js';
 import type { AgentOutput, AttemptOutcome, Finding as LensFinding } from './agent-output.js';
 import { pendingLabels } from './attempt-labels.js';
+import { isCliActor } from './authz.js';
 import { runMeasure, type RunMeasure } from './measures.js';
 import { addTokens, type EventType, type FactoryEvent, type LogicalState, type TokenUsage } from './types.js';
 import { upcast, type StoredEvent } from './upcast.js';
@@ -17,8 +18,8 @@ export interface TimelineEntry {
 }
 
 /**
- * Where a human decided: in Linear (signed webhook), on GitHub (signed webhook), from the dashboard (or `factory stop`, which
- * goes through it), or `factory run repair` on the command line.
+ * Where a human decided: in Linear (signed webhook), on GitHub (signed webhook), from the dashboard, or on the command line:
+ * `factory stop|pause|resume` through the daemon's socket, signed `cli:<host>` (ORC-405, ORC-414), and `factory run repair`.
  */
 export type DecisionChannel = 'linear' | 'github' | 'dashboard' | 'cli';
 
@@ -244,7 +245,7 @@ function decisionOf(e: FactoryEvent, facts: MeasureFacts): Pick<HumanDecision, '
     case 'control.bundle':
     case 'control.pause':
     case 'control.resume':
-      return { channel: 'dashboard', who: null };
+      return actor !== null && isCliActor(actor) ? { channel: 'cli', who: actor } : { channel: 'dashboard', who: null };
     case 'dead_letter.repaired':
       return { channel: 'cli', who: e.payload.by };
     default:
