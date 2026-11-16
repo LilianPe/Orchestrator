@@ -1,5 +1,5 @@
 import { WORKFLOW_FORMAT, type JobSpec, type Limits, type RunLimits, type Workflow } from '../core/workflow.js';
-import { blockingFix, nextOf, reactionJobs, startingJob } from '../core/chain.js';
+import { blockingFix, hasHumanRounds, nextOf, reactionJobs, startingJob } from '../core/chain.js';
 import { UNLINKED_REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, isAgentStep, mergeGate, type AgentStep, type Effort, type Preset } from './preset.js';
@@ -127,7 +127,8 @@ export function workflowViolations(wf: Workflow): string[] {
   if (wf.level !== 'rapide') {
     for (const name of UNLINKED_REACTION_JOBS) job('reactions', name);
     // The other reactions read their job on the preset's links (ORC-417): a link to no job would start nothing, silently.
-    for (const [link, j] of Object.entries(reactionJobs(wf))) if (!j) out.push(`reactions: ${link} starts no job`);
+    // A merge gate with no way back has no round of human review: human feedback starts nothing there (`hasHumanRounds`).
+    for (const [link, j] of Object.entries(reactionJobs(wf))) if (!j && (link !== 'humanFeedback' || hasHumanRounds(wf))) out.push(`reactions: ${link} starts no job`);
     // A question relayed to the agent that implements starts its job: only the Rapide level, where nobody asks, has none.
     if (wf.relayJob === undefined) out.push('relayJob: missing, the questions relayed to the agent that implements would start no job');
   }

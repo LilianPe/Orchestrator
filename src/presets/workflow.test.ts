@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hashText } from '../core/attempt-labels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
 import { blockingFix, delegatedJob, nextOf } from '../core/chain.js';
+import { mergeGate } from './preset.js';
 import { agentStep, defaultWorkflow, workflowViolations, type StepSettings } from './workflow.js';
 
 /**
@@ -46,6 +47,15 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     wrong.entry = 'intak';
     delete wrong.jobs['fix-human'];
     expect(workflowViolations(wrong)).toEqual(['jobs.answer-relayed.step: fxi is not a step of factory/default', 'entry: intak is not a step of factory/default', 'reactions: humanFeedback starts no job']);
+  });
+
+  it("refuses a link of the preset a reaction reads that starts no job, but a merge gate with no way back, which has no round (ORC-417)", () => {
+    const noRound = defaultWorkflow();
+    delete mergeGate(noRound.preset)!.onFailure;
+    expect(workflowViolations(noRound)).toEqual([]);
+    const lost = defaultWorkflow();
+    delete lost.jobs['fix-ci'];
+    expect(workflowViolations(lost)).toEqual(['reactions: redCi starts no job']);
   });
 
   // What the loader refused in a job or a rule of the pack, checked on the table now that no file goes through it.

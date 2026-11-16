@@ -976,6 +976,8 @@ interface Reaction {
   job: JobSpec;
   /** A message regrouped this long before its job starts (ORC-180); none: at once. */
   debounceMs?: number;
+  /** What the run reads, the job's own if absent: red CI's failures, whatever step the preset's `redCi` sends them to (ORC-417). */
+  input?: InputKind;
 }
 
 const rapide = (workflow: Workflow): boolean => workflow.level === 'rapide';
@@ -994,9 +996,9 @@ function reactionJob(workflow: Workflow, which: ReactionJob): JobSpec {
 }
 
 /** A reaction that starts `job`: a ticket not delegated only ever gets the questions queue's work. */
-function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: TicketState | undefined, debounceMs?: number): Reaction | undefined {
+function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: TicketState | undefined, debounceMs?: number, input?: InputKind): Reaction | undefined {
   if (ticket && !ticket.delegated && event.type !== 'ticket.delegated' && job.queue !== 'questions') return undefined;
-  return { index, job, debounceMs };
+  return { index, job, debounceMs, ...(input ? { input } : {}) };
 }
 
 /** The delegation, on a ticket not blocked, in Todo or In Progress (any status at the Rapide level): the chain's entry job. */
@@ -1038,9 +1040,12 @@ function replyReaction(event: FactoryEvent, ticket: TicketState | undefined, wor
  */
 const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => reaction(0, reactionJob(workflow, DEV_FEEDBACK), event, ticket);
 
-/** Human feedback in Human Review (ORC-190): a round of the merge gate's fix (`fix-human`), on its counter, once the messages are regrouped. */
+/**
+ * Human feedback in Human Review (ORC-190): a round of the merge gate's fix (`fix-human`), on its counter, once the messages are
+ * regrouped. A preset with no round of human review starts nothing, as for a review on the PR (`humanReview`): it waits in the inbox.
+ */
 const humanFeedback = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  reaction(1, reactionJob(workflow, 'humanFeedback'), event, ticket, regroupMs(workflow));
+  hasHumanRounds(workflow) ? reaction(1, reactionJob(workflow, 'humanFeedback'), event, ticket, regroupMs(workflow)) : undefined;
 
 /** An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any counter. */
 const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
@@ -1058,7 +1063,7 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
   const state = ticket?.logical ?? 'todo';
   const conflict = event.type === 'pr.conflicted';
   if (ticket?.blocked || !(state === 'human_review' || state === 'ai_review' || (conflict && state === 'dev'))) return undefined;
-  return reaction(0, reactionJob(workflow, conflict ? 'conflict' : 'redCi'), event, ticket);
+  return conflict ? reaction(0, reactionJob(workflow, 'conflict'), event, ticket) : reaction(0, reactionJob(workflow, 'redCi'), event, ticket, undefined, 'ci_failures');
 }
 
 /** The label `agent:stop` stops the ticket's work, as the stop of its session does (until ORC-201 removes the `agent:*` labels). */
@@ -1480,7 +1485,7 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   } else {
     // A mention that answers the block is read from the inbox, in the ticket's session, as a reply is (ORC-415).
     const threaded = !reply && (event.type === 'session.mentioned' || event.type === 'command');
-    const run = { input: resumed ? 'feedback' : job.input, inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
+    const run = { input: resumed ? 'feedback' : (r.input ?? job.input), inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
     humanRound(out, ticket, workflow, job, () => startRun(out, event, ticket, job, run));
   }
   return out;

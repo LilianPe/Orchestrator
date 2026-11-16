@@ -151,7 +151,8 @@ describe("red CI and a conflict start the job of the preset's edge, not one name
   it('a preset whose redCi.goto points at the build starts the build on a red CI, counted on the same loop', () => {
     const custom = presetWorkflow({ ...factoryDefault, redCi: { goto: 'build', counter: 'review_ci' } });
     const out = decide(reviewed(), red(), custom);
-    expect(starts(out)).toEqual([expect.objectContaining({ job: 'dev' })]);
+    // It reads the red checks, as the fix would: the edge's cause, not the build's own input.
+    expect(starts(out)).toEqual([expect.objectContaining({ job: 'dev', input: 'ci_failures' })]);
     expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 1 } });
     // The default preset still starts its fix for the CI.
     expect(starts(decide(reviewed(), red(), workflow))).toEqual([expect.objectContaining({ job: 'fix-ci' })]);
