@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { parseAllDocuments } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import {
@@ -9,7 +8,7 @@ import {
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, validatorWarnings } from '../config/instance.js';
+import { effectiveInstance, samePath, validatorWarnings } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -592,8 +591,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   try {
     const instance = effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml);
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
-    const repoPath = resolve(options.repoPath);
-    validators = validatorWarnings(instance.projects.filter((p) => resolve(p.repoPath) === repoPath));
+    validators = validatorWarnings(instance.projects.filter((p) => samePath(p.repoPath, options.repoPath)));
     if (!options.json) for (const line of validators) out(line);
     githubApp = resolveGithubApp(instance, env);
   } catch (error) {
@@ -613,21 +611,12 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  const report = { repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
   let config: RepoConfig;
   try {
     config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });
   } catch (error) {
-    return doctorFailure({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
+    return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({
-    repoPath: options.repoPath,
-    api,
-    out,
-    naming: config.branches,
-    commands: config.commands,
-    visualProof,
-    validatorWarnings: validators,
-    ...(serverSecrets ? { serverSecrets } : {}),
-    ...(options.json ? { json: true } : {}),
-  });
+  return runDoctor({ ...report, api, naming: config.branches, commands: config.commands });
 }

@@ -1,10 +1,14 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { z } from 'zod';
 import type { FactoryYml } from './factory-yml.js';
 import { isSealed, openSecretsFile, sealSecretsFile } from './secrets-file.js';
+import { validatorsNeeded } from '../core/authz.js';
+
+/** The preset of the replay of closed tickets (ORC-231), named here without loading the presets: `isFantome` reads `fantome.name`. */
+const FANTOME = 'factory/fantome';
 
 /**
  * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml`
@@ -25,7 +29,7 @@ const projectSchema = z.object({
   /** `none` (ORC-231): nothing of the project leaves the factory, its effects are kept as artifacts of its runs. */
   effects: z.literal('none').optional(),
   /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
-  preset: z.literal('factory/fantome').optional(),
+  preset: z.literal(FANTOME).optional(),
 });
 
 const idSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);
@@ -180,19 +184,26 @@ export function effectiveInstance(home: string, yml: FactoryYml | undefined): In
   return yml?.github ? { ...cfg, github: { ...cfg.github, ...yml.github } } : cfg;
 }
 
+/** Whether two paths name one directory: a project's `repoPath` an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
+export function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+  return norm(a) === norm(b);
+}
+
 /**
  * The projects whose spec gate no validator can pass (ORC-421), for `factory doctor` and the daemon's start: every delegation
  * waits there for a designated validator's `/approve` (ORC-395), never its initiator's. With none, every ticket stops at the gate;
  * with a lone one, the tickets they delegate. The replay of closed tickets approves its own specs.
  */
 export function validatorWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'authz' | 'preset'>[]): string[] {
+  const needed = validatorsNeeded();
   return projects.flatMap((p) => {
-    if (p.preset === 'factory/fantome') return [];
+    if (p.preset === FANTOME) return [];
     // By id, as the role resolver reads them: one id twice is one validator.
     const count = new Set(p.authz?.validators).size;
-    if (count === 0) return [`Warning: ${p.id}: no spec validator (authz.validators in config.yaml): every ticket waits at the spec gate for a designated validator's \`/approve\`, which its initiator cannot give, and stops there. Designate validators by their Linear user ids.`];
-    if (count === 1) return [`Warning: ${p.id}: one spec validator (authz.validators in config.yaml): a ticket they delegate themselves stops at the spec gate, as no one may approve the spec of a run they launched. Designate a second validator.`];
-    return [];
+    if (count >= needed) return [];
+    if (count === 0) return [`Warning: ${p.id}: no spec validator (authz.validators in config.yaml): every ticket waits at the spec gate for a designated validator's \`/approve\`, and stops there. Designate validators by their Linear user ids.`];
+    return [`Warning: ${p.id}: one spec validator (authz.validators in config.yaml): a ticket they delegate themselves stops at the spec gate, as no one may approve the spec of a run they launched. Designate a second validator.`];
   });
 }
 

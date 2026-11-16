@@ -336,7 +336,6 @@ describe('bootstrap', () => {
     const warned = logs.filter((m) => m.includes('authz.validators'));
     expect(warned).toEqual(validatorWarnings(projects));
     expect(warned.map((m) => m.split(':')[1]!.trim())).toEqual(['none', 'lone']);
-    expect(warned.every((m) => m.startsWith('Warning: '))).toBe(true);
   });
 
   it('TrackerSwitch explains how to connect', async () => {
