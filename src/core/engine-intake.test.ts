@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { defaultWorkflow, preset, presetWorkflow } from '../presets/workflow.js';
 import type { Workflow } from './workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { causeOf } from './block-cause.js';
@@ -28,15 +28,15 @@ describe('intake (ORC-206)', () => {
     const job = workflow.jobs['intake']!;
     expect(job).toMatchObject({ step: 'intake', queue: 'dev', effort: 'low', structuredOutput: true, pickup: false });
     expect(startMove(workflow, job)).toBeUndefined();
-    // The guard before `build`, the chain's entry until ORC-395: it hands over to `dev`, which moves the ticket at its launch.
-    expect(nextOf(workflow, job)).toEqual({ run: workflow.jobs['dev'], step: expect.objectContaining({ id: 'build' }) });
+    // The chain's entry (ORC-395): past clarify, which has no job, its end starts the spec.
+    expect(nextOf(workflow, job)).toEqual({ run: workflow.jobs['spec'], step: expect.objectContaining({ id: 'spec_draft' }) });
   });
 
-  it('records the size and the risk it estimated, then the guard lets a complete ticket start dev', () => {
+  it('records the size and the risk it estimated, then the guard lets a complete ticket start the spec (ORC-395)', () => {
     const e = finished(assessed());
     const out = decide(ticket(), e, workflow);
     expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { size: 'm', risk: 'medium' } });
-    expect(out.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'dev' })]);
+    expect(out.effects).toEqual([expect.objectContaining({ kind: 'start_run', job: 'spec' })]);
     expect(after(ticket(), e)).toMatchObject({ size: 'm', risk: 'medium', blocked: false });
   });
 
@@ -138,8 +138,10 @@ describe('intake: duplicates, existing code and scope (ORC-207)', () => {
 });
 
 describe('the run boundary of the risk (ORC-365)', () => {
-  // Delegation starts with intake, as a repository turns it on.
-  const withIntake: Workflow = { ...workflow, delegated: 'intake' };
+  // Delegation starts with intake, the preset's entry (ORC-395).
+  const withIntake = workflow;
+  /** A chain that starts at `build`, as a preset with no intake would. */
+  const atBuild: Workflow = presetWorkflow(preset, {}, 'build');
   const delegation = (extra: Partial<FactoryEvent> = {}) =>
     ({ id: 'e-delegated', type: 'ticket.delegated', at: 5000, projectId: 'p', ticketId: 'REL-1', schemaVersion: 3, taint: 'trusted', payload: { linearSessionId: 's2', ack: true }, ...extra }) as FactoryEvent;
   /** A ticket whose last run was assessed `high` with a screen, then taken back: undelegated, no run. */
@@ -174,7 +176,7 @@ describe('the run boundary of the risk (ORC-365)', () => {
   });
 
   it('a delegation straight to dev starts a new run too, with no risk until an intake assesses it', () => {
-    expect(after(takenBack(), delegation())).toMatchObject({ risk: null, visualProof: null });
+    expect(after(takenBack(), delegation(), atBuild)).toMatchObject({ risk: null, visualProof: null });
   });
 
   it('a delegation that starts no run leaves the run as it is: refused, a run active, a blocked ticket, a wait on blockers', () => {

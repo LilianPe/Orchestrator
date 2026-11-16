@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { createHarness } from '../helpers/harness.js';
-import { delegationStarts } from '../helpers/workflow-with.js';
 
 /** ORC-283: the ticket's branch by the team's convention, or the repository's, given once and kept. */
 describe("the ticket's branch name", () => {
@@ -78,7 +77,8 @@ describe("the ticket's branch name", () => {
 
   it("leaves the ticket's own branch and PR out of intake's duplicates by the repository's naming, `not_started` checked or not", async () => {
     const h = createHarness({
-      workflow: delegationStarts('intake', { pickupChecks: ['has_description'] }),
+      fullChain: true,
+      workflow: { pickupChecks: ['has_description'] },
       repoConfig: async () => parseRepoConfig('branches: { pattern: "agent/{id}" }\n'),
     });
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });

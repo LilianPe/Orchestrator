@@ -31,7 +31,8 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     const out = decide(t, e, workflow);
     expect(out.effects.some((x) => x.kind === 'start_run' || x.kind === 'move' || x.kind === 'block_comment')).toBe(false);
     expect(out.effects).toContainEqual({ kind: 'activity', type: 'thought', body: expect.stringContaining('REL-2 (In Progress)') });
-    expect(after(t, e)).toMatchObject({ blocked: false, size: 'm', waitingOn: { blockers: ['REL-2'], start: { job: 'dev' } } });
+    // What intake's end starts waits: the spec (ORC-395).
+    expect(after(t, e)).toMatchObject({ blocked: false, size: 'm', waitingOn: { blockers: ['REL-2'], start: { job: 'spec' } } });
   });
 
   it('an incomplete ticket is asked its questions first (ORC-210): the human has something to answer, the wait comes after', () => {

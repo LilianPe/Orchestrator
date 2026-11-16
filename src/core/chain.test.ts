@@ -22,12 +22,13 @@ function ends(wf: Workflow) {
 describe('the chain walks the preset (ORC-391)', () => {
   it("factory/default: each job's end, as the jobs' `on_success` of the former pack said it", () => {
     expect(ends(defaultWorkflow())).toEqual({
-      // The guard before `build`, the chain's entry until ORC-395.
-      intake: { run: 'dev', at: 'build' },
+      // The chain's entry (ORC-395): past clarify, which has no job, to the spec.
+      intake: { run: 'spec', at: 'spec_draft' },
       dev: { run: 'review', move: 'ai_review', post: 'summary', at: 'review' },
       // Its end waits at the spec gate; `/approve` passes it.
       spec: { at: 'spec_review' },
-      tests: { run: 'dev', at: 'build' },
+      // Past the red check and the freeze, to the build, whose status the ticket takes.
+      tests: { run: 'dev', move: 'dev', at: 'build' },
       'dev-feedback': { run: 'review', move: 'ai_review', post: 'reply', at: 'review' },
       'fix-ci': { run: 'review', move: 'ai_review', post: 'reply', at: 'review' },
       'fix-review': { run: 'review', move: 'ai_review', post: 'reply', at: 'review' },
@@ -47,7 +48,10 @@ describe('the chain walks the preset (ORC-391)', () => {
   it('factory/default: only the entry moves at its launch, the review fix and the human round come from the edges', () => {
     const wf = defaultWorkflow();
     const jobs = Object.values(wf.jobs);
-    expect(jobs.flatMap((j) => (startMove(wf, j) ? [[j.name, startMove(wf, j)]] : []))).toEqual([['dev', 'dev']]);
+    // Its entry, intake, has no status: the ticket stays in Todo until the end that reaches the build (ORC-395).
+    expect(jobs.flatMap((j) => (startMove(wf, j) ? [[j.name, startMove(wf, j)]] : []))).toEqual([]);
+    const atBuild = presetWorkflow(preset, {}, 'build');
+    expect(Object.values(atBuild.jobs).flatMap((j) => (startMove(atBuild, j) ? [[j.name, startMove(atBuild, j)]] : []))).toEqual([['dev', 'dev']]);
     expect(jobs.flatMap((j) => (blockingFix(wf, j) ? [[j.name, blockingFix(wf, j)!.name]] : []))).toEqual([['review-security', 'fix-review']]);
     expect(jobs.filter((j) => humanRoundJob(wf, j)).map((j) => j.name)).toEqual(['fix-human']);
   });

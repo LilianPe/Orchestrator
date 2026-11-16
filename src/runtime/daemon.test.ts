@@ -884,7 +884,7 @@ describe('Daemon', () => {
   });
 
   it('arms no timer of a decision when an earlier effect of it fails: the guard\'s question, then its reminders (ORC-133, ORC-210)', async () => {
-    const { store, tracker, runner, orch } = setup({ tweak: (w) => void (w.delegated = 'intake') });
+    const { store, tracker, runner, orch } = setup({ tweak: (w) => void (w.entry = 'intake') });
     tracker.addIssue({ identifier: 'REL-1', title: 'A', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     tracker.activity = async (_session, a) => {
       if (a.type === 'elicitation') throw new Error('linear down');

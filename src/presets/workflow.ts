@@ -120,7 +120,6 @@ export function workflowViolations(wf: Workflow): string[] {
   }
   if (!steps.has(wf.entry)) out.push(`entry: ${wf.entry} is not a step of ${wf.preset.name}`);
   job('relayJob', wf.relayJob);
-  job('delegated', wf.delegated);
   if (wf.level !== 'rapide') {
     for (const name of REACTION_JOBS) job('reactions', name);
     // A question relayed to the agent that implements starts its job: only the Rapide level, where nobody asks, has none.
@@ -185,9 +184,9 @@ export function presetWorkflow(given: Preset, settings: StepSettings = {}, entry
 }
 
 /**
- * The workflow of `factory/default`. Its chain starts at `build` until the delegation starts at the preset's entry (ORC-395):
- * `intake`, when a test or a project runs it, is the guard before `build` (ORC-206) and hands over to it.
+ * The workflow of `factory/default`. A delegation starts at the preset's entry (ORC-395): `intake`, then the spec and its human
+ * gate, the tests, the red check and the freeze, before `build`.
  */
 export function defaultWorkflow(settings: StepSettings = {}): Workflow {
-  return presetWorkflow(preset, settings, 'build');
+  return presetWorkflow(preset, settings);
 }

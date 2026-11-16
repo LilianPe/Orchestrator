@@ -32,11 +32,11 @@ const asking = (questions = [RATE, FORMAT]) => after(ticket(), finished(assessed
 const timer = (kind: 'clarify.remind' | 'clarify.expire', at = 1000) => ev('timer.fired', { kind, payload: { at } }, { id: `e-${kind}`, at: 1000 + (kind === 'clarify.remind' ? CLARIFY_REMIND_MS : CLARIFY_EXPIRE_MS) });
 
 describe('clarify (ORC-210)', () => {
-  it('criterion 1: a clear ticket asks nothing and starts dev', () => {
+  it('criterion 1: a clear ticket asks nothing and starts the spec (ORC-395)', () => {
     const out = decide(ticket(), finished(assessed()), workflow);
     expect(out.effects.filter((x) => x.kind === 'activity')).toEqual([]);
     expect(out.timers).toEqual([]);
-    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
+    expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'spec' }));
   });
 
   it('criterion 2: an unclear ticket gets its questions as elicitations with select, one at a time, a free answer possible, and is neither blocked nor moved', () => {

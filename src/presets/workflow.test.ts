@@ -7,10 +7,10 @@ import { agentStep, defaultWorkflow, workflowViolations, type StepSettings } fro
 /**
  * The hashes of the workflow of `factory/default`: the canonical one, which each ticket's frozen version and the replay
  * journals carry, and the one of its JSON text, keys in their order, which the journals hold. A change of either changes the
- * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-393, format 2, the frozen-version fields gone).
+ * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-395, the chain's entry at intake).
  */
-const CANONICAL = 'ed8b6ceb5196d5ed89291bf5c3627f8fd17db1ea544a23a6af3dec37764cd3c0';
-const TEXT = 'sha256:cdec3b88d57b9667ea175d3c1baaa33fd6fead2490afd21d1906466cfa056f87';
+const CANONICAL = '809977d80f42307fc051119296b3bdd5788809bab9be6e15a1053beaf40bb11a';
+const TEXT = 'sha256:41baaafe3491ed8a7b0f58b878549b2d39fb3956e95c6f76a61ad7f82ad70e5c';
 
 describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
   // The safety net of ORC-177's later parts: a change of the workflow is a change of the journals, seen in their diff.
@@ -43,9 +43,9 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     expect(wf.jobs[wf.relayJob!]).toMatchObject({ queue: 'dev', session: 'resume', input: 'feedback', cause: 'relay' });
     const wrong = defaultWorkflow();
     wrong.jobs['answer-relayed']!.step = 'fxi';
-    wrong.delegated = 'intak';
+    wrong.entry = 'intak';
     delete wrong.jobs['fix-human'];
-    expect(workflowViolations(wrong)).toEqual(['jobs.answer-relayed.step: fxi is not a step of factory/default', 'delegated: unknown job "intak"', 'reactions: unknown job "fix-human"']);
+    expect(workflowViolations(wrong)).toEqual(['jobs.answer-relayed.step: fxi is not a step of factory/default', 'entry: intak is not a step of factory/default', 'reactions: unknown job "fix-human"']);
   });
 
   // What the loader refused in a job or a rule of the pack, checked on the table now that no file goes through it.
@@ -63,16 +63,17 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
     }
   });
 
-  it('gives each call a workflow of its own: a test that changes a job, a step, the delegation or a limit changes no other workflow', () => {
+  it('gives each call a workflow of its own: a test that changes a job, a step, the entry or a limit changes no other workflow', () => {
     const a = defaultWorkflow();
     a.jobs.dev!.skill = 'x';
     a.preset!.steps.find((s) => s.id === 'review')!.next = null;
-    a.delegated = 'intake';
+    a.entry = 'build';
     a.limits.verifyAttempts = 1;
     a.limits.perRun.turns = 1;
     expect(defaultWorkflow().jobs.dev!.skill).toBe('factory:dev');
     expect(defaultWorkflow().preset!.steps.find((s) => s.id === 'review')!.next).toBe('human_review');
-    expect(delegatedJob(defaultWorkflow())).toBe('dev');
+    // The delegation starts the preset's entry (ORC-395).
+    expect(delegatedJob(defaultWorkflow())).toBe('intake');
     expect(defaultWorkflow().limits).toMatchObject({ verifyAttempts: 4, perRun: { turns: 150 } });
   });
 

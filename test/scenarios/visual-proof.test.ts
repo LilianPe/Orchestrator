@@ -7,15 +7,15 @@ import { VISUAL_PROOF_CHECK, type VisualProof } from '../../src/checks/visual-pr
 import { CAPTURES_KEPT_MS } from '../../src/runtime/effects.js';
 import type { AgentOutput } from '../../src/core/agent-output.js';
 import type { CleanVerifyRequest, CleanVerifyResult } from '../../src/core/clean-verify.js';
-import { createHarness } from '../helpers/harness.js';
-import { delegationStarts } from '../helpers/workflow-with.js';
+import type { FakeScript } from '../../src/adapters/runner/fake.js';
+import { chainHarness, delegate as delegated, drafted, toBuild } from '../helpers/chain.js';
+import type { createHarness } from '../helpers/harness.js';
 
 /**
  * ORC-176: the visual proof the factory takes in `verify`. The browser and the check itself are proved by `clean-verify.test.ts`;
  * here, what the orchestrator does with them: the decision's inputs, the journal, the artifacts kept out of the agent's reach, the check.
  */
 type Harness = ReturnType<typeof createHarness>;
-const INTAKE_FIRST = delegationStarts('intake');
 const SHA = 'c0ffee'.padEnd(40, '0');
 const BASE = 'ba5e'.padEnd(40, '0');
 const WORKTREE = '/tmp/factory-fake/p/REL-1';
@@ -42,8 +42,7 @@ function taken(): NonNullable<CleanVerifyResult['visual']> {
 
 function visual(result: (req: CleanVerifyRequest) => Partial<CleanVerifyResult> | Promise<Partial<CleanVerifyResult>>, screen = true) {
   const asked: CleanVerifyRequest[] = [];
-  const h = createHarness({
-    workflow: INTAKE_FIRST,
+  const h = chainHarness({
     sandboxed: true,
     visualShooter: new FakeShooter(),
     cleanVerify: async (req) => {
@@ -53,11 +52,15 @@ function visual(result: (req: CleanVerifyRequest) => Partial<CleanVerifyResult> 
   });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Restyle the button', description: 'Restyle the settings button.\n\nAcceptance criteria:\n1. It is blue.' });
   h.workspaces.heads.set(WORKTREE, SHA);
-  h.runner.enqueue(intake(screen), dev);
+  h.runner.enqueue(intake(screen), drafted());
   return { h, asked };
 }
 
-const delegate = (h: Harness) => h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+/** Delegated, the ticket goes through intake, the spec and the tests (ORC-395), then the build runs as `dev`, then `more`. */
+async function delegate(h: Harness, ...more: FakeScript[]): Promise<void> {
+  await delegated(h);
+  await toBuild(h, { build: [dev, ...more] });
+}
 const passed = async (h: Harness) => (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'verify.passed');
 const check = (h: Harness) => h.forge.checkRuns.find((c) => c.name === VISUAL_PROOF_CHECK);
 
@@ -67,7 +70,7 @@ describe('the visual proof in the orchestrator (ORC-176)', () => {
     await delegate(h);
     expect(asked).toHaveLength(1);
     expect(asked[0]!.visual).toMatchObject({ intake: true, path: '/settings', shooter: expect.any(FakeShooter) });
-    expect(h.runner.requests).toHaveLength(2);
+    expect(h.runner.requests).toHaveLength(4);
   });
 
   it('criterion 1: the journal carries the decision, its triggers and the six captures by hash; the files are kept as artifacts', async () => {
@@ -114,10 +117,9 @@ describe('the visual proof in the orchestrator (ORC-176)', () => {
       first = false;
       return { ok: false, failures: [{ command: VISUAL_PROOF_CHECK, exitCode: 1, output: 'The captures before and after are identical at every width.' }] };
     });
-    h.runner.enqueue({ events: [{ kind: 'text', text: 'Fixed.' }] });
-    await delegate(h);
-    expect(h.runner.requests).toHaveLength(3);
-    expect(h.runner.requests[2]!.prompt).toContain('identical at every width');
+    await delegate(h, { events: [{ kind: 'text', text: 'Fixed.' }] });
+    expect(h.runner.requests).toHaveLength(5);
+    expect(h.runner.requests[4]!.prompt).toContain('identical at every width');
     expect(await passed(h)).toHaveLength(1);
     // The second check runs on the relaunch the first one counted.
     expect(counters).toEqual([0, 1]);

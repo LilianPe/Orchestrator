@@ -22,7 +22,7 @@ import { Daemon, type DaemonDeps, type ProjectRuntime } from '../../src/runtime/
 import { queueCapacity, Scheduler } from '../../src/runtime/capacity.js';
 import { TimerService } from '../../src/runtime/timers.js';
 import { fantome } from '../../src/presets/fantome.js';
-import { presetWorkflow } from '../../src/presets/workflow.js';
+import { preset, presetWorkflow } from '../../src/presets/workflow.js';
 import { Replays } from '../../src/ghost/delegate.js';
 import type { EventPayloads, EventType, FactoryEvent, Taint } from '../../src/core/types.js';
 import type { VisualShooter } from '../../src/adapters/browser/types.js';
@@ -44,10 +44,13 @@ export const packDir = join(import.meta.dirname, '../../packs/standard');
  * lenses, and `fix-ci`'s end starts no review either (ORC-184): what the scenarios of the other steps, the properties and the
  * recorded journals run on, their runs and moves counted without the review's. The review's own scenarios
  * (`test/scenarios/review.test.ts`), the review loop's property and the golden replay run the workflow as it ships.
+ * Without `fullChain`, the delegation starts at `build`, what most scenarios test; with it, at the preset's entry, as it ships
+ * (ORC-395): `intake`, the spec and its gate, `tests`, the red check and the freeze come first (`test/helpers/chain.ts`).
  */
-export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean; fantome?: boolean } = {}): Workflow {
+export function loadTestWorkflow(overrides?: WorkflowOverrides, o: { aiReview?: boolean; fantome?: boolean; fullChain?: boolean } = {}): Workflow {
+  const entry = o.fullChain ? preset.entry : 'build';
   // The fixes that go back through the review (ORC-184) keep their reply and leave the ticket where it is, as before (`withoutAiReview`).
-  const base = o.fantome ? presetWorkflow(fantome) : o.aiReview ? undefined : workflowWithoutAiReview();
+  const base = o.fantome ? presetWorkflow(fantome) : o.aiReview ? presetWorkflow(preset, {}, entry) : workflowWithoutAiReview(entry);
   return workflowWith(overrides, base);
 }
 
@@ -265,6 +268,8 @@ export function createHarness(
     startFingerprint?: DaemonDeps['startFingerprint'];
     /** `dev`'s end starts the AI review, as the pack ships it (ORC-183); off by default: `loadTestWorkflow`. */
     aiReview?: boolean;
+    /** The delegation starts at the preset's entry, `intake`, as it ships (ORC-395); at `build` by default: `loadTestWorkflow`. */
+    fullChain?: boolean;
     /** Another pack than the standard one (a copy a test changed, ORC-236): its skills and settings. */
     packDir?: string;
     /** Where the runs' transcripts are, as a test writes them: the answer agent reads the session at work there (ORC-182). */
@@ -283,7 +288,7 @@ export function createHarness(
 ) {
   if (opts.workflow !== undefined && opts.preset) throw new Error('createHarness: pass workflow or preset, not both');
   const pack = opts.packDir ?? packDir;
-  const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome });
+  const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome, fullChain: opts.fullChain });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
   const database: HarnessDatabase = given ? () => given : databases.create();

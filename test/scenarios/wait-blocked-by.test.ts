@@ -1,23 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { reconcileOnce } from '../../src/adapters/tracker/linear/reconcile.js';
-import type { AgentOutput } from '../../src/core/agent-output.js';
+import { assessment, drafted } from '../helpers/chain.js';
 import { createHarness } from '../helpers/harness.js';
-import { delegationStarts, type WorkflowOverrides } from '../helpers/workflow-with.js';
 
-/** A repository that makes delegation start with `intake` (ORC-206). */
-const INTAKE_FIRST = delegationStarts('intake');
 const DESCRIPTION = 'Export the audits as CSV from the audit list.\n\nAcceptance criteria:\n1. A CSV button downloads the list.';
 const DEV = { events: [{ kind: 'text' as const, text: 'Done.' }] };
-const ASSESSED = {
-  output: {
-    status: 'done', summary: 'Read.', tests_added: [], why: '', assumptions: [], risks: [], untested: [], review_hints: [],
-    intake: { size: 's', risk: 'low', complete: true, missing: [], screen: false },
-  } satisfies AgentOutput,
-};
-
-/** REL-1, delegated to the app, « blocked by » REL-2 in `blocker`'s state. */
-function setup(blocker: { stateName: string; stateType: string }, workflow?: WorkflowOverrides, ticket: { stateName?: string; stateType?: string } = {}) {
-  const h = createHarness(workflow ? { workflow } : {});
+/**
+ * REL-1, delegated to the app, « blocked by » REL-2 in `blocker`'s state. `fullChain`: the delegation starts at intake, as it
+ * ships (ORC-395); else at `build`, a chain with no intake before it, whose launch checks the blockers itself.
+ */
+function setup(blocker: { stateName: string; stateType: string }, fullChain = false, ticket: { stateName?: string; stateType?: string } = {}) {
+  const h = createHarness({ fullChain });
   h.tracker.addIssue({ identifier: 'REL-2', title: 'Audit list', ...blocker });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION, delegateId: 'app', ...ticket });
   h.tracker.blocks('REL-2', 'REL-1');
@@ -32,7 +25,7 @@ function setup(blocker: { stateName: string; stateType: string }, workflow?: Wor
 }
 
 describe('a ticket « blocked by » a Linear ticket that is not done waits (ORC-363)', () => {
-  it('intake off (the pack): nothing starts, the session says what it waits for, and nothing is asked of the human', async () => {
+  it('a chain started at build, with no intake: nothing starts, the session says what it waits for, and nothing is asked of the human', async () => {
     const { h, skills, moves } = setup({ stateName: 'In Progress', stateType: 'started' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills()).toEqual([]);
@@ -72,23 +65,24 @@ describe('a ticket « blocked by » a Linear ticket that is not done waits (ORC-
     expect((await h.ticket()).waitingOn ?? undefined).toBeUndefined();
   });
 
-  it('intake on: the blocker is an input of the guard after intake; dev starts once it is Done', async () => {
-    const { h, reconcile, done, skills, moves } = setup({ stateName: 'Todo', stateType: 'unstarted' }, INTAKE_FIRST);
-    h.runner.enqueue(ASSESSED);
+  it('as it ships: the blocker is an input of the guard after intake; the spec starts once it is Done (ORC-395)', async () => {
+    const { h, reconcile, done, skills, moves } = setup({ stateName: 'Todo', stateType: 'unstarted' }, true);
+    h.runner.enqueue(assessment());
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(skills()).toEqual(['/factory:intake']);
     expect(moves()).toEqual([]);
-    expect(await h.ticket()).toMatchObject({ blocked: false, size: 's', waitingOn: { blockers: ['REL-2'], start: { job: 'dev' } } });
+    expect(await h.ticket()).toMatchObject({ blocked: false, size: 's', waitingOn: { blockers: ['REL-2'], start: { job: 'spec' } } });
     expect(h.tracker.activities('ls-1')).toContainEqual({ type: 'thought', body: expect.stringContaining('REL-2') });
     done();
-    h.runner.enqueue(DEV);
+    h.runner.enqueue(drafted());
     await reconcile();
-    expect(skills()).toEqual(['/factory:intake', '/factory:dev']);
-    expect(moves()[0]).toBe('In Progress');
+    expect(skills()).toEqual(['/factory:intake', '/factory:spec']);
+    // The ticket moves to In Progress when the build starts, after the spec's gate.
+    expect(moves()).toEqual([]);
   });
 
   it('a reply while it waits starts nothing, even In Progress where a reply starts dev-feedback: the message is kept', async () => {
-    const { h, reconcile, done, skills } = setup({ stateName: 'In Progress', stateType: 'started' }, undefined, { stateName: 'In Progress', stateType: 'started' });
+    const { h, reconcile, done, skills } = setup({ stateName: 'In Progress', stateType: 'started' }, false, { stateName: 'In Progress', stateType: 'started' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     expect(await h.ticket()).toMatchObject({ logical: 'dev', waitingOn: { blockers: ['REL-2'] } });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Use a semicolon separator', author: 'Lilian', ack: true, kind: 'instruction' });
