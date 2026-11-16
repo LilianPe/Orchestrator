@@ -129,11 +129,33 @@ export abstract class DaemonEffects extends DaemonChecks {
     return removed;
   }
 
-  /** A block made out of a decision (a launch that failed, a refused pickup): the same comment as any other, without an effect's key. */
-  protected async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts): Promise<void> {
+  /**
+   * A block made out of a decision (a launch that failed, a refused pickup): the same comment as any other, without an effect's key.
+   * `key`: the comment's own, when one notice is enough for good; without it, a fresh one each time.
+   */
+  protected async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, key = `block:${this.newId()}`): Promise<void> {
     if (this.silenced(project.id, `the block notice of ${t.ticketId}`)) return;
     // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
-    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), `block:${this.newId()}`);
+    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), key);
+  }
+
+  /**
+   * A ticket refused for the format of its frozen version (ORC-393), told on it (ORC-419): it is not blocked, none of its events
+   * is decided, and only a new ticket goes on with the request. Once by version, whatever the daemon: a notice found is not written again.
+   */
+  protected async tellRefusal(projectId: string, ticketId: string, hash: string): Promise<void> {
+    if (this.silenced(projectId, `the refusal notice of ${ticketId}`)) return;
+    const key = `refused:${hash}`;
+    const t = await this.d.store.getTicket(projectId, ticketId);
+    if (!t || (await this.d.tracker.findComment(ticketId, key)) !== undefined) return;
+    await this.tellBlock(this.project(projectId), t, {
+      step: 'workflow version',
+      max: 1,
+      reason: `This ticket is frozen on workflow version ${hash.slice(0, 12)}, of a format this factory no longer reads (format 1: frozen before ORC-393): it is refused, and none of its events is decided.`,
+      tried: ['Reading the workflow version the ticket started with.'],
+      question: 'Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.',
+      waits: true,
+    }, key);
   }
 
   /** The state line of a block's comment. An unknown value is said as such: reading it must not stop the comment. */
