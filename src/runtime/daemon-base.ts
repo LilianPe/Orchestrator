@@ -188,13 +188,13 @@ export abstract class DaemonBase {
   }
 
   /** The workflow of a version a ticket is frozen on: one of another format refuses the ticket (ORC-393). */
-  protected workflowOf(version: WorkflowVersion, ticketId: string | undefined): Workflow {
+  protected workflowOf(version: WorkflowVersion, projectId: string, ticketId: string | undefined): Workflow {
     let wf = this.workflows.get(version.hash);
     if (!wf) {
       try {
         wf = frozenWorkflow(version);
       } catch (err) {
-        if (err instanceof FrozenFormatError) this.refuse(version.hash, ticketId, err);
+        if (err instanceof FrozenFormatError) this.refuse(version.hash, projectId, ticketId, err);
         throw err;
       }
       this.workflows.set(version.hash, wf);
@@ -202,14 +202,22 @@ export abstract class DaemonBase {
     return wf;
   }
 
-  /** A ticket refused for the format of its frozen version: in the daemon's log, once per ticket. */
-  private refuse(hash: string, ticketId: string | undefined, err: FrozenFormatError): void {
+  /** A ticket refused for the format of its frozen version: in the daemon's log, and told on the ticket (ORC-419), once per ticket while its notice holds. */
+  private refuse(hash: string, projectId: string, ticketId: string | undefined, err: FrozenFormatError): void {
     this.refusedVersions.set(hash, err);
     const key = `${ticketId ?? ''}:${hash}`;
     if (this.refusedTickets.has(key)) return;
     this.refusedTickets.add(key);
     this.log('error', `${ticketId ?? 'an event'} refused: ${err.message}`);
+    // A notice that fails lets the ticket's next event log and tell it again.
+    if (ticketId) this.track(this.tellRefusal(projectId, ticketId, hash).catch((e: Error) => {
+      this.refusedTickets.delete(key);
+      this.log('warn', `could not post the refusal of ${ticketId}: ${e.message}`);
+    }));
   }
+
+  /** The notice of a ticket refused for the format of its frozen version (ORC-419): a write to the tracker, outside any decision. */
+  protected abstract tellRefusal(projectId: string, ticketId: string, hash: string): Promise<void>;
 
   /** The project as a ticket sees it: with the workflow version the ticket is frozen on. */
   /** `known`: the ticket, when the caller has just read it (`null`: read, and not tracked). */
@@ -226,13 +234,13 @@ export abstract class DaemonBase {
       // A ticket refused for its version's format (ORC-393) has no runtime: nothing is launched, executed nor kept for it.
       const refused = this.refusedVersions.get(hash);
       if (refused) {
-        this.refuse(hash, ticketId, refused);
+        this.refuse(hash, project.id, ticketId, refused);
         return undefined;
       }
       const stored = await this.d.store.getWorkflowVersion(hash);
       if (!stored) throw new Error(`workflow version ${hash} of ${ticketId} is not stored`);
       try {
-        workflow = this.workflowOf(stored, ticketId);
+        workflow = this.workflowOf(stored, project.id, ticketId);
       } catch (err) {
         if (err instanceof FrozenFormatError) return undefined;
         throw err;

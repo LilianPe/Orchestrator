@@ -736,7 +736,7 @@ export class Daemon extends DaemonLaunch {
       workflow: this.currentVersion(project),
       // By the ticket's team, not the event's project: a delegation may come here from a team believed to have no repo (ORC-171).
       peers: this.d.projects.filter((p) => p.id !== event.projectId && p.teamKey === event.ticketId?.split('-')[0]).map((p) => p.id),
-      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version, event.ticketId), hash: version.hash, now }),
+      decide: (known, version) => planDecision({ event, known, workflow: this.workflowOf(version, project.id, event.ticketId), hash: version.hash, now }),
     };
   }
 

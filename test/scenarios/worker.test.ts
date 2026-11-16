@@ -145,6 +145,71 @@ describe('worker: per-ticket lock and decision transaction', () => {
     expect(await h.ticket('REL-2')).toMatchObject({ delegated: true, blocked: false });
   });
 
+  /** REL-1 delegated on a workflow of format 1, then a daemon on the current one (ORC-419); `poke` sends it an event and waits it out. */
+  async function refusedTicket(setup: (h: ReturnType<typeof createHarness>) => void = () => {}) {
+    const h = createHarness();
+    const current = h.project.workflow;
+    h.project.workflow = { ...current, version: 1 } as unknown as typeof current;
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    const frozen = (await h.ticket()).workflowHash!;
+    h.project.workflow = current;
+    setup(h);
+    await h.restart();
+    const poke = async () => {
+      await h.send('control.stop', {});
+      await h.orch.drained();
+    };
+    const notices = () => h.tracker.comments('REL-1').filter((c) => c.startsWith('🔴 Blocked'));
+    return { h, frozen, poke, notices };
+  }
+
+  it('posts on a ticket frozen on a workflow of format 1 why it is refused and what to do, once, restarts included (ORC-419)', async () => {
+    const { h, frozen, poke, notices } = await refusedTicket();
+
+    await poke();
+    await waitFor(() => notices().length === 1);
+    const notice = notices()[0]!;
+    expect(notice).toContain(`Reason: This ticket is frozen on workflow version ${frozen.slice(0, 12)}, of another format than the one this factory reads (2): it is refused, and none of its events is decided.`);
+    expect(notice).toContain('Question: Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.');
+    expect(notice.split('\n').at(-1)).toBe('This ticket will not resume: a reply here changes nothing.');
+    // Its key names the ticket: Linear derives the comment's id from it, and other tickets share the version.
+    expect(await h.tracker.findComment('REL-1', `refused:REL-1:${frozen}`)).toBeDefined();
+
+    // Another daemon finds the notice on the ticket and writes none again.
+    await h.restart();
+    await poke();
+    await waitFor(() => h.logs.filter((l) => l.message.startsWith('REL-1 refused:')).length === 2);
+    expect(notices()).toHaveLength(1);
+  });
+
+  it('posts no refusal notice for a ticket of a project without effects (ORC-419)', async () => {
+    const { h, poke, notices } = await refusedTicket((h) => (h.project.effects = 'none'));
+
+    await poke();
+    await waitFor(() => h.logs.some((l) => l.message === 'the block notice of REL-1 not made: the project has no effects'));
+    expect(notices()).toEqual([]);
+  });
+
+  it('tells a refused ticket again at its next event when its notice failed (ORC-419)', async () => {
+    let down = true;
+    const { h, poke, notices } = await refusedTicket((h) => {
+      const comment = h.tracker.comment.bind(h.tracker);
+      h.tracker.comment = async (identifier, body, effectId) => {
+        if (down && effectId?.startsWith('refused:')) throw new Error('Linear is down');
+        return comment(identifier, body, effectId);
+      };
+    });
+
+    await poke();
+    await waitFor(() => h.logs.some((l) => l.message === 'could not post the refusal of REL-1: Linear is down'));
+    expect(notices()).toEqual([]);
+
+    down = false;
+    await poke();
+    await waitFor(() => notices().length === 1);
+  });
+
   it('keeps a ticket on the workflow version it started with when the workflow changes (criterion 4)', async () => {
     const version = (comment: string): WorkflowOverrides => ({ effects: { 'label.changed': { label: 'agent:x', effects: [{ kind: 'comment', body: comment }] } } });
     const h = createHarness({ workflow: version('ancienne version') });

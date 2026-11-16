@@ -13,7 +13,7 @@ import { needsBase, rerunOnBase, runAndRerun, settle, type CommandRun, type Flak
 import { checkFrozen, FREEZE_CHECK, isFrozenHarness, type FrozenTests } from '../checks/freeze.js';
 import { checkForbiddenPaths, FORBIDDEN_CHECK, type ForbiddenView } from '../checks/forbidden-paths.js';
 import { mdCode } from '../checks/markdown.js';
-import { REPORT_FLAGS, runnerOfCommand, type Runner } from '../checks/red.js';
+import { REPORT_FLAGS, testCommand, type Runner } from '../checks/red.js';
 import type { PackageRegistry, RegistryOpener } from '../checks/registry.js';
 import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepArgv, semgrepCheck, semgrepFindings, type SemgrepRead } from '../checks/semgrep.js';
 import { isTestSpec } from '../checks/test-files.js';
@@ -225,8 +225,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const rules = added.size ? await repoRules(git, rulesDir) : [];
     const { proof, shooting, probe } = await planVisual(req.visual, { git, from, sha, config, refused: failures.length > 0 });
     // Read before any code of the agent has run: the runner of each command, and the base checked out for the reruns there.
-    const runners = await testRunners(git, sha, commands);
-    const onBase = from !== EMPTY_TREE && runners.size > 0 && !failures.length;
+    const tests = await testCommands(git, sha, commands);
+    const onBase = from !== EMPTY_TREE && [...tests.values()].some((t) => t.runner) && !failures.length;
     if (shooting || onBase) await checkoutBase(req, cloneDir, { dir: beforeDir, index: beforeIndex }, from);
     let flaky: FlakyTest[] = [];
     let preview: PreviewOutcome | undefined;
@@ -269,7 +269,8 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const standing: Standing = { known: req.knownFlaky ?? [], ...(req.frozen ? { frozen: req.frozen } : {}) };
     await inBox('verify', cloneDir, [], async (id) => {
       for (const command of commands) {
-        const failed = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
+        const { line, runner } = tests.get(command)!;
+        const failed = await runAndRerun(command, runner, reportRun(sandboxes, id, env), standing, line);
         if (failed) ran.push(failed);
       }
     }, withServices);
@@ -335,14 +336,14 @@ function reportRun(sandboxes: Boxes, id: string, env: Record<string, string>): R
   };
 }
 
-/** The runner of each command that names one, from the commit's `package.json` for an npm script: read before any of its code runs. */
-async function testRunners(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, Runner>> {
-  const runners = new Map<string, Runner>();
-  for (const command of commands) {
-    const runner = await runnerOfCommand(command, { showAtHead: (p) => show(git, sha, p) });
-    if (runner) runners.set(command, runner);
-  }
-  return runners;
+/**
+ * Each command as the red check runs it (`testCommand`, ORC-420): the line its files and flags are appended to, and the runner
+ * it names, from the commit's `package.json` for a script npm, pnpm or yarn runs. Read before any of its code runs, each file once.
+ */
+async function testCommands(git: CloneGit, sha: string, commands: readonly string[]): Promise<Map<string, { line: string; runner?: Runner }>> {
+  const read = new Map<string, Promise<string | undefined>>();
+  const showAtHead = (p: string) => read.get(p) ?? read.set(p, show(git, sha, p)).get(p)!;
+  return new Map(await Promise.all(commands.map(async (c) => [c, await testCommand(c, { showAtHead })] as const)));
 }
 
 /**

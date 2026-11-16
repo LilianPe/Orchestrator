@@ -79,7 +79,11 @@ describe('runDetail (ORC-298)', () => {
         ev('m', 'status.changed', 7, { from: 'dev', to: 'human_review' }),
         ev('h', 'push.human', 8, { branch: 'b', sha: 'abc1234', author: 'armand-gh' }),
         ev('r', 'pr.reviewed', 9, { ...pr, kind: 'review', author: 'lilian-gh', body: 'ok', state: 'APPROVED' }),
+        // Journaled before ORC-301, with no actor; then from the dashboard, signed in with GitHub (ORC-399).
         ev('ui:control.stop:11', 'control.stop', 11, {}),
+        ev('ui:control.stop:11a', 'control.stop', 11, {}, { actor: 'github:armand-gh' }),
+        // `factory stop` on the server, through the CLI's socket (ORC-405): its own channel, not the dashboard's (ORC-414).
+        ev('ui:control.stop:11b', 'control.stop', 11, {}, { actor: 'cli:factory-1' }),
         ev('rep', 'dead_letter.repaired', 12, { eventId: 'x', action: 'skip', by: 'armand', event: {} as never }),
         ev('s', 'status.changed', 13, { from: 'human_review', to: 'dev' }, { actor: 'u-lilian' }),
       ],
@@ -91,6 +95,8 @@ describe('runDetail (ORC-298)', () => {
       { id: 'h', at: 8, channel: 'github', who: 'armand-gh', what: 'Pushed abc1234 on b' },
       { id: 'r', at: 9, channel: 'github', who: 'lilian-gh', what: 'Reviewed PR #3: approved' },
       { id: 'ui:control.stop:11', at: 11, channel: 'dashboard', who: null, what: 'Stopped the ticket' },
+      { id: 'ui:control.stop:11a', at: 11, channel: 'dashboard', who: 'armand-gh', what: 'Stopped the ticket' },
+      { id: 'ui:control.stop:11b', at: 11, channel: 'cli', who: 'cli:factory-1', what: 'Stopped the ticket' },
       { id: 'rep', at: 12, channel: 'cli', who: 'armand', what: 'Repaired a dead-lettered event (skip)' },
       { id: 's', at: 13, channel: 'linear', who: 'u-lilian', what: 'Moved from human_review to dev' },
     ]);

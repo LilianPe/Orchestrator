@@ -75,14 +75,20 @@ function detectPython(repo: string): Detected {
   return { setup: ['uv sync --frozen'], commands: { ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' } };
 }
 
+/** Said by `init` when it proposes pytest beside Node's `test` (ORC-420): the red check runs `commands.test` only. */
+export const PYTEST_BESIDE_TEST = `Warning: the red check of the tests step runs \`commands.test\` only, Node's here: \`commands.pytest\` runs in verify, not there.`;
+
 /**
- * Both when the repository has both. A `preview` from Node's scripts only: no convention names a start script for Python (a
- * `[project.scripts]` entry is a console command, not a server).
+ * Both when the repository has both. pytest is the red check's `test` (ORC-420) when Node has none; beside Node's, it keeps its
+ * name. A `preview` from Node's scripts only: no convention names a start script for Python (a `[project.scripts]` entry is a
+ * console command, not a server).
  */
 function detect(repo: string): Detected {
   const node = detectNode(repo);
   const python = detectPython(repo);
-  return { ...node, setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...python.commands } };
+  const { pytest, ...checks } = python.commands;
+  const tests: Record<string, string> = pytest ? { [node.commands['test'] ? 'pytest' : 'test']: pytest } : {};
+  return { ...node, setup: [...node.setup, ...python.setup], commands: { ...node.commands, ...checks, ...tests } };
 }
 
 /** What `init` prints before the `.factory/config.yml` it proposes (ORC-388): it writes nothing in the repository. */
@@ -155,6 +161,7 @@ export async function runInit(d: InitDeps): Promise<void> {
     ? detected.commands
     : await makeRepoConfig({ exec: d.exec })({ repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
   for (const warning of testCommandWarnings(commands)) io.print(warning);
+  if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 
   saveInstance(d.home, cfg);
   io.print(

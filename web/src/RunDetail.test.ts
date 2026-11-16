@@ -64,6 +64,12 @@ describe('the run detail page (ORC-298)', () => {
     }
   });
 
+  it('a stop made through the CLI shows under its own channel and its host, not the dashboard (ORC-414)', () => {
+    const html = render(detail({ decisions: [{ id: 's', type: 'control.stop', at: 0, channel: 'cli', who: 'cli:factory-1', what: 'Stopped the ticket' }] }));
+    expect(html).toContain('<td>cli:factory-1</td><td>cli</td><td>Stopped the ticket</td>');
+    expect(html).not.toContain('<td>dashboard</td>');
+  });
+
   it('shows the labels, those still null with the tickets that will fill them', () => {
     expect(labelsLine({ task: 'dev', model: 'sonnet', image: null, effort: null, fingerprints: { prompt: 'sha256:x' }, pending: { image: ['ORC-204'] } }))
       .toBe('Labels: task dev · model sonnet · image — (ORC-204) · effort —');
