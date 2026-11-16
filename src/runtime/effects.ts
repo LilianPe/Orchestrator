@@ -10,7 +10,7 @@ import { KEPT_PR, type EffectOutcome, type OutboxRow, type RunRecord } from '../
 import { describePr, START_SAID, verifySummary, type PrFacts } from '../publish/describe.js';
 import { composeResult, OutputRefused } from '../publish/output-policy.js';
 import type { Effect } from '../core/decision.js';
-import { composeBlockComment, type BlockFacts, type BlockStatus } from '../core/block-comment.js';
+import { blockFacts, composeBlockComment, type BlockFacts, type BlockStatus } from '../core/block-comment.js';
 import { mayPublish, RECONCILE_MS, reconcileTicket } from '../core/engine.js';
 import { codeRunTokens, mergeTime, runMeasure } from '../core/measures.js';
 import { DAY_MS } from '../core/baseline.js';
@@ -132,12 +132,12 @@ export abstract class DaemonEffects extends DaemonChecks {
 
   /**
    * A block made out of a decision (a launch that failed, a refused pickup): the same comment as any other, without an effect's key.
-   * `key`: the comment's own, when one notice is enough for good; without it, a fresh one each time.
+   * `once`: the comment's own key, when one notice is enough for good: a comment found under it is not written again.
    */
-  protected async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, key = `block:${this.newId()}`): Promise<void> {
+  protected async tellBlock(project: ProjectRuntime, t: TicketState, facts: BlockFacts, once?: string): Promise<void> {
     if (this.silenced(project.id, `the block notice of ${t.ticketId}`)) return;
     // A key of its own: it carries the marker that tells a comment of the factory from a human's reply.
-    await this.d.tracker.comment(t.ticketId, composeBlockComment(facts, await this.blockStatus(t)), key);
+    await this.commentOnce(t.ticketId, async () => composeBlockComment(facts, await this.blockStatus(t)), { id: once ?? `block:${this.newId()}`, replay: once !== undefined });
   }
 
   /**
@@ -146,19 +146,16 @@ export abstract class DaemonEffects extends DaemonChecks {
    * written again.
    */
   protected async tellRefusal(projectId: string, ticketId: string, hash: string): Promise<void> {
-    if (this.silenced(projectId, `the refusal notice of ${ticketId}`)) return;
-    // By ticket as well: Linear derives the comment's id from its key, and tickets share a version.
-    const key = `refused:${ticketId}:${hash}`;
     const t = await this.d.store.getTicket(projectId, ticketId);
-    if (!t || (await this.d.tracker.findComment(ticketId, key)) !== undefined) return;
-    await this.tellBlock(this.project(projectId), t, {
+    if (!t) return;
+    const facts = blockFacts({
       step: 'workflow version',
-      max: 1,
       reason: `This ticket is frozen on workflow version ${hash.slice(0, 12)}, of another format than the one this factory reads (${WORKFLOW_FORMAT}): it is refused, and none of its events is decided.`,
       tried: ['Reading the workflow version the ticket started with.'],
       question: 'Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.',
-      waits: 'never',
-    }, key);
+    });
+    // By ticket as well: Linear derives the comment's id from its key, and tickets share a version.
+    await this.tellBlock(this.project(projectId), t, { ...facts, waits: 'never' }, `refused:${ticketId}:${hash}`);
   }
 
   /** The state line of a block's comment. An unknown value is said as such: reading it must not stop the comment. */
@@ -424,7 +421,7 @@ export abstract class DaemonEffects extends DaemonChecks {
   }
 
   /** A comment of an outbox effect, written unless its first execution already wrote it (ORC-162). */
-  private async commentOnce(ticketId: string, body: string | (() => Promise<string>), key: EffectKey): Promise<EffectOutcome | void> {
+  private async commentOnce(ticketId: string, body: string | (() => Promise<string>), key: Pick<EffectKey, 'id' | 'replay'>): Promise<EffectOutcome | void> {
     const found = key.replay ? await this.d.tracker.findComment(ticketId, key.id) : undefined;
     if (found !== undefined) return { deduplicated: true, ref: found };
     await this.d.tracker.comment(ticketId, typeof body === 'string' ? body : await body(), key.id);
