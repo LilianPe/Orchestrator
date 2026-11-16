@@ -716,8 +716,8 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
  */
 const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
 
-/** A human's relaunch of a blocked ticket: those events, and a mention, which only unblocks when it answers the block (ORC-415). */
-const relaunchedByHuman = (event: FactoryEvent): boolean => HUMAN_RELAUNCH.has(event.type) || event.type === 'session.mentioned';
+/** A human's relaunch of a blocked ticket: those events, and a mention that answers the block (ORC-415). */
+const relaunchedByHuman = (event: FactoryEvent, ticket: TicketState): boolean => HUMAN_RELAUNCH.has(event.type) || mentionAnswersBlock(event, ticket);
 
 /** The human review loop starts over with its whole bound (ORC-190); nothing is recorded when its count is already 0 or absent. */
 function resetHumanRounds(out: Decision, ticket: TicketState | undefined): void {
@@ -736,7 +736,7 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
  */
 function unblock(out: Decision, event: FactoryEvent, ticket: TicketState): void {
   out.events.push({ type: 'ticket.unblocked' });
-  if (!relaunchedByHuman(event)) return;
+  if (!relaunchedByHuman(event, ticket)) return;
   resetRedCi(out, ticket);
   // The human review rounds too (ORC-190): the reply to their own bound relaunches on the feedback it kept.
   resetHumanRounds(out, ticket);
@@ -1423,7 +1423,7 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
   // A round was counted when it was decided; a human reply gave the rounds back (`unblock`): this start is the first of the new ones (ORC-190).
-  if (relaunchedByHuman(event)) humanRound(out, ticket, workflow, job, () => startAs(out, event, ticket, job, pending));
+  if (relaunchedByHuman(event, ticket)) humanRound(out, ticket, workflow, job, () => startAs(out, event, ticket, job, pending));
   else startAs(out, event, ticket, job, pending);
   return out;
 }
@@ -1440,7 +1440,8 @@ function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: J
  */
 function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow, r: Reaction): Decision {
   // The pending job a reply resumes, at once (a debounce armed before the block resumes it when it fires: `timer.fired`).
-  const pending = repliesToBlock(event, ticket) ? strandedPending(ticket, workflow) : undefined;
+  const reply = repliesToBlock(event, ticket);
+  const pending = reply ? strandedPending(ticket, workflow) : undefined;
   if (pending) return startPending(out, event, ticket!, workflow, pending);
   const resumed = resumedJob(event, ticket, workflow);
   const job = resumed ?? r.job;
@@ -1459,8 +1460,8 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
     const inbox = ((event.type === 'session.prompted' || event.type === 'session.mentioned') && !!event.payload.kind) || event.type === 'pr.reviewed';
     out.timers.push({ kind: 'debounce', slot: job.name, ms: r.debounceMs, payload: { job: job.name, ...(inbox ? { inbox: true as const } : {}) } });
   } else {
-    // A mention that resumes the blocked step is read from the inbox, in the ticket's session (ORC-415).
-    const threaded = !resumed && (event.type === 'session.mentioned' || event.type === 'command');
+    // A mention that answers the block is read from the inbox, in the ticket's session, as a reply is (ORC-415).
+    const threaded = !reply && (event.type === 'session.mentioned' || event.type === 'command');
     const run = { input: resumed ? 'feedback' : job.input, inputText: threaded ? event.payload.body : undefined, linearSessionId: threaded ? event.payload.linearSessionId : undefined };
     humanRound(out, ticket, workflow, job, () => startRun(out, event, ticket, job, run));
   }

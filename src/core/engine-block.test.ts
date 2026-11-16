@@ -305,8 +305,10 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       expect(starts(stranded)).toEqual([expect.objectContaining({ job: 'review' })]);
     });
 
-    it('a block with no step of its own relaunches the reply\'s job', () => {
-      expect(starts(decide(blockedOn('dev', { blockedJob: undefined }), mention('question'), workflow))).toEqual([expect.objectContaining({ job: 'dev-feedback' })]);
+    it('a block with no step it resumes relaunches the reply\'s job, in the ticket\'s session, the mention read from the inbox', () => {
+      for (const state of [blockedOn('dev', { blockedJob: undefined }), blockedOn('fix-ci')]) {
+        expect(starts(decide(state, mention('question'), workflow))).toEqual([{ kind: 'start_run', job: 'dev-feedback', input: 'feedback' }]);
+      }
     });
 
     it('needs the right to relaunch a block: refused, the ticket keeps its block and nothing starts', () => {

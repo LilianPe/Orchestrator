@@ -480,7 +480,9 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       for (const step of decided(r)) {
         if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.ciFixAttempts === 0)) {
           // Only another PR or a human ends the loop: a reset by anything else, a green CI included, would let it run unbounded.
-          expect(CI_RESETS, 'reset of the review and CI loop').toContain(step.event.type);
+          // A mention only when it answers a block, as a reply does (ORC-415): the same decision unblocks.
+          const answersBlock = step.event.type === 'session.mentioned' && step.decision.events.some((e) => e.type === 'ticket.unblocked');
+          if (!answersBlock) expect(CI_RESETS, 'reset of the review and CI loop').toContain(step.event.type);
           fixes = 0;
         }
         const job = loopJob(step.event);
@@ -504,8 +506,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     };
     const ciBound = wf.limits.ciFixAttempts;
     // A human event that starts work, blocked or not (ORC-184), the repair of one included: `factory run repair` is an operator's.
-    // A mention too, when it answers a block as a reply does (ORC-415).
-    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'session.mentioned', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
+    const CI_RESETS: EventType[] = ['pr.opened', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'dead_letter.repaired'];
     const redCiCounterexample = seq(
       ...delegated(),
       ext('status.changed', { from: 'todo', to: 'human_review' }),
