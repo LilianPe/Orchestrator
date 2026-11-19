@@ -111,21 +111,17 @@ export class PrPoller {
     const t = (await this.d.store.getTicket(pass.projectId, pass.ticketId)) ?? pass;
     // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
     if (isTakenOver(t)) return;
-    // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
-    // on it just after the first publication. A pass that reads a head the factory knows since forgets it.
-    const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
-    const unpublished = await this.d.store.getMeta(unpublishedKey);
-    if (head === t.verifiedSha || head === t.humanHead) {
-      if (unpublished) await this.d.store.setMeta(unpublishedKey, "");
-      return;
-    }
+    if (head === t.verifiedSha || head === t.humanHead) return;
     // One head per commit: a commit published twice in a row is pushed once.
     const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
       .map((p) => p.sha)
       .filter((sha, i, all) => sha !== all[i - 1]);
     const published = heads.at(-1);
+    // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
+    // on it just after the first publication.
+    const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
     if (!published) return this.d.store.setMeta(unpublishedKey, head);
-    if (heads.length === 1 && unpublished === head) return;
+    if (heads.length === 1 && (await this.d.store.getMeta(unpublishedKey)) === head) return;
     // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
     // an older one is a human's push, as the webhook reports it.
     if (heads.slice(-2).includes(head)) return;
