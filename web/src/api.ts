@@ -1,4 +1,4 @@
-import type { AuditListView, AuditSheetView, BlockParetoView, BusMessage, DefectEntry, FlowView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
+import type { AuditListView, AuditSheetView, BlockParetoView, BusMessage, DefectEntry, FlowView, MaturityCardView, MeasuredTicketView, OverviewView, RunDetailView, RunSecurityView, SecurityPeriodView, Snapshot } from './types.js';
 
 let reloading = false;
 
@@ -57,6 +57,10 @@ export const postDefect = (projectId: string, ticketId: string, entry: DefectEnt
   call(`${auditPath(projectId, ticketId)}/defects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(entry) });
 
 export const post = (path: string) => call(path, { method: 'POST' });
+
+/** The maturity cards of every project (ORC-410), and the approval of one. */
+export const fetchMaturity = () => getJson<{ cards: MaturityCardView[] }>('/api/maturity').then((r) => r.cards);
+export const postApproval = (c: Pick<MaturityCardView, 'projectId' | 'key'>) => post(`/api/maturity/${encodeURIComponent(c.projectId)}/${encodeURIComponent(c.key)}/approve`);
 
 /** A ticket taken over (ORC-234): `take-over` gives the command of a shell in its container, `take-over/bundle` takes a bundle. */
 const takeOverPath = (projectId: string, ticketId: string, rest = '') => `/api/tickets/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}/take-over${rest}`;

@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps } from 'react';
-import { fetchAuditList, fetchAuditSheet, fetchBlocks, fetchFlow, fetchMeasures, fetchOverview, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postBundle, postDefect, refusal, subscribe } from './api.js';
+import { fetchAuditList, fetchAuditSheet, fetchBlocks, fetchFlow, fetchMaturity, fetchMeasures, fetchOverview, fetchRunDetail, fetchRunSecurity, fetchSecurity, fetchSnapshot, fetchTakeOverShell, post, postApproval, postBundle, postDefect, refusal, subscribe } from './api.js';
 import { AuditList, AuditSheet, auditTicketOf } from './Audit.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
+import { Maturity } from './Maturity.js';
 import { Measures, runIdOf } from './Measures.js';
 import { Overview } from './Overview.js';
 import { TakenOver, type ShellCommand } from './TakeOver.js';
 import { Line, RunDetail } from './RunDetail.js';
 import { Security } from './Security.js';
 import { feedKey, initialState, reducer } from './state.js';
-import type { AuditSheetView, DefectEntry, FlowView, ReviewDefectView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
+import type { AuditSheetView, DefectEntry, FlowView, MaturityCardView, ReviewDefectView, RunDetailView, RunSecurityView, WorkingRunView } from './types.js';
 import { PRODUCT_NAME } from '../../src/product.js';
 
 /** A burst of ticket updates reads the Flow once. */
@@ -30,8 +31,8 @@ function LiveFlow({ flow, flowAt, frozen, ...rest }: { flow: FlowView; flowAt: n
   return <Flow flow={flow} elapsedMs={Math.max(0, now - flowAt)} {...rest} />;
 }
 
-type View = 'flow' | 'overview' | 'measures' | 'run' | 'security' | 'audit' | 'sheet';
-const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'measures', '#security': 'security', '#audit': 'audit' };
+type View = 'flow' | 'overview' | 'measures' | 'run' | 'security' | 'audit' | 'sheet' | 'maturity';
+const PAGES: Record<string, View> = { '#overview': 'overview', '#measures': 'measures', '#security': 'security', '#audit': 'audit', '#maturity': 'maturity' };
 const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : auditTicketOf(hash) !== undefined ? 'sheet' : PAGES[hash] ?? 'flow');
 
 /**
@@ -194,6 +195,31 @@ function SheetPage({ projectId, ticketId }: { projectId: string; ticketId: strin
   );
 }
 
+/** The maturity cards `factory init` stored (ORC-410), read when shown and every 5 min while it is, again after an approval. */
+function MaturityPage() {
+  const [approvals, setApprovals] = useState(0);
+  const { data, failed } = usePolled(fetchMaturity, [approvals], OVERVIEW_POLL_MS);
+  const [notice, setNotice] = useState<string>();
+  const approve = (card: MaturityCardView) =>
+    postApproval(card).then(
+      async (res) => {
+        setNotice(res.ok ? `${card.title} approved.` : await refusal(res, 'approval'));
+        setApprovals((n) => n + 1);
+        return res.ok;
+      },
+      () => {
+        setNotice('Approval not sent: the server did not answer.');
+        return false;
+      },
+    );
+  return (
+    <div className="flow">
+      {failed && <p className="flow-failed" role="alert">{data ? 'Maturity cards out of date: reading them failed. Retrying within 5 min.' : 'Maturity cards unavailable: reading them failed. Retrying within 5 min.'}</p>}
+      {data ? <Maturity cards={data} onApprove={approve} notice={notice} /> : !failed && <section><p className="empty">Loading the maturity cards…</p></section>}
+    </div>
+  );
+}
+
 export function App() {
   const [hash, setHash] = useState(() => window.location.hash);
   const view = viewOf(hash);
@@ -289,6 +315,7 @@ export function App() {
           <a href="#measures" aria-current={view === 'measures' || view === 'run' ? 'page' : undefined}>Measures</a>
           <a href="#security" aria-current={view === 'security' ? 'page' : undefined}>Security</a>
           <a href="#audit" aria-current={view === 'audit' || view === 'sheet' ? 'page' : undefined}>Audit</a>
+          <a href="#maturity" aria-current={view === 'maturity' ? 'page' : undefined}>Maturity</a>
         </nav>
         {snap && (
           <div className="stats">
@@ -311,7 +338,7 @@ export function App() {
           Disabled in factory.yml: {snap.disabledControls.join(', ')}.
         </p>
       )}
-      {view === 'sheet' ? <main className="single"><SheetPage key={hash} {...auditTicketOf(hash)!} /></main> : view === 'audit' ? <main className="single"><AuditPage /></main> : view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : <main>
+      {view === 'sheet' ? <main className="single"><SheetPage key={hash} {...auditTicketOf(hash)!} /></main> : view === 'audit' ? <main className="single"><AuditPage /></main> : view === 'run' ? <main className="single"><RunPage runId={runIdOf(hash)!} /></main> : view === 'overview' ? <main className="single"><OverviewPage /></main> : view === 'measures' ? <main className="single"><MeasuresPage /></main> : view === 'security' ? <main className="single"><SecurityPage /></main> : view === 'maturity' ? <main className="single"><MaturityPage /></main> : <main>
         <div className="flow">
           {s.flowFailed && <p className="flow-failed" role="alert">{s.flow ? 'Flow out of date: reading it failed, what follows may be stale. Retrying within 10 s.' : 'Flow unavailable: reading it failed. Retrying within 10 s.'}</p>}
           {s.flow ? (

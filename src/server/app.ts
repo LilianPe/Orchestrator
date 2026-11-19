@@ -508,6 +508,14 @@ export function createApp(d: ServerDeps): Hono {
     return c.json({ ok: true, defect });
   });
 
+  // The maturity cards `factory init` stored (ORC-410), every project's, and the approval of one by an operator, of the value
+  // it stands at: a detection that changes the value drops it.
+  app.get('/api/maturity', async (c) => c.json({ cards: await d.store.maturityCards() }));
+  app.post('/api/maturity/:projectId/:key/approve', async (c) => {
+    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), operator(c).actor!, d.clock.now());
+    return card ? c.json({ ok: true, card }) : c.json({ error: 'no such card' }, 404);
+  });
+
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,
   // rules and runs over a period; a run's refusals and hosts. Never a command, a path nor a host that is not a plain name:
   // they can hold a secret.
