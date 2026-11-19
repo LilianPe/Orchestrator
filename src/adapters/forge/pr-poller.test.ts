@@ -135,16 +135,21 @@ describe('PrPoller', () => {
       expect(await headIs(HUMAN, { humanHead: HUMAN })).toEqual([]);
     });
 
-    it('judges each head once: the journal is read again only for a new head', async () => {
+    it('reads the journal at each pass whose head is neither the commit verified last nor a human push received', async () => {
       const s = setup();
       await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: VERIFIED });
       await s.store.recordEvent(published(PUBLISHED));
       const journal = vi.spyOn(s.store, 'ticketJournal');
-      for (const head of [PUBLISHED, PUBLISHED, HUMAN, HUMAN]) {
+      const read = async (head: string) => {
         s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
         await s.poller.pollOnce('p');
-      }
-      expect(journal).toHaveBeenCalledTimes(2);
+      };
+      for (const head of [PUBLISHED, PUBLISHED, HUMAN, VERIFIED]) await read(head);
+      expect(journal).toHaveBeenCalledTimes(3);
+      // The push caught up is the ticket's `humanHead` once reduced: its head is not read again.
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, humanHead: HUMAN });
+      await read(HUMAN);
+      expect(journal).toHaveBeenCalledTimes(3);
       expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN })]);
     });
 
@@ -215,6 +220,58 @@ describe('PrPoller', () => {
       // A human puts the branch back on C, its webhook lost: C, out of the window [D, E], is the head read last.
       await read(C);
       expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: C, before: E })]);
+    });
+
+    it('judges a head again once it is out of the window, whatever commit is verified then', async () => {
+      const [C, D, E] = ['c', 'd', 'e'].map((x) => x.repeat(40)) as [string, string, string];
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: D });
+      for (const [i, sha] of [C, D].entries()) await s.store.recordEvent(published(sha, i + 1));
+      const read = async (head: string) => {
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
+        await s.poller.pollOnce('p');
+      };
+      // Just after D, the forge still reads C: the factory's.
+      await read(C);
+      // E published; a human puts the branch back on D, its webhook received and D verified green again.
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, verifiedSha: E });
+      await s.store.recordEvent(published(E, 3));
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, verifiedSha: D, humanHead: D });
+      // The human puts it back on C, that webhook lost, no poll between: the commit verified is D again.
+      await read(C);
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: C, before: D })]);
+    });
+
+    it('judges a head again once it is out of the window, for a job that publishes without verify', async () => {
+      const [C, D, E] = ['c', 'd', 'e'].map((x) => x.repeat(40)) as [string, string, string];
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
+      await s.store.recordEvent(published(C, 1));
+      const read = async (head: string) => {
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
+        await s.poller.pollOnce('p');
+      };
+      await read(C);
+      // D then E published, no commit verified, no poll between; a human puts the branch back on C, its webhook lost.
+      for (const [i, sha] of [D, E].entries()) await s.store.recordEvent(published(sha, i + 2));
+      await read(C);
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: C, before: E })]);
+    });
+
+    it('takes no head in the window for a push when a commit is verified with no publication', async () => {
+      const [C, D, X] = ['c', 'd', 'x'].map((x) => x.repeat(40)) as [string, string, string];
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: D });
+      for (const [i, sha] of [C, D].entries()) await s.store.recordEvent(published(sha, i + 1));
+      const read = async (head: string) => {
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
+        await s.poller.pollOnce('p');
+      };
+      await read(C);
+      // A commit verified that waits for its publication: C, the one before the last pushed, stays the factory's.
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, verifiedSha: X });
+      await read(C);
+      expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
     });
 
     it('takes a head from before the first publication for no push, even read again just after it', async () => {

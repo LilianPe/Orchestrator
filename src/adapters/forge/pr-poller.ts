@@ -102,46 +102,41 @@ export class PrPoller {
 
   /**
    * A head of the open PR the factory neither published, verified, nor heard of is a human's push whose webhook got lost
-   * (ORC-281), under the webhook's id. A head is judged when the PR comes to it: the head read last outside a take-over is
-   * kept with the commit verified then, and the journal is read only for a new pair.
+   * (ORC-281), under the webhook's id. A head is judged at each pass that reads it, against the ticket's journal then.
    */
   private async lostPush(pass: TicketState, pr: PrInfo, at: number): Promise<void> {
     const head = pr.headSha;
     if (!head) return;
     // The factory's push is on the forge before its event: the ticket as it is now, read after the PR, knows the commit it verified.
     const t = (await this.d.store.getTicket(pass.projectId, pass.ticketId)) ?? pass;
-    // A commit verified since moves the window: the head read last, out of it now, is judged again.
-    const readKey = `lost-push:${t.projectId}:${t.ticketId}`;
-    const read = `${head}@${t.verifiedSha ?? ""}`;
-    const last = await this.d.store.getMeta(readKey);
-    if (last === read) return;
     // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
     if (isTakenOver(t)) return;
-    if (head !== t.verifiedSha && head !== t.humanHead) {
-      // One head per commit: a commit published twice in a row is pushed once.
-      const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
-        .map((p) => p.sha)
-        .filter((sha, i, all) => sha !== all[i - 1]);
-      const published = heads.at(-1);
-      // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
-      // an older one is a human's push, as the webhook reports it. With one publication, the head read last was read with that
-      // window or before it, with none to compare with: it is judged as it was.
-      const before = heads.length === 1 && last?.split("@")[0] === head;
-      if (published && !before && !heads.slice(-2).includes(head))
-        await this.d.submit({
-          ...TRUSTED,
-          // What the push brought was verified by no one in the factory (I12).
-          taint: "untrusted",
-          at,
-          projectId: t.projectId,
-          ticketId: t.ticketId,
-          id: pushEventId(t.ticketId, head),
-          type: "push.human",
-          // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
-          payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
-        });
-    }
-    await this.d.store.setMeta(readKey, read);
+    if (head === t.verifiedSha || head === t.humanHead) return;
+    // One head per commit: a commit published twice in a row is pushed once.
+    const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
+      .map((p) => p.sha)
+      .filter((sha, i, all) => sha !== all[i - 1]);
+    const published = heads.at(-1);
+    // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
+    // on it just after the first publication.
+    const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
+    if (!published) return this.d.store.setMeta(unpublishedKey, head);
+    if (heads.length === 1 && (await this.d.store.getMeta(unpublishedKey)) === head) return;
+    // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
+    // an older one is a human's push, as the webhook reports it.
+    if (heads.slice(-2).includes(head)) return;
+    await this.d.submit({
+      ...TRUSTED,
+      // What the push brought was verified by no one in the factory (I12).
+      taint: "untrusted",
+      at,
+      projectId: t.projectId,
+      ticketId: t.ticketId,
+      id: pushEventId(t.ticketId, head),
+      type: "push.human",
+      // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
+      payload: { branch: pr.branch, sha: head, author: "unknown", before: t.humanHead ?? published },
+    });
   }
 
   start(intervalMs = 30_000): void {
