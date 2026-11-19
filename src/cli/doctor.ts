@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { parseAllDocuments } from 'yaml';
-import type { Exec } from '../adapters/exec.js';
+import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import {
   GitHubAppApi,
   type BranchProtection,
@@ -12,7 +11,7 @@ import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
 import { effectiveInstance } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage, visualProofLine } from '../app/sandbox-wiring.js';
+import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -51,64 +50,103 @@ export interface DoctorApi {
 
 type Verdict = 'accepted' | 'refused';
 
-/** The host as the sandbox limits need it (ORC-208): cgroup v2, with the controllers the engine sets its limits through. */
+/**
+ * The host as the sandbox limits need it (ORC-208), as its engine reports it: cgroup v2, and the limits it can set. What the
+ * engine did not say is absent, never `false`: an engine that cannot be asked or read leaves only the verdict and its reason.
+ */
 export interface HostReport {
-  cgroupV2: boolean;
-  controllers: string[];
-  /** The controllers delegated to the daemon's user, the ones a rootless engine can use; absent for root. */
-  delegated?: string[];
+  /** The engine asked, `FACTORY_CONTAINER_CLI`. */
+  engine?: 'docker' | 'podman';
+  cgroupV2?: boolean;
+  /** Of `cpu`, `memory` and `pids`, the controllers the engine can set its limits through. */
+  controllers?: string[];
+  rootless?: boolean;
   verdict: Verdict;
   reasons: string[];
 }
 
-const CGROUP_ROOT = '/sys/fs/cgroup';
 /** The limits of an attempt's containers: processes, memory, CPUs (docs/tests.md, isolation 9). */
 const REQUIRED_CONTROLLERS = ['cpu', 'memory', 'pids'];
 
-/**
- * Reads the host's cgroups (ORC-208): the unified hierarchy has a `cgroup.controllers` at its root, cgroups v1 and the
- * hybrid layout have none there. A rootless engine (any `uid` but 0) creates its containers under the user's systemd
- * service, which holds only the controllers systemd delegates to it. `read`: a file's text, undefined when absent.
- */
-export function checkHost(read: (path: string) => string | undefined, uid: number | undefined): HostReport {
-  try {
-    return readHost(read, uid);
-  } catch (error) {
-    return refusedHost(`cannot read the host's cgroups: ${errorMessage(error)}`);
-  }
+/** What `info` says of the cgroups, whichever the engine. */
+interface EngineCgroups {
+  cgroupV2: boolean;
+  controllers: string[];
+  rootless: boolean;
+  /** A reason the engine ignores the limits whatever its controllers, when it has one. */
+  ignored?: string;
 }
 
-const refusedHost = (reason: string): HostReport => ({ cgroupV2: false, controllers: [], verdict: 'refused', reasons: [reason] });
-
-function readHost(read: (path: string) => string | undefined, uid: number | undefined): HostReport {
-  const listOf = (text: string) => text.split(/\s+/).filter(Boolean);
-  const missing = (present: string[]) => REQUIRED_CONTROLLERS.filter((controller) => !present.includes(controller));
-  const root = read(`${CGROUP_ROOT}/cgroup.controllers`);
-  if (root === undefined) {
-    return refusedHost(`no cgroup v2: ${CGROUP_ROOT}/cgroup.controllers is absent (cgroups v1 or hybrid), the sandbox cannot limit processes, memory and CPUs`);
+/**
+ * Asks the engine the sandboxes run on (ORC-208), `FACTORY_CONTAINER_CLI`, rather than this process's cgroups: run in the
+ * `factoryd` container, `doctor` sees a cgroup namespace of its own, and its uid is not the engine's. A rootless engine
+ * reports the controllers delegated to its user, the only ones it can limit through.
+ */
+export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<HostReport> {
+  const cli = containerCli(env);
+  if (!cli) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
+  if (typeof cli !== 'string') return { verdict: 'refused', reasons: [cli.refused] };
+  let cgroups: EngineCgroups;
+  try {
+    const args = cli === 'docker' ? ['info', '--format', '{{json .}}'] : ['info', '--format', 'json'];
+    const info: unknown = JSON.parse(await mustExec(run, cli, args, { timeoutMs: 60_000 }));
+    cgroups = cli === 'docker' ? dockerCgroups(info) : podmanCgroups(info);
+  } catch (error) {
+    return { engine: cli, verdict: 'refused', reasons: [`cannot read the cgroups of the engine (${cli} info): ${errorMessage(error).slice(0, 600)}`] };
   }
-  const controllers = listOf(root);
+  const { cgroupV2, controllers, rootless, ignored } = cgroups;
   const reasons: string[] = [];
-  const absent = missing(controllers);
-  if (absent.length > 0) reasons.push(`cgroup v2 without the ${absent.join(', ')} controller(s)`);
-  const rootless = uid !== undefined && uid !== 0;
-  let delegated: string[] | undefined;
-  if (rootless) {
-    const text = read(`${CGROUP_ROOT}/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`);
-    if (text === undefined) {
-      reasons.push(`no cgroup delegated to user ${uid}: a rootless engine cannot set the limits (sudo loginctl enable-linger <user>, docs/tests.md)`);
-    } else {
-      delegated = listOf(text);
-      const undelegated = missing(delegated);
-      if (undelegated.length > 0) reasons.push(`controller(s) not delegated to user ${uid}: ${undelegated.join(', ')}`);
-    }
+  if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);
+  const missing = REQUIRED_CONTROLLERS.filter((controller) => !controllers.includes(controller));
+  if (missing.length > 0) {
+    reasons.push(`${cli} cannot limit through the ${missing.join(', ')} controller(s)${rootless ? ', not delegated to its user (sudo loginctl enable-linger <user>, docs/tests.md)' : ''}`);
   }
+  if (ignored) reasons.push(ignored);
   return {
-    cgroupV2: true,
+    engine: cli,
+    cgroupV2,
     controllers,
-    ...(delegated ? { delegated } : {}),
+    rootless,
     verdict: reasons.length > 0 ? 'refused' : 'accepted',
-    reasons: reasons.length > 0 ? reasons : [`cgroup v2 with ${REQUIRED_CONTROLLERS.join(', ')}${rootless ? `, delegated to user ${uid}` : ''}`],
+    reasons: reasons.length > 0 ? reasons : [`${rootless ? 'rootless ' : ''}${cli} on cgroup v2, limits through ${REQUIRED_CONTROLLERS.join(', ')}`],
+  };
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+/** `docker info --format '{{json .}}'`: one flag per limit, which a rootless engine sets from its user's delegated controllers. */
+function dockerCgroups(info: unknown): EngineCgroups {
+  if (!isObject(info)) throw new Error('not a JSON object');
+  const errors = info['ServerErrors'];
+  if (Array.isArray(errors) && errors.length > 0) throw new Error(errors.join('; '));
+  const version = info['CgroupVersion'];
+  if (typeof version !== 'string' || version === '') throw new Error('no CgroupVersion in its answer');
+  const flags: Record<string, string> = { cpu: 'CpuCfsQuota', memory: 'MemoryLimit', pids: 'PidsLimit' };
+  const options = Array.isArray(info['SecurityOptions']) ? info['SecurityOptions'] : [];
+  return {
+    cgroupV2: version === '2',
+    controllers: REQUIRED_CONTROLLERS.filter((controller) => info[flags[controller]!] === true),
+    rootless: options.some((option) => typeof option === 'string' && option.split(',').includes('name=rootless')),
+  };
+}
+
+/** `podman info --format json`: the controllers of its cgroup. Rootless on cgroupfs, Podman ignores the limits whatever they are. */
+function podmanCgroups(info: unknown): EngineCgroups {
+  const host = isObject(info) ? info['host'] : undefined;
+  if (!isObject(host)) throw new Error('no host in its answer');
+  const version = host['cgroupVersion'];
+  if (typeof version !== 'string' || version === '') throw new Error('no host.cgroupVersion in its answer');
+  const listed = host['cgroupControllers'];
+  const controllers = Array.isArray(listed) ? listed.filter((c): c is string => typeof c === 'string') : [];
+  const rootless = isObject(host['security']) && host['security']['rootless'] === true;
+  const manager = host['cgroupManager'];
+  return {
+    cgroupV2: version === 'v2',
+    controllers,
+    rootless,
+    ...(rootless && manager !== 'systemd'
+      ? { ignored: `rootless podman on the ${String(manager)} cgroup manager ignores the limits: it needs systemd, a user session (sudo loginctl enable-linger <user>, docs/tests.md)` }
+      : {}),
   };
 }
 
@@ -698,26 +736,12 @@ export interface DoctorCommandOptions {
   http?: HttpClient;
   exec?: Exec;
   now?: () => number;
-  /** A host file's text, undefined when absent: the cgroup files by default. */
-  readHostFile?: (path: string) => string | undefined;
-  /** The daemon's user: this process's by default (doctor runs on the server, as that user). */
-  uid?: number;
-}
-
-/** A host file's text; undefined only when it does not exist, any other error thrown (`checkHost` names it). */
-function readIfPresent(path: string): string | undefined {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  }
 }
 
 /**
- * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), reads the host's cgroups, the
- * repository's branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last fetched it, then runs
- * the same analysis as `runDoctor`.
+ * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), asks the engine for the host's
+ * cgroups, reads the repository's branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last
+ * fetched it, then runs the same analysis as `runDoctor`.
  */
 export async function runDoctorCommand(options: DoctorCommandOptions): Promise<number> {
   const out = options.out ?? ((line) => console.log(line));
@@ -762,7 +786,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   return runDoctor({
     repoPath: options.repoPath,
     api,
-    host: checkHost(options.readHostFile ?? readIfPresent, options.uid ?? process.getuid?.()),
+    host: await checkHost(env, options.exec),
     out,
     naming: config.branches,
     commands: config.commands,

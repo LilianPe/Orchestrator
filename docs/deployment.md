@@ -193,6 +193,12 @@ docker compose exec factoryd node dist/src/cli/factory.js pause
 docker compose logs -f factoryd
 ```
 
+`factory doctor` runs there too, on the clone `config.yaml` names, before a repository is entrusted to the factory: it asks the engine through the same socket ([`github.md`](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)):
+
+```bash
+docker compose exec factoryd node dist/src/cli/factory.js doctor /srv/factory/repos/mon-app
+```
+
 Acceptance run: [`acceptance.md`](acceptance.md#8-docker-criterion-8).
 
 ## What is only proven on the server

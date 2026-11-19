@@ -45,8 +45,33 @@ class FakeApi implements DoctorApi {
   }
 }
 
-/** A host as the factory needs it: cgroup v2, its controllers delegated to the daemon's user. */
-const goodHost: HostReport = checkHost(() => 'cpuset cpu io memory pids', 1000);
+/** `docker info --format '{{json .}}'` of a rootless Docker on cgroup v2 whose user has the three controllers delegated. */
+const DOCKER_INFO = {
+  CgroupVersion: '2',
+  CgroupDriver: 'systemd',
+  MemoryLimit: true,
+  CpuCfsQuota: true,
+  PidsLimit: true,
+  SecurityOptions: ['name=seccomp,profile=builtin', 'name=rootless', 'name=cgroupns'],
+};
+/** `podman info --format json` of a rootless Podman in a systemd user session, the controllers delegated. */
+const PODMAN_INFO = { host: { cgroupVersion: 'v2', cgroupManager: 'systemd', cgroupControllers: ['cpu', 'memory', 'pids'], security: { rootless: true } } };
+
+/** An engine whose `info` prints `info` as JSON, or fails as `failure` says; it records the calls. */
+function engine(info: object, failure?: { code: number; stderr: string }): { exec: Exec; calls: string[][] } {
+  const calls: string[][] = [];
+  const exec: Exec = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return failure ? { stdout: '', ...failure } : { stdout: `${JSON.stringify(info)}\n`, stderr: '', code: 0 };
+  };
+  return { exec, calls };
+}
+
+const docker = (info: object = DOCKER_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, engine(info).exec);
+const podman = (info: object = PODMAN_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, engine(info).exec);
+
+/** A host as the factory needs it: its engine on cgroup v2, able to limit processes, memory and CPUs. */
+const goodHost: HostReport = await docker();
 
 function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowSource {
   return { path, content };
@@ -444,6 +469,8 @@ jobs:
     };
     const gitCalls: string[][] = [];
     const exec: Exec = async (cmd, args) => {
+      // The host, from the engine of FACTORY_CONTAINER_CLI (ORC-208).
+      if (cmd === 'docker') return engine(DOCKER_INFO).exec(cmd, args);
       expect(cmd).toBe('git');
       gitCalls.push(args);
       if (args[0] === 'remote') return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
@@ -457,13 +484,11 @@ jobs:
     const code = await runDoctorCommand({
       repoPath: '/repo',
       home,
-      env: {},
+      env: { FACTORY_CONTAINER_CLI: 'docker' },
       out: (line) => lines.push(line),
       http,
       exec,
       now: () => now,
-      readHostFile: () => 'cpu memory pids',
-      uid: 1000,
     });
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('Host: accepted');
@@ -733,55 +758,90 @@ jobs:
   });
 });
 
-describe('the host: cgroup v2 and its controllers (ORC-208, criterion 1)', () => {
-  const ROOT = '/sys/fs/cgroup/cgroup.controllers';
-  const USER = '/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers';
-  const files = (entries: Record<string, string>) => (path: string) => entries[path];
+describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, criterion 1)', () => {
+  it("asks the engine of FACTORY_CONTAINER_CLI, not the cgroups of doctor's own process", async () => {
+    const dockerEngine = engine(DOCKER_INFO);
+    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, dockerEngine.exec)).toMatchObject({
+      engine: 'docker',
+      cgroupV2: true,
+      controllers: ['cpu', 'memory', 'pids'],
+      rootless: true,
+      verdict: 'accepted',
+    });
+    expect(dockerEngine.calls).toEqual([['docker', 'info', '--format', '{{json .}}']]);
+    const podmanEngine = engine(PODMAN_INFO);
+    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, podmanEngine.exec)).toMatchObject({
+      engine: 'podman',
+      cgroupV2: true,
+      controllers: ['cpu', 'memory', 'pids'],
+      rootless: true,
+      verdict: 'accepted',
+    });
+    expect(podmanEngine.calls).toEqual([['podman', 'info', '--format', 'json']]);
+  });
 
-  it('refuses a host without cgroup v2: no cgroup.controllers at the root (cgroups v1 or hybrid)', async () => {
-    const host = checkHost(files({}), 1000);
-    expect(host.verdict).toBe('refused');
+  it('refuses an engine on cgroups v1 or the hybrid layout', async () => {
+    const host = await docker({ ...DOCKER_INFO, CgroupVersion: '1' });
+    expect(host).toMatchObject({ cgroupV2: false, verdict: 'refused' });
     const result = await doctor([], [], { host });
     expect(result.code).toBe(1);
     expect(result.text).toContain('cgroup v2');
     expect(result.text).toContain('Result: refused');
+    expect(await podman({ host: { ...PODMAN_INFO.host, cgroupVersion: 'v1' } })).toMatchObject({ cgroupV2: false, verdict: 'refused' });
   });
 
-  it('refuses a cgroup v2 host that lacks one of pids, memory and cpu, and names it', () => {
-    const host = checkHost(files({ [ROOT]: 'cpuset cpu io memory', [USER]: 'cpu memory' }), 1000);
+  it('refuses an engine that cannot set one of the process, memory and CPU limits, and names it', async () => {
+    // Rootless Docker without `cpu` delegated to its user: the engine says it cannot apply a CPU quota.
+    const noCpu = await docker({ ...DOCKER_INFO, CpuCfsQuota: false });
+    expect(noCpu).toMatchObject({ verdict: 'refused', controllers: ['memory', 'pids'] });
+    expect(noCpu.reasons.join(' ')).toContain('cpu');
+    const noPids = await podman({ host: { ...PODMAN_INFO.host, cgroupControllers: ['cpu', 'memory'] } });
+    expect(noPids.verdict).toBe('refused');
+    expect(noPids.reasons.join(' ')).toContain('pids');
+  });
+
+  it('refuses a rootless Podman on cgroupfs, which ignores the limits, even with every controller listed', async () => {
+    const host = await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs' } });
     expect(host.verdict).toBe('refused');
-    expect(host.reasons.join(' ')).toContain('pids');
+    expect(host.reasons.join(' ')).toContain('cgroupfs');
+    expect(host.reasons.join(' ')).toContain('loginctl enable-linger');
+    // Rootful, cgroupfs sets the limits.
+    expect((await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs', security: { rootless: false } } })).verdict).toBe('accepted');
   });
 
-  it("refuses a rootless daemon whose user has no delegated cgroup, or not every controller in it", () => {
-    const none = checkHost(files({ [ROOT]: 'cpu memory pids' }), 1000);
-    expect(none.verdict).toBe('refused');
-    expect(none.reasons.join(' ')).toContain('loginctl enable-linger');
-    const partial = checkHost(files({ [ROOT]: 'cpu memory pids', [USER]: 'memory pids' }), 1000);
-    expect(partial.verdict).toBe('refused');
-    expect(partial.reasons.join(' ')).toMatch(/delegated.*cpu/);
-  });
-
-  it('accepts cgroup v2 with the three controllers, delegated to the user; a root daemon reads the root only', () => {
-    expect(checkHost(files({ [ROOT]: 'cpuset cpu io memory hugetlb pids', [USER]: 'cpu memory pids' }), 1000)).toMatchObject({ verdict: 'accepted', cgroupV2: true });
-    expect(checkHost(files({ [ROOT]: 'cpu memory pids' }), 0).verdict).toBe('accepted');
-  });
-
-  it('names a cgroup file it cannot read, never reads it as absent', () => {
-    const host = checkHost((path) => {
-      if (path === ROOT) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
-      return undefined;
-    }, 0);
+  it('refuses without an engine to ask, and names FACTORY_CONTAINER_CLI', async () => {
+    const none = engine(DOCKER_INFO);
+    const host = await checkHost({}, none.exec);
     expect(host.verdict).toBe('refused');
-    expect(host.reasons.join(' ')).toContain('EACCES');
-    expect(host.reasons.join(' ')).not.toContain('cgroups v1');
+    expect(host.reasons.join(' ')).toContain('FACTORY_CONTAINER_CLI');
+    expect(none.calls).toEqual([]);
+    expect((await checkHost({ FACTORY_CONTAINER_CLI: 'lxc' }, none.exec)).reasons.join(' ')).toContain('docker or podman expected');
+  });
+
+  it("names an engine it cannot ask or read, and never tells what it did not read (no cgroupV2, no controllers)", async () => {
+    const unreachable = await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, engine({}, { code: 1, stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' }).exec);
+    expect(unreachable.verdict).toBe('refused');
+    expect(unreachable.reasons.join(' ')).toContain('Cannot connect to the Docker daemon');
+    expect(unreachable).not.toHaveProperty('cgroupV2');
+    expect(unreachable).not.toHaveProperty('controllers');
+    const serverErrors = await docker({ ServerErrors: ['error during connect'] });
+    expect(serverErrors.reasons.join(' ')).toContain('error during connect');
+    expect(serverErrors).not.toHaveProperty('cgroupV2');
+    // An answer without the cgroup version (an engine too old to report it) is unread, never cgroups v1.
+    const unknown = await docker({ MemoryLimit: true });
+    expect(unknown.verdict).toBe('refused');
+    expect(unknown).not.toHaveProperty('cgroupV2');
+    expect(unknown.reasons.join(' ')).not.toContain('cgroups v1');
+    const garbled = await checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, async () => ({ stdout: 'not json', stderr: '', code: 0 }));
+    expect(garbled.verdict).toBe('refused');
+    expect(garbled).not.toHaveProperty('cgroupV2');
   });
 
   it('puts the host in the JSON report', async () => {
-    const result = await doctor([], [], { json: true, host: checkHost(files({}), 1000) });
+    const result = await doctor([], [], { json: true, host: await docker({ ...DOCKER_INFO, CgroupVersion: '1' }) });
     const report = JSON.parse(result.text) as { accepted: boolean; host: HostReport };
     expect(report.accepted).toBe(false);
-    expect(report.host).toMatchObject({ cgroupV2: false, verdict: 'refused' });
+    expect(report.host).toMatchObject({ engine: 'docker', cgroupV2: false, verdict: 'refused' });
   });
 });
 
