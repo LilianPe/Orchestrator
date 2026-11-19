@@ -846,11 +846,14 @@ export class SqliteStore implements Store {
     });
   }
 
-  async approveMaturityCard(projectId: string, key: string, by: string, at: number): Promise<MaturityCard | undefined> {
+  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
     return this.atomically(() => {
       const row = this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ? AND key = ?').get(projectId, key) as { data: string } | undefined;
       if (!row) return undefined;
-      const card: MaturityCard = { ...(JSON.parse(row.data) as MaturityCard), approvedBy: by, approvedAt: at };
+      const stored = JSON.parse(row.data) as MaturityCard;
+      if (stored.value !== value) return 'changed';
+      if (stored.approvedBy !== undefined) return stored;
+      const card: MaturityCard = { ...stored, approvedBy: by, approvedAt: at };
       this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
       return card;
     });

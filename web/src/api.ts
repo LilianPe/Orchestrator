@@ -58,9 +58,10 @@ export const postDefect = (projectId: string, ticketId: string, entry: DefectEnt
 
 export const post = (path: string) => call(path, { method: 'POST' });
 
-/** The maturity cards of every project (ORC-410), and the approval of one. */
+/** The maturity cards of every project (ORC-410), and the approval of one, of the value shown. */
 export const fetchMaturity = () => getJson<{ cards: MaturityCardView[] }>('/api/maturity').then((r) => r.cards);
-export const postApproval = (c: Pick<MaturityCardView, 'projectId' | 'key'>) => post(`/api/maturity/${encodeURIComponent(c.projectId)}/${encodeURIComponent(c.key)}/approve`);
+export const postApproval = (c: Pick<MaturityCardView, 'projectId' | 'key' | 'value'>) =>
+  call(`/api/maturity/${encodeURIComponent(c.projectId)}/${encodeURIComponent(c.key)}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: c.value }) });
 
 /** A ticket taken over (ORC-234): `take-over` gives the command of a shell in its container, `take-over/bundle` takes a bundle. */
 const takeOverPath = (projectId: string, ticketId: string, rest = '') => `/api/tickets/${encodeURIComponent(projectId)}/${encodeURIComponent(ticketId)}/take-over${rest}`;

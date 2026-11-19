@@ -101,6 +101,9 @@ const MEASURES_AT_ONCE = 2;
 /** Tickets `GET /api/audit` looks through for a PR a human reviewed, the most recently updated. */
 const AUDITED_TICKETS = 50;
 
+/** An approval of a maturity card (ORC-410): the value the person saw. */
+const approvalEntry = z.object({ value: z.string() });
+
 /** A defect a human enters from review (ORC-229): on a PR of the ticket, linked to an AI finding of the ticket or not. */
 const defectEntry = z
   .object({
@@ -509,10 +512,15 @@ export function createApp(d: ServerDeps): Hono {
   });
 
   // The maturity cards `factory init` stored (ORC-410), every project's, and the approval of one by an operator, of the value
-  // it stands at: a detection that changes the value drops it.
+  // it was shown at: a detection that changes the value drops it, and an approval of a value no longer stored is refused.
+  const approvalLimit = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'approval over 64 KB' }, 413) });
   app.get('/api/maturity', async (c) => c.json({ cards: await d.store.maturityCards() }));
-  app.post('/api/maturity/:projectId/:key/approve', async (c) => {
-    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), operator(c).actor!, d.clock.now());
+  app.post('/api/maturity/:projectId/:key/approve', approvalLimit, async (c) => {
+    const parsed = approvalEntry.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) return c.json({ error: 'expected { value }: the value approved' }, 400);
+    const { value } = parsed.data;
+    const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), value, operator(c).actor!, d.clock.now());
+    if (card === 'changed') return c.json({ error: 'the card changed since it was shown: read it again' }, 409);
     return card ? c.json({ ok: true, card }) : c.json({ error: 'no such card' }, 404);
   });
 

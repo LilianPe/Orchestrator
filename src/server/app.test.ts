@@ -387,7 +387,8 @@ describe('server', () => {
       { key: 'stack', title: 'Stack', value: 'TypeScript (package.json)' },
       { key: 'main', title: 'main', value: 'not checked yet: the dry run decides' },
     ];
-    const approve = (app: Awaited<ReturnType<typeof setup>>['app'], path: string, headers: Record<string, string> = {}) => app.request(path, { method: 'POST', headers });
+    const approve = (app: Awaited<ReturnType<typeof setup>>['app'], path: string, headers: Record<string, string> = {}, value = path.includes('/main/') ? points[1]!.value : points[0]!.value) =>
+      app.request(path, { method: 'POST', body: JSON.stringify({ value }), headers: { 'content-type': 'application/json', ...headers } });
 
     it('lists the cards of every project, and stores the approval of one with its operator, shown when read again', async () => {
       const { app, store } = await setup();
@@ -413,6 +414,9 @@ describe('server', () => {
       expect((await approve(app, '/api/maturity/p/nope/approve')).status).toBe(404);
       expect((await approve(app, '/api/maturity/q/stack/approve')).status).toBe(404);
       expect((await approve(app, '/api/maturity/p/stack/approve', { origin: 'https://evil.test' })).status).toBe(403);
+      // The value shown is no longer the one stored (init ran again meanwhile): nothing approved, the page reads it again.
+      expect((await approve(app, '/api/maturity/p/stack/approve', {}, 'Python (uv)')).status).toBe(409);
+      expect((await app.request('/api/maturity/p/stack/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(400);
       expect((await store.maturityCards('p')).every((c) => c.approvedBy === undefined)).toBe(true);
       const signedOut = (await setup({ githubLogin: GITHUB })).app;
       expect((await signedOut.request('/api/maturity')).status).toBe(401);

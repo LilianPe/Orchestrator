@@ -771,8 +771,11 @@ export interface Store {
    * when its value is unchanged, and a point no longer reported goes.
    */
   putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void>;
-  /** Approves a card as it stands (ORC-410): undefined when the project has no such card. */
-  approveMaturityCard(projectId: string, key: string, by: string, at: number): Promise<MaturityCard | undefined>;
+  /**
+   * Approves a card of the `value` the person saw (ORC-410): `'changed'`, nothing approved, when the card now holds another;
+   * a card already approved keeps its first approval; undefined when the project has no such card.
+   */
+  approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined>;
   /**
    * Freezes a baseline (ORC-230), one row per measure, all or none: false, nothing written, when that period of the project
    * already has one and `replace` is not set; with it, the new one takes the place of the stored one.

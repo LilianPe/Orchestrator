@@ -1031,10 +1031,12 @@ export class PgStore implements AsyncStore {
     });
   }
 
-  async approveMaturityCard(projectId: string, key: string, by: string, at: number): Promise<MaturityCard | undefined> {
-    const rows = await this.db.execute(sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key} returning key`);
-    if (!rows.rows.length) return undefined;
-    return (await this.maturityCards(projectId)).find((c) => c.key === key);
+  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
+    await this.db.execute(
+      sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key} and value = ${value} and approved_by is null`,
+    );
+    const card = (await this.maturityCards(projectId)).find((c) => c.key === key);
+    return card && card.value !== value ? 'changed' : card;
   }
 
   async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {

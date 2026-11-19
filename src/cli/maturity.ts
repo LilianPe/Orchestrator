@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isRecord } from '../adapters/graphql-pages.js';
+import { pyprojectDependencies } from '../checks/deps.js';
 import type { MaturityPoint } from '../store/types.js';
 
 /** What init detected for the repository's `.factory/config.yml`: its install, its checks by name, what starts the application. */
@@ -46,12 +47,12 @@ function readJson(file: string): Record<string, unknown> | undefined {
   }
 }
 
-/** The names of every dependency of the repository's package.json and pyproject.toml (Python's read as text, by name). */
+/** The names of every dependency of the repository's package.json and pyproject.toml. */
 function dependencies(repo: string): Set<string> {
   const pkg = readJson(join(repo, 'package.json'));
   const node = ['dependencies', 'devDependencies'].flatMap((k) => (pkg && isRecord(pkg[k]) ? Object.keys(pkg[k]) : []));
   const pyproject = existsSync(join(repo, 'pyproject.toml')) ? readFileSync(join(repo, 'pyproject.toml'), 'utf8') : '';
-  const python = [...pyproject.matchAll(/["']([A-Za-z0-9_.-]+)\s*(?:[<>=!~;[\s]|["'])/g)].map((m) => m[1]!.toLowerCase());
+  const python = pyprojectDependencies(pyproject);
   return new Set([...node, ...python]);
 }
 

@@ -250,7 +250,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
   it('a card approved and detected the same again says by whom; nothing over an existing .factory/config.yml', async () => {
     const store = new SqliteStore(':memory:');
     const { projectId, repo } = await initCards(NPM, { store });
-    await store.approveMaturityCard(projectId, 'stack', 'armand', 1_700_000_000_001);
+    await store.approveMaturityCard(projectId, 'stack', 'Node (npm)', 'armand', 1_700_000_000_001);
     const again = await initCards(NPM, { store, repo, now: 1_700_000_000_002 });
     expect(again.out).toContain('  [approved by armand] Stack: Node (npm)');
     const configured = await initCards({ ...NPM, '.factory/config.yml': 'commands: { test: npm test }\n' });

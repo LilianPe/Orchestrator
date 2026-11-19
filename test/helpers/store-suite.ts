@@ -364,9 +364,14 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putMaturityCards('p', [stack, commands], 1_700_000_000_000);
     await s.putMaturityCards('other', [stack], 1_700_000_000_000);
     expect(await s.maturityCards('p')).toEqual([card(stack, 1_700_000_000_000), card(commands, 1_700_000_000_000)]);
-    expect(await s.approveMaturityCard('p', 'stack', 'armand', 1_700_000_000_005)).toEqual(card(stack, 1_700_000_000_000, { approvedBy: 'armand', approvedAt: 1_700_000_000_005 }));
-    expect(await s.approveMaturityCard('p', 'commands', 'armand', 1_700_000_000_005)).toBeDefined();
-    expect(await s.approveMaturityCard('p', 'nope', 'armand', 1_700_000_000_005)).toBeUndefined();
+    expect(await s.approveMaturityCard('p', 'stack', stack.value, 'armand', 1_700_000_000_005)).toEqual(card(stack, 1_700_000_000_000, { approvedBy: 'armand', approvedAt: 1_700_000_000_005 }));
+    // Approved again, by another: the first approval stands.
+    expect(await s.approveMaturityCard('p', 'stack', stack.value, 'lilian', 1_700_000_000_006)).toEqual(card(stack, 1_700_000_000_000, { approvedBy: 'armand', approvedAt: 1_700_000_000_005 }));
+    // A value the person did not see is not approved.
+    expect(await s.approveMaturityCard('p', 'commands', 'test: vitest', 'armand', 1_700_000_000_005)).toBe('changed');
+    expect((await s.maturityCards('p'))[1]!.approvedBy).toBeUndefined();
+    expect(await s.approveMaturityCard('p', 'commands', commands.value, 'armand', 1_700_000_000_005)).toBeDefined();
+    expect(await s.approveMaturityCard('p', 'nope', 'x', 'armand', 1_700_000_000_005)).toBeUndefined();
     // Detected again: the stack unchanged keeps its approval, the commands changed lose theirs, a card no longer detected goes.
     const changed = { ...commands, value: 'lint: npm run lint\ntest: npm test' };
     const services = { key: 'services', title: 'Services', value: 'none' };

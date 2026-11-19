@@ -53,6 +53,14 @@ describe('the maturity report (ORC-410)', () => {
     expect(v['untested']).toBe('src/app; tests/ holds tests not sorted by directory: check those by hand');
   });
 
+  it("reads Python's dependencies from their lists only, not any quoted string of pyproject.toml", () => {
+    const pyproject = (deps: string) => repoOf({ 'pyproject.toml': `[project]\nname = "postgres"\ndescription = "asyncpg"\n${deps}` });
+    expect(valueOf(pyproject('dependencies = ["httpx>=0.27"]\n'))['services']).toBe('none');
+    expect(valueOf(pyproject('dependencies = [\n  "httpx>=0.27",\n  "asyncpg>=0.29",\n]\n'))['services']).toBe('postgres (dependency asyncpg)');
+    expect(valueOf(pyproject('dependencies = []\n[project.optional-dependencies]\ndb = ["psycopg[binary]"]\n'))['services']).toBe('postgres (dependency psycopg)');
+    expect(valueOf(pyproject('dependencies = []\n[dependency-groups]\ndev = ["pytest", "psycopg2-binary==2.9"]\n'))['services']).toBe('postgres (dependency psycopg2-binary)');
+  });
+
   it('says what it did not find rather than leaving a point out', () => {
     const v = valueOf(repoOf({ 'README.md': '# x' }));
     expect(v).toEqual({
