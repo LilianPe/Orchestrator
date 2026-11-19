@@ -37,10 +37,13 @@ const viewOf = (hash: string): View => (runIdOf(hash) !== undefined ? 'run' : au
 
 /**
  * What `read` gives, read now and every `everyMs` (30 s) while the page is shown and its tab visible, again when `deps` change; an
- * answer to an earlier read never replaces a later one. `failed`: the last read failed, `data` still the one before.
+ * answer to an earlier read never replaces a later one. `failed`: the last read failed, `data` still the one before. `reload`
+ * reads again now, after a write of the page's own.
  */
-function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[], everyMs = MEASURES_POLL_MS): { data?: T; failed: boolean } {
+function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[], everyMs = MEASURES_POLL_MS): { data?: T; failed: boolean; reload: () => void } {
   const [state, setState] = useState<{ data?: T; failed: boolean }>({ failed: false });
+  const [version, setVersion] = useState(0);
+  const reload = useCallback(() => setVersion((v) => v + 1), []);
   useEffect(() => {
     let live = true;
     const load = () =>
@@ -55,8 +58,8 @@ function usePolled<T>(read: () => Promise<T>, deps: readonly unknown[], everyMs 
       clearInterval(timer);
     };
     // `read` is rebuilt each render: `deps` say when it changes.
-  }, deps);
-  return state;
+  }, [...deps, version]);
+  return { ...state, reload };
 }
 
 /** The reduced overview (ORC-299), read when shown and every 5 min while it is: the factory computes it over the last 90 days. */
@@ -197,20 +200,15 @@ function SheetPage({ projectId, ticketId }: { projectId: string; ticketId: strin
 
 /** The maturity cards `factory init` stored (ORC-410), read when shown and every 5 min while it is, again after an approval. */
 function MaturityPage() {
-  const [approvals, setApprovals] = useState(0);
-  const { data, failed } = usePolled(fetchMaturity, [approvals], OVERVIEW_POLL_MS);
+  const { data, failed, reload } = usePolled(fetchMaturity, [], OVERVIEW_POLL_MS);
   const [notice, setNotice] = useState<string>();
   const approve = (card: MaturityCardView) =>
     postApproval(card).then(
       async (res) => {
         setNotice(res.ok ? `${card.title} approved.` : await refusal(res, 'approval'));
-        setApprovals((n) => n + 1);
-        return res.ok;
+        reload();
       },
-      () => {
-        setNotice('Approval not sent: the server did not answer.');
-        return false;
-      },
+      () => setNotice('Approval not sent: the server did not answer.'),
     );
   return (
     <div className="flow">

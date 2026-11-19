@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { pyprojectDependencies } from '../checks/deps.js';
@@ -86,44 +86,27 @@ function visualPaths(repo: string, deps: Set<string>): string {
   return dirs.length ? dirs.map((d) => `${d}/**`).join(', ') : 'none: a front end, but none of its usual directories';
 }
 
-/** Walks `dir` for a test file; `budget` counts the entries seen across walks. */
-function hasTest(dir: string, budget: { left: number }): boolean {
-  let entries;
+/** The entries of `dir` the walk enters: none when it cannot be read; neither dot entries nor `SKIPPED`. */
+function entries(dir: string): Dirent[] {
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-  for (const e of entries) {
-    if (--budget.left < 0) return false;
-    if (e.name.startsWith('.') || SKIPPED.has(e.name)) continue;
-    if (e.isDirectory() ? e.name === '__tests__' || hasTest(join(dir, e.name), budget) : TEST_FILE.test(e.name)) return true;
-  }
-  return false;
-}
-
-function hasSource(dir: string, budget: { left: number }): boolean {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-  for (const e of entries) {
-    if (--budget.left < 0) return false;
-    if (e.name.startsWith('.') || SKIPPED.has(e.name)) continue;
-    if (e.isDirectory() ? hasSource(join(dir, e.name), budget) : SOURCE.test(e.name)) return true;
-  }
-  return false;
-}
-
-const subdirs = (dir: string): string[] => {
-  try {
-    return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIPPED.has(e.name)).map((e) => e.name);
+    return readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith('.') && !SKIPPED.has(e.name));
   } catch {
     return [];
   }
-};
+}
+
+/** Walks `dir` for a file `file` matches, or a directory `stop` matches; `budget` counts the entries seen across walks. */
+function finds(dir: string, budget: { left: number }, file: RegExp, stop: (name: string) => boolean = () => false): boolean {
+  for (const e of entries(dir)) {
+    if (--budget.left < 0) return false;
+    if (e.isDirectory() ? stop(e.name) || finds(join(dir, e.name), budget, file, stop) : file.test(e.name)) return true;
+  }
+  return false;
+}
+
+const hasTest = (dir: string, budget: { left: number }) => finds(dir, budget, TEST_FILE, (name) => name === '__tests__');
+const hasSource = (dir: string, budget: { left: number }) => finds(dir, budget, SOURCE);
+const subdirs = (dir: string): string[] => entries(dir).filter((e) => e.isDirectory()).map((e) => e.name);
 
 const TEST_DIRS = ['test', 'tests'];
 
@@ -140,13 +123,7 @@ function untested(repo: string): string {
     .map((d) => ({ name: d, path: root ? `${root}/${d}` : d }));
   if (!areas.length) return 'no source directory found';
   const bare = areas.filter((a) => !hasTest(join(repo, a.path), budget) && !TEST_DIRS.some((t) => hasTest(join(repo, t, a.name), budget)));
-  const loose = TEST_DIRS.find((t) => {
-    try {
-      return readdirSync(join(repo, t), { withFileTypes: true }).some((e) => e.isFile() && TEST_FILE.test(e.name));
-    } catch {
-      return false;
-    }
-  });
+  const loose = TEST_DIRS.find((t) => entries(join(repo, t)).some((e) => e.isFile() && TEST_FILE.test(e.name)));
   const value = bare.length ? bare.map((a) => a.path).join(', ') : 'none: every source directory has a test file';
   const notes = [...(loose ? [`${loose}/ holds tests not sorted by directory: check those by hand`] : []), ...(budget.left < 0 ? [`stopped after ${WALK_LIMIT} entries: partial`] : [])];
   return [value, ...notes].join('; ');

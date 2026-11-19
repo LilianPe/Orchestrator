@@ -46,6 +46,7 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  approvedCard,
   maturityCard,
   type MaturityCard,
   type MaturityPoint,
@@ -824,6 +825,10 @@ export class SqliteStore implements Store {
   }
 
   async maturityCards(projectId?: string): Promise<MaturityCard[]> {
+    return this.readMaturityCards(projectId);
+  }
+
+  private readMaturityCards(projectId?: string): MaturityCard[] {
     const rows = (
       projectId === undefined
         ? this.db.prepare('SELECT data FROM maturity_cards ORDER BY project_id, position').all()
@@ -834,12 +839,7 @@ export class SqliteStore implements Store {
 
   async putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void> {
     this.atomically(() => {
-      const before = new Map(
-        (this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ?').all(projectId) as { data: string }[]).map((r) => {
-          const c = JSON.parse(r.data) as MaturityCard;
-          return [c.key, c];
-        }),
-      );
+      const before = new Map(this.readMaturityCards(projectId).map((c) => [c.key, c]));
       this.db.prepare('DELETE FROM maturity_cards WHERE project_id = ?').run(projectId);
       const insert = this.db.prepare('INSERT INTO maturity_cards (project_id, key, position, data) VALUES (?, ?, ?, ?)');
       points.forEach((p, i) => insert.run(projectId, p.key, i, JSON.stringify(maturityCard(projectId, p, at, before.get(p.key)))));
@@ -851,10 +851,8 @@ export class SqliteStore implements Store {
       const row = this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ? AND key = ?').get(projectId, key) as { data: string } | undefined;
       if (!row) return undefined;
       const stored = JSON.parse(row.data) as MaturityCard;
-      if (stored.value !== value) return 'changed';
-      if (stored.approvedBy !== undefined) return stored;
-      const card: MaturityCard = { ...stored, approvedBy: by, approvedAt: at };
-      this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
+      const card = approvedCard(stored, value, by, at);
+      if (card !== stored && card !== 'changed') this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
       return card;
     });
   }

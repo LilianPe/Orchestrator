@@ -29,9 +29,6 @@ export interface InitDeps {
   storeCards?: (projectId: string, points: readonly MaturityPoint[]) => Promise<MaturityCard[]>;
 }
 
-/** What `init` proposes for a repository's `.factory/config.yml`: its install, its checks by name, and what starts the application. */
-type Detected = DetectedChecks;
-
 /**
  * The scripts of the repository's package.json, those that are a command: none without one, or with one that does not parse
  * or is not an object (npm would refuse it too; a proposal never fails init).
@@ -54,7 +51,7 @@ function nodeScripts(repo: string): Record<string, string> | undefined {
  * npm, or pnpm when its lockfile is the only one: the scripts `lint`, `typecheck` and `test` the repository has, and as its
  * `preview` (ORC-397) the first of `dev`, `start` and `preview`.
  */
-function detectNode(repo: string): Detected {
+function detectNode(repo: string): DetectedChecks {
   const scripts = nodeScripts(repo);
   if (!scripts) return { setup: [], commands: {} };
   const npmLock = existsSync(join(repo, 'package-lock.json'));
@@ -72,7 +69,7 @@ function detectNode(repo: string): Detected {
  * longer matches; without the network, it fails (measured on uv 0.13.7). A plain `uv sync` rewrites it too
  * (docs/repository-configuration.md). Named after their tool, beside Node's.
  */
-function detectPython(repo: string): Detected {
+function detectPython(repo: string): DetectedChecks {
   if (!existsSync(join(repo, 'pyproject.toml')) || !existsSync(join(repo, 'uv.lock'))) return { setup: [], commands: {} };
   return { setup: ['uv sync --frozen'], commands: { ruff: 'uv run --frozen ruff check', mypy: 'uv run --frozen mypy .', pytest: 'uv run --frozen pytest' } };
 }
@@ -85,7 +82,7 @@ export const PYTEST_BESIDE_TEST = `Warning: the red check of the tests step runs
  * name. A `preview` from Node's scripts only: no convention names a start script for Python (a `[project.scripts]` entry is a
  * console command, not a server).
  */
-function detect(repo: string): Detected {
+function detect(repo: string): DetectedChecks {
   const node = detectNode(repo);
   const python = detectPython(repo);
   const { pytest, ...checks } = python.commands;
@@ -97,7 +94,7 @@ function detect(repo: string): Detected {
 export const PROPOSAL_HEADER = `Proposed ${REPO_CONFIG_PATH}, to commit on the default branch (init writes nothing in the repository):\n`;
 
 /** The repository's `.factory/config.yml`, as `init` detects it: none when it detects nothing. */
-function proposal({ setup, commands, preview }: Detected): string | undefined {
+function proposal({ setup, commands, preview }: DetectedChecks): string | undefined {
   const checks = { ...(setup.length ? { setup: setup.join(' && ') } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
   const text =
     (Object.keys(checks).length ? stringify(checks) : '') +
@@ -108,8 +105,10 @@ function proposal({ setup, commands, preview }: Detected): string | undefined {
 /** What `init` prints before the maturity cards (ORC-410), followed by the dashboard page where a person approves them. */
 export const MATURITY_HEADER = 'Maturity report, one card per point to approve on the dashboard: ';
 
+type PrintedCard = MaturityPoint & Pick<MaturityCard, 'approvedBy'>;
+
 /** A card as init prints it: approved or not, its value under its title, a value of several lines indented. */
-function cardLine(c: MaturityPoint & { approvedBy?: string }): string {
+function cardLine(c: PrintedCard): string {
   const status = c.approvedBy === undefined ? '[to approve]' : `[approved by ${c.approvedBy}]`;
   const lines = c.value.split('\n');
   return lines.length === 1 ? `  ${status} ${c.title}: ${c.value}` : [`  ${status} ${c.title}:`, ...lines.map((l) => `    ${l}`)].join('\n');
@@ -117,7 +116,7 @@ function cardLine(c: MaturityPoint & { approvedBy?: string }): string {
 
 /** The maturity report of the repository, stored as cards when it can be: a store that fails leaves init to finish, and says so. */
 async function printMaturity(d: InitDeps, projectId: string, points: MaturityPoint[], dashboard: string): Promise<void> {
-  let cards: (MaturityPoint & { approvedBy?: string })[] = points;
+  let cards: PrintedCard[] = points;
   let failure: string | undefined;
   if (d.storeCards) {
     try {

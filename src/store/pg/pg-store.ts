@@ -48,6 +48,7 @@ import {
   type Artifact,
   type FindingsRecord,
   type KnownFlakyTest,
+  approvedCard,
   maturityCard,
   type MaturityCard,
   type MaturityPoint,
@@ -1032,11 +1033,15 @@ export class PgStore implements AsyncStore {
   }
 
   async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
-    await this.db.execute(
-      sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key} and value = ${value} and approved_by is null`,
-    );
-    const card = (await this.maturityCards(projectId)).find((c) => c.key === key);
-    return card && card.value !== value ? 'changed' : card;
+    return this.db.transaction(async (tx) => {
+      // The detection's lock: an init replacing the cards meanwhile is waited for, never approved over.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`maturity:${projectId}`}))`);
+      const stored = (await this.readMaturityCards(tx, projectId)).find((c) => c.key === key);
+      if (!stored) return undefined;
+      const card = approvedCard(stored, value, by, at);
+      if (card !== stored && card !== 'changed') await tx.execute(sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key}`);
+      return card;
+    });
   }
 
   async putBaseline(b: Baseline, replace: boolean): Promise<boolean> {

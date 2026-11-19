@@ -469,6 +469,15 @@ export function maturityCard(projectId: string, p: MaturityPoint, at: number, be
   return { projectId, key: p.key, title: p.title, value: p.value, detectedAt: at, ...kept };
 }
 
+/**
+ * The approval of a card of the `value` a person saw (ORC-410): `'changed'` when the card holds another; a card already
+ * approved stands as it is.
+ */
+export function approvedCard(stored: MaturityCard, value: string, by: string, at: number): MaturityCard | 'changed' {
+  if (stored.value !== value) return 'changed';
+  return stored.approvedBy === undefined ? { ...stored, approvedBy: by, approvedAt: at } : stored;
+}
+
 /** The findings one AI review lens made on a ticket's published commit (ORC-183): `runId`, the lens's run; `at`, when they were kept. */
 export interface FindingsRecord {
   projectId: string;

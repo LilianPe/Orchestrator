@@ -5,7 +5,7 @@ import { Maturity } from './Maturity.js';
 import type { MaturityCardView } from './types.js';
 
 const card = (patch: Partial<MaturityCardView> = {}): MaturityCardView => ({ projectId: 'p', key: 'stack', title: 'Stack', value: 'TypeScript (package.json)', detectedAt: 1_000, ...patch });
-const render = (cards: MaturityCardView[], notice?: string) => renderToStaticMarkup(createElement(Maturity, { cards, onApprove: async () => true, notice }));
+const render = (cards: MaturityCardView[], notice?: string) => renderToStaticMarkup(createElement(Maturity, { cards, onApprove: async () => undefined, notice }));
 
 describe('the maturity cards page (ORC-410)', () => {
   it('shows each card of each project, its value, and a button to approve one not approved yet', () => {
