@@ -809,6 +809,25 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     expect((await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs', security: { rootless: false } } })).verdict).toBe('accepted');
   });
 
+  it('refuses a rootless Docker off the systemd cgroup driver, which ignores the limits, whatever its flags', async () => {
+    // No systemd user session: Docker's rootless docs, `Cgroup Driver: none`.
+    const none = await docker({ ...DOCKER_INFO, CgroupDriver: 'none' });
+    expect(none.verdict).toBe('refused');
+    expect(none.reasons.join(' ')).toContain('none');
+    expect(none.reasons.join(' ')).toContain('loginctl enable-linger');
+    // A rootless Podman behind the Docker-compatible socket (compose's `docker` CLI): its cgroup manager in CgroupDriver.
+    expect((await docker({ ...DOCKER_INFO, CgroupDriver: 'cgroupfs' })).verdict).toBe('refused');
+    // Rootful, cgroupfs sets the limits.
+    expect((await docker({ ...DOCKER_INFO, CgroupDriver: 'cgroupfs', SecurityOptions: ['name=seccomp,profile=builtin'] })).verdict).toBe('accepted');
+  });
+
+  it('on cgroups v1, says no cgroup v2 alone: no delegation advice that linger cannot fix', async () => {
+    const host = await podman({ host: { ...PODMAN_INFO.host, cgroupVersion: 'v1', cgroupControllers: [], cgroupManager: 'cgroupfs' } });
+    expect(host.verdict).toBe('refused');
+    expect(host.reasons).toHaveLength(1);
+    expect(host.reasons[0]).toContain('no cgroup v2');
+  });
+
   it('refuses without an engine to ask, and names FACTORY_CONTAINER_CLI', async () => {
     const none = engine(DOCKER_INFO);
     const host = await checkHost({}, none.exec);

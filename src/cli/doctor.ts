@@ -73,8 +73,8 @@ interface EngineCgroups {
   cgroupV2: boolean;
   controllers: string[];
   rootless: boolean;
-  /** A reason the engine ignores the limits whatever its controllers, when it has one. */
-  ignored?: string;
+  /** Docker's CgroupDriver, Podman's cgroupManager: rootless, the engine ignores the limits off `systemd`. */
+  manager: string | undefined;
 }
 
 /**
@@ -94,14 +94,18 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   } catch (error) {
     return { engine: cli, verdict: 'refused', reasons: [`cannot read the cgroups of the engine (${cli} info): ${errorMessage(error).slice(0, 600)}`] };
   }
-  const { cgroupV2, controllers, rootless, ignored } = cgroups;
+  const { cgroupV2, controllers, rootless, manager } = cgroups;
+  const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
   const reasons: string[] = [];
-  if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);
   const missing = REQUIRED_CONTROLLERS.filter((controller) => !controllers.includes(controller));
-  if (missing.length > 0) {
-    reasons.push(`${cli} cannot limit through the ${missing.join(', ')} controller(s)${rootless ? ', not delegated to its user (sudo loginctl enable-linger <user>, docs/tests.md)' : ''}`);
+  // On cgroups v1, no delegation makes the limits work: the version alone is said.
+  if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);
+  else if (rootless && manager !== 'systemd') {
+    // Whatever the controllers it lists: Docker's rootless driver `none` (no user session), Podman's `cgroupfs`.
+    reasons.push(`rootless ${cli} on the ${manager ?? 'unknown'} cgroup manager ignores the limits: it needs systemd, a user session (${linger})`);
+  } else if (missing.length > 0) {
+    reasons.push(`${cli} cannot limit through the ${missing.join(', ')} controller(s)${rootless ? `, not delegated to its user (${linger})` : ''}`);
   }
-  if (ignored) reasons.push(ignored);
   return {
     engine: cli,
     cgroupV2,
@@ -127,10 +131,11 @@ function dockerCgroups(info: unknown): EngineCgroups {
     cgroupV2: version === '2',
     controllers: REQUIRED_CONTROLLERS.filter((controller) => info[flags[controller]!] === true),
     rootless: options.some((option) => typeof option === 'string' && option.split(',').includes('name=rootless')),
+    manager: typeof info['CgroupDriver'] === 'string' ? info['CgroupDriver'] : undefined,
   };
 }
 
-/** `podman info --format json`: the controllers of its cgroup. Rootless on cgroupfs, Podman ignores the limits whatever they are. */
+/** `podman info --format json`: the controllers of its cgroup. */
 function podmanCgroups(info: unknown): EngineCgroups {
   const host = isObject(info) ? info['host'] : undefined;
   if (!isObject(host)) throw new Error('no host in its answer');
@@ -140,14 +145,7 @@ function podmanCgroups(info: unknown): EngineCgroups {
   const controllers = Array.isArray(listed) ? listed.filter((c): c is string => typeof c === 'string') : [];
   const rootless = isObject(host['security']) && host['security']['rootless'] === true;
   const manager = host['cgroupManager'];
-  return {
-    cgroupV2: version === 'v2',
-    controllers,
-    rootless,
-    ...(rootless && manager !== 'systemd'
-      ? { ignored: `rootless podman on the ${String(manager)} cgroup manager ignores the limits: it needs systemd, a user session (sudo loginctl enable-linger <user>, docs/tests.md)` }
-      : {}),
-  };
+  return { cgroupV2: version === 'v2', controllers, rootless, manager: typeof manager === 'string' ? manager : undefined };
 }
 
 /** The protection's verdict; what was read of it, absent when it could not be read. */
