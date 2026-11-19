@@ -217,3 +217,66 @@ describe('GitHubAppApi', () => {
     expect((error as Error).message).not.toContain('ghs_api_secret');
   });
 });
+
+describe('GitHubAppApi.branchProtection (ORC-208)', () => {
+  const protectionRoutes = (branch: unknown, rules: unknown, repo: unknown = { default_branch: 'main' }, rulesets: Record<string, unknown> = {}): Route[] => [
+    tokenRoute(),
+    (url) => {
+      const id = /^\/repos\/acme\/app\/rulesets\/(\d+)$/.exec(url.pathname)?.[1];
+      return id ? { body: rulesets[id] ?? { id: Number(id), current_user_can_bypass: 'never' } } : undefined;
+    },
+    (url) => (url.pathname === '/repos/acme/app' ? { body: repo } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: branch } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: rules } : undefined),
+  ];
+
+  it('reads the default branch, its classic protection flag and the rule types its active rulesets apply, once each', async () => {
+    const calls: Call[] = [];
+    const rules = [{ type: 'pull_request', ruleset_id: 1 }, { type: 'deletion', ruleset_id: 1 }, { type: 'pull_request', ruleset_id: 2 }];
+    const rulesets = { '2': { id: 2, current_user_can_bypass: 'always' } };
+    // GitHub's answer for a branch its rulesets cover and no classic protection does: `protected` true, `protection.enabled` false.
+    const branch = { name: 'main', protected: true, protection: { enabled: false } };
+    const protection = await makeApi(protectionRoutes(branch, rules, undefined, rulesets), calls).branchProtection('/repo');
+    expect(protection).toEqual({ branch: 'main', classic: false, rules: ['deletion', 'pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }, { id: 2, bypass: 'always' }] });
+    expect(calls.every((call) => !call.url.includes('/protection'))).toBe(true);
+    expect(calls.filter((call) => call.url.includes('/rulesets/'))).toHaveLength(2);
+  });
+
+  it("does not read a ruleset that only blocks deletion as a classic protection: GitHub's `protected` counts rulesets too", async () => {
+    const branch = { name: 'main', protected: true, protection: { enabled: false } };
+    const protection = await makeApi(protectionRoutes(branch, [{ type: 'deletion', ruleset_id: 3 }])).branchProtection('/repo');
+    expect(protection).toEqual({ branch: 'main', classic: false, rules: ['deletion'], pullRequestRulesets: [] });
+  });
+
+  it('reads a classic protection on its `protection.enabled`, with no ruleset', async () => {
+    const branch = { name: 'main', protected: true, protection: { enabled: true } };
+    expect((await makeApi(protectionRoutes(branch, [])).branchProtection('/repo')).classic).toBe(true);
+  });
+
+  it('reads every page of the branch rules: a pull request rule past the first 100 still counts', async () => {
+    const first = Array.from({ length: 100 }, () => ({ type: 'required_status_checks', ruleset_id: 5 }));
+    const branch = { name: 'main', protected: true, protection: { enabled: false } };
+    const routes = protectionRoutes(branch, []);
+    routes.splice(1, 0, (url) =>
+      url.pathname === '/repos/acme/app/rules/branches/main'
+        ? { body: url.searchParams.get('page') === '2' ? [{ type: 'pull_request', ruleset_id: 6 }] : first }
+        : undefined,
+    );
+    const protection = await makeApi(routes).branchProtection('/repo');
+    expect(protection.pullRequestRulesets).toEqual([{ id: 6, bypass: 'never' }]);
+  });
+
+  it("rejects a ruleset that does not say whether the App can bypass it", async () => {
+    const routes = protectionRoutes({ protected: true, protection: { enabled: false } }, [{ type: 'pull_request', ruleset_id: 7 }], undefined, { '7': { id: 7 } });
+    await expect(makeApi(routes).branchProtection('/repo')).rejects.toThrow(/unreadable answer, not a ruleset/);
+  });
+
+  it.each([
+    ['a repository without its default branch', { name: 'app' }, { protected: true, protection: { enabled: true } }, []],
+    ['a branch without its classic protection flag', { default_branch: 'main' }, { name: 'main', protected: true }, []],
+    ['rules that are not a list of typed rules', { default_branch: 'main' }, { protected: true, protection: { enabled: true } }, [{ ruleset_id: 1 }]],
+    ['a rule without its ruleset', { default_branch: 'main' }, { protected: true, protection: { enabled: true } }, [{ type: 'pull_request' }]],
+  ])('rejects, never reads "protected", %s', async (_case, repo, branch, rules) => {
+    await expect(makeApi(protectionRoutes(branch, rules, repo)).branchProtection('/repo')).rejects.toThrow(/unreadable answer/);
+  });
+});
