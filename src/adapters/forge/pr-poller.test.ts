@@ -286,6 +286,23 @@ describe('PrPoller', () => {
       expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
     });
 
+    it('judges a head from before the first publication once a pass has read a head the factory knows since', async () => {
+      const s = setup();
+      await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
+      const read = async (head: string) => {
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
+        await s.poller.pollOnce('p');
+      };
+      await read(OTHER);
+      // The factory publishes the commit it verified; a pass reads it before its `publish.done`.
+      await s.store.putTicket({ ...(await s.store.getTicket('p', 'REL-1'))!, verifiedSha: PUBLISHED });
+      await read(PUBLISHED);
+      await s.store.recordEvent(published(PUBLISHED));
+      // A human puts the branch back on the head from before, its webhook lost: no longer the forge lagging.
+      await read(OTHER);
+      expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: OTHER, before: PUBLISHED })]);
+    });
+
     it("holds back no CI verdict when the head's judgement fails", async () => {
       const logs: string[] = [];
       const events: FactoryEvent[] = [];
