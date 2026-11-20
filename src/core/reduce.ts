@@ -142,7 +142,7 @@ function internal(t: TicketState, e: InternalEvent): TicketState {
     case 'feedback.appended':
       return { ...t, humanInbox: withinBound([...t.humanInbox, e.item]) };
     case 'work.cancelled':
-      return { ...t, pendingJob: undefined, verifyingRunId: undefined };
+      return { ...t, pendingJob: undefined, verifyingRunId: undefined, nextJob: undefined };
     case 'verify.started':
       return { ...t, verifyingRunId: e.runId };
     case 'status.recorded':

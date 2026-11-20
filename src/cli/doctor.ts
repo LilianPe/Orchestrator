@@ -9,7 +9,7 @@ import {
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance } from '../config/instance.js';
+import { effectiveInstance, samePath, validatorWarnings } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -199,12 +199,17 @@ export interface DoctorOptions {
   visualProof?: { image?: string; detail: string };
   /** The server secrets (ORC-398): where each is kept and its rotation, for the JSON report; never part of the verdict. In text, `runDoctorCommand` says it first. */
   serverSecrets?: SecretReport[];
+  /** The projects whose spec gate no validator can pass (ORC-421), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says them first. */
+  validatorWarnings?: string[];
 }
 
-/** The visual proof (ORC-404) and the server secrets (ORC-398) in the JSON report. */
-const instanceReportOf = (o: Pick<DoctorOptions, 'visualProof' | 'serverSecrets'>) => ({
+type InstanceReport = Pick<DoctorOptions, 'visualProof' | 'serverSecrets' | 'validatorWarnings'>;
+
+/** The visual proof (ORC-404), the server secrets (ORC-398) and the validators (ORC-421) in the JSON report. */
+const instanceReportOf = (o: InstanceReport) => ({
   ...(o.visualProof ? { visualProof: { available: !!o.visualProof.image, detail: o.visualProof.detail } } : {}),
   ...(o.serverSecrets ? { serverSecrets: o.serverSecrets } : {}),
+  ...(o.validatorWarnings?.length ? { validatorWarnings: o.validatorWarnings } : {}),
 });
 
 export interface WorkflowReport {
@@ -710,7 +715,7 @@ function verdictLines({ host, branchProtection: protection }: Verdicts): string[
 }
 
 function doctorFailure(
-  options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json' | 'visualProof' | 'serverSecrets'>,
+  options: Pick<DoctorOptions, 'repoPath' | 'out' | 'json'> & InstanceReport,
   message: string,
   ignored: string[] = [],
   warnings: string[] = [],
@@ -756,8 +761,13 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
+  let validators: string[];
   try {
-    githubApp = resolveGithubApp(effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml), env);
+    const instance = effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml);
+    // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
+    validators = validatorWarnings(instance.projects.filter((p) => samePath(p.repoPath, options.repoPath)));
+    if (!options.json) for (const line of validators) out(line);
+    githubApp = resolveGithubApp(instance, env);
   } catch (error) {
     out(errorMessage(error));
     return 1;
@@ -775,21 +785,12 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  const report = { repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
   let config: RepoConfig;
   try {
     config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });
   } catch (error) {
-    return doctorFailure({ repoPath: options.repoPath, out, visualProof, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) }, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
+    return doctorFailure(report, `Cannot read the repository's branch naming: ${errorMessage(error)}`);
   }
-  return runDoctor({
-    repoPath: options.repoPath,
-    api,
-    host: await checkHost(env, options.exec),
-    out,
-    naming: config.branches,
-    commands: config.commands,
-    visualProof,
-    ...(serverSecrets ? { serverSecrets } : {}),
-    ...(options.json ? { json: true } : {}),
-  });
+  return runDoctor({ ...report, api, host: await checkHost(env, options.exec), naming: config.branches, commands: config.commands });
 }
