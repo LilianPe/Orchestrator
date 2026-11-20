@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DryRun, DryRunRequest } from '../../src/core/dry-run.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
@@ -22,7 +23,7 @@ describe('the dry run of a project', () => {
     expect(asked[0]).not.toHaveProperty('sha');
     expect(await asked[0]!.env(parseRepoConfig(undefined))).toEqual({});
     // Its place is the dry run's, gone with it.
-    expect(existsSync(asked[0]!.workDir)).toBe(false);
+    expect(existsSync(dirname(asked[0]!.workDir))).toBe(false);
     expect(await h.store.lastDryRun('p')).toEqual(run);
   });
 

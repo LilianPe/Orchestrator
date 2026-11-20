@@ -2,11 +2,12 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExecResult } from '../adapters/exec.js';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import type { CommandRun } from '../checks/flaky.js';
+import { VERIFY_TIMEOUT_MS } from './verify.js';
 import { breaksOfRuns, classifyBreak, dryRunFingerprint, runDryRun, unreachable, type DryRunRequest } from './dry-run.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -42,6 +43,7 @@ class LocalSandboxes extends FakeSandboxProvider {
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -156,6 +158,31 @@ describe('runDryRun (ORC-408)', () => {
     expect(sandboxes.active()).toEqual([]);
   });
 
+  it('a registry pip cannot reach, before it finds no version, rejects: the dependency it names is not missing', async () => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: "WARNING: Retrying after connection broken by 'NewConnectionError: Failed to establish a new connection: [Errno 111] Connection refused'\nERROR: Could not find a version that satisfies the requirement httpx\n", code: 1 } : undefined);
+    await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
+  });
+
+  it('a setup cut by its cap while a registry did not answer rejects, as any registry breakdown', async () => {
+    const { req, sandboxes } = forge();
+    const now = Date.now();
+    sandboxes.answer = (command) => {
+      if (command !== 'npm ci') return undefined;
+      // Past the cap on the factory's clock: the exit is the cap's (`cappedExit`).
+      vi.spyOn(Date, 'now').mockReturnValue(now + 2 * VERIFY_TIMEOUT_MS);
+      return { stdout: '', stderr: 'npm error code ESOCKETTIMEDOUT\n', code: 124 };
+    };
+    await expect(runDryRun(req)).rejects.toThrow('no dry run recorded');
+  });
+
+  it('the clone the sandboxes mount holds nothing of the host\'s git: a tracked root gitconfig checks out', async () => {
+    const { req, sandboxes } = forge({}, { gitconfig: '[core]\n' });
+    const run = await runDryRun(req);
+    expect(run.ok).toBe(true);
+    expect(sandboxes.ran.map((r) => r.command)).toContain('grep green state.txt');
+  });
+
   it('a registry the egress proxy refuses is the repository\'s: recorded red, as a dependency', async () => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error 403 Forbidden - GET https://npm.acme.internal/left-pad\n', code: 1 } : undefined);
@@ -174,6 +201,7 @@ describe('runDryRun (ORC-408)', () => {
     const run = await runDryRun(req);
     expect(run.ok).toBe(false);
     expect(run.breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'config', detail: expect.stringContaining('postgres') })]);
+    expect(run.commands).toEqual([]);
     expect(sandboxes.ran).toEqual([]);
   });
 
@@ -239,6 +267,8 @@ describe('classifyBreak', () => {
     expect(classifyBreak('expected 200 "OK", got 404 "Not Found"', 'command', declared).kind).toBe('failure');
     expect(classifyBreak("Error: Cannot find module './dist/index.js'", 'command', declared).kind).toBe('failure');
     expect(classifyBreak("Error: Cannot find module '/work/build/app.js'", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("Error: Cannot find module '@/lib/db'", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("Error: Cannot find module '~/utils'", 'command', declared).kind).toBe('failure');
     expect(classifyBreak('npm error code ETARGET', 'command', declared).kind).toBe('failure');
     expect(classifyBreak('npm error 403 Forbidden - GET https://npm.acme.internal/x', 'command', declared).kind).toBe('failure');
   });
@@ -253,6 +283,8 @@ describe('classifyBreak', () => {
     expect(unreachable('connect ECONNREFUSED 127.0.0.1:3128')).toContain('3128');
     expect(unreachable('npm error code ETIMEDOUT')).toContain('ETIMEDOUT');
     expect(unreachable('npm error 502 Bad Gateway - GET https://registry.npmjs.org/zod')).toContain('502');
+    expect(unreachable("Failed to establish a new connection: [Errno 111] Connection refused")).toContain('Errno 111');
+    expect(unreachable('error: Request failed after 3 retries\n  Caused by: dns error: failed to lookup address information')).toContain('dns error');
     expect(unreachable('AssertionError: expected 1 to be 2')).toBeUndefined();
   });
 

@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Exec } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { SHA } from '../adapters/workspace/git-workspaces.js';
@@ -6,7 +8,7 @@ import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } 
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
-import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, zFields, type CloneGit } from './clean-verify.js';
+import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, within, zFields, type CloneGit } from './clean-verify.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
@@ -60,7 +62,7 @@ export interface DryRunRequest {
   originUrl: string;
   /** A commit given; absent, the forge's default branch. */
   sha?: string;
-  /** On the host, empty, and the caller's to remove: the clone the sandboxes mount. */
+  /** On the host, empty, and the caller's to remove: the clone the sandboxes mount is in its `clone/`, the host git's config beside it. */
   workDir: string;
   /** The workflow's (`workspace.setup`, `jobs.dev.verify`): what the commit's `.factory/config.yml` does not declare. */
   setup: readonly string[];
@@ -72,6 +74,7 @@ export interface DryRunRequest {
   knownFlaky?: readonly KnownFlaky[];
   now: () => number;
   log: (message: string) => void;
+  /** Each sandbox's, and each fetch from the forge's. */
   deadlineMs?: number;
   exec?: Exec;
 }
@@ -97,6 +100,8 @@ async function lockfilesAt(git: CloneGit, sha: string): Promise<Record<string, s
   return Object.fromEntries(entries.map((m) => [m[2]!, m[1]!]));
 }
 
+/** As a ticket's `verify`, unless the request says otherwise: each sandbox, and each fetch from the forge. */
+const DEADLINE_MS = VERIFY_TIMEOUT_MS + 60_000;
 const OUTPUT_MAX = 4000;
 const DETAIL_MAX = 300;
 const DEPENDENCY = `a dependency is missing, or younger than the ${RELEASE_AGE_DAYS} days the setup allows`;
@@ -108,7 +113,7 @@ const DEPENDENCY_LINES = [
   /Because there (?:is|are) no versions? of \S+|was not found in the package registry/,
   /No matching distribution found for \S+|Could not find a version that satisfies the requirement/,
   /Couldn't find any versions for|Couldn't find package/,
-  /Cannot find (?:module|package) '(?![./])[^']+'/,
+  /Cannot find (?:module|package) '(?![./~]|@\/)[^']+'/,
   /ModuleNotFoundError: No module named/,
   /No solution found when resolving/,
 ];
@@ -133,7 +138,11 @@ const VARIABLE_LINES = [
 /** On the loopback, where the services listen; `:3128` is the egress proxy's relay, never a service. */
 const SERVICE_LINES = [/ECONNREFUSED (?:127\.0\.0\.1|localhost|::1|\[::1\])(?!:3128\b)(?::\d+)?/, /could not connect to (?:server|database)/i, /Is the server running/];
 /** A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. */
-const UNREACHABLE_LINES = [/\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/];
+const UNREACHABLE_LINES = [
+  /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
+  // pip's and uv's.
+  /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
+];
 const ERROR_LINE = /\b(?:error|fail(?:ed|ure)?|assert\w*|exception|traceback|panic)\b/i;
 
 const brief = (line: string) => line.trim().slice(0, DETAIL_MAX);
@@ -199,7 +208,9 @@ export function breaksOfRuns(runs: readonly CommandRun[], standing: Standing, de
 
 /** The forge's default branch into the clone, and the commit given when the fetch of it did not bring it. */
 async function fetchCommit(req: DryRunRequest, git: CloneGit, cloneDir: string): Promise<string> {
-  await fetchFromForge(req, cloneDir, [`+HEAD:${BASE}`], "the forge's default branch");
+  const fetch = (refspecs: string[], said: string) =>
+    within(fetchFromForge(req, cloneDir, refspecs, said), req.deadlineMs ?? DEADLINE_MS, `the forge no longer responds: ${said}`);
+  await fetch([`+HEAD:${BASE}`], "the forge's default branch");
   if (!req.sha) return git('rev-parse', '--verify', `${BASE}^{commit}`);
   const sha = req.sha;
   const held = async () => {
@@ -209,7 +220,7 @@ async function fetchCommit(req: DryRunRequest, git: CloneGit, cloneDir: string):
   const said = `the commit ${sha.slice(0, 12)}`;
   let found = await held();
   if (!found) {
-    await fetchFromForge(req, cloneDir, [sha], `${said} of the forge`);
+    await fetch([sha], `${said} of the forge`);
     found = await held();
   }
   if (!found) throw new Error(`${said} is not on the forge`);
@@ -232,9 +243,11 @@ async function fetchCommit(req: DryRunRequest, git: CloneGit, cloneDir: string):
 export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   if (req.sha !== undefined && !SHA.test(req.sha)) throw new Error(`${req.sha}: a full commit sha expected`);
   const startedAt = req.now();
-  const sandboxes = withDeadline(req.sandboxes, req.deadlineMs ?? VERIFY_TIMEOUT_MS + 60_000);
+  const sandboxes = withDeadline(req.sandboxes, req.deadlineMs ?? DEADLINE_MS);
   const inBox = boxOpener(sandboxes, { runId: req.runId, ticketId: req.projectId, log: req.log });
-  const cloneDir = req.workDir;
+  // Beside the host git's own config (`cloneGit` writes it in `workDir`), never in the tree the sandboxes mount.
+  const cloneDir = join(req.workDir, 'clone');
+  mkdirSync(cloneDir);
   const git = cloneGit(req, cloneDir);
   await initHardenedClone(git);
   const sha = await fetchCommit(req, git, cloneDir);
@@ -257,7 +270,7 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   const unprovided = req.sandboxes.unprovided([...new Set(config.services)]);
   if (unprovided.length) {
     const detail = `${unprovided.join(', ')}: declared under \`services\` in ${REPO_CONFIG_PATH}, and no sandbox backend of this factory provides ${unprovided.length === 1 ? 'it' : 'them'}`;
-    return dryRun([{ kind: 'service', step: 'config', command: REPO_CONFIG_PATH, detail, output: '' }], setup, commands);
+    return dryRun([{ kind: 'service', step: 'config', command: REPO_CONFIG_PATH, detail, output: '' }], setup, []);
   }
   await inBox('prepare', cloneDir, [], async (id) => {
     // `-c`: the clone's config is ours.
@@ -272,12 +285,14 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       await runSealedSetup(sandboxes, { runId: `${req.runId}-run`, ticketId: req.projectId, workspacePath: cloneDir, mounts: [], commands: setup, argv: verifyCommand, env, secrets: {}, services: config.services, now: new Date(req.now()) });
     } catch (err) {
       if (!(err instanceof SetupFailure)) throw err;
-      if (err.exitCode === null) return dryRun([{ kind: 'failure', step: 'setup', command: err.command, detail: err.message, output: logExcerpt(err.output, OUTPUT_MAX) }], setup, commands);
-      const broke = breakOf('setup', err.command, err.output, config);
+      const broke: DryRunBreak = err.exitCode === null
+        ? { kind: 'failure', step: 'setup', command: err.command, detail: err.message, output: logExcerpt(err.output, OUTPUT_MAX) }
+        : breakOf('setup', err.command, err.output, config);
       // A registry or the proxy that did not answer says nothing of the repository: no dry run, as for the forge or the engine.
-      const down = broke.kind === 'failure' ? unreachable(err.output) : undefined;
+      // A dependency it then says is missing was not reached; a service of the repository's own that refuses is its own.
+      const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
       if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
-      return dryRun([broke], setup, commands);
+      return dryRun([broke], setup, []);
     }
   }
   const standing: Standing = { known: req.knownFlaky ?? [] };

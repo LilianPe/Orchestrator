@@ -24,7 +24,8 @@ result in the store:
    test that the runner's report names (vitest, jest, pytest) is run again once, as in `verify`.
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
-a `setup` that fails because a registry or the egress proxy did not answer (a connection refused or timed out, a 502), the
+a `setup` that fails because a registry or the egress proxy did not answer (a connection refused or timed out, a 502, pip's or
+uv's connection or DNS error), even when it then says a dependency is missing or the command ran past its cap, the
 repository's variables that cannot be read from `factory.yml`, no sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`
 are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
@@ -39,7 +40,7 @@ command, an excerpt of its output, and a detail line, classified as:
 | `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but the egress proxy's relay, `:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
 | `variable` | a variable the code asks for that `.factory/config.yml` does not declare under `env`. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
-| `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap, a test that fails again | its first error line |
+| `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap (a registry not answering aside), a test that fails again | its first error line |
 
 The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
 command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only

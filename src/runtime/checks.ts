@@ -191,7 +191,8 @@ export abstract class DaemonChecks extends DaemonBase {
     const { sandboxes, runsDir, originUrl, runnerImage } = this.d;
     if (!sandboxes || !runsDir || !originUrl || !runnerImage) throw new Error('a dry run runs in the sandboxes: FACTORY_CONTAINER_CLI and FACTORY_RUNNER_IMAGE are required');
     const id = `dry-${randomUUID()}`;
-    const workDir = join(runsDir, id, 'dry-run');
+    const runDir = join(runsDir, id);
+    const workDir = join(runDir, 'dry-run');
     mkdirSync(workDir, { recursive: true });
     try {
       const run = await (this.d.dryRunner ?? runDryRun)({
@@ -215,7 +216,7 @@ export abstract class DaemonChecks extends DaemonBase {
       this.log('info', `dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : `red (${run.breaks.map((b) => b.kind).join(', ')})`}`);
       return run;
     } finally {
-      await rm(workDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `dry run of ${projectId}: ${workDir} not removed: ${err.message}`));
+      await rm(runDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `dry run of ${projectId}: ${runDir} not removed: ${err.message}`));
     }
   }
 
