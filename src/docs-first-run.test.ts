@@ -8,7 +8,7 @@ const root = join(import.meta.dirname, '..');
 const guide = readFileSync(join(root, 'docs/first-run.md'), 'utf8');
 const cli = readFileSync(join(root, 'src/cli/factory.ts'), 'utf8');
 
-/** The commands the CLI dispatches, each with the flags its usage line names, and those `parseArgs` accepts. */
+/** The commands of the CLI's usage, each with the flags its line names, and the flags `parseArgs` accepts. */
 function cliDefinitions(source: string) {
   const usage = /const USAGE = `([\s\S]*?)`;/.exec(source)?.[1] ?? '';
   const usageFlags = new Map<string, Set<string>>();
@@ -20,10 +20,10 @@ function cliDefinitions(source: string) {
   }
   // Those with a parser of their own are dispatched before parseArgs, on process.argv[2].
   const ownParser = new Set([...source.matchAll(/process\.argv\[2\] === '([\w-]+)'/g)].map((m) => m[1]!));
-  const switched = new Set([...source.matchAll(/case '([\w-]+)':/g)].map((m) => m[1]!));
-  const options = /parseArgs\(\{[\s\S]*?options: \{([^\n]*)\}/.exec(source)?.[1] ?? '';
-  const parsed = new Set([...options.matchAll(/'?([\w-]+)'?: \{ type:/g)].map((m) => `--${m[1]}`));
-  return { usageFlags, ownParser, switched, parsed };
+  // The options object, on one line or several.
+  const options = /parseArgs\(\{[\s\S]*?options: \{([\s\S]*?)\},?\s*\}\)/.exec(source)?.[1] ?? '';
+  const parsed = new Set([...options.matchAll(/'?([\w-]+)'?: \{\s*type:/g)].map((m) => `--${m[1]}`));
+  return { usageFlags, ownParser, parsed };
 }
 
 const defs = cliDefinitions(cli);
@@ -33,9 +33,8 @@ function problem(line: string): string | undefined {
   const [, cmd, rest = ''] = /^factory(?:\s+([^\s-][^\s]*))?(.*)$/.exec(line) ?? [];
   // `factory` alone prints the help; with a flag, parseArgs refuses it.
   if (cmd === undefined) return rest.trim() ? `${line}: no command before ${rest.trim()}` : undefined;
-  const dispatched = defs.ownParser.has(cmd) || defs.switched.has(cmd);
   const usage = defs.usageFlags.get(cmd);
-  if (!dispatched || !usage) return `${line}: \`${cmd}\` is not a command of src/cli/factory.ts`;
+  if (!usage) return `${line}: \`${cmd}\` is not a command of src/cli/factory.ts`;
   for (const flag of rest.match(/--[\w-]+/g) ?? []) {
     if (!usage.has(flag)) return `${line}: ${flag} is not in the usage of \`${cmd}\``;
     if (!defs.ownParser.has(cmd) && !defs.parsed.has(flag)) return `${line}: ${flag} is not a parseArgs option`;

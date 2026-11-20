@@ -20,7 +20,7 @@ Nothing below can be skipped for a real run: without a container engine nothing 
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
 | 9 | **The runner image**, built from this repository | `podman build -f docker/runner.Dockerfile -t localhost/factory-runner docker` | `FACTORY_RUNNER_IMAGE=localhost/factory-runner` |
 | 10 | **Postgres** (optional locally) | Outside production the daemon uses SQLite (`FACTORY_HOME/factory.db`) when no URL is set. To run on Postgres as the server will, a database of its own (never the test suites' one). | `FACTORY_DATABASE_URL=postgres://user:password@host:5432/database` |
-| 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With Armand alone as validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `config.yaml`: `projects[].authz.validators` |
+| 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `config.yaml`: `projects[].authz.validators` |
 | 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `config.yaml`: `projects[].authz.githubLogins` (Linear id → GitHub login) |
 
 Also on the machine: Node 24.22.1+, git, `gh` 2.50+ and `claude` ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
@@ -69,7 +69,7 @@ It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME
 ```yaml
 projects:
   - id: pilot
-    repoPath: /home/armand/code/pilot
+    repoPath: /home/<user>/code/pilot
     linearTeamKey: PIL
     authz:
       validators: [<linear id of validator 1>, <linear id of validator 2>]
@@ -156,7 +156,7 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 
 | Output | Cause | Fix |
 |---|---|---|
-| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell | export it (step 2) |
+| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell (`factory plan` says the same) | run it in the daemon's environment (step 2) |
 | `invalid factory.yml:` then `claude.default_model: required` or `` claude.runtime: only `claude-code` exists `` | the `claude` section | as in step 2 |
 | `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml` nor in `config.yaml`, and no `GH_APP_*` | item 4 |
 | `Cannot read the repository's branch naming: unreadable default branch (origin/main): origin/HEAD is not set …` | clone without `origin/HEAD` | `git remote set-head origin --auto` |
@@ -188,7 +188,7 @@ factory up
 The lines to read in its log (taken from a start on a scratch repository):
 
 ```text
-[factoryd] store: SQLite (/home/armand/.factory/factory.db)        # or: store: Postgres (Drizzle migrations applied)
+[factoryd] store: SQLite (/home/<user>/.factory/factory.db)        # or: store: Postgres (Drizzle migrations applied)
 [factoryd] Disabled in factory.yml: budgets.per_step_tokens.
 [factoryd] GitHub forge: GitHub App <id> (installation tokens limited to the run's repository, installation resolved per repository)
 [factoryd] Linear not connected: open http://localhost:4100/oauth/start
@@ -235,5 +235,4 @@ A blocked ticket waits for a human: reply on the ticket (comment or session) and
 ## Troubleshooting
 
 - **`factory status` says `Orchestrator did not answer through …/cli/factory.sock (connect EINVAL …)`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes). `status`, `pause`, `resume` and `stop` then fail; use a shorter `FACTORY_HOME` and restart the daemon.
-- **`factory plan` or `factory doctor` say `the environment variable … is not set`**: they read `factory.yml` with the shell's environment; run them in the daemon's.
 - More: [`operations.md`](operations.md#troubleshooting).
