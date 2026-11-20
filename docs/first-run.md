@@ -62,7 +62,7 @@ commands:
   test: npm test
 ```
 
-Commit that file on the default branch through a PR, merged: the factory reads it there, never in a working copy. Then `git fetch` in the clone, so `origin/HEAD` has it. If `init` warns that there is no `commands.test`, add one before going on.
+Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
 It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay) and `FACTORY_HOME/secrets.json` (mode `0600`). Now add by hand, in `config.yaml`, the roles of items 11 and 12:
 
@@ -77,7 +77,7 @@ projects:
         <linear id of the delegator>: <their github login>
 ```
 
-And create `FACTORY_HOME/factory.yml`, read only by `factory up`, `factory doctor` and `factory plan`, with the daemon's environment:
+And create `FACTORY_HOME/factory.yml`, read by `factory up`, `factory doctor` and `factory plan` with the daemon's environment, and by `factory validate` for its budgets, `max_diff` and tools:
 
 ```yaml
 github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }
@@ -101,6 +101,9 @@ export GH_APP_KEY=$HOME/.factory/github-app.pem
 export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
 export FACTORY_CONTAINER_CLI=podman
 export FACTORY_RUNNER_IMAGE=localhost/factory-runner
+# outside a desktop login session (a dev container, ssh), rootless Podman needs the systemd user session's:
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
 # optional: export FACTORY_DATABASE_URL=postgres://…
 ```
 
@@ -112,13 +115,13 @@ export FACTORY_RUNNER_IMAGE=localhost/factory-runner
 factory validate
 ```
 
-Expected: `.factory/config.yml valid: it only adds checks or prohibitions to the baseline.`, the tools of each agent step, and, with the budgets above, `No worst case of factory/default in tokens: budgets.per_step_tokens is disabled.`, exit code `0`.
+Expected: `.factory/config.yml valid: it only adds checks or prohibitions to the baseline.`, `Disabled in factory.yml: budgets.per_step_tokens.`, the tools of each agent step, and, with the budgets above, `No worst case of factory/default in tokens: budgets.per_step_tokens is disabled.`, exit code `0`.
 
 If it breaks:
 
 - `Budgets of factory/default refused:` then one `not set` line per step: `factory.yml` has no `budgets`, or not in the daemon's `FACTORY_HOME`.
 - `worst case … exceeds budgets.per_ticket_tokens`: per-step caps whose worst case passes the ticket cap; raise the ticket cap, or lower the step caps.
-- `invalid factory.yml:` then `claude.default_model: required`, `` claude.runtime: only `claude-code` exists ``, or `the environment variable … is not set`: the file, or the shell's environment.
+- `factory.yml refused:`: its `budgets`, `max_diff` or `tools`, the only sections `validate` reads. The rest of the file (`claude`, `github`, the `env:` references) is checked by `factory doctor` and `factory up`.
 
 ### `factory doctor`
 
@@ -153,12 +156,14 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 
 | Output | Cause | Fix |
 |---|---|---|
-| `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | item 4 not in this shell | export `GH_APP_ID` and `GH_APP_KEY`, or fill `github` |
+| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell | export it (step 2) |
+| `invalid factory.yml:` then `claude.default_model: required` or `` claude.runtime: only `claude-code` exists `` | the `claude` section | as in step 2 |
+| `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml` nor in `config.yaml`, and no `GH_APP_*` | item 4 |
 | `Cannot read the repository's branch naming: unreadable default branch (origin/main): origin/HEAD is not set …` | clone without `origin/HEAD` | `git remote set-head origin --auto` |
 | `Host: refused — no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox` | item 8 | export `FACTORY_CONTAINER_CLI=podman` |
 | `Host: refused — cannot read the cgroups of the engine (podman info): spawn podman ENOENT` | Podman not installed, or not on the `PATH` | install it |
 | `Host: refused — no cgroup v2: …` | the host is on cgroups v1 or the hybrid layout | boot on the unified cgroup v2 hierarchy |
-| `Host: refused — rootless podman on the cgroupfs cgroup manager ignores the limits: …` or `podman cannot limit through the … controller(s), not delegated to its user …` | no systemd user session, controllers not delegated | `sudo loginctl enable-linger <user>`, log in again ([`tests.md`](tests.md)) |
+| `Host: refused — rootless podman on the cgroupfs cgroup manager ignores the limits: …` or `podman cannot limit through the … controller(s), not delegated to its user …` | no systemd user session, controllers not delegated | `sudo loginctl enable-linger <user>`, then `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` as in step 2 ([`tests.md`](tests.md)) |
 | `Default branch: refused — Cannot read the protection of the default branch: GitHub API GET /repos/<owner>/<repo>/installation: 404 Integration not found` | the App is not installed on this repository (or a wrong App ID) | item 4: install it |
 | `Default branch main: refused — …` | no ruleset requiring a pull request, or the App in its bypass list | item 3 |
 | `verdict: refused` under a workflow | a CI job sees a secret or a writable `GITHUB_TOKEN` on the factory's branches (`feat/*`, `fix/*`) | protect that job with an environment with required reviewers, or declare `permissions:` read only ([`github.md`](github.md#rule)) |
@@ -184,6 +189,7 @@ The lines to read in its log (taken from a start on a scratch repository):
 
 ```text
 [factoryd] store: SQLite (/home/armand/.factory/factory.db)        # or: store: Postgres (Drizzle migrations applied)
+[factoryd] Disabled in factory.yml: budgets.per_step_tokens.
 [factoryd] GitHub forge: GitHub App <id> (installation tokens limited to the run's repository, installation resolved per repository)
 [factoryd] Linear not connected: open http://localhost:4100/oauth/start
 [factoryd] GitHub webhooks refused: neither github.webhookSecret nor GH_WEBHOOK_SECRET; only the PR poll every 30 s follows GitHub.
@@ -228,6 +234,6 @@ A blocked ticket waits for a human: reply on the ticket (comment or session) and
 
 ## Troubleshooting
 
-- **`factory status` says the daemon did not answer through `…/cli/factory.sock`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes); use a shorter `FACTORY_HOME`. The CLI falls back to HTTP on the loopback all the same.
-- **`factory plan` or `factory doctor` say a variable is not set**: they read `factory.yml` with the shell's environment; run them in the daemon's.
+- **`factory status` says `Orchestrator did not answer through …/cli/factory.sock (connect EINVAL …)`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes). `status`, `pause`, `resume` and `stop` then fail; use a shorter `FACTORY_HOME` and restart the daemon.
+- **`factory plan` or `factory doctor` say `the environment variable … is not set`**: they read `factory.yml` with the shell's environment; run them in the daemon's.
 - More: [`operations.md`](operations.md#troubleshooting).

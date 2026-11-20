@@ -31,7 +31,8 @@ const defs = cliDefinitions(cli);
 /** Why a quoted command line does not exist in the CLI, or undefined when it does. */
 function problem(line: string): string | undefined {
   const [, cmd, rest = ''] = /^factory(?:\s+([^\s-][^\s]*))?(.*)$/.exec(line) ?? [];
-  if (cmd === undefined) return undefined; // `factory` alone prints the help
+  // `factory` alone prints the help; with a flag, parseArgs refuses it.
+  if (cmd === undefined) return rest.trim() ? `${line}: no command before ${rest.trim()}` : undefined;
   const dispatched = defs.ownParser.has(cmd) || defs.switched.has(cmd);
   const usage = defs.usageFlags.get(cmd);
   if (!dispatched || !usage) return `${line}: \`${cmd}\` is not a command of src/cli/factory.ts`;
@@ -42,18 +43,21 @@ function problem(line: string): string | undefined {
   return undefined;
 }
 
+const SHELLS = ['bash', 'sh', 'shell', 'console'];
+
 /**
- * The `factory` commands the guide quotes: inline code that starts with `factory `, and the lines of shell blocks that do,
- * their comment and what follows a `&&`, `;` or `|` left out.
+ * The `factory` commands the guide quotes: inline code that starts with `factory `, and the lines of shell blocks that do
+ * (a `$ ` prompt dropped), their comment and what follows a `&&`, `;` or `|` left out.
  */
 function quotedCommands(markdown: string): string[] {
   const found: string[] = [];
   const fences = /^```(\w*)\n([\s\S]*?)^```/gm;
   for (const [, lang, body] of markdown.matchAll(fences)) {
-    if (lang !== 'bash') continue;
+    if (!SHELLS.includes(lang!)) continue;
     for (const line of body!.split('\n')) {
       for (const part of line.replace(/#.*$/, '').split(/&&|;|\|/)) {
-        if (/^factory(\s|$)/.test(part.trim())) found.push(part.trim());
+        const cmd = part.trim().replace(/^\$\s+/, '');
+        if (/^factory(\s|$)/.test(cmd)) found.push(cmd);
       }
     }
   }
@@ -86,6 +90,9 @@ describe('docs/first-run.md', () => {
     expect(problem('factory validate')).toBeUndefined();
     expect(problem('factory pause')).toBeUndefined();
     expect(problem('factory resume')).toBeUndefined();
+    expect(problem('factory --json')).toMatch(/no command before --json/);
+    expect(problem('factory')).toBeUndefined();
+    expect(quotedCommands('```sh\n$ factory dry-run\n```')).toEqual(['factory dry-run']);
     expect(quotedCommands('```bash\nfactory up --nope   # comment: factory nothing\n```\nand `factory stop <ID>`')).toEqual(['factory up --nope', 'factory stop <ID>']);
   });
 });
