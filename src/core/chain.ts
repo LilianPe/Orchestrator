@@ -95,7 +95,12 @@ export function delegatedJob(wf: Workflow): JobSpec | undefined {
  * `factory/default`. A ticket at one of them is not at work on the code yet, whatever status a delegation again left it in.
  */
 export function beforeInProgress(wf: Workflow, id: string): boolean {
-  for (let s = stepById(wf, wf.entry); s && STEP_STATUS[s.id] !== 'dev'; s = stepById(wf, s.next)) if (s.id === id) return true;
+  const before: string[] = [];
+  for (let s = stepById(wf, wf.entry); s; s = stepById(wf, s.next)) {
+    if (STEP_STATUS[s.id] === 'dev') return before.includes(id);
+    before.push(s.id);
+  }
+  // A chain where no step shows In Progress (its entry past it): none comes before it.
   return false;
 }
 

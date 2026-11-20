@@ -1050,20 +1050,27 @@ const humanFeedback = (event: FactoryEvent, ticket: TicketState, workflow: Workf
  * counter. Not while its active step comes before the one that shows In Progress (ORC-422): a ticket delegated again from
  * In Progress keeps that status through its intake and its spec, where the message waits for the step at work, as in Todo.
  */
-const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => {
-  const step = activeStep(ticket, workflow);
-  return step && beforeInProgress(workflow, step) ? undefined : reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
-};
+const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
+  beforeBuild(ticket, workflow, event.at) ? undefined : reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
+
+/** The ticket's active step comes before the one that shows In Progress (ORC-422), whatever its status. */
+function beforeBuild(ticket: TicketState, workflow: Workflow, at: number): boolean {
+  const step = activeStep(ticket, workflow, at);
+  return !!step && beforeInProgress(workflow, step);
+}
 
 /**
- * The step the ticket is at (ORC-422): its run's, the launch's, the waiting job's, the one its `clarify` questions or its
- * blockers hold back, else the spec's while it waits for its review or a new draft. None when nothing tells it: a check, or
- * nothing at work.
+ * The step the ticket is at (ORC-422): its run's, the launch's while its hold lasts, the waiting job's, the one its `clarify`
+ * questions or its blockers hold back; else the spec's while it waits for its review or a new draft, and the step that drafts
+ * it while a delegation again cleared the last one (`null`) and none is drafted yet. None when nothing tells it: a check, a
+ * start the queue holds on a ticket that never had a spec, or nothing at work.
  */
-function activeStep(ticket: TicketState, workflow: Workflow): string | undefined {
-  const job = ticket.activeJob ?? ticket.launching?.start.job ?? ticket.pendingJob?.job ?? ticket.clarify?.job ?? ticket.waitingOn?.start.job;
+function activeStep(ticket: TicketState, workflow: Workflow, at: number): string | undefined {
+  const launch = ticket.launching && ticket.launching.until > at ? ticket.launching.start.job : undefined;
+  const job = ticket.activeJob ?? launch ?? ticket.pendingJob?.job ?? ticket.clarify?.job ?? ticket.waitingOn?.start.job;
   if (job) return stepOf(workflow, job);
   const spec = ticket.spec;
+  if (spec === null) return workflow.preset.steps.find((s) => s.type === 'agent_step' && s.writes === 'spec')?.id;
   return spec && (!spec.approval || spec.drafting) ? stepOf(workflow, spec.job) : undefined;
 }
 
@@ -2336,6 +2343,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const waits = heldByWait(ticket, job);
       if (waits) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${waits}`);
+        return out;
+      }
+      // Armed In Progress, before a delegation again took the ticket back to its intake or its spec: the step at work keeps the instruction (ORC-422).
+      if (job.name === DEV_FEEDBACK && ticket && beforeBuild(ticket, workflow, event.at)) {
+        out.trace.push(`timer.fired debounce: ${job.name} not started, the ticket is not at work on the code yet`);
         return out;
       }
       // Armed in Human Review, a round of human feedback starts there only: the ticket moved since (Done, In Progress) keeps the feedback.
