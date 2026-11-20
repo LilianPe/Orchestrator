@@ -53,7 +53,7 @@ export class ActivityRelay {
     if (a) this.pushActivity(a);
   }
 
-  /** An activity already composed (`composedActivity`), as the orchestrator does once for the dashboard too (ORC-301). */
+  /** An activity already composed (`composedActivity`), as the daemon does once for the dashboard too (ORC-301). */
   pushActivity(a: ActivityInput): void {
     this.pending = a;
     const wait = this.last + this.intervalMs - this.now();

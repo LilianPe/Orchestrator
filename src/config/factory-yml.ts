@@ -37,7 +37,7 @@ export interface FactoryYml {
   /** Tickets worked at once: the dev queue's capacity (ORC-203), the only one since the workflow's `parallel_sessions` went (ORC-390). */
   concurrency?: number;
   /**
-   * `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the orchestrator (ORC-340).
+   * `max_turns` and `per_step_tokens` are applied by `stepSettings` (ORC-136); `per_ticket_tokens` and `on_usage_limit` by the daemon (ORC-340).
    * A token cap `off` is disabled (ORC-381), `budgets: off` both: unlike a cap left unset, `factory validate` accepts it. `on_usage_limit` is no cap of the factory's.
    */
   budgets?: { perStepTokens?: Record<string, number> | 'off'; perTicketTokens?: number | 'off'; maxTurns?: Record<string, number>; onUsageLimit?: 'wait' };
@@ -179,7 +179,7 @@ export function stepSettings(yml: FactoryYml | undefined): StepSettings {
   return { effort: yml?.claude?.effort, budgets: yml?.budgets && { ...budgets, ...(perStepTokens === 'off' ? {} : { perStepTokens }) }, tools: yml?.tools };
 }
 
-/** The ticket's token cap the orchestrator applies (ORC-340): none when it is unset or `off` (ORC-381). */
+/** The ticket's token cap the daemon applies (ORC-340): none when it is unset or `off` (ORC-381). */
 export function ticketCapOf(yml: Pick<FactoryYml, 'budgets'> | undefined): number | undefined {
   const cap = yml?.budgets?.perTicketTokens;
   return cap === 'off' ? undefined : cap;

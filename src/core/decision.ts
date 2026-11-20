@@ -6,7 +6,7 @@ import type { VisualProof } from '../checks/visual-proof.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
-/** An action outside the ticket state, carried out by the orchestrator (later: the outbox). */
+/** An action outside the ticket state, written to the outbox with the decision and carried out by its executors (ORC-150). */
 export type Effect =
   /** `sensitivePaths`: set on a run started from an untrusted event, the mark that makes the branch untrusted (`SENSITIVE_PATHS`, ORC-338). */
   /** `relaunchOf`: the lost attempt whose step this starts again (ORC-220): what it read and its session come from its record. */

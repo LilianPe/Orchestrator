@@ -73,7 +73,7 @@ export interface DaemonDeps {
    */
   captureHost?: ArtifactHost;
   /**
-   * The policy in front of every text the orchestrator publishes (ORC-214): its comments and activities, the PR's text. Absent: one
+   * The policy in front of every text the daemon publishes (ORC-214): its comments and activities, the PR's text. Absent: one
    * without gitleaks, for a test or the fake runner's daemon; the daemon's scans in its sandboxes.
    */
   outputPolicy?: OutputPolicy;
@@ -271,13 +271,13 @@ export class Daemon extends DaemonLaunch {
     return this.replayInbox();
   }
 
-  /** A result the orchestrator produces itself (a check, a run lost): `deliver`ed to the inbox. */
+  /** A result the daemon produces itself (a check, a run lost): `deliver`ed to the inbox. */
   protected submitResult(event: FactoryEvent): Promise<void> {
     return this.deliver(event.id, `event ${event.id} (${event.type})`, async () => void (await this.accept(event)));
   }
 
   /**
-   * For the results the orchestrator produces itself (run finished, checks): nobody resends them, so a failed write is
+   * For the results the daemon produces itself (run finished, checks): nobody resends them, so a failed write is
    * retried with a short backoff. Still failing transiently (`isTransient`: the database down), it is kept and written
    * again at each beat, with no bound but this process's life (ORC-343): the ticket and its slot go on once the database
    * is back. A permanent failure gives up with an error (the run's slot is then held until `recover()` at the next
