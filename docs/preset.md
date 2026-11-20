@@ -87,7 +87,7 @@ A repository no longer overrides them: its `.factory/workflow.yml`, where `verif
 
 ## Resuming the blocked step (ORC-196)
 
-A human reply on a Blocked ticket relaunches the step where it got blocked, not `dev-feedback`. The block remembers its job (`blockedJob`, from `ticket.blocked`), which the engine launches instead of the reaction's job, with the reply as input. The reaction to a reply on a blocked ticket (`resumeBlocked`, on `session.prompted` and `ticket.commented`) is still what lets the reply through. ORC-180's classification comes first: an instruction or a question from the ticket's session relaunches, a command (`/status`, `/stop`) relaunches nothing, a question from another thread gets its answer there and does not lift the block.
+A human reply on a Blocked ticket relaunches the step where it got blocked, not `dev-feedback`. The block remembers its job (`blockedJob`, from `ticket.blocked`), which the engine launches instead of the reaction's job, with the reply as input. A run published while the ticket was blocked (ORC-403) hands its next step to the block instead (`nextJob`, ORC-416): the reply starts that step as it would have started, the reply left for the agent in the human inbox, and the repair of a dead letter or the green CI that lifts the red-CI bound starts it too. The reaction to a reply on a blocked ticket (`resumeBlocked`, on `session.prompted` and `ticket.commented`) is still what lets the reply through. ORC-180's classification comes first: an instruction or a question from the ticket's session relaunches, a command (`/status`, `/stop`) relaunches nothing, a question from another thread gets its answer there and does not lift the block.
 
 A reply resumes a job, the one of the step that blocked: a step without an agent is not resumed on its own. Hence what resuming can do today:
 
@@ -385,7 +385,7 @@ What a human's event, or a fact of the PR, starts or does is coded in `decide` (
 | -- | -- | -- | -- |
 | `onDelegated` | `ticket.delegated` | the ticket in Todo or In Progress, not blocked (any status at the Rapide level) | starts the job of the chain's entry, the preset's: `intake` (ORC-395) |
 | `reviewAgain` | `status.changed` to AI Review | a human's move; a merge refused for a push since the review reads it too (ORC-148) | starts the review again on the published commit, the first lens of the preset's review |
-| `resumeBlocked` | `session.prompted`, `ticket.commented` | the ticket blocked | at once, the blocked step's job (`blockedJob`, [resuming](#resuming-the-blocked-step-orc-196)), `dev-feedback` for a block with no step of its own; lifts the block |
+| `resumeBlocked` | `session.prompted`, `ticket.commented` | the ticket blocked | at once, the next step handed to the block (`nextJob`, ORC-416), else the blocked step's job (`blockedJob`, [resuming](#resuming-the-blocked-step-orc-196)), `dev-feedback` for a block with no step of its own; lifts the block |
 | `humanFeedback` | `session.prompted`, an instruction in `session.mentioned`, `pr.reviewed` | the ticket in Human Review | after the regrouping (`regroup`: 3 min), the job of the merge gate's `onFailure` (`fix-human`: the fix for the cause `human`), a round of human feedback (ORC-190) |
 | `instruction` | `session.prompted`, an instruction in `session.mentioned` | the ticket In Progress, its active step not before the one that shows In Progress (ORC-422) | after the regrouping, `dev-feedback`, no round of any counter (ORC-180) |
 | `askQuestion` | `session.mentioned` | always | the answer agent, `ask`, at once (ORC-182) |
