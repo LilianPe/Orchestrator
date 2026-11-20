@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, type ReactionLink } from './chain.js';
+import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, type ReactionLink } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
@@ -1045,9 +1045,27 @@ const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workf
 const humanFeedback = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
   hasHumanRounds(workflow) ? reaction(1, linked(workflow, 'humanFeedback'), event, ticket, regroupMs(workflow)) : undefined;
 
-/** An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any counter. */
-const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
+/**
+ * An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any
+ * counter. Not while its active step comes before the one that shows In Progress (ORC-422): a ticket delegated again from
+ * In Progress keeps that status through its intake and its spec, where the message waits for the step at work, as in Todo.
+ */
+const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined => {
+  const step = activeStep(ticket, workflow);
+  return step && beforeInProgress(workflow, step) ? undefined : reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
+};
+
+/**
+ * The step the ticket is at (ORC-422): its run's, the launch's, the waiting job's, the one its `clarify` questions or its
+ * blockers hold back, else the spec's while it waits for its review or a new draft. None when nothing tells it: a check, or
+ * nothing at work.
+ */
+function activeStep(ticket: TicketState, workflow: Workflow): string | undefined {
+  const job = ticket.activeJob ?? ticket.launching?.start.job ?? ticket.pendingJob?.job ?? ticket.clarify?.job ?? ticket.waitingOn?.start.job;
+  if (job) return stepOf(workflow, job);
+  const spec = ticket.spec;
+  return spec && (!spec.approval || spec.drafting) ? stepOf(workflow, spec.job) : undefined;
+}
 
 /** A mention asks a question: the answer agent, at once (ORC-182). The memory in writing sleeps (ORC-193): a `retiens` is a message as any other. */
 const askQuestion = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined => reaction(0, named(workflow, ASK), event, ticket);
