@@ -109,6 +109,16 @@ export const DEFAULT_MATRIX: AuthzMatrix = {
   take_over: dashboardRow('taking over a run'),
 };
 
+/**
+ * How many designated validators a project needs for its spec gate to pass every ticket (ORC-421): none when another role can
+ * approve, one more when the initiator of a run, who may be a validator, is refused.
+ */
+export function validatorsNeeded(matrix: AuthzMatrix = DEFAULT_MATRIX): number {
+  const row = matrix.validate_spec;
+  if (!row.anyOf.every((roles) => roles.includes('validator'))) return 0;
+  return row.neverInitiator ? 2 : 1;
+}
+
 export interface AuthzRequest {
   action: AuthzAction;
   channel: Channel;
