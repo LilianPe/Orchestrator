@@ -90,6 +90,23 @@ export function delegatedJob(wf: Workflow): JobSpec | undefined {
   return entry && jobStarting(wf, entry);
 }
 
+/**
+ * Step `id` comes in the chain before the step that shows In Progress (ORC-422): intake, the spec, the tests for
+ * `factory/default`. A ticket at one of them is not at work on the code yet, whatever status a delegation again left it in.
+ */
+export function beforeInProgress(wf: Workflow, id: string): boolean {
+  let seen = false;
+  for (let s = stepById(wf, wf.entry); s; s = stepById(wf, s.next)) {
+    if (STEP_STATUS[s.id] === 'dev') return seen;
+    seen ||= s.id === id;
+  }
+  // A chain where no step shows In Progress (its entry past it): none comes before it.
+  return false;
+}
+
+/** The step of the preset that drafts the spec (ORC-212), if it has one. */
+export const specStep = (wf: Workflow): string | undefined => wf.preset.steps.find((s) => s.type === 'agent_step' && s.writes === 'spec')?.id;
+
 /** The move the launch of `job` makes: the chain's entry shows its status from its first run on. */
 export function startMove(wf: Workflow, job: JobSpec): LogicalState | undefined {
   return wf.level !== 'rapide' && job.step !== undefined && job.step === wf.entry ? STEP_STATUS[job.step] : undefined;

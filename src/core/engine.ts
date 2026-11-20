@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, type ReactionLink } from './chain.js';
+import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, type ReactionLink } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
@@ -14,7 +14,7 @@ import { factoryDefault } from '../presets/factory-default.js';
 import { FANTOME_APPROVER } from '../presets/fantome.js';
 import { PRODUCT_NAME } from '../product.js';
 import { CUT_RELAUNCHES, CUT_WINDOW_MS } from '../store/types.js';
-import { isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
+import { heldByOther, isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
@@ -1082,9 +1082,31 @@ const resumeBlocked = (event: FactoryEvent, ticket: TicketState, workflow: Workf
 const humanFeedback = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
   hasHumanRounds(workflow) ? reaction(1, linked(workflow, 'humanFeedback'), event, ticket, regroupMs(workflow)) : undefined;
 
-/** An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any counter. */
+/**
+ * An instruction while the ticket is In Progress (ORC-180): `dev-feedback` resumes the session once regrouped, no round of any
+ * counter. Not while its active step comes before the one that shows In Progress (ORC-422): a ticket delegated again from
+ * In Progress keeps that status through its intake and its spec, where the message waits for the step at work, as in Todo.
+ */
 const instruction = (event: FactoryEvent, ticket: TicketState, workflow: Workflow): Reaction | undefined =>
-  reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
+  beforeBuild(ticket, workflow, event.at) ? undefined : reaction(2, named(workflow, DEV_FEEDBACK), event, ticket, regroupMs(workflow));
+
+/** The ticket's active step comes before the one that shows In Progress (ORC-422), whatever its status. */
+function beforeBuild(ticket: TicketState, workflow: Workflow, at: number): boolean {
+  const step = activeStep(ticket, workflow, at);
+  return !!step && beforeInProgress(workflow, step);
+}
+
+/**
+ * The step the ticket is at (ORC-422): of its run, launch, waiting job, `clarify` or wait on blockers; else of its spec while
+ * it waits for review or a new draft, or while a delegation again cleared it (`null`). None for a check or nothing at work.
+ */
+function activeStep(ticket: TicketState, workflow: Workflow, at: number): string | undefined {
+  const job = ticket.activeJob ?? heldByOther(ticket, at)?.start.job ?? ticket.pendingJob?.job ?? ticket.clarify?.job ?? ticket.waitingOn?.start.job;
+  if (job) return stepOf(workflow, job);
+  const spec = ticket.spec;
+  if (spec === null) return specStep(workflow);
+  return spec && (!spec.approval || spec.drafting) ? stepOf(workflow, spec.job) : undefined;
+}
 
 /** A mention asks a question: the answer agent, at once (ORC-182). The memory in writing sleeps (ORC-193): a `retiens` is a message as any other. */
 const askQuestion = (event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined => reaction(0, named(workflow, ASK), event, ticket);
@@ -2365,6 +2387,12 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       const waits = heldByWait(ticket, job);
       if (waits) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${waits}`);
+        return out;
+      }
+      // Armed In Progress, before a delegation again took the ticket back to its intake or its spec: the step at work keeps the instruction
+      // (ORC-422). A run, a waiting job or a wait on blockers held it above: what is left is a launch, `clarify` or the spec.
+      if (job.name === DEV_FEEDBACK && ticket && beforeBuild(ticket, workflow, event.at)) {
+        out.trace.push(`timer.fired debounce: ${job.name} not started, the ticket is not at work on the code yet`);
         return out;
       }
       // Armed in Human Review, a round of human feedback starts there only: the ticket moved since (Done, In Progress) keeps the feedback.
