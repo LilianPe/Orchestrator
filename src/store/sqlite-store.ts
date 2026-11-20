@@ -865,9 +865,8 @@ export class SqliteStore implements Store {
   }
 
   async lastDryRun(projectId: string, sha?: string): Promise<DryRun | undefined> {
-    const row = (sha === undefined
-      ? this.db.prepare("SELECT data FROM dry_runs WHERE project_id = ? AND target = 'main' ORDER BY ended_at DESC, rowid DESC LIMIT 1").get(projectId)
-      : this.db.prepare('SELECT data FROM dry_runs WHERE project_id = ? AND sha = ? ORDER BY ended_at DESC, rowid DESC LIMIT 1').get(projectId, sha)) as { data: string } | undefined;
+    const [which, args] = sha === undefined ? ["target = 'main'", [projectId]] : ['sha = ?', [projectId, sha]];
+    const row = this.db.prepare(`SELECT data FROM dry_runs WHERE project_id = ? AND ${which} ORDER BY ended_at DESC, rowid DESC LIMIT 1`).get(...args) as { data: string } | undefined;
     return row && (JSON.parse(row.data) as DryRun);
   }
 

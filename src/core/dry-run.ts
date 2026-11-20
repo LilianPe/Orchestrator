@@ -202,7 +202,7 @@ export function breaksOfRuns(runs: readonly CommandRun[], standing: Standing, de
     const breaks = flaky.map((t): DryRunBreak => ({ kind: 'flaky', step: 'command', command: run.command, detail: `${t.test} failed, then passed on its rerun`, output }));
     // `withoutIndicative` is set only when every failing test is a known flaky one, none of them counted.
     const onlyFlaky = flaky.length > 0 && flaky.length === counted.length && !run.notRerun && run.withoutIndicative === undefined;
-    return onlyFlaky ? breaks : [...breaks, { ...classifyBreak(run.output, 'command', declared), step: 'command', command: run.command, output }];
+    return onlyFlaky ? breaks : [...breaks, breakOf('command', run.command, run.output, declared)];
   });
 }
 
@@ -218,13 +218,12 @@ async function fetchCommit(req: DryRunRequest, git: CloneGit, cloneDir: string):
     return r.code === 0 ? r.stdout.trim() : undefined;
   };
   const said = `the commit ${sha.slice(0, 12)}`;
-  let found = await held();
-  if (!found) {
-    await fetch([sha], `${said} of the forge`);
-    found = await held();
-  }
-  if (!found) throw new Error(`${said} is not on the forge`);
-  return found;
+  const found = await held();
+  if (found) return found;
+  await fetch([sha], `${said} of the forge`);
+  const fetched = await held();
+  if (!fetched) throw new Error(`${said} is not on the forge`);
+  return fetched;
 }
 
 /**
