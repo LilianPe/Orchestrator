@@ -334,9 +334,11 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     });
 
     it('a command relaunches nothing: answered, the block kept', () => {
-      const out = decide(blockedOn('dev'), mention('command', writer), workflow);
+      const status = ev('session.mentioned', { linearSessionId: 's-m', body: '/status', author: 'Lilian', ack: true, kind: 'command' }, writer);
+      const out = decide(blockedOn('dev'), status, workflow);
       expect(starts(out)).toEqual([]);
       expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'response', linearSessionId: 's-m' }));
     });
   });
 
