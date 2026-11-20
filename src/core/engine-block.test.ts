@@ -278,7 +278,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     expect(mayCheck(comment({}), workflow)).toBe(true);
   });
 
-  describe('a mention answers the block as a reply does (ORC-415): never unblocked with no step running', () => {
+  describe('a mention answers the block as a reply does (ORC-415, ORC-426): never unblocked with no step running', () => {
     const writer = { actor: 'u-member', roles: ['team_member', 'repo_writer'] as readonly Role[] };
     const mention = (kind?: MessageKind, extra: Partial<FactoryEvent> = writer) =>
       ev('session.mentioned', { linearSessionId: 's-m', body: 'Pourquoi le tri ?', author: 'Lilian', ack: true, ...(kind ? { kind } : {}) }, extra);
@@ -286,6 +286,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     it.each([
       ['a question', mention('question')],
       ['a row with no class', mention()],
+      ['an instruction (ORC-426)', mention('instruction')],
     ])('%s starts the job that blocked, the mention kept for its agent, in its session, and says it resumes', (_what, event) => {
       const out = decide(blockedOn('dev'), event, workflow);
       expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
@@ -324,10 +325,18 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
     });
 
-    it('an instruction waits in the inbox, the block kept, as before', () => {
-      const out = decide(blockedOn('dev'), mention('instruction'), workflow);
+    it('an instruction needs the right to relaunch a block, as an instruction reply does (ORC-426)', () => {
+      const matrix = { ...DEFAULT_MATRIX, relaunch_blocked: { ...DEFAULT_MATRIX.relaunch_blocked, anyOf: [['maintainer' as const]] } };
+      const out = decide(blockedOn('dev'), mention('instruction'), workflow, matrix);
+      expect(out.trace.join()).toContain('authz: refused relaunch_blocked');
+      expect(out.events).toEqual([]);
       expect(starts(out)).toEqual([]);
-      expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
+    });
+
+    it('a command relaunches nothing: answered, the block kept', () => {
+      const out = decide(blockedOn('dev'), mention('command', writer), workflow);
+      expect(starts(out)).toEqual([]);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
     });
   });
 

@@ -1476,16 +1476,17 @@ function strandedPending(ticket: TicketState | undefined, workflow: Workflow): P
   return workflow.jobs[pending.job] ? pending : undefined;
 }
 
-/** A reply to a blocked ticket: it resumes the blocked step (ORC-196), a mention that answers the block as well (ORC-415). */
+/** A reply to a blocked ticket: it resumes the blocked step (ORC-196), a mention that answers the block as well (ORC-415, ORC-426). */
 const repliesToBlock = (event: FactoryEvent, ticket: TicketState | undefined): boolean => !!ticket?.blocked && (REPLIES.has(event.type) || mentionAnswersBlock(event, ticket));
 
 /**
  * A mention on a blocked ticket answers the block as a reply does (ORC-415): a question asked there would otherwise lift the
- * block for its answer alone, the blocked step never resumed. Not on a ticket no longer delegated, which no reply resumes (its
- * question is answered, its block kept), nor an instruction or a command, decided apart.
+ * block for its answer alone, the blocked step never resumed; an instruction resumes it as an instruction reply does (ORC-426).
+ * Not on a ticket no longer delegated, which no reply resumes (its question is answered, its block kept), nor a command, which
+ * relaunches nothing.
  */
 const mentionAnswersBlock = (event: FactoryEvent, ticket: TicketState | undefined): boolean =>
-  event.type === 'session.mentioned' && !!ticket?.blocked && ticket.delegated && event.payload.kind !== 'instruction' && event.payload.kind !== 'command';
+  event.type === 'session.mentioned' && !!ticket?.blocked && ticket.delegated && event.payload.kind !== 'command';
 
 /**
  * A reply to a block written on the ticket, a comment (ORC-196) or a mention (ORC-415): under the right to relaunch it, then
@@ -2602,7 +2603,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         const order = event.payload.kind === 'instruction' && ticket.delegated;
         keepMessage(out, event, order ? 'session' : 'thread');
         if (event.payload.kind === 'command') return factoryCommand(out, event, ticket, workflow);
-        if (order) return ticket.blocked ? out : regroup(out, event, ticket, workflow);
+        // On a blocked ticket, an instruction answered the block above (ORC-426).
+        if (order) return regroup(out, event, ticket, workflow);
       }
       break;
     case 'command':
