@@ -181,6 +181,12 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
   it.each([
     ['in the session', classified('command', '/status'), { kind: 'activity', type: 'response', linearSessionId: 's-dev', body: expect.stringContaining('Blocked: The run failed.') }],
     ['as a comment', comment(signed, 'command', { body: '/status' }), { kind: 'comment', body: expect.stringContaining('Blocked: The run failed.') }],
+    [
+      'in a mention',
+      // A mention triggers: its author needs write access to the repository as well.
+      ev('session.mentioned', { linearSessionId: 's-m', body: '/status', author: 'Lilian', ack: true, kind: 'command' }, { ...signed, roles: [...MEMBER, 'repo_writer'] }),
+      { kind: 'activity', type: 'response', linearSessionId: 's-m', body: expect.stringContaining('Blocked: The run failed.') },
+    ],
   ])('`/status` %s answers, resumes nothing, the step kept', (_where, event, answer) => {
     const out = decide(blockedOn('dev'), event, workflow);
     expect(out.effects).toEqual([answer]);
@@ -311,9 +317,12 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       }
     });
 
-    it('needs the right to relaunch a block: refused, the ticket keeps its block and nothing starts', () => {
+    it.each([
+      ['a question', 'question'],
+      ['an instruction, as an instruction reply does (ORC-426)', 'instruction'],
+    ] as const)('%s needs the right to relaunch a block: refused, the ticket keeps its block and nothing starts', (_what, kind) => {
       const matrix = { ...DEFAULT_MATRIX, relaunch_blocked: { ...DEFAULT_MATRIX.relaunch_blocked, anyOf: [['maintainer' as const]] } };
-      const out = decide(blockedOn('dev'), mention('question'), workflow, matrix);
+      const out = decide(blockedOn('dev'), mention(kind), workflow, matrix);
       expect(out.trace.join()).toContain('authz: refused relaunch_blocked');
       expect(out.events).toEqual([]);
       expect(starts(out)).toEqual([]);
@@ -325,21 +334,6 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
     });
 
-    it('an instruction needs the right to relaunch a block, as an instruction reply does (ORC-426)', () => {
-      const matrix = { ...DEFAULT_MATRIX, relaunch_blocked: { ...DEFAULT_MATRIX.relaunch_blocked, anyOf: [['maintainer' as const]] } };
-      const out = decide(blockedOn('dev'), mention('instruction'), workflow, matrix);
-      expect(out.trace.join()).toContain('authz: refused relaunch_blocked');
-      expect(out.events).toEqual([]);
-      expect(starts(out)).toEqual([]);
-    });
-
-    it('a command relaunches nothing: answered, the block kept', () => {
-      const status = ev('session.mentioned', { linearSessionId: 's-m', body: '/status', author: 'Lilian', ack: true, kind: 'command' }, writer);
-      const out = decide(blockedOn('dev'), status, workflow);
-      expect(starts(out)).toEqual([]);
-      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
-      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'activity', type: 'response', linearSessionId: 's-m' }));
-    });
   });
 
   it('unblocked, the ticket forgets the step', () => {
