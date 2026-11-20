@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allowed, AUTHZ_ACTIONS, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type Channel, type Role } from './authz.js';
+import { allowed, AUTHZ_ACTIONS, DEFAULT_MATRIX, refusalMessage, validatorsNeeded, type AuthzAction, type Channel, type Role } from './authz.js';
 
 const MEMBER = 'u-member';
 const INITIATOR = 'u-initiator';
@@ -9,6 +9,13 @@ const check = (action: AuthzAction, channel: Channel, actor: string | undefined,
   allowed({ action, channel }, actor, t, DEFAULT_MATRIX, roles);
 
 describe('authorization matrix (ORC-186)', () => {
+  it('needs two validators for the spec gate to pass every ticket, the initiator being refused; one without that, none when another role approves (ORC-421)', () => {
+    expect(validatorsNeeded()).toBe(2);
+    const spec = DEFAULT_MATRIX.validate_spec;
+    expect(validatorsNeeded({ ...DEFAULT_MATRIX, validate_spec: { ...spec, neverInitiator: false } })).toBe(1);
+    expect(validatorsNeeded({ ...DEFAULT_MATRIX, validate_spec: { ...spec, anyOf: [['validator'], ['maintainer']] } })).toBe(0);
+  });
+
   it('has the six rows of the default matrix, the PR review of ORC-190 and the three of the dashboard, no more', () => {
     expect(Object.keys(DEFAULT_MATRIX).sort()).toEqual([...AUTHZ_ACTIONS].sort());
     expect(AUTHZ_ACTIONS).toHaveLength(10);

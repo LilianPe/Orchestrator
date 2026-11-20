@@ -12,7 +12,7 @@ import { Daemon, type DaemonDeps } from '../runtime/daemon.js';
 import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
-import { saveInstance, saveSecrets } from '../config/instance.js';
+import { saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
 import { posixPath } from '../config/run-settings.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { startFactory } from './bootstrap.js';
@@ -316,6 +316,26 @@ describe('bootstrap', () => {
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m) });
     await app.stop();
     expect(logs.some((m) => m.includes('webhook secret') && m.includes('refused'))).toBe(warns);
+  });
+
+  it('warns at startup of each project whose spec gate no validator can pass: none designated, or a lone one (ORC-421)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    const repo = () => mkdtempSync(join(tmpdir(), 'factory-repo-'));
+    const authz = (validators: string[]) => ({ maintainers: [], validators, githubLogins: {} });
+    const projects = [
+      { id: 'none', repoPath: repo(), linearTeamKey: 'AAA' },
+      { id: 'lone', repoPath: repo(), linearTeamKey: 'BBB', authz: authz(['u-1']) },
+      { id: 'two', repoPath: repo(), linearTeamKey: 'CCC', authz: authz(['u-1', 'u-2']) },
+      // The replay of closed tickets approves its own specs.
+      { id: 'ghost', repoPath: repo(), linearTeamKey: 'DDD', preset: 'factory/fantome' as const },
+    ];
+    saveInstance(home, { port: 4172, host: '127.0.0.1', relay: { kind: 'none' }, projects, limits: {} });
+    const logs: string[] = [];
+    const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await app.stop();
+    const warned = logs.filter((m) => m.includes('authz.validators'));
+    expect(warned).toEqual(validatorWarnings(projects));
+    expect(warned.map((m) => m.split(':')[1]!.trim())).toEqual(['none', 'lone']);
   });
 
   it('TrackerSwitch explains how to connect', async () => {
