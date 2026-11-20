@@ -34,7 +34,6 @@ describe('the instruction reaction follows the active step, not the status (ORC-
     expect(out.timers).toEqual([]);
     // Kept in the inbox for the step at work, as on a ticket in Todo.
     expect(out.events).toContainEqual(expect.objectContaining({ type: 'feedback.appended' }));
-    expect(feedsDev({ ...intake, activeJob: 'spec' })).toBe(false);
   });
 
   it('a spec waiting for its review, or redrafted on /changes, takes no dev-feedback either', () => {
@@ -76,8 +75,7 @@ describe('the instruction reaction follows the active step, not the status (ORC-
 
   it('decides as for the same ticket in Todo: the status a delegation again left behind does not count', () => {
     for (const patch of [{ activeRunId: 'r1', activeJob: 'intake' }, { spec: spec() }]) {
-      const strip = ({ timers, trace, ...d }: ReturnType<typeof decide>) => ({ ...d, timers, trace });
-      expect(strip(decide(ticket(patch), instruction, workflow))).toEqual(strip(decide(ticket({ ...patch, logical: 'todo' }), instruction, workflow)));
+      expect(decide(ticket(patch), instruction, workflow)).toEqual(decide(ticket({ ...patch, logical: 'todo' }), instruction, workflow));
     }
   });
 
