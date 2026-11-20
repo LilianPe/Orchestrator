@@ -23,7 +23,7 @@ describe('the factory/fantome preset (ORC-231)', () => {
     const wf = presetWorkflow(fantome);
     expect(wf).toMatchObject({ level: 'rapide', entry: 'intake', preset: fantome });
     // Its delegation starts its entry; nothing else starts a job (`engine-fantome.test.ts`).
-    expect(delegatedJob(wf)).toBe('intake');
+    expect(delegatedJob(wf)?.name).toBe('intake');
     expect(Object.keys(wf.jobs)).toEqual(['intake', 'dev', 'spec', 'tests', 'ask']);
     const end = (job: string) => nextOf(wf, wf.jobs[job]!);
     expect(end('intake').run?.name).toBe('spec');

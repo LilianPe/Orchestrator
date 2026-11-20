@@ -51,7 +51,7 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
 }
 
 /** `FACTORY_CONTAINER_CLI`: none without sandboxes, or the reason another CLI is refused. */
-function containerCli(env: NodeJS.ProcessEnv): 'docker' | 'podman' | { refused: string } | undefined {
+export function containerCli(env: NodeJS.ProcessEnv): 'docker' | 'podman' | { refused: string } | undefined {
   const cli = env['FACTORY_CONTAINER_CLI'];
   if (!cli) return undefined;
   return cli === 'docker' || cli === 'podman' ? cli : { refused: `FACTORY_CONTAINER_CLI=${cli}: docker or podman expected` };

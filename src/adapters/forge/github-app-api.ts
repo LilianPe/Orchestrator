@@ -1,4 +1,4 @@
-import { GitHubApiError, GitHubAppAuth, isRecord } from './github-app.js';
+import { GitHubApiError, GitHubAppAuth, isRecord, repoApi } from './github-app.js';
 
 /** One workflow file, decoded from the Contents API. */
 export interface WorkflowSource {
@@ -11,6 +11,22 @@ export interface EnvironmentProtection {
   name: string;
   /** True only with a `required_reviewers` rule that lists at least one reviewer. */
   requiredReviewers: boolean;
+}
+
+/**
+ * The default branch's protection as `factory doctor` reads it (ORC-208), with the App's read permissions only: the
+ * classic protection's flag (its rules need the *Administration* permission, which the App does not have) and the types
+ * of the rules the repository's active rulesets apply to it.
+ */
+export interface BranchProtection {
+  branch: string;
+  classic: boolean;
+  rules: string[];
+  /**
+   * The rulesets with a `pull_request` rule, each with whether the App may bypass it (`current_user_can_bypass`:
+   * `always`, `pull_requests_only`, `exempt` or `never`): a ruleset the App bypasses does not keep the branch from it.
+   */
+  pullRequestRulesets: { id: number; bypass: string }[];
 }
 
 interface ContentEntryDto {
@@ -66,6 +82,16 @@ const isEnvironment = (v: unknown): v is EnvironmentDto =>
   v.name !== '' &&
   (v.protection_rules === undefined || (Array.isArray(v.protection_rules) && v.protection_rules.every(isProtectionRule)));
 
+const isRepository = (v: unknown): v is { default_branch: string } => isRecord(v) && typeof v.default_branch === 'string' && v.default_branch !== '';
+/**
+ * A branch with its classic protection's flag, `protection.enabled`. Not the branch's `protected`: GitHub sets it for
+ * an active ruleset too, whatever its rules, so a ruleset that only blocks deletion would read as a classic protection.
+ */
+const isBranch = (v: unknown): v is { protection: { enabled: boolean } } =>
+  isRecord(v) && isRecord(v.protection) && typeof v.protection.enabled === 'boolean';
+const isRule = (r: unknown): r is { type: string; ruleset_id: number } => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number';
+const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
+
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
   return (rules ?? []).some((rule) => rule.type === 'required_reviewers' && (rule.reviewers ?? []).length > 0);
 }
@@ -73,7 +99,8 @@ function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolea
 /**
  * Read-only GitHub App client for `factory doctor`.
  * It reuses the App authentication of the forge (JWT, repo-scoped token) and adds
- * the two reads the CI secret check needs: workflow files and environment rules.
+ * the reads its checks need: workflow files and environment rules for the CI secret check, the default branch's
+ * protection (ORC-208).
  * A 404 on `.github/workflows` means no CI, not an error. A 2xx answer it cannot read rejects, never read as
  * "no workflow" or "no environment" (ORC-273): `doctor` would then skip the CI secret check.
  */
@@ -108,5 +135,21 @@ export class GitHubAppApi extends GitHubAppAuth {
     const path = `/repos/${segment(repo.owner)}/${segment(repo.name)}/environments`;
     const environments = await this.allPages(path, 'environments', 'a list of environments', isEnvironment, token);
     return environments.map((environment) => ({ name: environment.name, requiredReviewers: hasRequiredReviewers(environment.protection_rules) }));
+  }
+
+  async branchProtection(repoPath: string): Promise<BranchProtection> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const base = repoApi(repo);
+    const { default_branch: branch } = await this.read('GET', base, token, isRepository, 'a repository with its default branch');
+    const [{ protection: { enabled: classic } }, rules] = await Promise.all([
+      this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its classic protection flag'),
+      this.allPages(`${base}/rules/branches/${segment(branch)}`, null, 'a list of branch rules', isRule, token),
+    ]);
+    const ids = [...new Set(rules.filter((rule) => rule.type === 'pull_request').map((rule) => rule.ruleset_id))].sort((a, b) => a - b);
+    const pullRequestRulesets = await Promise.all(
+      ids.map(async (id) => ({ id, bypass: (await this.read('GET', `${base}/rulesets/${id}`, token, isRuleset, 'a ruleset')).current_user_can_bypass })),
+    );
+    return { branch, classic, rules: [...new Set(rules.map((rule) => rule.type))].sort(), pullRequestRulesets };
   }
 }

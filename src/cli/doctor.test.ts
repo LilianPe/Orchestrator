@@ -4,15 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import type { EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
+import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
 import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
-import { runDoctor, runDoctorCommand, type DoctorApi } from './doctor.js';
+import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
   failEnvironments?: boolean;
+  failProtection?: boolean;
+  protection?: BranchProtection;
 }
 
 class FakeApi implements DoctorApi {
@@ -36,7 +38,40 @@ class FakeApi implements DoctorApi {
     if (this.options.failEnvironments) throw new Error('403 Resource not accessible');
     return this.environments;
   }
+
+  async branchProtection(): Promise<BranchProtection> {
+    if (this.options.failProtection) throw new Error('403 Resource not accessible');
+    return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] };
+  }
 }
+
+/** `docker info --format '{{json .}}'` of a rootless Docker on cgroup v2 whose user has the three controllers delegated. */
+const DOCKER_INFO = {
+  CgroupVersion: '2',
+  CgroupDriver: 'systemd',
+  MemoryLimit: true,
+  CpuCfsQuota: true,
+  PidsLimit: true,
+  SecurityOptions: ['name=seccomp,profile=builtin', 'name=rootless', 'name=cgroupns'],
+};
+/** `podman info --format json` of a rootless Podman in a systemd user session, the controllers delegated. */
+const PODMAN_INFO = { host: { cgroupVersion: 'v2', cgroupManager: 'systemd', cgroupControllers: ['cpu', 'memory', 'pids'], security: { rootless: true } } };
+
+/** An engine whose `info` prints `info` as JSON, or fails as `failure` says; it records the calls. */
+function engine(info: object, failure?: { code: number; stderr: string }): { exec: Exec; calls: string[][] } {
+  const calls: string[][] = [];
+  const exec: Exec = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return failure ? { stdout: '', ...failure } : { stdout: `${JSON.stringify(info)}\n`, stderr: '', code: 0 };
+  };
+  return { exec, calls };
+}
+
+const docker = (info: object = DOCKER_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, engine(info).exec);
+const podman = (info: object = PODMAN_INFO) => checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, engine(info).exec);
+
+/** A host as the factory needs it: its engine on cgroup v2, able to limit processes, memory and CPUs. */
+const goodHost: HostReport = await docker();
 
 function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowSource {
   return { path, content };
@@ -45,13 +80,14 @@ function workflow(content: string, path = '.github/workflows/ci.yml'): WorkflowS
 async function doctor(
   workflows: WorkflowSource[],
   environments: EnvironmentProtection[] = [],
-  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string; commands?: Record<string, string> } = {},
+  options: { json?: boolean; fake?: FakeOptions; naming?: BranchNaming; repoPath?: string; commands?: Record<string, string>; host?: HostReport } = {},
 ): Promise<{ code: number; lines: string[]; text: string; api: FakeApi }> {
   const api = new FakeApi(workflows, environments, options.fake);
   const lines: string[] = [];
   const code = await runDoctor({
     repoPath: options.repoPath ?? '/repo',
     api,
+    host: options.host ?? goodHost,
     out: (line) => lines.push(line),
     ...(options.json ? { json: true } : {}),
     ...(options.naming ? { naming: options.naming } : {}),
@@ -328,6 +364,14 @@ jobs:
     expect(envFailure.text).toContain('Cannot read the environments');
   });
 
+  it("still tells the host's and the protection's verdicts when the workflows cannot be read, in text and JSON", async () => {
+    const text = await doctor([], [], { fake: { failWorkflows: true } });
+    expect(text.text).toMatch(/^Host: accepted/m);
+    expect(text.text).toMatch(/^Default branch main: accepted/m);
+    const json = await doctor([], [], { json: true, fake: { failWorkflows: true } });
+    expect(JSON.parse(json.text)).toMatchObject({ accepted: false, host: { verdict: 'accepted' }, branchProtection: { branch: 'main', verdict: 'accepted' } });
+  });
+
   it('emits a JSON report with the verdict and no secret value', async () => {
     const ci = `on: pull_request
 jobs:
@@ -356,7 +400,7 @@ jobs:
   it('puts whether the visual proof can be taken on this instance in the JSON report, whatever the verdict, a failure included (ORC-404)', async () => {
     const report = async (api: FakeApi, visualProof: { image?: string; detail: string }) => {
       const json: string[] = [];
-      const code = await runDoctor({ repoPath: '/repo', api, out: (l) => json.push(l), json: true, visualProof });
+      const code = await runDoctor({ repoPath: '/repo', api, host: goodHost, out: (l) => json.push(l), json: true, visualProof });
       return { code, report: JSON.parse(json.join('\n')) as unknown };
     };
     expect(await report(new FakeApi([]), { image: 'b:1', detail: 'the captures run in b:1' })).toEqual({
@@ -410,6 +454,10 @@ jobs:
           ? { body: { type: 'file', encoding: 'base64', content: Buffer.from(ci).toString('base64') } }
           : undefined,
       (url) => (url.pathname === '/repos/acme/app/environments' ? { body: { total_count: 0, environments: [] } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app' ? { body: { default_branch: 'main' } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: { name: 'main', protected: true, protection: { enabled: false } } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request', ruleset_id: 9 }] } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/rulesets/9' ? { body: { id: 9, current_user_can_bypass: 'never' } } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -421,6 +469,8 @@ jobs:
     };
     const gitCalls: string[][] = [];
     const exec: Exec = async (cmd, args) => {
+      // The host, from the engine of FACTORY_CONTAINER_CLI (ORC-208).
+      if (cmd === 'docker') return engine(DOCKER_INFO).exec(cmd, args);
       expect(cmd).toBe('git');
       gitCalls.push(args);
       if (args[0] === 'remote') return { stdout: 'git@github.com:acme/app.git\n', stderr: '', code: 0 };
@@ -434,13 +484,15 @@ jobs:
     const code = await runDoctorCommand({
       repoPath: '/repo',
       home,
-      env: {},
+      env: { FACTORY_CONTAINER_CLI: 'docker' },
       out: (line) => lines.push(line),
       http,
       exec,
       now: () => now,
     });
     expect(code).toBe(0);
+    expect(lines.join('\n')).toContain('Host: accepted');
+    expect(lines.join('\n')).toContain('Default branch main: accepted');
     expect(lines.join('\n')).toContain('verdict: accepted');
     // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
     expect(lines).toContain(MISSING_TEST_COMMAND);
@@ -703,5 +755,169 @@ jobs:
       expect((await doctor([], [], { commands: { test: 'npm test' } })).text).not.toContain('commands.test');
       expect(JSON.parse((await doctor([], [], { commands: { test: 'npm test' }, json: true })).text)).not.toHaveProperty('warnings');
     });
+  });
+});
+
+describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, criterion 1)', () => {
+  it("asks the engine of FACTORY_CONTAINER_CLI, not the cgroups of doctor's own process", async () => {
+    const dockerEngine = engine(DOCKER_INFO);
+    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, dockerEngine.exec)).toMatchObject({
+      engine: 'docker',
+      cgroupV2: true,
+      controllers: ['cpu', 'memory', 'pids'],
+      rootless: true,
+      verdict: 'accepted',
+    });
+    expect(dockerEngine.calls).toEqual([['docker', 'info', '--format', '{{json .}}']]);
+    const podmanEngine = engine(PODMAN_INFO);
+    expect(await checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, podmanEngine.exec)).toMatchObject({
+      engine: 'podman',
+      cgroupV2: true,
+      controllers: ['cpu', 'memory', 'pids'],
+      rootless: true,
+      verdict: 'accepted',
+    });
+    expect(podmanEngine.calls).toEqual([['podman', 'info', '--format', 'json']]);
+  });
+
+  it('refuses an engine on cgroups v1 or the hybrid layout', async () => {
+    const host = await docker({ ...DOCKER_INFO, CgroupVersion: '1' });
+    expect(host).toMatchObject({ cgroupV2: false, verdict: 'refused' });
+    const result = await doctor([], [], { host });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('cgroup v2');
+    expect(result.text).toContain('Result: refused');
+    expect(await podman({ host: { ...PODMAN_INFO.host, cgroupVersion: 'v1' } })).toMatchObject({ cgroupV2: false, verdict: 'refused' });
+  });
+
+  it('refuses an engine that cannot set one of the process, memory and CPU limits, and names it', async () => {
+    // Rootless Docker without `cpu` delegated to its user: the engine says it cannot apply a CPU quota.
+    const noCpu = await docker({ ...DOCKER_INFO, CpuCfsQuota: false });
+    expect(noCpu).toMatchObject({ verdict: 'refused', controllers: ['memory', 'pids'] });
+    expect(noCpu.reasons.join(' ')).toContain('cpu');
+    const noPids = await podman({ host: { ...PODMAN_INFO.host, cgroupControllers: ['cpu', 'memory'] } });
+    expect(noPids.verdict).toBe('refused');
+    expect(noPids.reasons.join(' ')).toContain('pids');
+  });
+
+  it('refuses a rootless Podman on cgroupfs, which ignores the limits, even with every controller listed', async () => {
+    const host = await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs' } });
+    expect(host.verdict).toBe('refused');
+    expect(host.reasons.join(' ')).toContain('cgroupfs');
+    expect(host.reasons.join(' ')).toContain('loginctl enable-linger');
+    // Rootful, cgroupfs sets the limits.
+    expect((await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs', security: { rootless: false } } })).verdict).toBe('accepted');
+  });
+
+  it('refuses a rootless Docker off the systemd cgroup driver, which ignores the limits, whatever its flags', async () => {
+    // No systemd user session: Docker's rootless docs, `Cgroup Driver: none`.
+    const none = await docker({ ...DOCKER_INFO, CgroupDriver: 'none' });
+    expect(none.verdict).toBe('refused');
+    expect(none.reasons.join(' ')).toContain('none');
+    expect(none.reasons.join(' ')).toContain('loginctl enable-linger');
+    // A rootless Podman behind the Docker-compatible socket (compose's `docker` CLI): its cgroup manager in CgroupDriver.
+    expect((await docker({ ...DOCKER_INFO, CgroupDriver: 'cgroupfs' })).verdict).toBe('refused');
+    // Rootful, cgroupfs sets the limits.
+    expect((await docker({ ...DOCKER_INFO, CgroupDriver: 'cgroupfs', SecurityOptions: ['name=seccomp,profile=builtin'] })).verdict).toBe('accepted');
+  });
+
+  it('on cgroups v1, says no cgroup v2 alone: no delegation advice that linger cannot fix', async () => {
+    const host = await podman({ host: { ...PODMAN_INFO.host, cgroupVersion: 'v1', cgroupControllers: [], cgroupManager: 'cgroupfs' } });
+    expect(host.verdict).toBe('refused');
+    expect(host.reasons).toHaveLength(1);
+    expect(host.reasons[0]).toContain('no cgroup v2');
+  });
+
+  it('refuses without an engine to ask, and names FACTORY_CONTAINER_CLI', async () => {
+    const none = engine(DOCKER_INFO);
+    const host = await checkHost({}, none.exec);
+    expect(host.verdict).toBe('refused');
+    expect(host.reasons.join(' ')).toContain('FACTORY_CONTAINER_CLI');
+    expect(none.calls).toEqual([]);
+    expect((await checkHost({ FACTORY_CONTAINER_CLI: 'lxc' }, none.exec)).reasons.join(' ')).toContain('docker or podman expected');
+  });
+
+  it("names an engine it cannot ask or read, and never tells what it did not read (no cgroupV2, no controllers)", async () => {
+    const unreachable = await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, engine({}, { code: 1, stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' }).exec);
+    expect(unreachable.verdict).toBe('refused');
+    expect(unreachable.reasons.join(' ')).toContain('Cannot connect to the Docker daemon');
+    expect(unreachable).not.toHaveProperty('cgroupV2');
+    expect(unreachable).not.toHaveProperty('controllers');
+    const serverErrors = await docker({ ServerErrors: ['error during connect'] });
+    expect(serverErrors.reasons.join(' ')).toContain('error during connect');
+    expect(serverErrors).not.toHaveProperty('cgroupV2');
+    // An answer without the cgroup version (an engine too old to report it) is unread, never cgroups v1.
+    const unknown = await docker({ MemoryLimit: true });
+    expect(unknown.verdict).toBe('refused');
+    expect(unknown).not.toHaveProperty('cgroupV2');
+    expect(unknown.reasons.join(' ')).not.toContain('cgroups v1');
+    const garbled = await checkHost({ FACTORY_CONTAINER_CLI: 'podman' }, async () => ({ stdout: 'not json', stderr: '', code: 0 }));
+    expect(garbled.verdict).toBe('refused');
+    expect(garbled).not.toHaveProperty('cgroupV2');
+  });
+
+  it('puts the host in the JSON report', async () => {
+    const result = await doctor([], [], { json: true, host: await docker({ ...DOCKER_INFO, CgroupVersion: '1' }) });
+    const report = JSON.parse(result.text) as { accepted: boolean; host: HostReport };
+    expect(report.accepted).toBe(false);
+    expect(report.host).toMatchObject({ engine: 'docker', cgroupV2: false, verdict: 'refused' });
+  });
+});
+
+describe("the default branch's protection (ORC-208, criterion 2)", () => {
+  const protection = (p: Partial<BranchProtection>): { fake: FakeOptions } => ({ fake: { protection: { branch: 'main', classic: false, rules: [], pullRequestRulesets: [], ...p } } });
+  const pullRequest = (...bypass: string[]) => protection({ rules: ['pull_request'], pullRequestRulesets: bypass.map((b, i) => ({ id: i + 1, bypass: b })) });
+
+  it('refuses a repository whose default branch has neither branch protection nor a ruleset that requires a pull request', async () => {
+    const result = await doctor([], [], protection({}));
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('main');
+    expect(result.text).toContain('not protected');
+    expect(result.text).toContain('Result: refused');
+  });
+
+  it('refuses rulesets that do not require a pull request: a direct push still lands', async () => {
+    const result = await doctor([], [], protection({ rules: ['deletion', 'non_fast_forward'] }));
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('pull_request');
+  });
+
+  it('accepts a ruleset that requires a pull request, and a classic protection, whose rules the App cannot read, saying so', async () => {
+    const ruleset = await doctor([], [], pullRequest('never'));
+    expect(ruleset.code).toBe(0);
+    const classic = await doctor([], [], protection({ classic: true }));
+    expect(classic.code).toBe(0);
+    expect(classic.text).toContain('Administration');
+  });
+
+  it.each(['always', 'pull_requests_only', 'exempt'])("refuses a pull request ruleset the factory's App can bypass (%s), and names it", async (bypass) => {
+    const result = await doctor([], [], pullRequest(bypass));
+    expect(result.code).toBe(1);
+    expect(result.text).toContain(`ruleset 1 (${bypass})`);
+  });
+
+  it('accepts when one pull request ruleset holds the App, though another lets it bypass', async () => {
+    expect((await doctor([], [], pullRequest('always', 'never'))).code).toBe(0);
+  });
+
+  it('accepts a classic protection beside a pull request ruleset the App bypasses: that ruleset does not count, nor takes from it', async () => {
+    const result = await doctor([], [], protection({ classic: true, rules: ['pull_request'], pullRequestRulesets: [{ id: 4, bypass: 'always' }] }));
+    expect(result.code).toBe(0);
+    expect(result.text).toContain('Administration');
+  });
+
+  it('fails closed when the protection cannot be read', async () => {
+    const result = await doctor([], [], { fake: { failProtection: true } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('Cannot read the protection of the default branch');
+    expect(result.text).toContain("Result: refused — the default branch's protection cannot be read");
+    expect(result.text).not.toContain('is not protected');
+  });
+
+  it('puts the protection in the JSON report', async () => {
+    const result = await doctor([], [], { json: true, ...protection({ rules: ['deletion'] }) });
+    const report = JSON.parse(result.text) as { accepted: boolean; branchProtection: { branch: string; verdict: string } };
+    expect(report.accepted).toBe(false);
+    expect(report.branchProtection).toMatchObject({ branch: 'main', verdict: 'refused' });
   });
 });
