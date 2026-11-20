@@ -8,8 +8,10 @@ import { describe, expect, it } from 'vitest';
 const root = join(import.meta.dirname, '..');
 const OLD = ['orchestrator', 'bus', 'scheduler'];
 
+const eslint = new ESLint({ cwd: root });
+
 const lintErrors = async (filePath: string, code: string): Promise<string[]> => {
-  const [result] = await new ESLint({ cwd: root }).lintText(code, { filePath: join(root, filePath) });
+  const [result] = await eslint.lintText(code, { filePath: join(root, filePath) });
   return result!.messages.filter((m) => m.ruleId === 'no-restricted-imports').map((m) => m.message);
 };
 
