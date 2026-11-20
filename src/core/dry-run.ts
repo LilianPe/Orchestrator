@@ -6,7 +6,7 @@ import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } 
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
-import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testRunners, verifyCommand, withDeadline, zFields, type CloneGit } from './clean-verify.js';
+import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, zFields, type CloneGit } from './clean-verify.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
@@ -265,7 +265,7 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
     if (out.code !== 0) throw new Error(`git checkout (sandbox): ${out.stderr.trim()}`);
   });
   // Read before any of its code runs, and before the setup opens services that a failure here would leave behind.
-  const runners = await testRunners(git, sha, commands);
+  const tests = await testCommands(git, sha, commands);
   const env = await req.env(config);
   if (setup.length) {
     try {
@@ -284,7 +284,8 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   const failed: CommandRun[] = [];
   await inBox('run', cloneDir, [], async (id) => {
     for (const command of commands) {
-      const run = await runAndRerun(command, runners.get(command), reportRun(sandboxes, id, env), standing);
+      const { line, runner } = tests.get(command)!;
+      const run = await runAndRerun(command, runner, reportRun(sandboxes, id, env), standing, line);
       if (run) failed.push(run);
     }
   }, { ...DEFAULT_REQUIREMENTS, services: config.services });

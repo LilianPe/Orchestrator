@@ -66,6 +66,8 @@ export type Run = (line: string, runner: Runner | undefined) => Promise<TestRun>
 /** A command that failed, and its failing tests with their reruns; none when its report named none. */
 export interface CommandRun {
   command: string;
+  /** The command as it runs, which files and flags are appended to: with the `--` its script needs (`testCommand`, ORC-420). */
+  line: string;
   runner?: Runner;
   exitCode: number | null;
   output: string;
@@ -193,16 +195,17 @@ function standing(t: { test: string; file: string }, at: Standing): 'counts' | '
  * `command`, then the tests its report names as failing rerun once on the commit, together, up to `MAX_RERUNS`. Undefined
  * when it passed. Without a runner, an exit without a code (its cap) or a report that names no failing test, nothing is
  * rerun. When every failing test is indicative, the command runs once more without them (`withoutIndicative`): the report
- * is the agent's code's, and an exit can have a cause no test carries; only a pass then spares the command.
+ * is the agent's code's, and an exit can have a cause no test carries; only a pass then spares the command. Each run is of
+ * `line`, the command as files are appended to it (`testCommand`).
  */
-export async function runAndRerun(command: string, runner: Runner | undefined, run: Run, at: Standing): Promise<CommandRun | undefined> {
-  const first = await run(command, runner);
+export async function runAndRerun(command: string, runner: Runner | undefined, run: Run, at: Standing, line = command): Promise<CommandRun | undefined> {
+  const first = await run(line, runner);
   if (first.exitCode === 0) return undefined;
   const failed = runner && first.exitCode !== null ? (readTests(first.report)?.filter((t) => t.status === 'failed') ?? []) : [];
-  const res: CommandRun = { command, ...(runner ? { runner } : {}), exitCode: first.exitCode, output: first.output, tests: [], notRerun: Math.max(0, failed.length - MAX_RERUNS) };
+  const res: CommandRun = { command, line, ...(runner ? { runner } : {}), exitCode: first.exitCode, output: first.output, tests: [], notRerun: Math.max(0, failed.length - MAX_RERUNS) };
   const rerun = failed.slice(0, MAX_RERUNS);
   if (!rerun.length) return res;
-  const again = attemptsIn('head', 2, await run(rerunLine(command, runner!, rerun), runner));
+  const again = attemptsIn('head', 2, await run(rerunLine(line, runner!, rerun), runner));
   for (const t of rerun) {
     res.tests.push({
       command, test: t.id, file: t.file, name: t.name,
@@ -213,7 +216,7 @@ export async function runAndRerun(command: string, runner: Runner | undefined, r
     });
   }
   if (!res.notRerun && res.tests.every((t) => standing(t, at) === 'indicative')) {
-    res.withoutIndicative = (await run(withoutLine(command, runner!, rerun), runner)).exitCode;
+    res.withoutIndicative = (await run(withoutLine(line, runner!, rerun), runner)).exitCode;
   }
   return res;
 }
@@ -235,7 +238,7 @@ export async function rerunOnBase(runs: readonly CommandRun[], run: Run, at: Sta
     const tests = chosen.filter((c) => c.r === r).map((c) => c.t);
     r.notOnBase = all.filter((c) => c.r === r).length - tests.length;
     if (!tests.length) continue;
-    const onBase = attemptsIn('base', 1, await run(rerunLine(r.command, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner));
+    const onBase = attemptsIn('base', 1, await run(rerunLine(r.line, r.runner!, tests.map((t) => ({ id: t.test, file: t.file, name: t.name }))), r.runner));
     for (const t of tests) t.attempts.push(onBase(t.test));
   }
 }

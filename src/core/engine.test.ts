@@ -31,15 +31,15 @@ const REVIEW_AGAIN = { from: 'human_review', to: 'ai_review' } as const;
 const kinds = (d: Decision) => ({ events: d.events.map((e) => e.type), effects: d.effects.map((e) => e.kind), timers: d.timers.map((t) => t.kind) });
 
 describe('decide — default reactions (ORC-392)', () => {
-  it('starts dev on delegation of a todo ticket', () => {
+  it("starts intake, the preset's entry, on delegation of a todo ticket (ORC-395)", () => {
     expect(decide(ticket(), ev('ticket.delegated', {}), workflow)).toEqual(
-      decision({ effects: [{ kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined }] }),
+      decision({ effects: [{ kind: 'start_run', job: 'intake', input: undefined, inputText: undefined, linearSessionId: undefined }] }),
     );
   });
 
-  it('starts dev on delegation of a ticket it does not track yet, from the snapshot in the event', () => {
+  it('starts intake on delegation of a ticket it does not track yet, from the snapshot in the event', () => {
     const out = decide(undefined, ev('ticket.delegated', { issue: { title: 'Export CSV', logical: 'todo', priority: 0 } }), workflow);
-    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined }]);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'intake', input: undefined, inputText: undefined, linearSessionId: undefined }]);
   });
 
   it('ignores delegation of a blocked ticket', () => {
@@ -283,11 +283,11 @@ describe('decide — after the merge (ORC-268)', () => {
     expect(devStarts(decide(reopened, ev('status.changed', REVIEW_AGAIN), workflow))).toHaveLength(1);
   });
 
-  it('a human who takes the ticket out of done, or delegates it again, can relaunch dev work', () => {
+  it('a human who takes the ticket out of done, or delegates it again, can relaunch work: a delegation from intake (ORC-395)', () => {
     const back = decide(merged(), ev('status.changed', { from: 'done', to: 'human_review' }), workflow);
     expect(devStarts(decide(reduce(merged(), ev('status.changed', { from: 'done', to: 'human_review' })), ev('status.changed', REVIEW_AGAIN), workflow))).toHaveLength(1);
     expect(back.trace).toContain('no rule for status.changed');
-    expect(devStarts(decide(merged({ logical: 'todo' }), ev('ticket.delegated', {}), workflow))).toEqual([expect.objectContaining({ job: 'dev' })]);
+    expect(devStarts(decide(merged({ logical: 'todo' }), ev('ticket.delegated', {}), workflow))).toEqual([expect.objectContaining({ job: 'intake' })]);
   });
 
   it('a reply starts no dev run on a merged ticket, and leaves it blocked', () => {
@@ -440,7 +440,7 @@ describe('decide — taint', () => {
 
   it('starts the other runs of an untrusted event with the sensitive paths of the repository', () => {
     const out = decide(ticket(), untrusted(ev('ticket.delegated', {})), workflow);
-    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined, sensitivePaths: SENSITIVE_PATHS }]);
+    expect(out.effects).toEqual([{ kind: 'start_run', job: 'intake', input: undefined, inputText: undefined, linearSessionId: undefined, sensitivePaths: SENSITIVE_PATHS }]);
     expect(SENSITIVE_PATHS).toEqual(['.github/**', '.factory/**', '.claude/**', 'CODEOWNERS', '.env*']);
   });
 
@@ -482,7 +482,7 @@ describe('decide — taint', () => {
   it('leaves out the pending feedback taint when the run does not consume the feedback', () => {
     const t = ticket({ logical: 'dev', humanInbox: pending('untrusted') });
     expect(decide(t, ev('ticket.delegated', {}), workflow).effects).toEqual([
-      { kind: 'start_run', job: 'dev', input: undefined, inputText: undefined, linearSessionId: undefined },
+      { kind: 'start_run', job: 'intake', input: undefined, inputText: undefined, linearSessionId: undefined },
     ]);
   });
 
@@ -1102,16 +1102,16 @@ describe('decide — the tests step and the red check (ORC-123)', () => {
     expect(out).toEqual(decision({ events: [{ type: 'verify.started', runId: 'r1' }], effects: [{ kind: 'run_verify', runId: 'r1', job: 'tests' }] }));
   });
 
-  it('a verified red starts the build', () => {
+  it('a verified red starts the build, and moves the ticket to In Progress: the build is not the entry since ORC-395', () => {
     const out = decide(ticket({ verifyingRunId: 'r1', redAttempts: 1 }), ev('verify.passed', { runId: 'r1', job: 'tests', red: 'assertion' }), workflow);
     expect(out.events).toEqual([{ type: 'ticket.patched', patch: { verifyAttempts: 0, redAttempts: 0 } }]);
-    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined }]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'dev' }, { kind: 'start_run', job: 'dev', input: undefined }]);
   });
 
   it('in measure mode, an unverified red is traced « aurait bloqué » and the build starts all the same', () => {
     const out = decide(ticket({ verifyingRunId: 'r1' }), unverified('r1'), workflow);
     expect(out.events).toEqual([]);
-    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined }]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'dev' }, { kind: 'start_run', job: 'dev', input: undefined }]);
     expect(out.trace).toContain('red: would have blocked (compile), measure mode: the run goes on');
   });
 
@@ -1128,7 +1128,7 @@ describe('decide — the tests step and the red check (ORC-123)', () => {
 
   it('in measure mode, a tests step that wrote something else than tests is recorded and the build starts', () => {
     const out = decide(ticket({ verifyingRunId: 'r1' }), unverified('r1', 'scope'), workflow);
-    expect(out.effects).toEqual([{ kind: 'start_run', job: 'dev', input: undefined }]);
+    expect(out.effects).toEqual([{ kind: 'move', to: 'dev' }, { kind: 'start_run', job: 'dev', input: undefined }]);
     expect(out.trace).toContain('red: would have blocked (scope), measure mode: the run goes on');
   });
 

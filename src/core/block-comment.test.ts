@@ -41,4 +41,9 @@ describe('the standard blocking comment (ORC-196)', () => {
     const body = composeBlockComment({ ...facts, waits: true }, {});
     expect(body.split('\n').at(-1)).toBe('A reply is not enough here: I will resume once what is asked above is done.');
   });
+
+  it('promises no resumption at all when nothing lifts the block (ORC-419)', () => {
+    const body = composeBlockComment({ ...facts, waits: 'never' }, {});
+    expect(body.split('\n').at(-1)).toBe('This ticket will not resume: a reply here changes nothing.');
+  });
 });

@@ -9,7 +9,7 @@ again when its fingerprint changes, come with part 3 (ORC-409): until then nothi
 
 ## What runs
 
-`Orchestrator.dryRun(projectId, { sha? })` (in `src/core/orchestrator.ts`) runs `runDryRun` (`src/core/dry-run.ts`) and records the
+`Daemon.dryRun(projectId, { sha? })` (in `src/runtime/checks.ts`) runs `runDryRun` (`src/core/dry-run.ts`) and records the
 result in the store:
 
 1. **The commit.** The forge's default branch, or the commit `sha` when one is given (the replay of closed tickets runs it on

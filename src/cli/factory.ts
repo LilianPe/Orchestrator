@@ -29,7 +29,7 @@ import { PRODUCT_NAME } from '../product.js';
 const USAGE = `Usage: factory <command>
   init               set up ${PRODUCT_NAME} for the current repository
   validate [repo]    check .factory/config.yml against the baseline (it can only add)
-  doctor [repo] [--json] refuse a repository whose CI can expose secrets to the factory's branches
+  doctor [repo] [--json] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
   up [--fake-runner] start ${PRODUCT_NAME} (interface on http://localhost:4100)
   plan               see which delegated tickets would be taken
   status             state of the running instance

@@ -262,7 +262,7 @@ describe('classifyBreak', () => {
 });
 
 describe('breaksOfRuns', () => {
-  const run = (over: Partial<CommandRun>): CommandRun => ({ command: 'npm test', runner: 'vitest', exitCode: 1, output: 'FAIL a.test.ts', tests: [], notRerun: 0, ...over });
+  const run = (over: Partial<CommandRun>): CommandRun => ({ command: 'npm test', line: 'npm test', runner: 'vitest', exitCode: 1, output: 'FAIL a.test.ts', tests: [], notRerun: 0, ...over });
   const test = (name: string, rerun: 'passed' | 'failed') => ({
     command: 'npm test', test: `a.test.ts > ${name}`, file: 'a.test.ts', name,
     attempts: [{ on: 'head' as const, attempt: 1, outcome: 'failed' as const, output: '' }, { on: 'head' as const, attempt: 2, outcome: rerun, output: '' }],

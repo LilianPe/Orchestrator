@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { factoryDefault } from '../presets/factory-default.js';
+import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import type { Decision } from './decision.js';
 import { nextOf, startMove } from './chain.js';
@@ -141,5 +142,24 @@ describe('a conflict with the default branch is handled by a rebase step the eng
     const reply = ev('ticket.commented', { body: 'Keep the base side.', author: 'Lilian', kind: 'instruction' });
     const out = decide(t, reply, workflow);
     expect(starts(out)).toEqual([expect.objectContaining({ job: 'rebase', input: 'feedback' })]);
+  });
+});
+
+describe("red CI and a conflict start the job of the preset's edge, not one named in the engine (ORC-417)", () => {
+  const red = () => ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] });
+
+  it('a preset whose redCi.goto points at the build starts the build on a red CI, counted on the same loop', () => {
+    const custom = presetWorkflow({ ...factoryDefault, redCi: { goto: 'build', counter: 'review_ci' } });
+    const out = decide(reviewed(), red(), custom);
+    // It reads the red checks, as the fix would: the edge's cause, not the build's own input.
+    expect(starts(out)).toEqual([expect.objectContaining({ job: 'dev', input: 'ci_failures' })]);
+    expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 1 } });
+    // The default preset still starts its fix for the CI.
+    expect(starts(decide(reviewed(), red(), workflow))).toEqual([expect.objectContaining({ job: 'fix-ci' })]);
+  });
+
+  it('a preset whose conflict.goto points at the build starts the build on a conflict', () => {
+    const custom = presetWorkflow({ ...factoryDefault, conflict: { goto: 'build', counter: 'review_ci' } });
+    expect(starts(decide(reviewed(), conflicted(), custom))).toEqual([expect.objectContaining({ job: 'dev' })]);
   });
 });

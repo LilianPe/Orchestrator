@@ -15,7 +15,7 @@ import type { BusMessage, EventBus } from './live-feed.js';
 import type { Clock } from '../core/clock.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';
-import type { TakeOverDesk } from '../core/orchestrator.js';
+import type { TakeOverDesk } from '../runtime/daemon.js';
 import { measureTicket, mergeTime, type TicketMeasures } from '../core/measures.js';
 import { BASELINE_DAYS, DAY_MS } from '../core/baseline.js';
 import { overview } from '../core/overview.js';

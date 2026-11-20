@@ -1,27 +1,38 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SENSITIVE_PATHS } from '../../src/core/engine.js';
 import { TRUSTED } from '../../src/core/types.js';
+import { assessment, chainHarness, delegate, drafted, toBuild } from '../helpers/chain.js';
 import { createHarness, withMoveBack } from '../helpers/harness.js';
+
+/** The build's run: a command, its last text, and the result it submits. */
+const BUILD = {
+  events: [
+    { kind: 'init' as const, sessionId: 'x' },
+    { kind: 'tool' as const, name: 'Bash', input: 'npm test' },
+    { kind: 'text' as const, text: 'PR ouverte, tests verts.' },
+  ],
+  output: { status: 'done' as const, summary: 'Audits export to CSV from their list.', tests_added: ['src/export.test.ts'], why: '', assumptions: [], risks: ['large lists'], untested: [], review_hints: [] },
+};
 
 async function delegatedAndInReview(h: ReturnType<typeof createHarness>) {
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
-  h.runner.enqueue({
-    events: [
-      { kind: 'init', sessionId: 'x' },
-      { kind: 'tool', name: 'Bash', input: 'npm test' },
-      { kind: 'text', text: 'PR ouverte, tests verts.' },
-    ],
-    output: { status: 'done', summary: 'Audits export to CSV from their list.', tests_added: ['src/export.test.ts'], why: '', assumptions: [], risks: ['large lists'], untested: [], review_hints: [] },
-  });
+  h.runner.enqueue(BUILD);
   await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
 }
 
 describe('standard workflow', () => {
-  it('criterion 3: delegation -> dev run -> human review with summary', async () => {
-    const h = createHarness();
-    await delegatedAndInReview(h);
-    const req = h.runner.requests[0]!;
-    expect(req).toMatchObject({ resume: false, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
+  it('criterion 3: delegation -> intake -> spec, approved -> tests -> dev run -> human review with summary (ORC-395)', async () => {
+    const h = chainHarness();
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
+    h.runner.enqueue(assessment(), drafted());
+    await delegate(h);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec']);
+    expect(await h.ticket()).toMatchObject({ logical: 'todo', spec: { version: 1 } });
+    await toBuild(h, { build: [BUILD] });
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    const req = h.runner.requests[3]!;
+    // The ticket session starts at the tests step (ORC-217): the build resumes it.
+    expect(req).toMatchObject({ resume: true, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
     expect(req.prompt.startsWith('/factory:dev\n')).toBe(true);
     expect(req.prompt).toContain('Branch: feat/rel-1-export-csv');
     const t = await h.ticket();
@@ -32,7 +43,8 @@ describe('standard workflow', () => {
     const acts = h.tracker.activities('ls-1');
     // Live, what the agent does in the factory's words; the recap composed from its `submit_result`, never its last text (ORC-214, ORC-195).
     expect(acts).toContainEqual({ type: 'action', action: 'Running a command', parameter: 'step build', ephemeral: true });
-    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists\n\n**Tests added**\n- `src/export.test.ts`\n\n**Work**: 1 attempt, 1 turn, tokens not reported, 0 s.' });
+    // The work of the whole run: intake, the spec, the tests and the build, one attempt each (ORC-395).
+    expect(acts.at(-1)).toEqual({ type: 'response', body: 'Audits export to CSV from their list.\n\n**Risks**\n- large lists\n\n**Tests added**\n- `src/export.test.ts`\n\n**Work**: 4 attempts, 4 turns, tokens not reported, 0 s.' });
     expect(JSON.stringify(acts)).not.toMatch(/npm test|PR ouverte/);
   });
 
@@ -383,12 +395,12 @@ describe('standard workflow', () => {
       expect(h.runner.requests).toHaveLength(1);
     });
 
-    it('a later delegation of a mentioned ticket starts dev', async () => {
-      const h = createHarness();
+    it("a later delegation of a mentioned ticket starts intake, the preset's entry (ORC-395)", async () => {
+      const h = createHarness({ fullChain: true });
       await mentioned(h);
       await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
       expect(h.runner.requests).toHaveLength(2);
-      expect(h.runner.requests[1]!.prompt.startsWith('/factory:dev\n')).toBe(true);
+      expect(h.runner.requests[1]!.prompt.startsWith('/factory:intake\n')).toBe(true);
       expect(await h.ticket()).toMatchObject({ delegated: true, linearSessionId: 'ls-1' });
     });
 
@@ -436,7 +448,18 @@ describe('standard workflow', () => {
     expect(h.runner.requests).toHaveLength(2);
   });
 
-  it('a ticket failing pickup checks is blocked with an explanation', async () => {
+  it('a ticket failing pickup checks goes to the guard after intake: asked to complete it, not blocked (ORC-206, ORC-395)', async () => {
+    const h = createHarness({ fullChain: true });
+    h.tracker.addIssue({ identifier: 'REL-1', title: 'Flou', description: 'trop court' });
+    h.runner.enqueue(assessment());
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake']);
+    const t = await h.ticket();
+    expect(t).toMatchObject({ blocked: false, logical: 'todo', clarify: { job: 'intake' } });
+    expect(h.tracker.activities('ls-1').at(-1)).toMatchObject({ type: 'elicitation', body: expect.stringContaining('The description is shorter than 30 characters.') });
+  });
+
+  it('on a chain started at build, with no intake before it, a ticket failing pickup checks is blocked with an explanation', async () => {
     const h = createHarness();
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Flou', description: 'trop court' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });

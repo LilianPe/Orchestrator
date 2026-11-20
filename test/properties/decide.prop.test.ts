@@ -93,6 +93,8 @@ const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
 /** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
 const starts = (step: Step) => stepEffects(step).filter((e) => e.kind === 'start_run');
+/** A mention that answers a block, as a reply does (ORC-415): a human relaunch when the same decision unblocks. */
+const answersBlock = (step: Step): boolean => step.kind === 'decided' && step.event.type === 'session.mentioned' && step.decision.events.some((e) => e.type === 'ticket.unblocked');
 
 /**
  * I5 on one loop: between two resets of its `counter`, the runner gets at most `bound - 1` of its relaunches, counted as it
@@ -480,7 +482,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       for (const step of decided(r)) {
         if (step.decision.events.some((e) => e.type === 'ticket.patched' && e.patch.ciFixAttempts === 0)) {
           // Only another PR or a human ends the loop: a reset by anything else, a green CI included, would let it run unbounded.
-          expect(CI_RESETS, 'reset of the review and CI loop').toContain(step.event.type);
+          if (!answersBlock(step)) expect(CI_RESETS, 'reset of the review and CI loop').toContain(step.event.type);
           fixes = 0;
         }
         const job = loopJob(step.event);
@@ -601,11 +603,11 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       for (const step of decided(r)) {
         const { events, effects, trace } = step.decision;
         if (events.some((e) => e.type === 'ticket.patched' && e.patch.humanReviewRounds === 0)) {
-          expect(HUMAN_RESETS, 'reset of the human review loop').toContain(step.event.type);
+          if (!answersBlock(step)) expect(HUMAN_RESETS, 'reset of the human review loop').toContain(step.event.type);
           rounds = 0;
         }
         // A pending start was counted when it was decided, unless a human relaunch starts it: that gave the rounds back, it is the first.
-        const pendingStart = events.some((e) => e.type === 'pending.cleared') && !HUMAN_RESETS.includes(step.event.type);
+        const pendingStart = events.some((e) => e.type === 'pending.cleared') && !HUMAN_RESETS.includes(step.event.type) && !answersBlock(step);
         const started = effects.filter((e) => e.kind === 'start_run' && e.job === 'fix-human' && !e.relaunchOf && e.input !== 'verify_failures' && !pendingStart);
         rounds += started.length;
         expect(rounds, 'rounds of human review feedback').toBeLessThanOrEqual(bound);
@@ -785,7 +787,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     it(
       'duplicating events (same id) anywhere after their original changes neither the final state nor the effects, through the store’s inbox',
       async () => {
-        // Duplicates are dropped by what drops them in `Orchestrator.handle`: `Store.recordEvent`, here on SQLite.
+        // Duplicates are dropped by what drops them in the inbox: `Store.recordEvent`, here on SQLite.
         // One store for every sequence, each recording its ids under its own prefix. The store answers
         // asynchronously: its answers are taken first, in order, then the fold reads them.
         const store = new SqliteStore(':memory:');
@@ -878,7 +880,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
             if (relaunched && e.type === 'run.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             if (relaunched && e.type === 'verify.lost') expect(recent.length).toBeLessThan(CUT_RELAUNCHES);
             const reset = step.decision.events.some((x) => x.type === 'ticket.patched' && x.patch.cutRelaunches?.length === 0);
-            if (reset) expect(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
+            if (reset && !answersBlock(step)) expect(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated']).toContain(e.type);
           }
         });
       },
@@ -908,7 +910,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
     /**
      * A run that reads the pending feedback while part of it came from an untrusted event is launched with the
      * sensitive paths, whoever starts it: `decide`, or `settle` on the pending job. Checked on the launches, as
-     * `Orchestrator.launch` hands them to the runner (ORC-274), not on the starts `decide` emits.
+     * `Daemon.launch` hands them to the runner (ORC-274), not on the starts `decide` emits.
      */
     const launches0 = (s: Sequences) => run(s).steps.flatMap(launches);
     const feedbackRunSandboxed = (s: Sequences): void => {
