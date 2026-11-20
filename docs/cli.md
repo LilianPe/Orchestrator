@@ -9,7 +9,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | Command | Role | Daemon required |
 |---|---|---|
 | `relais init` | Configure Relais for the current repository. | no |
-| `factory doctor [repo]` | Refuse a repository whose CI can expose secrets to the factory's branches. | no (GitHub App) |
+| `factory doctor [repo]` | Refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches. | no (GitHub App) |
 | `relais up [--fake-runner]` | Start the daemon. | — |
 | `relais plan` | List the delegated tickets and say which ones would be picked up. | no (Linear connected) |
 | `factory status` | State of the running instance: tickets, blocks, runs. | yes |
@@ -61,11 +61,11 @@ A control `factory.yml` disables (ORC-381) is named right after the repository's
 
 ### `factory doctor [repo]`
 
-Check before entrusting a repository: refuses (exit code `1`) a CI that can expose secrets to the factory's branches (the repository's naming, `feat/*` and `fix/*` by default, and the legacy `factory/*`) without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are each under a protected environment with required reviewers (the only approval it credits, ORC-283).
+Check before entrusting a repository, run where the daemon runs (`docker compose exec factoryd …` under compose, [`github.md`](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)): refuses (exit code `1`) a host whose engine (`FACTORY_CONTAINER_CLI`, asked with `info`) cannot limit the sandbox (no cgroup v2, or no limit through the `cpu`, `memory` and `pids` controllers), a default branch with neither a classic protection nor a ruleset requiring a pull request that the App cannot bypass ([branch protection](github.md#branch-protection-required-by-factory-doctor)), and a CI that can expose secrets to the factory's branches (the repository's naming, `feat/*` and `fix/*` by default, and the legacy `factory/*`) without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are each under a protected environment with required reviewers (the only approval it credits, ORC-283).
 
-- Reads `.github/workflows` and `GET /repos/{owner}/{repo}/environments` with the GitHub App: no `gh` fallback.
+- Reads `.github/workflows`, `GET /repos/{owner}/{repo}/environments` and the default branch's protection with the GitHub App: no `gh` fallback.
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
-- `--json`: machine report (workflows, triggers, secrets yes/no, environments, verdict).
+- `--json`: machine report (`host`, `branchProtection`, workflows with their triggers, secrets yes/no, environments and verdict; `accepted` false on any refusal).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
 - Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
 - Warns when the project of the repository checked has a spec gate no validator can pass (ORC-421): `authz.validators` empty in `config.yaml`, every ticket stops at the gate, as its initiator cannot approve; a lone validator, the tickets they delegate themselves. `factory/fantome` projects approve their own specs. Said before the workflows, also by the daemon at its start; the verdict does not change; `--json` has the lines under `validatorWarnings`.

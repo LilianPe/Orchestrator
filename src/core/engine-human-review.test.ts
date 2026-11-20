@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
+import { factoryDefault } from '../presets/factory-default.js';
 import { fantome } from '../presets/fantome.js';
 import type { Role } from './authz.js';
 import type { Decision, Effect } from './decision.js';
@@ -97,6 +98,14 @@ describe('human review feedback goes back through fix → verify → AI review �
     const out = decide(inHumanReview(), reviewed('Rename it.'), presetWorkflow(fantome));
     expect(out).toMatchObject({ events: [], effects: [], timers: [] });
     expect(out.trace).toContain('pr.reviewed: no reaction, the preset has no round of human review');
+  });
+
+  it("a merge gate with no way back starts no round for a message either: it waits in the inbox (ORC-417)", () => {
+    const noRound = presetWorkflow({ ...factoryDefault, steps: factoryDefault.steps.map((s) => (s.id === 'human_review' ? { ...s, onFailure: undefined } : s)) });
+    const out = decide(inHumanReview(), event('session.prompted', { body: 'Rename it.', author: 'Lilian', linearSessionId: 's1', kind: 'instruction' }), noRound);
+    expect(out.timers).toEqual([]);
+    expect(starts(out)).toEqual([]);
+    expect(out.trace).toContain('no rule for session.prompted');
   });
 
   it('out of Human Review a review is kept and starts nothing: no uncounted fix, no fix that skips the AI review', () => {
