@@ -4,7 +4,7 @@ import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
-import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
+import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
@@ -101,12 +101,6 @@ function proposal({ setup, commands, preview }: Detected): string | undefined {
     (Object.keys(checks).length ? stringify(checks) : '') +
     (preview ? `# What starts the application for the visual proof: it must listen on PORT.\n${stringify({ preview })}` : '');
   return text ? PROPOSAL_HEADER + text : undefined;
-}
-
-/** Whether two paths name one directory: an entry an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
-  return norm(a) === norm(b);
 }
 
 export async function runInit(d: InitDeps): Promise<void> {
