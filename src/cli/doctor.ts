@@ -646,34 +646,72 @@ export interface InstallationReport {
   warnings?: string[];
 }
 
-const NO_ADMINISTRATION = 'installed without the Administration permission';
+const NO_FORBIDDEN = 'installed without the Administration or Workflows permission';
 
-/** Where each Administration permission is removed: the repository's, and the organization's, which edits its rulesets. */
-const ADMINISTRATION = { administration: 'Repository permissions → Administration', organization_administration: 'Organization permissions → Administration' };
+/** A permission the App must hold at no level: where each of its kinds is removed, and what it would let the daemon do. */
+interface Forbidden {
+  name: string;
+  settings: Record<string, string>;
+  risk: string;
+}
+
+const FORBIDDEN: Forbidden[] = [
+  // The repository's rulesets, and the organization's (ORC-439).
+  {
+    name: 'Administration',
+    settings: { administration: 'Repository permissions → Administration', organization_administration: 'Organization permissions → Administration' },
+    risk: 'the daemon could edit or delete the rules that keep it from merging alone',
+  },
+  // A workflow pushed after doctor read them (ORC-441).
+  { name: 'Workflows', settings: { workflows: 'Repository permissions → Workflows' }, risk: "the daemon could push a workflow that exposes the repository's secrets, after doctor read the workflows" },
+];
+
+/** The forbidden permissions the installation holds, each with the kinds it holds. */
+const heldForbidden = (permissions: Record<string, string>) =>
+  FORBIDDEN.map((forbidden) => ({ ...forbidden, held: Object.keys(forbidden.settings).filter((permission) => permissions[permission] !== undefined) })).filter(
+    (forbidden) => forbidden.held.length > 0,
+  );
+
+/** `actions: write` lets the daemon re-run, cancel or dispatch workflows and delete their logs: warned, not refused (ORC-441). */
+function actionsWarnings(permissions: Record<string, string>): string[] {
+  const level = permissions['actions'];
+  if (level === undefined || level === 'read') return [];
+  return [
+    `Warning: the App is installed with actions (${level}): the daemon could re-run, cancel or dispatch workflows and delete their runs' logs and artifacts; the manifest asks read. ` +
+      "In the App's settings (Permissions & events), set Repository permissions → Actions to Read-only and save, then accept the change in the installation " +
+      '(Settings → Applications → Installed GitHub Apps → Configure).',
+  ];
+}
 
 /**
- * Whether the App's installation keeps out of the protection it is held by (ORC-439): with Administration, the repository's
- * or the organization's, read or write, it could edit or delete the rulesets that keep it from merging alone.
+ * Whether the App's installation keeps out of the protection it is held by: with Administration, the repository's or the
+ * organization's, read or write, it could edit or delete the rulesets that keep it from merging alone (ORC-439); with
+ * Workflows, at any level, push a workflow that exposes the secrets (ORC-441). `actions: write` only warns.
  */
 function judgeInstallation(permissions: Record<string, string>): InstallationReport {
-  const held = Object.entries(ADMINISTRATION).filter(([permission]) => permissions[permission] !== undefined);
-  if (held.length === 0) return { permissions, verdict: 'accepted', reasons: [NO_ADMINISTRATION] };
+  const warnings = actionsWarnings(permissions);
+  const held = heldForbidden(permissions);
   return {
     permissions,
-    verdict: 'refused',
-    reasons: [
-      `installed with ${held.map(([permission]) => `${permission} (${permissions[permission]})`).join(' and ')}: ` +
-        'the daemon could edit or delete the rules that keep it from merging alone. ' +
-        "Remove it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), " +
-        `set ${held.map(([, setting]) => setting).join(' and ')} to No access and save, then check in the installation (Settings → Applications → ` +
-        'Installed GitHub Apps → Configure) that Administration is no longer listed (docs/github-app-manifest.json).',
-    ],
+    ...(held.length === 0
+      ? { verdict: 'accepted', reasons: [NO_FORBIDDEN] }
+      : {
+          verdict: 'refused',
+          reasons: held.map(
+            ({ name, settings, risk, held: kinds }) =>
+              `installed with ${kinds.map((permission) => `${permission} (${permissions[permission]})`).join(' and ')}: ${risk}. ` +
+              "Remove it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), " +
+              `set ${kinds.map((permission) => settings[permission]).join(' and ')} to No access and save, then check in the installation (Settings → Applications → ` +
+              `Installed GitHub Apps → Configure) that ${name} is no longer listed (docs/github-app-manifest.json).`,
+          ),
+        }),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 
 /**
  * An installation that could not be read. A failed call (network, authentication) is a warning, never the verdict; an answer
- * GitHub gave without readable permissions refuses, never taken for one without Administration (ORC-273).
+ * GitHub gave without readable permissions refuses, never taken for one without them (ORC-273).
  */
 function unreadInstallation(error: unknown): InstallationReport {
   if (error instanceof UnreadableAnswerError) return { verdict: 'refused', reasons: [`Cannot read the installation's permissions: ${error.message}`] };
@@ -682,7 +720,7 @@ function unreadInstallation(error: unknown): InstallationReport {
     reasons: ['not checked, see the warning'],
     warnings: [
       `Warning: the App's installation permissions not read: ${errorMessage(error)}. ` +
-        'Check by hand that the installation does not hold Administration (Settings → Applications → Installed GitHub Apps → Configure).',
+        'Check by hand that the installation holds neither Administration nor Workflows, and Actions at read only (Settings → Applications → Installed GitHub Apps → Configure).',
     ],
   };
 }
@@ -724,6 +762,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const protection = await protectionRead;
   const installation = await installationRead;
   const unchecked = installation.verdict === 'unchecked';
+  const installationWarned = installation.warnings !== undefined;
   const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
@@ -737,7 +776,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
       ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
       : []),
     ...(installation.verdict === 'refused'
-      ? [installation.permissions ? 'the GitHub App is installed with the Administration permission' : "the GitHub App installation's permissions cannot be read"]
+      ? [installation.permissions ? installedWith(installation.permissions) : "the GitHub App installation's permissions cannot be read"]
       : []),
     ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
   ];
@@ -773,12 +812,18 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? `Result: accepted — a cgroup v2 host, a protected default branch, ${unchecked ? '' : 'an App installed without Administration, '}and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. ` +
-            `Check by hand what the warning under the default branch names${unchecked ? ', and the one under the GitHub App installation' : ''}.`
+        ? `Result: accepted — a cgroup v2 host, a protected default branch, ${unchecked ? '' : 'an App installed without Administration or Workflows, '}and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. ` +
+            `Check by hand what the warning under the default branch names${installationWarned ? ', and the one under the GitHub App installation' : ''}.`
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
   return accepted ? 0 : 1;
+}
+
+/** The refusal of an installation holding forbidden permissions, named. */
+function installedWith(permissions: Record<string, string>): string {
+  const names = heldForbidden(permissions).map(({ name }) => name);
+  return `the GitHub App is installed with the ${names.join(' and ')} permission${names.length > 1 ? 's' : ''}`;
 }
 
 /** The ignored workflow files and the warnings in the JSON report, each only when there is one. */
