@@ -265,9 +265,9 @@ const apiLabel = (method: string, path: string) => `GitHub API ${method} ${path.
  * A 2xx answer that is not what the endpoint documents: never read as an empty list (ORC-273). `secret`: the answer
  * may carry a credential, so no part of it goes in the error.
  */
-function unreadable(method: string, path: string, what: string, data: unknown, secret = false): Error {
+function unreadable(method: string, path: string, what: string, data: unknown, secret = false): UnreadableAnswerError {
   const shown = secret ? '' : `: ${data === undefined ? 'undefined' : excerpt(JSON.stringify(data))}`;
-  return new Error(`${apiLabel(method, path)}: unreadable answer, not ${what}${shown}`);
+  return new UnreadableAnswerError(`${apiLabel(method, path)}: unreadable answer, not ${what}${shown}`);
 }
 
 /** `/repos/{owner}/{name}`, encoded. */
@@ -318,6 +318,11 @@ export class GitHubApiError extends Error {
     if (apiMessage) this.apiMessage = apiMessage;
     this.rateLimited = rateLimited;
   }
+}
+
+/** GitHub answered with a 2xx it cannot read: told apart from a call that failed (`doctor` refuses it, ORC-439). */
+export class UnreadableAnswerError extends Error {
+  override readonly name = 'UnreadableAnswerError';
 }
 
 /**
@@ -375,8 +380,13 @@ export class GitHubAppAuth {
     return request;
   }
 
+  /** The App's own JWT, for the few endpoints an installation token cannot call (`/repos/{owner}/{repo}/installation`). */
+  protected appJwt(now = this.now()): string {
+    return createAppJwt(this.appId, this.#privateKey, now);
+  }
+
   private async fetchInstallationToken(repo: GitHubRepoRef, now: number): Promise<string> {
-    const jwt = createAppJwt(this.appId, this.#privateKey, now);
+    const jwt = this.appJwt(now);
     const installationId = this.installationId ?? (await this.findInstallationId(repo, jwt));
     const data = await this.read(
       'POST',
@@ -459,7 +469,7 @@ export class GitHubAppAuth {
           : text.slice(0, 200);
       throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined, isRateLimit(res, message));
     }
-    if (!json) throw new Error(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
+    if (!json) throw new UnreadableAnswerError(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
     return data;
   }
 

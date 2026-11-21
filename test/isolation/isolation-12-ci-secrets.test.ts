@@ -37,10 +37,11 @@ describe.skipIf(skip)(title, () => {
 
   it("doctor accepts the test repository, whose CI reads a secret behind a human's approval; without it, refuses", async () => {
     const live = new GitHubAppApi(appOptions());
-    // The CI secret check alone: the host and the branch protection (ORC-208) are other verdicts, held accepted here.
+    // The CI secret check alone: the host, the branch protection (ORC-208) and the App's installation (ORC-439) are other verdicts, held accepted here.
     const branchProtection = async () => ({ branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] });
+    const installationPermissions = async () => ({});
     const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
-    const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection };
+    const api = { listWorkflows: (p: string) => live.listWorkflows(p), listEnvironments: (p: string) => live.listEnvironments(p), branchProtection, installationPermissions };
     const lines: string[] = [];
     expect(await runDoctor({ repoPath: REPO, api, host, out: (l) => lines.push(l), json: true }), lines.join('\n')).toBe(0);
     const report = JSON.parse(lines.join('\n')) as { workflows: { path: string; secrets: boolean; verdict: string }[] };

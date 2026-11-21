@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../../adapters/exec.js';
 import type { HttpClient, HttpRequest } from '../forge/github-app.js';
+import { UnreadableAnswerError } from './github-app.js';
 import { GitHubAppApi } from './github-app-api.js';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -278,5 +279,33 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
     ['a rule without its ruleset', { default_branch: 'main' }, { protected: true, protection: { enabled: true } }, [{ type: 'pull_request' }]],
   ])('rejects, never reads "protected", %s', async (_case, repo, branch, rules) => {
     await expect(makeApi(protectionRoutes(branch, rules, repo)).branchProtection('/repo')).rejects.toThrow(/unreadable answer/);
+  });
+});
+
+describe('GitHubAppApi.installationPermissions (ORC-439)', () => {
+  it("reads the repository's installation with the App's JWT, never an installation token", async () => {
+    const calls: Call[] = [];
+    const api = makeApi([tokenRoute(), (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: { contents: 'write', administration: 'write' } } } : undefined)], calls);
+    expect(await api.installationPermissions('/repo')).toEqual({ contents: 'write', administration: 'write' });
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/repos/acme/app/installation']);
+    const [scheme, jwt] = (calls[0]!.headers.authorization ?? calls[0]!.headers.Authorization ?? '').split(' ');
+    expect(scheme).toBe('Bearer');
+    expect(jwt?.split('.')).toHaveLength(3);
+  });
+
+  it.each([{ id: 42 }, { id: 42, permissions: { administration: 'write', contents: null } }, '<html>Bad gateway</html>'])(
+    'rejects an installation answered without readable permissions as unreadable, apart from a failed call: %j',
+    async (body) => {
+      const http: HttpClient = async () => ({ ok: true, status: 200, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) });
+      const api = new GitHubAppApi({ appId: '123', privateKey: privatePem, http, exec, now: () => NOW });
+      await expect(api.installationPermissions('/repo')).rejects.toThrow(UnreadableAnswerError);
+      await expect(api.installationPermissions('/repo')).rejects.toThrow(/unreadable answer/);
+    },
+  );
+
+  it('rejects a refused call as a GitHub error, not as an unreadable answer', async () => {
+    const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 401, body: { message: 'Bad credentials' } } : undefined)]);
+    await expect(api.installationPermissions('/repo')).rejects.toThrow(/401 Bad credentials/);
+    await expect(api.installationPermissions('/repo')).rejects.not.toThrow(UnreadableAnswerError);
   });
 });
