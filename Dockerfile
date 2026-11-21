@@ -1,11 +1,8 @@
 FROM node:24.22.1-bookworm-slim
-# gh until the daemon reads by the GitHub App alone (ORC-181); the engine's CLI to create the runners (ORC-203).
+# The engine's CLI to create the runners (ORC-203); not the GitHub CLI: the daemon reads and publishes by its GitHub App alone (ORC-181).
 ARG DOCKER_CLI_VERSION=29.9.3
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates curl gnupg bash \
- && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
- && apt-get update && apt-get install -y --no-install-recommends gh \
+ && apt-get install -y --no-install-recommends git ca-certificates curl bash \
  && rm -rf /var/lib/apt/lists/*
 RUN arch="$(uname -m)" \
  && curl -fsSL "https://download.docker.com/linux/static/stable/${arch}/docker-${DOCKER_CLI_VERSION}.tgz" | tar -xz -C /usr/local/bin --strip-components=1 docker/docker

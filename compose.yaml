@@ -32,8 +32,6 @@ services:
       CLAUDE_TOKEN_1:
       CLAUDE_TOKEN_2:
       ANTHROPIC_API_KEY:
-      # Until the gh CLI goes (ORC-181): the factory's own publication goes by the GitHub App.
-      GH_TOKEN: ${GH_TOKEN:?définissez GH_TOKEN (lecture HTTPS et gh pr)}
       # The dashboard's GitHub sign-in (ORC-399): factoryd listens beyond its loopback and refuses to start without the App's
       # OAuth client, from factory.yml (github.client_id, client_secret: env:...) or from these. Unset here, unset in the container.
       GH_APP_CLIENT_ID:
