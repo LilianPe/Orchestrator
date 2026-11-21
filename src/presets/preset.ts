@@ -1,6 +1,7 @@
 import type { NetworkLevel } from '../adapters/sandbox/types.js';
 import type { Approvers } from '../core/diff-class.js';
-import type { PickupCheck, ReviewLens } from '../core/workflow.js';
+import type { LogicalState } from '../core/types.js';
+import type { PickupCheck, Post, ReviewLens } from '../core/workflow.js';
 import { NETWORK_RANK } from '../network/levels.js';
 import { hashCanonical } from '../runtime/workflow-version.js';
 import { checkBudgets, type BudgetCaps } from './budget.js';
@@ -48,7 +49,19 @@ export interface Preset {
    * written in the spec, which the preset approves itself. Reserved to `factory/fantome`.
    */
   level?: 'rapide';
+  /**
+   * The logical state each step shows while it works or waits (ORC-382), the step → status table frozen with the preset's version
+   * (decided 15/11): a step moves the ticket when the chain reaches it, to the Linear status `Workflow.states` names for it. A step
+   * whose status has no name there (`spec`, unless `factory.yml` names one) moves nothing, nor does `todo`, a human's status.
+   */
+  statuses: Readonly<Record<string, StepStatus>>;
+  /** What the end of each step posts in the ticket's session (ORC-391), frozen with the preset as its statuses are. */
+  posts: Readonly<Record<string, Post>>;
 }
+
+/** The logical states a step can show (ORC-382): `done` is a human's merge decision, `cancelled` read on the Linear type. */
+export const STEP_STATUSES = ['todo', 'spec', 'dev', 'ai_review', 'human_review'] as const satisfies readonly LogicalState[];
+export type StepStatus = (typeof STEP_STATUSES)[number];
 
 export interface FailureEdge {
   goto: string;
@@ -138,6 +151,11 @@ export function compilePreset(preset: Preset, options: CompileOptions = {}): Com
   if (!isPositiveInt(preset.regroup.minutes)) violations.push('regroup: minutes must be a positive integer');
   checkEdge('redCi', preset.redCi);
   checkEdge('conflict', preset.conflict);
+  for (const [id, status] of Object.entries(preset.statuses)) {
+    if (!byId.has(id)) violations.push(`statuses: ${id} is not a step`);
+    if (!(STEP_STATUSES as readonly string[]).includes(status)) violations.push(`statuses of ${id}: ${status} is not a status a step shows (${STEP_STATUSES.join(', ')})`);
+  }
+  for (const id of Object.keys(preset.posts)) if (!byId.has(id)) violations.push(`posts: ${id} is not a step`);
   for (const [cls, actions] of Object.entries(preset.approvers)) {
     if (!actions.includes('done_merge')) violations.push(`approvers of ${cls}: a human done_merge is required, the factory never merges on its own`);
   }

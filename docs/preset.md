@@ -223,7 +223,7 @@ Every section is optional to the schema: a missing one is `spec_check`'s verdict
 
 **`spec_check`**, deterministic, at the end of the job: every section present (an empty list counts), at least one criterion and none empty, each property with its statement, domain and target, and each decision `clarify` recorded on the ticket carried in `decisions` with the answer given (read once `TicketState.decisions` exists, ORC-210). A spec that fails goes back to the job once (counter `spec_check`, `limits.specCheckReturns`), in a session of its own, with what is wrong and the refused draft (« Spec refused by spec_check »); the next failure blocks the ticket on the job, step `spec_check`, cause « failed ». A spec that passes resets the count.
 
-**Publication.** A spec that passes is a new version of the ticket's spec (`TicketState.spec`: its job, its number, its content, when), without approval. The factory posts it in the ticket's Linear session, through the `OutputPolicy` like every text it publishes: « Spec published (risk: medium). 3 acceptance criteria → tests. », the sections in a fixed order, then the commands. The ticket does not move (it stays in Todo, the spec in its session, until ORC-139 decides on a « Spec » status) and is not blocked: it waits for the review.
+**Publication** (ORC-382, decision ORC-139). A spec that passes is a new version of the ticket's spec (`TicketState.spec`: its job, its number, its content, when), without approval. The factory publishes it in a **comment of the ticket** (« **Spec, version 2** », the sections in a fixed order, then where to reply), through the `OutputPolicy` like every text it publishes; each version is a new comment. Past `spec.threshold` of `factory.yml` (5 000 characters by default) the spec goes to a **Linear document linked to the ticket** (« REL-12: spec, version 2 »), and the comment gives its goal, its criteria count and the document's link (`spec.publish: comment+doc`, the default; `comment` keeps it in the comment whatever its size, `doc` always uses the document; a tracker that keeps no document gets the whole spec in the comment). Then the ticket's Linear session, where the commands are replied, says « Spec published (risk: medium). 3 acceptance criteria → tests. Version 2, waiting for review. », where to read it, and the commands. One outbox effect, `publish_spec`, makes the three writes, each found again on a replay ([idempotency](idempotency.md)). The ticket is not blocked: it waits for the review. It shows the status `factory.yml` gives `spec_draft`, if any ([Linear statuses](#linear-statuses)); otherwise it stays in Todo.
 
 **`spec_review`**, a human gate always at the MVP. Three commands, replied in the ticket's session (a reply, not only after a mention: `webhook.ts` reads them as commands, never as feedback), all three reserved for the project's designated validators and never the run's initiator (matrix row `validate_spec`, ORC-186), checked even on an event without resolved roles. Refused, the command is traced (`authz: refused validate_spec …`) and answered in the session; sent anywhere else (a mention, another session), it is refused as not through this channel; written as a plain comment on the ticket, it is not read (a comment is read only as the reply to a block).
 
@@ -421,7 +421,7 @@ The end of a job walks its step's `next` past the steps the engine runs itself a
 - an agent step: its job starts (the first lens of a review; a `fix` starts only by its cause, on a failure edge);
 - a human gate, the merge, or the end of the run (`next: null`): nothing starts.
 
-The ticket moves to the status of the step reached (`STEP_STATUS`, ORC-170's names: `build` In Progress, `review` AI Review, `human_review` Human Review); the chain's entry moves it at its own launch instead, wherever it starts from. What is posted comes from the step that ended (`STEP_POST`): the build's summary, a fix's reply, the review (by its last lens). A review lens hands over to the next lens of its step. A relayed answer ends where it is (ORC-375). At the Rapide level nothing moves nor is posted. `/approve` passes the spec gate: the walk goes on from it.
+The ticket moves to the status of the step reached (the preset's `statuses`, to the Linear name `states` gives it, [Linear statuses](#linear-statuses): by default `build` In Progress, `review` AI Review, `human_review` Human Review); the chain's entry moves it at its own launch instead, wherever it starts from. What is posted comes from the step that ended (the preset's `posts`): the build's summary, a fix's reply, the review (by its last lens). A review lens hands over to the next lens of its step. A relayed answer ends where it is (ORC-375). At the Rapide level nothing moves nor is posted. `/approve` passes the spec gate: the walk goes on from it.
 
 The chain's entry is the preset's, `intake` (ORC-395); only tests start a chain later, at `build`. The entry moves the ticket at its launch to its step's status, which `intake` has none of: the ticket shows In Progress from the end that reaches `build` on. The review's fix (`fix-review`) is the fix of the review step's failure edge; a round of human review (`fix-human`) is the fix of the merge gate's.
 
@@ -490,17 +490,20 @@ The jobs of `factory/default`:
 
 ### Linear statuses
 
-The five **logical states** and the Linear status each one names (`states`):
+The **logical states** and the Linear status each one names (`states`), ORC-170's by default:
 
-| Logical state | Linear status |
-|---|---|
-| `todo` | `Todo` |
-| `dev` | `In Progress` |
-| `human_review` | `Human Review` |
-| `ai_review` | `AI Review` |
-| `done` | `Done` |
+| Logical state | Linear status | Step that shows it (`statuses` of the preset) |
+|---|---|---|
+| `todo` | `Todo` | `intake` (set by a human, never by the factory) |
+| `spec` | none, unless `factory.yml` names one | `spec_draft` |
+| `dev` | `In Progress` | `build` |
+| `ai_review` | `AI Review` | `review` |
+| `human_review` | `Human Review` | `human_review` |
+| `done` | `Done` | none: a human's merge decision |
 
-`ready` ("Ready to Merge") is gone (ORC-170). A repository cannot rename them since ORC-388 (ORC-382 makes them configurable). `cancelled` has no name: it is read on the Linear type *Canceled* ([`linear.md`](linear.md#5-states-columns-and-labels)). No other state name is accepted. During « Connect Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
+**The step → status table** (ORC-382) is part of the preset, frozen with its version (decided 15/11), as is the step → post table (`posts`: the build's summary, a fix's reply, the review). The ticket moves to a step's status when the chain reaches that step (the chain's entry at its launch); a step with no status, such as `tests`, leaves the ticket where it is. **`statuses` in `factory.yml`** gives the Linear name of each step's status, by step: `statuses: { spec_draft: Spec, build: Doing }` adds a « Spec » status, shown while the spec is drafted and reviewed, and renames In Progress. The daemon refuses to start on a step the preset does not have, a step with no status of its own, two steps of one status named differently, or one Linear name for two logical states. Whether the Linear team has the statuses is not known at load: `factory doctor` reads the team and warns of a missing one, as the daemon's log does once Linear is connected; « Connect Linear » creates the missing ones. A repository's `.factory/config.yml` cannot rename them (ORC-388).
+
+`ready` ("Ready to Merge") is gone (ORC-170). `cancelled` has no name: it is read on the Linear type *Canceled* ([`linear.md`](linear.md#5-states-columns-and-labels)). No other state name is accepted. During « Connect Linear », Relais creates the missing statuses in the team. A Linear status that is not mapped to any logical state is seen as "unknown": a move to it produces a `status.changed` with an empty `to`, which `from`/`to` rules do not recognize.
 
 ### Pickup checks
 

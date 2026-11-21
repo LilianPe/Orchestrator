@@ -39,7 +39,7 @@ describe('factory replay (ORC-174)', () => {
     expect(code).toBe(1);
     expect(out).toContain('stopped at the first divergence');
     // Both start at intake (ORC-395): they part at the spec's end, which the Rapide level approves itself instead of publishing it.
-    expect(out).toMatch(/event \S+ \(run\.finished, #5 of the journal\): effects\[0\]\.kind recorded "activity", replayed "start_run"/);
+    expect(out).toMatch(/event \S+ \(run\.finished, #5 of the journal\): effects\[0\]\.kind recorded "publish_spec", replayed "start_run"/);
   });
 
   it('--what-if refuses a preset the binary does not have, a workflow file included (ORC-389); exit code 2', async () => {
