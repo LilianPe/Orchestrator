@@ -96,6 +96,8 @@ const hasSource = (dir: string, budget: { left: number }) => finds(dir, budget, 
 const subdirs = (dir: string): string[] => entries(dir).filter((e) => e.isDirectory()).map((e) => e.name);
 
 const TEST_DIRS = ['test', 'tests'];
+/** Directories that hold tests and their helpers, never an area to test: `TEST_DIRS`, and those of Jest, specs and end-to-end runners. */
+const TEST_AREAS = new Set([...TEST_DIRS, '__tests__', 'spec', 'e2e', 'cypress']);
 
 /**
  * The source directories with no test file: those under `src/`, or at the root without one. An area is tested by a test file
@@ -105,7 +107,7 @@ function untested(repo: string): string {
   const budget = { left: WALK_LIMIT };
   const root = existsSync(join(repo, 'src')) ? 'src' : '';
   const areas = subdirs(join(repo, root))
-    .filter((d) => root || !TEST_DIRS.includes(d))
+    .filter((d) => !TEST_AREAS.has(d))
     .filter((d) => hasSource(join(repo, root, d), budget))
     .map((d) => ({ name: d, path: root ? `${root}/${d}` : d }));
   if (!areas.length) return 'no source directory found';

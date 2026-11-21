@@ -115,6 +115,11 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
   it("Django's tests.py tests its area", () => {
     expect(valueOf(repoOf({ 'shop/models.py': '', 'shop/tests.py': '' }))['untested']).toBe('none: every source directory has a test file');
   });
+
+  it('a directory of tests is no area without tests, under src/ or at the root', () => {
+    expect(valueOf(repoOf({ 'src/a/x.ts': '', 'src/a/x.test.ts': '', 'src/__tests__/util.ts': '', 'src/test/helpers.ts': '' }))['untested']).toBe('none: every source directory has a test file');
+    expect(valueOf(repoOf({ 'lib/x.ts': '', 'lib/x.test.ts': '', '__tests__/util.ts': '', 'e2e/fixtures.ts': '', 'cypress/support.ts': '', 'spec/helper.py': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
 });
 
 describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
