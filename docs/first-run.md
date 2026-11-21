@@ -6,7 +6,7 @@ The executable is `factory` (`npm link`, [`installation.md`](installation.md)), 
 
 ## 0. What you must create first
 
-Nothing below can be skipped for a real run: without a container engine nothing runs, without the GitHub App nothing is published, without a validator no spec is approved. Create each item, then put its value where the last column says.
+Nothing below can be skipped for a real run: without rootless Podman and the runner image nothing runs, since no run executes on this machine itself (ORC-179), without the GitHub App nothing is published, without a validator no spec is approved. Create each item, then put its value where the last column says.
 
 | # | What | How | Where the value goes |
 |---|---|---|---|
@@ -23,7 +23,7 @@ Nothing below can be skipped for a real run: without a container engine nothing 
 | 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `config.yaml`: `projects[].authz.validators` |
 | 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `config.yaml`: `projects[].authz.githubLogins` (Linear id → GitHub login) |
 
-Also on the machine: Node 24.22.1+, git and `claude` (no `gh`: the factory reads and publishes on GitHub by its App alone, ORC-181) ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
+Also on the machine: Node 24.22.1+ and git (no `claude`: it is the runner image's, run in the sandboxes; no `gh`: the factory reads and publishes on GitHub by its App alone, ORC-181) ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
 
 ## 1. Install
 
@@ -243,7 +243,7 @@ The GitHub webhooks line is expected locally: a merge or a CI verdict then reach
 
 | Output | Cause |
 |---|---|
-| `FACTORY_CONTAINER_CLI is not set: the agents would run on this machine, … ` and exit `1` | item 8: never set `FACTORY_ALLOW_HOST_RUNS=1` for a real ticket |
+| `FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container, there is no run on this machine. …` and exit `1` | items 8 and 9: install rootless Podman, build the runner image, and export `FACTORY_CONTAINER_CLI=podman` and `FACTORY_RUNNER_IMAGE`; there is no way to run on the host |
 | `Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.` | item 4: the App is not read, no PR will open |
 | `Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.` | item 7 not in the daemon's environment |
 | `Warning: <project>: no spec validator …` | item 11 |

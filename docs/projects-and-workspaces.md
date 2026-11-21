@@ -61,11 +61,11 @@ These are not `git worktree`s of the repository: each is a repository of its own
 Lifecycle of a ticket worktree:
 
 1. **Creation** on the first run: `git fetch origin`, then a new repository on the ticket's branch (reuses a remote branch, failing that a local one, with the same name or the ticket's older `factory/<id>-<slug>` name, otherwise creates it from `origin/<default branch>`). `.claude/` is masked there from that moment, except `.claude/CLAUDE.md`, including for the `setup`.
-2. **Setup**: the repository's `setup` ([`.factory/config.yml`](repository-configuration.md), e.g. `npm ci`) is run once, in a sandbox of its own, destroyed and its secrets sealed before the agent's starts (ORC-211), when `FACTORY_CONTAINER_CLI` is set; on the host otherwise. If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »); the next run starts from scratch.
+2. **Setup**: the repository's `setup` ([`.factory/config.yml`](repository-configuration.md), e.g. `npm ci`) is run once, in a sandbox of its own, destroyed and its secrets sealed before the agent's starts (ORC-211), never on the host (ORC-179). If one fails, the worktree is deleted and the ticket blocked (« Launch error: The worktree setup failed: <command> »); the next run starts from scratch.
 3. **Reuse**: the ticket's following runs (feedback, CI, review) pick up the same worktree, without setup.
 4. **Cleanup**: when the PR is merged (the preset's `after_merge` step, followed by the cleanup, ORC-197), the directory is deleted, its `.git` with it: a commit the agent had not pushed disappears.
 
-Each question, and each lens of an AI review, has its own `_trunk/<runId>/`, created for it and deleted when it ends.
+Each question, and each lens of an AI review, has its own `_trunk/<runId>/`, created for it, mounted in its sandbox alone, and deleted when it ends: no worktree is shared on the host (ORC-179).
 
 What is **not** cleaned up automatically (to do by hand if disk space matters): directories of tickets whose PR was closed without merging or that were abandoned, the `_kb/<runId>` directories the `learn` and `remember` runs left before ORC-193, and a `_trunk/<runId>` whose daemon was killed mid-run. They are deleted like any directory, and git keeps no trace of them.
 
@@ -78,7 +78,7 @@ Details and examples: [`repository-configuration.md`](repository-configuration.m
 
 ### Ports
 
-Each run in a ticket's worktree receives a `PORT` variable unique among concurrent runs: the workflow's `workspace.portBase` (4200, fixed by the preset) + slot number (0 to `concurrency - 1`). If your tests or your dev server read `PORT`, several tickets can run in parallel without conflict. Runs on a clone (`ask`, `intake`, the AI review) do not receive one.
+Each run in a ticket's worktree receives a `PORT` variable: the workflow's `workspace.portBase` (4200, fixed by the preset), the same for every run, since each listens in a container of its own (ORC-179). Several tickets run in parallel without conflict on it. Runs on a clone (`ask`, `intake`, the AI review) do not receive one.
 
 ## Shared knowledge base
 

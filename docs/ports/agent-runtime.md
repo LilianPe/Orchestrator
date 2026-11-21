@@ -3,7 +3,7 @@
 Launch an agent on a prompt, follow its stream, stop it, and read its outcome. This is the current `Runner` port, not renamed as long as its shape does not change.
 
 - Interface: `Runner`, `RunRequest`, `RunHandle`, `RunResult` (`src/adapters/runner/types.ts`).
-- Implementations: `ClaudeCodeRunner` (`src/adapters/runner/claude-code.ts`, `claude -p` as a subprocess), `FakeRunner` (`src/adapters/runner/fake.ts`).
+- Implementations: `ClaudeCodeRunner` (`src/adapters/runner/claude-code.ts`, `claude -p` in the run's sandbox, through `SandboxProvider.spawnCommand`; a run without a sandbox refused, ORC-179), `FakeRunner` (`src/adapters/runner/fake.ts`).
 - Suite: `test/contracts/agent-runtime.contract.ts`, run by `src/adapters/runner/fake.test.ts` and `src/adapters/runner/claude-code.test.ts` (on the fake `claude` in `src/adapters/runner/fixtures/`, without network).
 
 ## Methods
