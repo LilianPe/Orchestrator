@@ -149,7 +149,7 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
 
   it('a Postgres image as the default of a variable, or the timescaledb-ha variant, is a Postgres; a variable alone is not (ORC-454)', () => {
     const compose = (image: string) => repoOf({ 'compose.yaml': `services:\n  db:\n    image: ${image}\n` });
-    for (const image of ['${PG_IMAGE:-postgres:16}', '"${PG_IMAGE-postgis/postgis:16-3.4}"', 'timescale/timescaledb-ha:pg16'])
+    for (const image of ['${PG_IMAGE:-postgres:16}', '"${PG_IMAGE-postgis/postgis:16-3.4}"', 'timescale/timescaledb-ha:pg16', '${REGISTRY}/postgres:16', '${REGISTRY:-docker.io}/library/postgres:16'])
       expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
     for (const image of ['${PG_IMAGE}', '${PG_IMAGE:?set it}', '${REDIS:-redis:7}']) expect(valueOf(compose(image))['services'], image).toBe('none');
   });
@@ -160,9 +160,17 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
 });
 
 describe('the maturity report on what it reads only in part (ORC-454)', () => {
-  it('a malformed entry of package.json is said on the Stack card, the dependencies read before it kept', () => {
+  it('a malformed entry of package.json is said on Stack, Services and Visual paths, the dependencies read before it kept', () => {
     const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { react: '^18.0.0', pg: 8 } }), 'package-lock.json': '{}' }));
     expect(v['stack']).toBe('Node (npm), React; package.json not fully read (the version of "pg" in "dependencies" is not a string): Stack, Services and Visual paths may miss some of its dependencies');
+    expect(v['services']).toBe('none; package.json not fully read (see Stack): a dependency may be missing');
+    expect(v['visual_paths']).toBe('none: a front end, but none of its usual directories; package.json not fully read (see Stack): a dependency may be missing');
+  });
+
+  it('a Postgres a compose file runs needs no dependency: Services says nothing of the manifest not fully read', () => {
+    const v = valueOf(repoOf({ 'package.json': '{', 'compose.yaml': 'services:\n  db:\n    image: postgres:16\n' }));
+    expect(v['services']).toBe('postgres (compose.yaml)');
+    expect(v['visual_paths']).toBe('none: no front-end framework detected; package.json not fully read (see Stack): a dependency may be missing');
   });
 
   it('a package.json that does not parse, a pyproject.toml either: each said, neither read as no dependency', () => {
@@ -170,8 +178,9 @@ describe('the maturity report on what it reads only in part (ORC-454)', () => {
     expect(v['stack']).toMatch(/^Node \(no lockfile\), Python \(uv\); package\.json not fully read \(invalid JSON .*\); pyproject\.toml not fully read \(unreadable TOML .*\): Stack, Services and Visual paths may miss some of their dependencies$/);
   });
 
-  it('well-formed manifests add nothing to the Stack card', () => {
-    expect(valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }))['stack']).toBe('Node (npm), Vue');
+  it('well-formed manifests add nothing to the cards', () => {
+    const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }));
+    expect([v['stack'], v['services'], v['visual_paths']]).toEqual(['Node (npm), Vue', 'none', 'none: a front end, but none of its usual directories']);
   });
 });
 
