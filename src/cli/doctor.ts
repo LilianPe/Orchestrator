@@ -161,10 +161,8 @@ export interface BranchProtectionReport extends Partial<BranchProtection> {
 }
 
 /**
- * GitHub returns a ruleset's `bypass_actors` only to an account that can edit it, the Administration write permission the App
- * must not have, and a classic protection's bypass settings need it too (ORC-428): who else bypasses goes unread. A run on the
- * host keeps the daemon's user and every git credential it holds (SSH keys, an HTTPS credential helper, a `gh` token): one
- * that is a bypass actor pushes to the default branch without a pull request.
+ * Told with every accepted protection (ORC-428): GitHub shows a ruleset's `bypass_actors` only with the Administration
+ * permission the App must not have, so a credential of the daemon's user that bypasses goes unread (docs/github.md).
  */
 const BYPASS_ACTORS_WARNING =
   'Warning: bypass actors not read: GitHub shows them only with the Administration permission, which the App is not given (docs/github-app-manifest.json). ' +
@@ -718,9 +716,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? `Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches.${
-            protection.warnings ? ' Check by hand what the warning under the default branch names.' : ''
-          }`
+        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. Check by hand what the warning under the default branch names."
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
