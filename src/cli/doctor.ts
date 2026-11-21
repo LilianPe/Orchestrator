@@ -967,11 +967,11 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     // An invalid factory.yml: said just below, by the load the check needs.
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
-  // What every failure from here reports: `--json` keeps its form whatever stops the check (ORC-449).
-  const instanceFailure = { repoPath: options.repoPath, out, visualProof, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
   let githubApp;
-  let validators: string[];
-  let relay: string[];
+  let validators: string[] = [];
+  let relay: string[] = [];
+  // What every failure from here reports, the warnings said so far included: `--json` keeps its form whatever stops the check (ORC-449).
+  const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, relayWarnings: relay, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
   let projects;
   let states;
   try {
@@ -994,11 +994,11 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     if (!unread) claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {
     // Through doctorFailure (ORC-449): `--json` stays JSON.
-    return doctorFailure(instanceFailure, errorMessage(error));
+    return doctorFailure(reportOf(), errorMessage(error));
   }
   // Its Linear team's statuses against factory.yml's (ORC-382): a warning, never the verdict.
   if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses })) out(line);
-  const report = { ...instanceFailure, validatorWarnings: validators, relayWarnings: relay };
+  const report = reportOf();
   if (!githubApp) {
     return doctorFailure(
       report,

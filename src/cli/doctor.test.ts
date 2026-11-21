@@ -1035,6 +1035,14 @@ describe('doctor --json on a refusal of the instance configuration (ORC-449)', (
     expect(JSON.parse(lines[0]!)).toMatchObject({ repoPath: '/repo', accepted: false, error: expect.stringMatching(/^invalid config\.yaml: port/), visualProof: { available: false } });
   });
 
+  it('keeps the warnings said before the refusal, as the text says them', async () => {
+    const home = tempHome();
+    saveInstance(home, { port: 4160, host: '127.0.0.1', relay: { kind: 'smee', url: 'https://smee.io/abc' }, projects: [], limits: {} });
+    const lines: string[] = [];
+    expect(await runDoctorCommand({ repoPath: '/repo', home, env: { GH_APP_ID: '456' }, json: true, out: (line) => lines.push(line) })).toBe(1);
+    expect(JSON.parse(lines.join('\n'))).toMatchObject({ error: expect.stringMatching(/^Incomplete GitHub App configuration/), relayWarnings: [expect.stringContaining('smee')] });
+  });
+
   it('stays JSON without the GitHub App', async () => {
     const lines: string[] = [];
     expect(await runDoctorCommand({ repoPath: '/repo', home: tempHome(), env: {}, json: true, out: (line) => lines.push(line) })).toBe(1);

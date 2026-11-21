@@ -43,10 +43,10 @@ export function checkHostRuns(env: NodeJS.ProcessEnv): void {
 export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress, o: { browserImage?: string; exec?: Exec } = {}): SandboxProvider | undefined {
   const cli = containerCli(env);
   if (!cli) return undefined;
-  // Another CLI, no runner image: the start refused them already (`checkHostRuns`); the other two tests narrow the types.
-  const [refusal] = sandboxRefusals(env);
+  // Another CLI, no runner image: the start refused them already, before anything opened.
+  checkHostRuns(env);
   const image = env['FACTORY_RUNNER_IMAGE'];
-  if (refusal || typeof cli !== 'string' || !image) throw new Error(refusal);
+  if (typeof cli !== 'string' || !image) throw new Error('sandboxRefusals let a sandbox environment through that it refuses.');
   const uid = process.getuid?.();
   const gid = process.getgid?.();
   if (uid === undefined || gid === undefined) throw new Error('The sandboxes require a daemon on Linux (uid and gid).');
