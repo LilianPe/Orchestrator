@@ -82,7 +82,7 @@ describe('docs/first-run.md', () => {
 
   it('reads the CLI definitions it checks against', () => {
     // A command or a flag the CLI does not define is told, so the check above cannot pass for want of reading.
-    expect(problem('factory dry-run')).toMatch(/not a command/);
+    expect(problem('factory teleport')).toMatch(/not a command/);
     expect(problem('factory doctor --fix')).toMatch(/--fix is not in the usage of `doctor`/);
     expect(problem('factory up --json')).toMatch(/--json is not in the usage of `up`/);
     expect(problem('factory up --fake-runner')).toBeUndefined();
