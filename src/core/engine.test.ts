@@ -788,7 +788,7 @@ describe('decide — built-ins', () => {
 
   describe('red CI loop bounded by limits.ci_fix_attempts (I5, ORC-270, ORC-184)', () => {
     const red = ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test', 'lint'] });
-    const inReview = (patch: Partial<TicketState> = {}) => ticket({ logical: 'human_review', ...patch });
+    const inReview = (patch: Partial<TicketState> = {}) => ticket({ logical: 'human_review', prNumber: 3, prState: 'OPEN', ...patch });
 
     it('starts fix-ci and counts it while the count is under the bound', () => {
       expect(workflow.limits.ciFixAttempts).toBe(2);
@@ -867,11 +867,33 @@ describe('decide — built-ins', () => {
       expect(out.events).toContainEqual({ type: 'ticket.patched', patch: { ciFixAttempts: 0 } });
     });
 
+    it('ignores, with a trace, a red CI of another PR or of a head a push left behind: no fix-ci, no count (ORC-466)', () => {
+      const failed = (number: number, headSha?: string) => ev('pr.checks_failed', { number, url: 'u', branch: 'b', failures: ['test'], ...(headSha ? { headSha } : {}) });
+      const ignored = (t: TicketState, e: FactoryEvent, why: string) => {
+        const out = decide(t, e, workflow);
+        expect(out).toEqual(decision());
+        expect(out.trace).toContainEqual(expect.stringContaining(why));
+      };
+      const counted = (t: TicketState, e: FactoryEvent) => expect(decide(t, e, workflow).events).toEqual([{ type: 'ticket.patched', patch: { ciFixAttempts: 1 } }]);
+      // The factory published `new` over `old`, then a human pushed `human` over `new`.
+      const pushed = [ev('publish.done', { runId: 'r1', job: 'fix-ci', sha: 'new', before: 'old' }), ev('push.human', { branch: 'b', sha: 'human', author: 'L', before: 'new' })];
+      const open = pushed.reduce((t, e) => reduce(t, e)!, inReview());
+      ignored(open, failed(2, 'human'), 'PR #2 is not the open PR of the ticket');
+      ignored({ ...open, prState: 'CLOSED' }, failed(3, 'human'), 'PR #3 is not the open PR of the ticket');
+      ignored(open, failed(3, 'old'), 'head old of PR #3 was left behind by a push since');
+      ignored(open, failed(3, 'new'), 'head new of PR #3 was left behind by a push since');
+      // The current head, a head not heard of yet (a push whose event is late), or a red CI recorded before ORC-466 with no head, is acted on.
+      for (const e of [failed(3, 'human'), failed(3, 'later'), failed(3)]) counted(open, e);
+      // A branch a human puts back on a head left behind makes it the PR's head again.
+      counted(reduce(open, ev('push.human', { branch: 'b', sha: 'new', author: 'L', before: 'human' }))!, failed(3, 'new'));
+    });
+
     it('counts nothing when no fix-ci starts: no rule, or a merged PR', () => {
-      expect(decide(ticket({ logical: 'dev', ciFixAttempts: 1 }), red, workflow)).toEqual(decision());
+      expect(decide(ticket({ logical: 'dev', prNumber: 3, prState: 'OPEN', ciFixAttempts: 1 }), red, workflow)).toEqual(decision());
       const merged = decide(inReview({ prState: 'MERGED', ciFixAttempts: 1 }), red, workflow);
       expect(merged).toEqual(decision());
-      expect(merged.trace).toContain('merged: refused fix-ci');
+      // A merged PR is no open PR: its red CI is ignored before any run is asked for (ORC-466).
+      expect(merged.trace).toContain('pr.checks_failed: PR #3 is not the open PR of the ticket, ignored');
     });
   });
 

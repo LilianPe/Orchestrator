@@ -7,6 +7,7 @@ const MAX_QUESTION_SESSIONS = 50;
 const MAX_ANSWERED_MESSAGES = 50;
 
 const MAX_HUMAN_PUSHES = 50;
+const MAX_LEFT_HEADS = 20;
 
 /**
  * Only an implementer's run empties the human inbox, and a ticket may never see one. What already had its answer (a
@@ -63,7 +64,20 @@ export function branchAnew(t: TicketState): TicketState {
   return t.humanPushes ? { ...t, humanPushes: undefined } : t;
 }
 
-function external(t: TicketState, e: FactoryEvent): TicketState {
+/**
+ * The head a push went over is left behind (ORC-466), the factory's push or a human's; the head it puts the branch on is not,
+ * whatever it was before. A push that names none (before ORC-338 or ORC-438) or makes the branch leaves none.
+ */
+function leftBehind(t: TicketState, e: FactoryEvent): TicketState {
+  if (e.type !== 'push.human' && e.type !== 'publish.done') return t;
+  const { sha, before } = e.payload;
+  const kept = (t.leftHeads ?? []).filter((h) => h !== sha && h !== before);
+  const left = before && before !== sha && !/^0+$/.test(before) ? [...kept, before].slice(-MAX_LEFT_HEADS) : kept;
+  return left.length || t.leftHeads ? { ...t, leftHeads: left } : t;
+}
+
+function external(state: TicketState, e: FactoryEvent): TicketState {
+  const t = leftBehind(state, e);
   switch (e.type) {
     case 'ticket.delegated':
       return reopened({ ...t, delegated: true, linearSessionId: t.linearSessionId ?? e.payload.linearSessionId });

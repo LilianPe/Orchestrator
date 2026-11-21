@@ -253,6 +253,7 @@ describe('standard workflow', () => {
   it('CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run; a green CI keeps the count (ORC-270, ORC-184 criterion 7)', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);
+    await h.send('pr.opened', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv' });
     const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
     const fixCi = async () => (await Promise.all(h.runner.requests.map(async (r) => (await h.store.getRun(r.runId))?.job))).filter((j) => j === 'fix-ci').length;
     await h.send('pr.checks_failed', red);

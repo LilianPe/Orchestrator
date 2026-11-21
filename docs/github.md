@@ -134,7 +134,7 @@ Events produced (see [`preset.md`](preset.md#reactions)):
 | Observation | Event | Standard pack |
 |---|---|---|
 | New PR for the branch | `pr.opened` | URL added to the Linear session |
-| CI turning red | `pr.checks_failed` (with the list of failing checks) | `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (the preset's `counters.review_ci`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`preset.md`](preset.md#limits)) |
+| CI turning red | `pr.checks_failed` (with the list of failing checks and the head they ran on, ORC-466) | ignored, with a trace, on another PR than the ticket's open one or on a head a push has left behind (ORC-466); then `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (the preset's `counters.review_ci`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`preset.md`](preset.md#limits)) |
 | CI turning green | `pr.checks_passed` | lifts the block caused by the red-CI limit; the count of the loop stays, one per run (ORC-184) |
 | PR merged | `pr.merged` | *Done*, the `after_merge` step (the requester mentioned with the PR's link, the changelog entry, ORC-197), worktree deleted, no run (ORC-193); after that, no more code runs on the ticket |
 | Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |

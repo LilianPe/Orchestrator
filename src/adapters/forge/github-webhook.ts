@@ -143,7 +143,7 @@ async function checks(body: any, kind: 'check_run' | 'check_suite', repo: string
   const name: string = kind === 'check_run' ? check.name : (check.app?.name ?? 'check suite');
   const verdict: Draft =
     bucket === 'fail'
-      ? { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures: live?.failedChecks.length ? live.failedChecks : [name] } }
+      ? { id: checksEventId(t.ticketId, read.number, 'fail', head), type: 'pr.checks_failed', payload: { ...read, failures: live?.failedChecks.length ? live.failedChecks : [name], headSha: head } }
       : { id: checksEventId(t.ticketId, read.number, 'pass', head), type: 'pr.checks_passed', payload: read };
   return { ticket: t, events: [...opened(t, read), verdict] };
 }

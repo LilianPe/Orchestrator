@@ -57,6 +57,19 @@ describe('GithubReconciler', () => {
     expect(events.map((e) => e.type)).toEqual(['pr.checks_failed', 'pr.checks_failed']);
   });
 
+  it('names the head a red CI was read on, when the forge reads it (ORC-466)', async () => {
+    const { store, forge, events, reconciler } = setup();
+    await store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, verifiedSha: 'h7' });
+    forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h7', checks: 'fail', failedChecks: ['t'] });
+    await reconciler.once();
+    expect(events.find((e) => e.type === 'pr.checks_failed')!.payload).toEqual({ number: 7, url: 'u', branch: 'b', failures: ['t'], headSha: 'h7' });
+    // The next head red at the next pass, no pending read between: its own red CI, which a stale one ignored does not hide.
+    await store.putTicket({ ...(await store.getTicket('p', 'REL-1'))!, verifiedSha: 'h8' });
+    forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: 'h8', checks: 'fail', failedChecks: ['t'] });
+    await reconciler.once();
+    expect(events.filter((e) => e.type === 'pr.checks_failed').map((e) => e.payload)).toEqual([expect.objectContaining({ headSha: 'h7' }), expect.objectContaining({ headSha: 'h8' })]);
+  });
+
   it('isolates a failing ticket and logs', async () => {
     const logs: string[] = [];
     const events: FactoryEvent[] = [];
