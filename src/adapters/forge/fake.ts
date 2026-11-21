@@ -59,7 +59,7 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     const pr = [...this.prs.values()].find((p) => p.number === prNumber);
     if (!pr) throw new Error(`no pull request #${prNumber}`);
     const failed = pr.failedChecks.map((name) => ({ name, conclusion: 'failure', noLog: 'the fake forge keeps no log' }));
-    return { head: pr.headSha ?? '', failed, base: { branch: this.defaultBranch, checks: 'pass', failedChecks: [] } };
+    return { head: pr.headSha ?? '', failed, base: { branch: this.defaultBranch, sha: '', checks: 'pass', failedChecks: [] } };
   }
 
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

@@ -27,6 +27,8 @@ export interface HttpResponse {
   /** Read for the rate limit headers of a refusal (`retry-after`, `x-ratelimit-remaining`). */
   headers?: { get(name: string): string | null };
   text(): Promise<string>;
+  /** The body's last `bytes`, read as it streams, never held whole (an Actions job's log, ORC-459); absent, `text()` is cut. */
+  tail?(bytes: number): Promise<string>;
 }
 
 /** Injected in tests: no unit test ever reaches the network. */
@@ -34,8 +36,19 @@ export type HttpClient = (url: string, init: HttpRequest) => Promise<HttpRespons
 
 export const fetchHttp: HttpClient = async (url, init) => {
   const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body });
-  return { ok: res.ok, status: res.status, headers: res.headers, text: () => res.text() };
+  return { ok: res.ok, status: res.status, headers: res.headers, text: () => res.text(), tail: (bytes) => streamTail(res.body, bytes) };
 };
+
+/** The last `bytes` of a body, kept as it streams: the memory one chunk past them, whatever the body weighs. */
+export async function streamTail(body: ReadableStream<Uint8Array> | null, bytes: number): Promise<string> {
+  if (!body) return '';
+  let kept = Buffer.alloc(0);
+  for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    kept = Buffer.concat([kept, chunk]);
+    if (kept.length > bytes) kept = kept.subarray(kept.length - bytes);
+  }
+  return kept.toString('utf8');
+}
 
 /** GitHub rejects installation tokens older than one hour; cache them with a safety margin. */
 export const TOKEN_SAFETY_MARGIN_MS = 60_000;
@@ -493,12 +506,13 @@ export class GitHubAppAuth {
   /**
    * The HTTP exchange: a refusal throws a `GitHubApiError`, with GitHub's message when it gives one; else the answer's text.
    */
-  async #exchange(method: string, path: string, auth: string, body: unknown): Promise<string> {
+  async #exchange(method: string, path: string, auth: string, body: unknown, tail?: number): Promise<string> {
     const res = await this.http(`${this.apiBase}${path}`, {
       method,
       headers: { ...githubApiHeaders(auth), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+    if (res.ok && tail !== undefined) return res.tail ? res.tail(tail) : (await res.text()).slice(-tail);
     const text = await res.text();
     if (res.ok) return text;
     let data: unknown;
@@ -514,9 +528,13 @@ export class GitHubAppAuth {
     throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined, isRateLimit(res, message));
   }
 
-  /** A GET whose answer is plain text, not JSON (an Actions job's log, ORC-459). */
-  protected readText(path: string, auth: string): Promise<string> {
-    return this.#exchange('GET', path, auth, undefined);
+  /**
+   * The end of a GET whose answer is plain text, not JSON (an Actions job's log, ORC-459): its last `bytes`, without the line
+   * the cut fell in, whose start is gone (a secret cut there would escape its mask).
+   */
+  protected async readTail(path: string, auth: string, bytes: number): Promise<string> {
+    const text = await this.#exchange('GET', path, auth, undefined, bytes);
+    return text.length < bytes ? text : text.slice(text.indexOf('\n') + 1);
   }
 
   /**
@@ -589,7 +607,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
 
   /**
    * What the fix of a red CI reads (ORC-459), its run having no token: the failed checks of the PR's head, the factory's own left
-   * out, each with the end of its log, and the CI of the base branch at its tip. An Actions job's log is read by its check run's
+   * out, each with the end of its log, and the CI of the base branch on the commit the PR is compared with. An Actions job's log is read by its check run's
    * id, which is the job's (the App's `actions: read`); another CI's check run gives the report it attached; a commit status, its
    * description. Only the first `MAX_LOGS` logs are read. A log the forge refuses (expired, a permission) is said, not thrown: the
    * names still go to the agent; a transient refusal throws, to be read again.
@@ -602,7 +620,7 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const [runs, statuses, base] = await Promise.all([
       this.allPages(`${head}/check-runs`, 'check_runs', 'a list of check runs', isReportedRun, token),
       this.allPages(`${head}/status`, 'statuses', 'a list of commit statuses', isDescribedStatus, token),
-      this.checksFor(repo, pr.base.ref, token),
+      this.checksFor(repo, pr.base.sha, token),
     ]);
     const failedRuns = runs.filter((run) => !isFactoryCheck(run, this.appId) && checkRunBucket(run) === 'fail');
     const failed: FailedCheck[] = [
@@ -611,18 +629,19 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
         .filter((status) => statusBucket(status.state) === 'fail')
         .map((status) => ({ name: status.context, conclusion: status.state, ...(status.description ? { log: status.description } : { noLog: 'a commit status without a description' }) })),
     ];
-    return { head: pr.head.sha, failed, base: { branch: pr.base.ref, checks: base.checks, failedChecks: base.failedChecks } };
+    return { head: pr.head.sha, failed, base: { branch: pr.base.ref, sha: pr.base.sha, checks: base.checks, failedChecks: base.failedChecks } };
   }
 
   /** A failed check run with the end of its log (`ciFailures`). */
   async #runLog(repo: GitHubRepoRef, run: CheckRunDto, token: string): Promise<FailedCheck> {
     const check = { name: run.name, conclusion: run.conclusion ?? run.status };
     if (run.app?.slug !== 'github-actions') {
+      // GitHub bounds a report to 65,535 characters a field: whole, cut by `formatCiFailures` only.
       const report = [run.output?.title, run.output?.summary, run.output?.text].filter((t) => !!t).join('\n\n');
-      return { ...check, ...(report ? { log: report.slice(-LOG_READ_TAIL) } : { noLog: 'its CI attached no report' }) };
+      return { ...check, ...(report ? { log: report } : { noLog: 'its CI attached no report' }) };
     }
     try {
-      return { ...check, log: (await this.readText(`${repoApi(repo)}/actions/jobs/${run.id}/logs`, token)).slice(-LOG_READ_TAIL) };
+      return { ...check, log: await this.readTail(`${repoApi(repo)}/actions/jobs/${run.id}/logs`, token, LOG_READ_TAIL) };
     } catch (err) {
       if (!(err instanceof GitHubApiError) || err.retryable) throw err;
       return { ...check, noLog: `GitHub refused its log (${err.status})` };

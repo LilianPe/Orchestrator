@@ -14,11 +14,11 @@ export interface FailedCheck {
   noLog?: string;
 }
 
-/** What the forge read of a red CI (`Forge.ciFailures`): the head's failed checks, and the CI of the base branch at its tip. */
+/** What the forge read of a red CI (`Forge.ciFailures`): the head's failed checks, and the CI of the base branch on `base.sha`, the commit the PR is compared with. */
 export interface CiFailureReport {
   head: string;
   failed: FailedCheck[];
-  base: { branch: string } & Pick<PrInfo, 'checks' | 'failedChecks'>;
+  base: { branch: string; sha: string } & Pick<PrInfo, 'checks' | 'failedChecks'>;
 }
 
 /** The checks named, at most: a CI of hundreds of jobs gives the agent a list it can read. */
@@ -39,21 +39,24 @@ export function scrubLog(log: string, secrets: readonly string[] = []): string {
   return logExcerpt(maskTranscriptLine(plain, secrets).trimEnd(), CHECK_LOG_MAX);
 }
 
-/** A fence longer than any run of backticks in `text`: the log cannot close it and write outside it. */
+/** Backticks one more than the longest run in `text`: a delimiter the text cannot close. */
+const longerThanIn = (text: string, least: number): string => '`'.repeat(Math.max(least - 1, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+
+/** A fence `text` cannot close to write outside it. */
 function fenced(text: string): string {
-  const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-  const fence = '`'.repeat(longest + 1);
+  const fence = longerThanIn(text, 3);
   return `${fence}text\n${text}\n${fence}`;
 }
 
-/** A name written by the repository's CI, in a code span it cannot break. */
+/** A name written by the repository's CI, in a code span it cannot close. */
 const name = (n: string): string => {
-  const s = n.replace(CONTROL, '?').replace(/\n/g, ' ');
-  return s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``;
+  const s = n.replace(/\n/g, ' ').replace(CONTROL, '?');
+  const tick = longerThanIn(s, 1);
+  return tick.length === 1 ? `\`${s}\`` : `${tick} ${s} ${tick}`;
 };
 
 function baseLine(base: CiFailureReport['base']): string {
-  const at = `The CI of the base branch ${name(base.branch)}, at its tip`;
+  const at = `The CI of the base branch ${name(base.branch)}, on \`${base.sha.slice(0, 12)}\` (the commit the PR is compared with)`;
   switch (base.checks) {
     case 'fail':
       return `${at}, fails too: ${base.failedChecks.slice(0, MAX_NAMED).map(name).join(', ')}${base.failedChecks.length > MAX_NAMED ? `, and ${base.failedChecks.length - MAX_NAMED} more` : ''}.`;

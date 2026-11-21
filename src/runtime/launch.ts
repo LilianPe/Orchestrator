@@ -908,8 +908,16 @@ export abstract class DaemonLaunch extends DaemonEffects {
       const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.repoPath, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
       // The fix of a red CI reads its failures on the forge, its run having no token to (ORC-459). Their logs are written by the
-      // code the CI ran and the tools it called: untrusted, as review comments are.
-      const ciRead = kind === 'ci_failures' && opts.inputText === undefined && t.prNumber ? await forge.ciFailures(project.repoPath, t.prNumber) : undefined;
+      // code the CI ran and the tools it called: untrusted, as review comments are. A transient failure retries the start; any
+      // other one runs the fix without them, rather than blocking it on what it can do without.
+      const ciRead =
+        kind === 'ci_failures' && opts.inputText === undefined && t.prNumber
+          ? await forge.ciFailures(project.repoPath, t.prNumber).catch((err: unknown) => {
+            if (isTransient(err)) throw err;
+            this.log('warn', `CI failures of ${ticketId} unread, its fix runs without them: ${err instanceof Error ? err.message : String(err)}`);
+            return undefined;
+          })
+          : undefined;
       const held = ticketSession && !t.newSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // The questions relayed to the agent that implements (ORC-182): any launch of its session takes them all, whatever run they
@@ -968,7 +976,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       } else if (kind === 'verify_failures') {
         input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
       } else if (kind === 'ci_failures') {
-        input = { kind, text: opts.inputText ?? (ciRead ? formatCiFailures(ciRead, this.d.secretValues?.()) : "The PR's CI is failing: the factory knows no PR of the ticket to read its checks on.") };
+        input = { kind, text: opts.inputText ?? (ciRead ? formatCiFailures(ciRead, this.d.secretValues?.()) : "The PR's CI is failing, but the factory could not read its checks on the forge.") };
       } else if (kind === 'thread' || kind === 'spec_check') {
         input = { kind, text: opts.inputText ?? '' };
       }

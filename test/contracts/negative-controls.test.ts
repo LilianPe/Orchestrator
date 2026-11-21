@@ -396,7 +396,7 @@ describeForgeContract(
     unreachable: {
       findPr: async () => Promise.reject(new Error('forge unreachable')),
       unresolvedReviewComments: async () => Promise.reject(new Error('forge unreachable')),
-      ciFailures: async () => ({ head: '', failed: [], base: { branch: 'main', checks: 'none', failedChecks: [] } }),
+      ciFailures: async () => ({ head: '', failed: [], base: { branch: 'main', sha: 'base', checks: 'none', failedChecks: [] } }),
       openPrs: async () => [],
       branches: async () => [],
       recentBranches: async () => [],

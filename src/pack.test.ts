@@ -125,7 +125,7 @@ describe('standard pack', () => {
     expect(text).toMatch(/the base branch's CI fails the same check/);
   });
 
-  it('has no skill launch a subagent:the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
+  it('has no skill launch a subagent: the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
     for (const [name, text] of instructions) expect(text, name).not.toMatch(/sub-?agent|`(Task|Agent)`|parallel passes/i);
   });
 
