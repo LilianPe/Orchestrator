@@ -5,8 +5,12 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
+import { GitHubAppForge } from '../adapters/forge/github-app.js';
+import { NO_GITHUB_APP } from '../adapters/forge/no-forge.js';
 import { repoRoot } from '../app/root.js';
-import { homePaths, loadInstance } from '../config/instance.js';
+import { resolveGithubApp } from '../config/github-app.js';
+import { effectiveInstance, homePaths, loadInstance } from '../config/instance.js';
+import { GITHUB_APP_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
 import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { HOST_RUNS_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
 import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
@@ -54,8 +58,8 @@ export interface GhostOptions {
    */
   sandboxes(): Promise<boolean | undefined>;
   humanPr(repoPath: string, number: number): Promise<HumanPr>;
-  /** The diff of a human PR, read when it is judged. */
-  humanDiff(repoPath: string, number: number): Promise<string>;
+  /** The human's work, read when it is judged: from the replay's start to the PR's merge commit. */
+  humanDiff(repoPath: string, pr: { start: string; mergeSha: string }): Promise<string>;
   /**
    * The ticket's environment as the human found it (`ghost/history.ts`), in `dir`: the clone at the parent of `mergeSha` (before the
    * first of `prCommits` for a rebase merge), then the knowledge base at its last commit before that start, unless `memory` is off.
@@ -225,9 +229,9 @@ async function collect(o: GhostOptions, id: string): Promise<number> {
   return 0;
 }
 
-/** The diff of one side of a pair: the factory's from its kept PR, the human's from the forge. */
+/** The diff of one side of a pair: the factory's from its kept PR, the human's from its start to the merge commit. */
 async function diffOf(o: GhostOptions, repoPath: string, t: GhostTicket, side: GhostSide): Promise<string> {
-  if (side === 'human') return (await o.humanDiff(repoPath, t.humanPr.number)).trim() || '(no diff)';
+  if (side === 'human') return t.start ? (await o.humanDiff(repoPath, { start: t.start, mergeSha: t.mergeSha })).trim() || '(no diff)' : '(no start commit)';
   const kept = (await o.store.artifacts(t.ticketId)).find((a) => a.id === t.factoryPr);
   if (!kept) return '(the kept PR is gone)';
   return ((JSON.parse(await readFile(kept.path, 'utf8')) as { pr?: { diff?: string } }).pr?.diff ?? '').trim() || '(no diff)';
@@ -296,16 +300,15 @@ async function report(o: GhostOptions, id: string): Promise<number> {
   return 0;
 }
 
-/** The forge's view of a merged PR, through `gh` in the project's checkout. */
-async function ghHumanPr(repoPath: string, number: number): Promise<HumanPr> {
-  const view = JSON.parse(await mustExec(execCmd, 'gh', ['pr', 'view', String(number), '--json', 'number,url,author,mergeCommit,commits'], { cwd: repoPath })) as {
-    number: number; url: string; author?: { login?: string }; mergeCommit?: { oid?: string } | null; commits?: { messageHeadline?: string }[];
-  };
-  const commits = (view.commits ?? []).map((c) => c.messageHeadline ?? '');
-  return { number: view.number, url: view.url, author: view.author?.login ?? '', ...(view.mergeCommit?.oid ? { mergeSha: view.mergeCommit.oid } : {}), commits };
+/** The daemon's GitHub App, which alone reads the human PRs (ORC-181: no `gh`). */
+async function githubForge(home: string): Promise<GitHubAppForge> {
+  const { yml } = await loadSealedFactoryYml(home, process.env, { only: GITHUB_APP_SECRETS });
+  const githubApp = resolveGithubApp(effectiveInstance(home, yml));
+  if (!githubApp) throw new Error(`factory ghost: ${NO_GITHUB_APP}: the human PRs are read by the App alone.`);
+  return new GitHubAppForge(githubApp);
 }
 
-/** The command line, on the instance's store and projects; the PRs read through `gh`, the clones from each project's origin. */
+/** The command line, on the instance's store and projects; the PRs read by the GitHub App, the clones and diffs from each project's origin. */
 export async function runGhostCommand(home: string, args: readonly string[]): Promise<number> {
   const instance = loadInstance(home);
   // The daemon migrates the schema; this only reads and writes rows.
@@ -314,6 +317,8 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
   let rl: ReturnType<typeof createInterface> | undefined;
   // Each project's default branch, read once for all its tickets.
   const branches: Record<string, Promise<string>> = {};
+  // Resolved at the first PR read: `collect`, `judge`, `report` and `list` need no App.
+  let forge: Promise<GitHubAppForge> | undefined;
   try {
     let user = 'cli';
     try {
@@ -329,8 +334,12 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
         const said = await store.getMeta(SANDBOXES_META);
         return said === undefined ? undefined : said === '1';
       },
-      humanPr: ghHumanPr,
-      humanDiff: (repoPath, number) => mustExec(execCmd, 'gh', ['pr', 'diff', String(number)], { cwd: repoPath }),
+      humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(repoPath, number),
+      // The merge commit fetched from origin, with its history: the start is one of its ancestors.
+      humanDiff: async (repoPath, { start, mergeSha }) => {
+        await mustExec(execCmd, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin', mergeSha]);
+        return mustExec(execCmd, 'git', ['-C', repoPath, 'diff', start, mergeSha]);
+      },
       environment: async ({ repoPath, mergeSha, prCommits, dir, memory }) => {
         const remote = (await mustExec(execCmd, 'git', ['-C', repoPath, 'remote', 'get-url', 'origin'])).trim();
         const repo = join(dir, 'repo');

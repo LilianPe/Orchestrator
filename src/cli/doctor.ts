@@ -779,7 +779,7 @@ async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'lin
 }
 
 /**
- * CLI adapter: loads the instance, requires the GitHub App (no `gh` fallback for this check), asks the engine for the host's
+ * CLI adapter: loads the instance, requires the GitHub App, asks the engine for the host's
  * cgroups, reads the repository's branch naming (ORC-283) and commands (ORC-412) on its default branch as the clone last
  * fetched it, then runs the same analysis as `runDoctor`.
  */
@@ -820,7 +820,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   if (!githubApp) {
     out(
       'GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) ' +
-        'to read the workflows and the environments. No `gh` fallback for this check.',
+        'to read the workflows and the environments.',
     );
     return 1;
   }

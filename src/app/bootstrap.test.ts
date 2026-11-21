@@ -5,7 +5,6 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { PrPoller } from '../adapters/forge/pr-poller.js';
 import { githubDelivery } from '../../test/helpers/github-webhook.js';
 import { signLinear } from '../../test/helpers/linear-webhook.js';
 import { Daemon, type DaemonDeps } from '../runtime/daemon.js';
@@ -211,13 +210,16 @@ describe('bootstrap', () => {
     expect(await planned()).toEqual([['a', '_reconcile.a:reconcile']]);
   });
 
-  it('falls back to the gh CLI when no GitHub App is configured', async () => {
+  it('starts without a GitHub App, warning that it reads no PR and publishes nothing: no gh fallback (ORC-181)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     const logs: string[] = [];
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
-    expect(logs.some((m) => m.includes('gh CLI'))).toBe(true);
+    expect(logs).toContain(
+      'Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.',
+    );
+    expect(logs.some((m) => m.includes('gh CLI'))).toBe(false);
   });
 
   it('purges the transcripts older than 30 days at start', async () => {
@@ -254,7 +256,7 @@ describe('bootstrap', () => {
   it('stops the server and the timers it started when the start fails after them', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4184, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    const poll = vi.spyOn(PrPoller.prototype, 'start').mockImplementation(() => {
+    const worker = vi.spyOn(Daemon.prototype, 'startWorker').mockImplementation(() => {
       throw new Error('boom');
     });
     const timersStop = vi.spyOn(TimerService.prototype, 'stop');
@@ -264,7 +266,7 @@ describe('bootstrap', () => {
       expect(timersStop).toHaveBeenCalled();
       expect(close).toHaveBeenCalledTimes(1);
     } finally {
-      poll.mockRestore();
+      worker.mockRestore();
       timersStop.mockRestore();
       close.mockRestore();
     }

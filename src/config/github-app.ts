@@ -44,8 +44,8 @@ function expandHome(path: string): string {
 
 /**
  * Builds the GitHub App settings from config.yaml, with GH_APP_* env vars as fallback.
- * Returns undefined when no GitHub App is configured, so bootstrap can keep using gh.
- * A partial configuration is an error rather than a silent fallback to gh.
+ * Returns undefined when no GitHub App is configured: the daemon then reads and publishes nothing on GitHub (ORC-181).
+ * A partial configuration is an error rather than a silent start without the App.
  */
 export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv = process.env): GithubAppSettings | undefined {
   const fromConfig = config.github;
@@ -55,7 +55,7 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
   if (!appId || !key) {
     throw new Error(
       'Incomplete GitHub App configuration: set github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY), ' +
-        'or remove the github section to go on with the gh CLI.',
+        'or remove the github section to start without the App (nothing is then read or published on GitHub).',
     );
   }
   const installationId = (fromConfig?.installationId ?? env['GH_APP_INSTALLATION_ID'] ?? '').trim() || undefined;

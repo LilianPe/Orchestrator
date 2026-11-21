@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
+import { NO_GITHUB_APP } from '../adapters/forge/no-forge.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError } from '../config/factory-yml.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
@@ -110,7 +110,7 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     console.log(tracker);
     return 1;
   }
-  // The forge the daemon would use: the GitHub App when configured, otherwise the gh CLI.
+  // The forge the daemon uses: the GitHub App, without which nothing is read on GitHub (ORC-181).
   let githubApp;
   try {
     githubApp = resolveGithubApp(instance);
@@ -118,7 +118,11 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     console.log((err as Error).message);
     return 1;
   }
-  const forge = githubApp ? new GitHubAppForge(githubApp) : new GhCliForge();
+  if (!githubApp) {
+    console.log(`factory baseline: ${NO_GITHUB_APP}: the merged PRs are read by the App alone.`);
+    return 1;
+  }
+  const forge = new GitHubAppForge(githubApp);
   // The daemon migrates the schema; this only writes rows.
   const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {

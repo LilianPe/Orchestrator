@@ -2,11 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
-import { GhCliForge } from '../adapters/forge/gh-cli.js';
 import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/forge/github-ingest.js';
 import { githubAuthorizeUrl, githubSignIn } from '../adapters/forge/github-login.js';
-import { PrPoller } from '../adapters/forge/pr-poller.js';
+import { GithubReconciler } from '../adapters/forge/github-reconcile.js';
+import { NoForge } from '../adapters/forge/no-forge.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
@@ -245,16 +245,15 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: chosenClaudeToken, proxyHasToken: () => !!claudeTokenOf(), log, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, log });
-    const forge = githubApp
-      ? new GitHubAppForge({ ...githubApp, log })
-      : new GhCliForge();
+    // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
+    const forge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : new NoForge();
     if (githubApp) {
       log(
         `GitHub forge: GitHub App ${githubApp.appId} (installation tokens limited to the run's repository` +
           `${githubApp.installationId ? `, installation ${githubApp.installationId}` : ", installation resolved per repository"})`,
       );
     } else {
-      log('GitHub forge: gh CLI (migration fallback, read-only: without a GitHub App, the factory neither publishes nor merges)');
+      log('Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.');
     }
     const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
@@ -284,7 +283,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       repo: forge,
     });
 
-    // Filled once the reconciler and the poll exist, below: the reconciliation's timer (ORC-185) runs both.
+    // Filled once both reconcilers exist, below: the reconciliation's timer (ORC-185) runs Linear's, then GitHub's.
     let reconcileProject: (p: ProjectRuntime) => Promise<void> = async () => {};
     // Before any run of this process: `verify` reads the base branch at this URL, whatever an agent writes in the repository's config (ORC-151).
     const originUrl = makeOriginUrl();
@@ -316,7 +315,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       tracker: trackerSwitch,
       outputPolicy,
       forge,
-      // Only the GitHub App merges (ORC-148): with the gh CLI, a Done goes back to Human Review with the reason.
+      // Only the GitHub App merges (ORC-148): without it, a Done goes back to Human Review with the reason.
       // A fake run writes nothing real: its fake PR's number would be another one's on the forge.
       // The visual proof's captures shown in the PR from the repository's `factory/artifacts` branch, by the same App (ORC-407).
       ...(forge instanceof GitHubAppForge && !o.fakeRunner ? { forgeWriter: forge, captureHost: forge } : {}),
@@ -415,13 +414,13 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects: fromLinear, submit: accept, clock, log, serial: labelsTurn });
     const timers = new TimerService(store, clock, () => daemon.wake(), (e) => log(`timers: ${e.message}`));
-    const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
+    const githubReconciler = new GithubReconciler({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
       await reconcileOnce({ tracker: trackerSwitch, store, projects: fromLinear, only: p.id, submit: accept, clock, log, serial: labelsTurn });
-      await poller.pollOnce(p.id);
+      await githubReconciler.once(p.id);
     };
-    // GitHub webhooks (ORC-134) write to the inbox beside the poll (each reconciliation, ORC-185; every 30 s without
-    // webhooks, until ORC-181): both name a fact the same way, so the inbox keeps it once.
+    // GitHub webhooks (ORC-134) write to the inbox beside the reconciliation (every 5 min, ORC-185): both name a fact the
+    // same way, so the inbox keeps it once.
     const githubIngest = createGithubIngest({
       secret: () => githubSecret,
       accept,
@@ -518,7 +517,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ingest.close();
       await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
-      await Promise.all([timers.stop(), poller.stop(), reconciler.stop(), replays.stop(), pruning]);
+      await Promise.all([timers.stop(), reconciler.stop(), replays.stop(), pruning]);
       daemon.stopAll();
       await daemon.drained();
       // The sandboxes it let run on keep their socket folders: the next start listens in them again (ORC-344).
@@ -567,9 +566,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         daemon.supervise().catch((e: unknown) => log(`heartbeat: ${(e as Error).message}`));
       }, RUN_BEAT_MS);
       beatInterval.unref();
-      // The GitHub webhooks carry the PRs (ORC-134), the 5-minute reconciliation catches what they lose (ORC-185);
-      // without webhooks a merge would wait 5 minutes, so the 30-second poll stays (ORC-181 removes it).
-      if (!isUsableWebhookSecret(githubSecret)) poller.start();
       if (await connectLinear()) void reconciler.once();
       else log(`Linear not connected: open ${baseUrl}/oauth/start`);
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
@@ -581,7 +577,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       if (!isUsableWebhookSecret(webhookSecret()))
         log('Warning: no Linear webhook secret configured, every webhook will be refused. Run factory init again to set it.');
       if (!isUsableWebhookSecret(githubSecret))
-        log('GitHub webhooks refused: neither github.webhookSecret nor GH_WEBHOOK_SECRET; only the PR poll every 30 s follows GitHub.');
+        log('GitHub webhooks refused: neither github.webhookSecret nor GH_WEBHOOK_SECRET; only the reconciliation every 5 min follows GitHub.');
     } catch (err) {
       await shutdown().catch((e: Error) => log(`shutdown after a failed start: ${e.message}`));
       throw err;
