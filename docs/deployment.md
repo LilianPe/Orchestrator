@@ -191,7 +191,7 @@ Operations commands are run in the container, on the server (over SSH from elsew
 
 ```bash
 docker compose exec factoryd node dist/src/cli/factory.js status
-docker compose exec factoryd node dist/src/cli/factory.js pause
+docker compose exec factoryd node dist/src/cli/factory.js stop REL-12
 docker compose logs -f factoryd
 ```
 

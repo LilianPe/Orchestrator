@@ -30,7 +30,7 @@ A reference is written `<source>:<path>`: `env:NPM_TOKEN`, or `coffre:kv/app#see
 - `env:NAME` is resolved while `factory.yml` is parsed, as before. Every other reference is read **once, at the daemon's start**, through the `SecretReader` that later reads the repositories' secrets (`loadSealedFactoryYml`, `src/config/server-secrets.ts`): the file is parsed a first time to find the references, they are read, and it is parsed again with their values. A source that fails stops the start, with `the secret github.private_key (creds:github-key) could not be read: <why>`, never a value. The values are masked in the transcripts from the start.
 - The Claude account is re-read at each launch (ORC-215) with the values read at the start: an account added since with a reference of another source than `env` waits for the next start (the last account stays, with the usual warning).
 - `factory doctor` reports, without reading a value, each server secret in clear (`env`, a GitHub key in `config.yaml` or `GH_APP_KEY`) and the rotation date of the others through `describe`: past 180 days, or unknown, is a warning; never part of the verdict.
-- `plan`, `baseline` and `doctor` read the server secrets the same way: run outside the daemon's service, a `systemd-creds` reference fails (no `CREDENTIALS_DIRECTORY`).
+- `baseline` and `doctor` read the server secrets the same way: run outside the daemon's service, a `systemd-creds` reference fails (no `CREDENTIALS_DIRECTORY`).
 
 ### The repositories' secrets (ORC-308)
 

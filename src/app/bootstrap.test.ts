@@ -233,6 +233,26 @@ describe('bootstrap', () => {
     expect(await planned()).toEqual([['a', '_reconcile.a:reconcile']]);
   });
 
+  // ORC-200: nothing pauses or resumes the queue any more; a pause left from before would hold every launch for good.
+  it('lifts a pause of the queue left from before the global pause was removed, and says so', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: 'REL' }], limits: {} });
+    const store = new MemoryStore();
+    await store.setMeta('paused', '1');
+    const logs: string[] = [];
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store });
+    try {
+      await vi.waitFor(async () => expect(await store.getMeta('paused')).toBe('0'), { timeout: 5000, interval: 50 });
+      expect(logs).toContain('The queue was paused, and nothing pauses it any more (ORC-200): it is resumed.');
+    } finally {
+      await app.stop();
+    }
+    // Once only: a queue not paused is left as it is.
+    logs.length = 0;
+    await (await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store })).stop();
+    expect(logs.join('\n')).not.toContain('ORC-200');
+  });
+
   it('starts without a GitHub App, warning that it reads no PR and publishes nothing: no gh fallback (ORC-181)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });

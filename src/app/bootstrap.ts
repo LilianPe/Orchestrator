@@ -50,7 +50,7 @@ import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Daemon, type ProjectRuntime } from '../runtime/daemon.js';
 import { queueCapacity, Scheduler } from '../runtime/capacity.js';
 import { TimerService } from '../runtime/timers.js';
-import type { FactoryEvent } from '../core/types.js';
+import { TRUSTED, type FactoryEvent } from '../core/types.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
@@ -385,6 +385,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     // Every source writes its events to the inbox and gets the promise of the committed row
     // (ORC-147); the daemon's worker then decides them from the inbox (ORC-149).
     const accept = (e: FactoryEvent) => daemon.accept(e);
+    // Nothing pauses or resumes the queue any more (ORC-200): a pause left from before would hold every launch for good.
+    if (await daemon.isPaused()) {
+      log('The queue was paused, and nothing pauses it any more (ORC-200): it is resumed.');
+      await accept({ ...TRUSTED, actor: 'factory:start', id: `start:resume:${clock.now()}`, type: 'control.resume', at: clock.now(), projectId: '*', payload: {} });
+    }
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
