@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
+import { UnreadableInstallationError, type BranchProtection, type EnvironmentProtection, type WorkflowSource } from '../adapters/forge/github-app-api.js';
 import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
@@ -15,7 +15,7 @@ interface FakeOptions {
   failEnvironments?: boolean;
   failProtection?: boolean;
   protection?: BranchProtection;
-  failInstallation?: boolean;
+  failInstallation?: 'network' | 'unreadable';
   permissions?: Record<string, string>;
 }
 
@@ -51,7 +51,8 @@ class FakeApi implements DoctorApi {
   }
 
   async installationPermissions(): Promise<Record<string, string>> {
-    if (this.options.failInstallation) throw new Error('getaddrinfo ENOTFOUND api.github.com');
+    if (this.options.failInstallation === 'network') throw new Error('getaddrinfo ENOTFOUND api.github.com');
+    if (this.options.failInstallation === 'unreadable') throw new UnreadableInstallationError('GitHub API GET /repos/acme/app/installation: unreadable answer');
     return this.options.permissions ?? MANIFEST_PERMISSIONS;
   }
 }
@@ -1052,15 +1053,21 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
 });
 
 describe("the GitHub App's installation permissions (ORC-439)", () => {
-  it.each(['write', 'read'])('refuses an installation holding Administration (%s), and says how to remove it', async (level) => {
-    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, administration: level } } });
+  it.each([
+    ['administration', 'write', 'Administration'],
+    ['administration', 'read', 'Administration'],
+    // Organization rulesets: edited with the organization's Administration.
+    ['organization_administration', 'write', 'Organization permissions → Administration'],
+  ])('refuses an installation holding %s (%s), and says how to remove it', async (permission, level, named) => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, [permission]: level } } });
     expect(result.code).toBe(1);
     const line = result.lines.find((l) => l.startsWith('GitHub App installation: refused'));
-    expect(line).toContain(`Administration (${level})`);
+    expect(line).toContain(`${permission} (${level})`);
+    expect(line).toContain(named);
     for (const named of ['Permissions & events', 'Administration', 'No access', 'Installed GitHub Apps']) expect(line).toContain(named);
     expect(result.text).toContain('Result: refused — the GitHub App is installed with the Administration permission');
-    const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions: { administration: level } } })).text) as { accepted: boolean; installation: { verdict: string } };
-    expect(json).toMatchObject({ accepted: false, installation: { verdict: 'refused', permissions: { administration: level } } });
+    const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions: { [permission]: level } } })).text) as { accepted: boolean; installation: { verdict: string } };
+    expect(json).toMatchObject({ accepted: false, installation: { verdict: 'refused', permissions: { [permission]: level } } });
   });
 
   it('accepts an installation holding what the manifest asks for, and no more', async () => {
@@ -1071,16 +1078,24 @@ describe("the GitHub App's installation permissions (ORC-439)", () => {
     expect(json.installation).toEqual({ permissions: MANIFEST_PERMISSIONS, verdict: 'accepted', reasons: ['installed without the Administration permission'] });
   });
 
-  it('warns, never refuses, when the installation cannot be read', async () => {
-    const result = await doctor([], [], { fake: { failInstallation: true } });
+  it('warns, never refuses, when the installation cannot be read (network, authentication), and tells it unchecked', async () => {
+    const result = await doctor([], [], { fake: { failInstallation: 'network' } });
     expect(result.code).toBe(0);
+    expect(result.text).toContain('GitHub App installation: unchecked');
     const warning = result.lines.find((l) => l.startsWith("  Warning: the App's installation permissions not read"));
     expect(warning).toContain('getaddrinfo ENOTFOUND api.github.com');
     expect(warning).toContain('Administration');
     expect(result.text).toContain('Result: accepted');
     expect(result.text).not.toContain('installed without the Administration permission');
-    const json = JSON.parse((await doctor([], [], { json: true, fake: { failInstallation: true } })).text) as { accepted: boolean; installation: { verdict: string; warnings: string[] } };
-    expect(json).toMatchObject({ accepted: true, installation: { verdict: 'accepted', warnings: [warning?.trim()] } });
+    const json = JSON.parse((await doctor([], [], { json: true, fake: { failInstallation: 'network' } })).text) as { accepted: boolean; installation: { verdict: string; warnings: string[] } };
+    expect(json).toMatchObject({ accepted: true, installation: { verdict: 'unchecked', warnings: [warning?.trim()] } });
+  });
+
+  it('refuses an answer it cannot read: never taken for an installation without Administration (ORC-273)', async () => {
+    const result = await doctor([], [], { fake: { failInstallation: 'unreadable' } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('GitHub App installation: refused — Cannot read the installation\'s permissions: GitHub API GET /repos/acme/app/installation: unreadable answer');
+    expect(result.text).toContain("Result: refused — the GitHub App installation's permissions cannot be read");
   });
 
   it('tells the installation beside the other verdicts when the workflows cannot be read', async () => {

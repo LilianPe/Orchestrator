@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../../adapters/exec.js';
 import type { HttpClient, HttpRequest } from '../forge/github-app.js';
-import { GitHubAppApi } from './github-app-api.js';
+import { GitHubAppApi, UnreadableInstallationError } from './github-app-api.js';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -292,8 +292,18 @@ describe('GitHubAppApi.installationPermissions (ORC-439)', () => {
     expect(jwt?.split('.')).toHaveLength(3);
   });
 
-  it('rejects an installation answered without its permissions, saying it is unreadable', async () => {
-    const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: { contents: 1 } } } : undefined)]);
-    await expect(api.installationPermissions('/repo')).rejects.toThrow(/unreadable/);
+  it.each([{ id: 42 }, { id: 42, permissions: { administration: 'write', contents: null } }])(
+    'rejects an installation answered without readable permissions as unreadable, apart from a failed call: %j',
+    async (body) => {
+      const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { body } : undefined)]);
+      await expect(api.installationPermissions('/repo')).rejects.toThrow(UnreadableInstallationError);
+      await expect(api.installationPermissions('/repo')).rejects.toThrow(/unreadable answer/);
+    },
+  );
+
+  it('rejects a refused call as a GitHub error, not as an unreadable answer', async () => {
+    const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 401, body: { message: 'Bad credentials' } } : undefined)]);
+    await expect(api.installationPermissions('/repo')).rejects.toThrow(/401 Bad credentials/);
+    await expect(api.installationPermissions('/repo')).rejects.not.toThrow(UnreadableInstallationError);
   });
 });

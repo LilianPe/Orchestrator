@@ -2,6 +2,7 @@ import { parseAllDocuments } from 'yaml';
 import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import {
   GitHubAppApi,
+  UnreadableInstallationError,
   type BranchProtection,
   type EnvironmentProtection,
   type WorkflowSource,
@@ -640,42 +641,52 @@ function analyzeWorkflow(source: WorkflowSource, environments: Map<string, Envir
 export interface InstallationReport {
   /** As GitHub granted them to the installation, absent when it could not be read. */
   permissions?: Record<string, string>;
-  verdict: Verdict;
+  /** `unchecked`: the call failed (network, authentication), said with a warning, never a refusal (ORC-439). */
+  verdict: Verdict | 'unchecked';
   reasons: string[];
-  /** Told when the permissions could not be read: never a refusal (ORC-439). */
   warnings?: string[];
 }
 
 const NO_ADMINISTRATION = 'installed without the Administration permission';
 
+/** Where each Administration permission is removed: the repository's, and the organization's, which edits its rulesets. */
+const ADMINISTRATION = { administration: 'Repository permissions → Administration', organization_administration: 'Organization permissions → Administration' };
+
 /**
- * Whether the App's installation keeps out of the protection it is held by (ORC-439): with Administration, read or write,
- * it could edit or delete the rulesets that keep it from merging alone, and read what ORC-428 says it must not.
+ * Whether the App's installation keeps out of the protection it is held by (ORC-439): with Administration, the repository's
+ * or the organization's, read or write, it could edit or delete the rulesets that keep it from merging alone.
  */
 function judgeInstallation(permissions: Record<string, string>): InstallationReport {
-  const level = permissions.administration;
-  if (level === undefined) return { permissions, verdict: 'accepted', reasons: [NO_ADMINISTRATION] };
+  const held = Object.entries(ADMINISTRATION).filter(([permission]) => permissions[permission] !== undefined);
+  if (held.length === 0) return { permissions, verdict: 'accepted', reasons: [NO_ADMINISTRATION] };
   return {
     permissions,
     verdict: 'refused',
     reasons: [
-      `installed with Administration (${level}): the daemon could edit or delete the rules that keep it from merging alone. ` +
+      `installed with ${held.map(([permission]) => `${permission} (${permissions[permission]})`).join(' and ')}: ` +
+        'the daemon could edit or delete the rules that keep it from merging alone. ' +
         "Remove it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), " +
-        'set Repository permissions → Administration to No access and save, then check in the installation (Settings → Applications → ' +
+        `set ${held.map(([, setting]) => setting).join(' and ')} to No access and save, then check in the installation (Settings → Applications → ` +
         'Installed GitHub Apps → Configure) that Administration is no longer listed (docs/github-app-manifest.json).',
     ],
   };
 }
 
-/** An installation that could not be read (network, authentication): a warning, never the verdict (ORC-439). */
-const unreadInstallation = (error: unknown): InstallationReport => ({
-  verdict: 'accepted',
-  reasons: ['not checked, see the warning'],
-  warnings: [
-    `Warning: the App's installation permissions not read: ${errorMessage(error)}. ` +
-      "Check by hand that the installation does not hold Administration (Settings → Applications → Installed GitHub Apps → Configure).",
-  ],
-});
+/**
+ * An installation that could not be read. A failed call (network, authentication) is a warning, never the verdict; an answer
+ * GitHub gave without readable permissions refuses, never taken for one without Administration (ORC-273).
+ */
+function unreadInstallation(error: unknown): InstallationReport {
+  if (error instanceof UnreadableInstallationError) return { verdict: 'refused', reasons: [`Cannot read the installation's permissions: ${error.message}`] };
+  return {
+    verdict: 'unchecked',
+    reasons: ['not checked, see the warning'],
+    warnings: [
+      `Warning: the App's installation permissions not read: ${errorMessage(error)}. ` +
+        'Check by hand that the installation does not hold Administration (Settings → Applications → Installed GitHub Apps → Configure).',
+    ],
+  };
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -725,7 +736,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     ...(protection.verdict === 'refused'
       ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
       : []),
-    ...(installation.verdict === 'refused' ? ['the GitHub App is installed with the Administration permission'] : []),
+    ...(installation.verdict === 'refused'
+      ? [installation.permissions ? 'the GitHub App is installed with the Administration permission' : "the GitHub App installation's permissions cannot be read"]
+      : []),
     ...(refused > 0 ? [`${refused} workflow(s) of ${reports.length} can expose secrets or a writable GITHUB_TOKEN to the factory's branches`] : []),
   ];
   const accepted = refusals.length === 0;
