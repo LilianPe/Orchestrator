@@ -986,6 +986,9 @@ export function staleRelaunch(ticket: TicketState, job: JobSpec, input: InputKin
 /** `job` must not start: the ticket's PR is merged (I8 b). */
 const refused = (ticket: TicketState | undefined, job: JobSpec): boolean => refusesDevWork(ticket, job) === 'merged';
 
+/** PR `number` is the ticket's open one: neither another PR nor a merged or closed one. */
+const isOpenPr = (ticket: TicketState | undefined, number: number): ticket is TicketState => ticket?.prNumber === number && ticket.prState === 'OPEN';
+
 /**
  * Starts `job`, unless the ticket is delivered (traced only). Every `start_run` of `decide` goes through here, so the rule
  * applies whatever branch starts the run.
@@ -1295,7 +1298,7 @@ function humanReview(out: Decision, event: FactoryEvent<'pr.reviewed'>, ticket: 
     out.trace.push('pr.reviewed: no reaction, the preset has no round of human review');
     return out;
   }
-  if (!ticket?.delegated || ticket.prNumber !== number || ticket.prState !== 'OPEN') {
+  if (!isOpenPr(ticket, number) || !ticket.delegated) {
     out.trace.push(`pr.reviewed: PR #${number} is not the open PR of a ticket at work`);
     return out;
   }
@@ -1669,12 +1672,11 @@ function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Wor
 /**
  * The reaction to red CI or to a conflict with the default branch (`prFailed`): a round of the review and CI loop
  * (`loopRound`). Once the count reaches the bound, the next red CI or conflict blocks the ticket instead of starting its
- * job. A run that would not start anyway (merged PR, I8 b) is neither counted nor blocked. On a ticket waiting on its
+ * job. Only the ticket's open PR reaches here (ORC-466): a merged one's is neither counted nor blocked. On a ticket waiting on its
  * blockers (ORC-363), neither yet: the wait keeps it (`roundOnWait`).
  */
 function reviewCiLoop(out: Decision, r: Reaction, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { job } = r;
-  if (refused(ticket, job)) return startReaction(out, event, ticket, workflow, r);
   // `startReaction` runs the job a red CI or a conflict names: on a blocked ticket none reaches here (`prFailed`).
   const waits = heldByWait(ticket, job);
   if (waits) return roundOnWait(out, event, ticket!, r, waits);
@@ -2642,7 +2644,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       return humanReview(out, event, ticket, workflow, matrix);
     case 'pr.conflicted':
       // The open PR of the ticket only is rebased (ORC-146): another PR's conflict, or a merged or closed one's, is recorded.
-      if (ticket?.prNumber !== event.payload.number || ticket.prState !== 'OPEN') {
+      if (!isOpenPr(ticket, event.payload.number)) {
         out.trace.push(`pr.conflicted: PR #${event.payload.number} is not the open PR of the ticket, nothing started`);
         return out;
       }
@@ -2662,7 +2664,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       // nor one of a head a push, the factory's or a human's, left behind since. A head the ticket never heard of may be a newer
       // one whose push is not decided yet: it is read, as a red CI with no head (before ORC-466) is.
       const { number, headSha } = event.payload;
-      if (ticket?.prNumber !== number || ticket.prState !== 'OPEN') {
+      if (!isOpenPr(ticket, number)) {
         out.trace.push(`pr.checks_failed: PR #${number} is not the open PR of the ticket, ignored`);
         return out;
       }
