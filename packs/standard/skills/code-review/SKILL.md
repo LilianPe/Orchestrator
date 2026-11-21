@@ -9,7 +9,7 @@ You review a diff as a demanding reviewer, not as its author. The result is a **
 
 ## 1. Scope the diff
 
-The base is the PR's target branch (`gh pr view <branch> --json baseRefName --jq .baseRefName`); without a PR, the trunk (`git rev-parse --abbrev-ref origin/HEAD`, which prints `origin/<trunk>`). One command per call, no shell chaining:
+The base is the trunk the PR targets: `git rev-parse --abbrev-ref origin/HEAD` prints `origin/<base>`. One command per call, no shell chaining:
 
 ```bash
 git fetch origin
@@ -36,7 +36,7 @@ Documentation that describes the code is not a "quick" diff: its truth is in the
 
 - **Quick**: one careful reading of the diff, hunk by hunk. No exploration beyond it.
 - **Standard**: the reading, plus the passes of section 3, plus the consumers of the changed symbols (`grep -rn "<symbol>"`).
-- **Thorough**: all of standard, in separate passes per angle (section 3), with the explicit list of critical surfaces to test (access controls, per-customer filtering, reversibility of a migration, what happens on a failure halfway through). If the subagent tool is available, run one pass per angle in parallel (instructions for each: the exact diff, the angle, "only report defects in these lines or in what they break", read-only, no subagent); otherwise do the passes yourself, one after the other. Keep it for diffs that warrant it: it is the most expensive level.
+- **Thorough**: all of standard, in separate passes per angle (section 3), with the explicit list of critical surfaces to test (access controls, per-customer filtering, reversibility of a migration, what happens on a failure halfway through). Do the passes yourself, one after the other, each limited to its angle: only the defects in these lines or in what they break. Keep it for diffs that warrant it: it is the most expensive level.
 
 ## 3. The angles
 

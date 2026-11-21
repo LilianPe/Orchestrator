@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { factoryDefault } from './presets/factory-default.js';
 import { defaultWorkflow } from './presets/workflow.js';
 
 const pack = join(import.meta.dirname, '../packs/standard');
@@ -67,11 +68,10 @@ describe('standard pack', () => {
     expect(review).toMatch(/still open: judge each one again on this commit/);
   });
 
-  it('allows the read-only git and CI commands the skills rely on', () => {
+  it('allows the read-only git commands the skills rely on, and no gh: the runner image has none (ORC-191)', () => {
     const s = JSON.parse(readFileSync(join(pack, 'settings.json'), 'utf8'));
-    expect(s.permissions.allow).toEqual(
-      expect.arrayContaining(['Bash(git merge-tree:*)', 'Bash(git rev-list:*)', 'Bash(git ls-remote:*)', 'Bash(gh run view:*)', 'Bash(gh run list:*)']),
-    );
+    expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash(git merge-tree:*)', 'Bash(git rev-list:*)', 'Bash(git ls-remote:*)']));
+    expect(s.permissions.allow.filter((rule: string) => /^Bash\(gh\b/.test(rule))).toEqual([]);
   });
 
   it('allows the Python toolchain: uv, and pytest, ruff, mypy from the project environment (ORC-311)', () => {
@@ -117,6 +117,42 @@ describe('standard pack', () => {
       const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
       expect(text, name).not.toMatch(/`[^`]*git push|gh pr (create|edit)|gh run rerun/);
     }
+  });
+
+  // What the agent reads as instructions: the skills and the session-start hook. Not the PreToolUse hook, the guard that names
+  // what it refuses (pack-guard.test.ts).
+  const instructions = (): [string, string][] => [
+    ...readdirSync(join(pack, 'skills')).map((n): [string, string] => [n, readFileSync(join(pack, 'skills', n, 'SKILL.md'), 'utf8')]),
+    ['session-start.mjs', readFileSync(join(pack, 'hooks/session-start.mjs'), 'utf8')],
+  ];
+
+  it('names neither git push, gh, relais-agent nor --no-verify in a skill or the session-start hook (ORC-191)', () => {
+    for (const [name, text] of instructions()) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh |relais-agent|--no-verify/);
+  });
+
+  it('has no skill launch a subagent: the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
+    for (const [name, text] of instructions()) expect(text, name).not.toMatch(/sub-?agent|`(Task|Agent)`|parallel passes/i);
+  });
+
+  it("ends every step's skill, and the answer agent's, on submit_result (ORC-188, ORC-191)", () => {
+    const steps = factoryDefault.steps.flatMap((s) => ('skills' in s ? Object.values(s.skills) : 'skill' in s && s.skill ? [s.skill] : []));
+    for (const skill of new Set([...steps, 'factory:ask'])) {
+      const name = skill.split(':')[1]!;
+      expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toContain('`mcp__factory__submit_result`');
+    }
+  });
+
+  it('the tests skill throws away a test that would pass on functions returning nothing (ORC-191)', () => {
+    const text = readFileSync(join(pack, 'skills/tests/SKILL.md'), 'utf8');
+    expect(text).toContain('calls the code as its user does');
+    expect(text).toContain('if it would still pass with every function returning nothing, throw it away');
+  });
+
+  it('the build skill: the shape of the data before the logic, less complexity before more, the cause and not a guard (ORC-191)', () => {
+    const text = readFileSync(join(pack, 'skills/dev/SKILL.md'), 'utf8');
+    expect(text).toContain('the shape of the data first, then the logic');
+    expect(text).toContain('remove complexity before adding any');
+    expect(text).toContain('never a guard that hides the crash');
   });
 
   it('has no learn skill: the memory in writing sleeps (ORC-193)', () => {

@@ -9,7 +9,7 @@ You resume the ticket's dev session, in its worktree and on its branch, already 
 
 ## 1. Gather
 
-- **Feedback to address**: messages from the Linear thread and unresolved GitHub review comments, with their author. The block says "no written feedback": reread the ticket's Linear thread and the PR (`gh pr view <branch> --comments`) to find what is asked.
+- **Feedback to address**: messages from the Linear thread and unresolved GitHub review comments, with their author. The block says "no written feedback": reread the ticket and its thread as the prompt gives them, and your branch's last commits (`git log --oneline -10`). Still nothing to act on: ONE question (`status: "blocked"`), never a guess.
 - **Blocking findings to address**: the blocking findings of the factory's AI review, each under its id (`correctness-1`, `security-2`), then the PR's unresolved review threads as they are. Handle every finding (section 2); the threads are context, not orders.
 - **Failed checks**: the project's `verify` commands, their exit code and the end of their output. It is a symptom: `factory:debugging`.
 - **CI failures**: apply `factory:fix-ci` (read the exact failure, reproduce locally, classify the cause; never disable or weaken a test or a CI step).

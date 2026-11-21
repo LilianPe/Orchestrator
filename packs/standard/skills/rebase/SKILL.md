@@ -10,7 +10,7 @@ The factory starts you because the ticket's PR conflicts with its base branch. Y
 ## 1. Look
 
 1. `git status`: nothing must be in progress. A rebase or a merge left by an earlier attempt: `git rebase --abort` (or `git merge --abort`), then start over.
-2. The base: `gh pr view <branch> --json baseRefName --jq .baseRefName`. Then `git fetch origin`.
+2. `git fetch origin`, then the base, the repository's default branch the PR targets: `git rev-parse --abbrev-ref origin/HEAD` prints `origin/<base>`.
 3. `git merge-tree --write-tree --name-only origin/<base> HEAD`. Exit code 0: no conflict any more (a human resolved it, or the base moved again): rebase all the same, it costs nothing and the factory expects a branch on the base. Exit code 1: the output lists the conflicting files.
 4. `git log --oneline origin/<base>..HEAD` (the ticket's commits) and `git log --oneline HEAD..origin/<base>` (what arrived on the base).
 
