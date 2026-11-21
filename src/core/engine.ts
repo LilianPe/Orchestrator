@@ -880,19 +880,31 @@ function usageLimitDecision(out: Decision, event: FactoryEvent<'run.finished'>, 
  */
 function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const wait = ticket?.waitingOn;
+  // A red CI or a conflict it kept (ORC-464), the ticket still in review; moved out of it, the wait's own start.
+  const round = wait?.round && inReview(ticket!.logical) ? wait.round : undefined;
+  const lift = wait?.round && !round ? undefined : wait?.lift;
   // Blocked, a human relaunched it while it waited: the block is lifted here, the bounds given back by the relaunch itself.
-  const lifting = !!wait?.lift && !!ticket?.blocked;
-  const start = wait && (wait.lift ?? wait.start);
+  const lifting = !!lift && !round && !!ticket?.blocked;
+  const start = wait && (lift ?? wait.start);
   const job = start && workflow.jobs[start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
-  const startable = !!ticket && STARTABLE.has(ticket.logical);
+  const startable = !!ticket && (!!round || STARTABLE.has(ticket.logical));
   if (!ticket || !start || !job || !startable || refusesDevWork(ticket, job) || (ticket.blocked && !lifting) || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     // The ack of the relaunch said it would resume: the human hears it will not.
     if (lifting) out.effects.push({ kind: 'activity', type: 'thought', body: LIFT_DROPPED });
     return out;
   }
-  out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
+  const starting = { kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` } as const;
+  // The round of the review and CI loop the wait kept is counted now that its run starts; past the bound, the ticket is blocked now (I5).
+  if (round) {
+    const makes = () => {
+      out.effects.push(starting);
+      startAs(out, event, ticket, job, start);
+    };
+    return loopRound(out, ticket, workflow, 'ciFixAttempts', makes, (bound) => pastLoopBound(out, workflow, job, bound, round === 'conflict' ? conflictBound(bound) : redCiBound(job, bound)));
+  }
+  out.effects.push(starting);
   if (lifting) {
     out.events.push({ type: 'ticket.unblocked' });
     // The lift a pending job's start deferred (ORC-435): off the ticket with this decision, as `startPending` takes it.
@@ -902,7 +914,7 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
   if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
   // The relaunch the wait kept (`liftOnWait`) is made: the rework measure counts it here, not where it was kept (ORC-440).
-  startAs(out, event, ticket, job, start, !!wait.lift);
+  startAs(out, event, ticket, job, start, !!lift);
   return out;
 }
 
@@ -1152,13 +1164,20 @@ const askQuestion = (event: FactoryEvent, ticket: TicketState | undefined, workf
  * preset's `conflict` (the rebase step), on the same loop (ORC-146); during another step it waits for that work to end (`settle`).
  */
 function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
-  const state = ticket?.logical ?? 'todo';
   const conflict = event.type === 'pr.conflicted';
-  if (ticket?.blocked || !(state === 'human_review' || state === 'ai_review' || (conflict && state === 'dev'))) return undefined;
+  if (ticket?.blocked || !loopReacts(ticket?.logical ?? 'todo', conflict)) return undefined;
   if (conflict) return reaction(0, linked(workflow, 'conflict'), event, ticket);
   const r = reaction(0, linked(workflow, 'redCi'), event, ticket);
   return r && { ...r, input: 'ci_failures' };
 }
+
+/** The statuses the review and CI loop reacts in: a red CI in review, a conflict In Progress too (ORC-146). */
+const loopReacts = (state: LogicalState, conflict: boolean): boolean => inReview(state) || (conflict && state === 'dev');
+
+const inReview = (state: LogicalState): boolean => state === 'human_review' || state === 'ai_review';
+
+/** The wait without what it kept to make in place of its start (ORC-464): a green CI of the PR, another PR, a relaunch's lift in its place. */
+const waitStart = ({ blockers, start }: NonNullable<TicketState['waitingOn']>): NonNullable<TicketState['waitingOn']> => ({ blockers, start });
 
 /** The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. The `agent:stop` label no longer (ORC-201). */
 function stopped(out: Decision, event: FactoryEvent<'session.stopped'>): Decision {
@@ -1553,7 +1572,7 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
  */
 function liftOnWait(out: Decision, event: FactoryEvent, ticket: TicketState, lift: PendingJob): void {
   if (relaunchedByHuman(event, ticket)) giveBoundsBack(out, ticket);
-  out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...ticket.waitingOn!, lift } } });
+  out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...waitStart(ticket.waitingOn!), lift } } });
   out.trace.push(`${LIFT_ON_WAIT}: ${lift.job}`);
 }
 
@@ -1635,56 +1654,78 @@ function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Wo
  * review with a blocking finding (ORC-184) all count on it. Only another PR or a human relaunch (`unblock`) starts it over: a
  * green CI does not, or a review that keeps finding would loop for good between its fix and the CI. `humanReviewRounds`, the
  * human review loop (ORC-190, `humanRound`). `start` runs and is counted while the count is under the bound, `past` decides
- * otherwise; a `start` that runs nothing (`counts` false) is not counted. The count is the one this decision leaves: a human
- * relaunch in it gave the bound back.
+ * otherwise. The count is the one this decision leaves: a human relaunch in it gave the bound back.
  */
-function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, key: 'ciFixAttempts' | 'humanReviewRounds', start: () => void, past: (bound: number) => Decision, counts = true): Decision {
+function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, key: 'ciFixAttempts' | 'humanReviewRounds', start: () => void, past: (bound: number) => Decision): Decision {
   const patched = out.events.findLast((e): e is Extract<DecidedEvent, { type: 'ticket.patched' }> => e.type === 'ticket.patched' && e.patch[key] !== undefined);
   const used = patched?.patch[key] ?? ticket?.[key] ?? 0;
   const bound = workflow.limits[key];
   if (used >= bound) return past(bound);
   start();
-  if (counts) out.events.push({ type: 'ticket.patched', patch: { [key]: used + 1 } });
+  out.events.push({ type: 'ticket.patched', patch: { [key]: used + 1 } });
   return out;
 }
 
 /**
  * The reaction to red CI or to a conflict with the default branch (`prFailed`): a round of the review and CI loop
  * (`loopRound`). Once the count reaches the bound, the next red CI or conflict blocks the ticket instead of starting its
- * job. A run that would not start anyway (merged PR, I8 b) is neither counted nor blocked. One held by the wait on the
- * ticket's blockers (ORC-363) is not counted either (ORC-462), and past the bound still blocks.
+ * job. A run that would not start anyway (merged PR, I8 b) is neither counted nor blocked. On a ticket waiting on its
+ * blockers (ORC-363), neither yet: the wait keeps it (`roundOnWait`).
  */
 function reviewCiLoop(out: Decision, r: Reaction, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { job } = r;
   if (refused(ticket, job)) return startReaction(out, event, ticket, workflow, r);
   // `startReaction` runs the job a red CI or a conflict names: on a blocked ticket none reaches here (`prFailed`).
-  const counts = !heldByWait(ticket, job);
-  return loopRound(out, ticket, workflow, 'ciFixAttempts', () => startReaction(out, event, ticket, workflow, r), (bound) => {
-    const conflict = event.type === 'pr.conflicted';
-    out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
-    const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
-    return block(out, workflow, { ...past, job: job.name, attempts: bound });
-  }, counts);
+  const waits = heldByWait(ticket, job);
+  if (waits) return roundOnWait(out, event, ticket!, r, waits);
+  return loopRound(out, ticket, workflow, 'ciFixAttempts', () => startReaction(out, event, ticket, workflow, r), (bound) =>
+    pastLoopBound(out, workflow, job, bound, event.type === 'pr.conflicted' ? conflictBound(bound, event.payload) : redCiBound(job, bound, event.payload.failures)));
+}
+
+/**
+ * A red CI or a conflict on a ticket waiting on its blockers (ORC-464): its fix or its rebase is the wait's lift, made by
+ * `blockersDone`, where its round is counted, or the ticket blocked past the bound. Blocked now, the wait would end
+ * (`endsWait`) and its start be lost. A red CI leaves a conflict kept: the same head raises no conflict again, its rebase would
+ * never run. Untrusted, it is made with the sensitive paths (I12). Only in review: In Progress, a conflict would take the place of
+ * the start the ticket waits for, whose published head raises it again.
+ */
+function roundOnWait(out: Decision, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState, r: Reaction, waits: string): Decision {
+  const wait = ticket.waitingOn!;
+  const round = event.type === 'pr.conflicted' ? 'conflict' : 'red_ci';
+  const skip = !inReview(ticket.logical) ? 'the start it waits for comes first' : round === 'red_ci' && wait.round === 'conflict' ? 'the rebase it keeps stays' : undefined;
+  out.trace.push(`${r.job.name} not started, ${waits}: ${skip ?? 'kept for the end of the wait'}`);
+  if (skip) return out;
+  const sensitivePaths = runTaint(event, ticket, r.input) === 'untrusted' ? SENSITIVE_PATHS : undefined;
+  out.events.push({ type: 'ticket.patched', patch: { waitingOn: { ...wait, lift: pendingOf({ job: r.job.name, input: r.input, sensitivePaths }), round } } });
+  return out;
+}
+
+/** The review and CI loop past its bound on a red CI or a conflict: the ticket blocked, its run not started. */
+function pastLoopBound(out: Decision, workflow: Workflow, job: JobSpec, bound: number, past: RunBlock): Decision {
+  out.trace.push(`${past.kind === 'conflict' ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
+  return block(out, workflow, { ...past, job: job.name, attempts: bound });
 }
 
 /** Red CI past the bound: `ci_bound`, which a green CI lifts. */
-function redCiBound(event: FactoryEvent<'pr.checks_failed'>, job: JobSpec, bound: number): RunBlock {
+function redCiBound(job: JobSpec, bound: number, failures: readonly string[] = []): RunBlock {
   const reason = `CI still failing after ${bound} attempts of ${job.name}.`;
   return {
     kind: 'ci_bound',
     reason,
-    tried: event.payload.failures.length ? event.payload.failures.map((f) => `\`${f}\``) : [`${bound} run(s) of ${job.name}.`],
+    tried: failures.length ? failures.map((f) => `\`${f}\``) : [`${bound} run(s) of ${job.name}.`],
   };
 }
 
-/** A conflict past the bound (ORC-146): a block of the conflict's own kind, which a green CI says nothing of. */
-function conflictBound(event: FactoryEvent<'pr.conflicted'>, bound: number): RunBlock {
-  const { number, baseRef, headSha } = event.payload;
-  const reason = `Conflict with ${baseRef}, and the review and CI loop has used its ${bound} runs: I am not starting a rebase.`;
+/**
+ * A conflict past the bound (ORC-146): a block of the conflict's own kind, which a green CI says nothing of. One the wait kept
+ * (ORC-464) no longer has its head and base at hand.
+ */
+function conflictBound(bound: number, at?: { number: number; baseRef: string; headSha: string }): RunBlock {
+  const reason = `Conflict with ${at?.baseRef ?? 'the default branch'}, and the review and CI loop has used its ${bound} runs: I am not starting a rebase.`;
   return {
     kind: 'conflict',
     reason,
-    tried: [`PR #${number} conflicts with ${baseRef} at ${headSha.slice(0, 12)}.`, `${bound} run(s) of the review and CI loop (fix-ci, rebase).`],
+    tried: [...(at ? [`PR #${at.number} conflicts with ${at.baseRef} at ${at.headSha.slice(0, 12)}.`] : []), `${bound} run(s) of the review and CI loop (fix-ci, rebase).`],
   };
 }
 
@@ -2624,6 +2665,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.events.push({ type: 'ticket.unblocked' });
         startHanded(out, event, ticket, workflow);
       }
+      // The fix of a red CI the wait kept fixes nothing any more (ORC-464): the blockers done make the start it waited for.
+      if (ticket?.waitingOn?.round === 'red_ci' && event.payload.number === ticket.prNumber) {
+        out.events.push({ type: 'ticket.patched', patch: { waitingOn: waitStart(ticket.waitingOn) } });
+      }
       break;
     case 'pr.opened': {
       // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,
@@ -2634,6 +2679,8 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (other) resetRedCi(out, ticket);
       // And another round of human review (ORC-190).
       if (other) resetHumanRounds(out, ticket);
+      // Nor the red CI or the conflict a wait kept of the previous PR (ORC-464).
+      if (other && ticket?.waitingOn?.round) out.events.push({ type: 'ticket.patched', patch: { waitingOn: waitStart(ticket.waitingOn) } });
       out.events.push({
         type: 'ticket.patched',
         patch: { prNumber: event.payload.number, prUrl: event.payload.url, ...(reopens ? { prState: 'OPEN' as const } : {}) },

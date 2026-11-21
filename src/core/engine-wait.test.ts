@@ -219,6 +219,87 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     });
   });
 
+  describe('a red CI or a conflict while it waits (ORC-464)', () => {
+    const pr = { number: 7, url: 'https://github.com/o/r/pull/7', branch: 'b' };
+    const inReview = (patch: Partial<TicketState> = {}) => waiting({ logical: 'human_review', prNumber: 7, prState: 'OPEN', ...patch });
+    const red = event('pr.checks_failed', { ...pr, failures: ['test'] });
+    const conflicted = event('pr.conflicted', { ...pr, headSha: 'h1', baseRef: 'main' });
+    const green = event('pr.checks_passed', pr);
+    const done = event('blockers.done', { blockers: ['REL-2'] });
+    const bound = workflow.limits.ciFixAttempts;
+
+    it.each([
+      ['a red CI', red, { job: 'fix-ci', input: 'ci_failures' }],
+      ['a conflict', conflicted, { job: 'rebase' }],
+    ])('%s starts nothing and counts no round: it is the lift of the wait, made once the blockers are done', (_what, e, lift) => {
+      expect(starts(inReview(), e)).toEqual([]);
+      const held = after(inReview(), e);
+      expect(held).toMatchObject({ blocked: false, ciFixAttempts: 0, waitingOn: { blockers: ['REL-2'], start: { job: 'dev' }, lift } });
+      expect(starts(held, done)).toEqual([expect.objectContaining(lift)]);
+      expect(starts(held, done)[0]).not.toHaveProperty('relaunches');
+      // The round of the review and CI loop is counted where its run starts (I5).
+      expect(after(held, done)).toMatchObject({ blocked: false, ciFixAttempts: 1 });
+      expect(after(held, done).waitingOn ?? undefined).toBeUndefined();
+    });
+
+    it.each([
+      ['a red CI', red, 'ci_bound', 'CI still failing'],
+      ['a conflict', conflicted, 'conflict', 'Conflict with'],
+    ])('%s past the bound does not block yet, which would end the wait: the blockers done, the ticket is blocked then', (_what, e, kind, reason) => {
+      const spent = inReview({ ciFixAttempts: bound });
+      const out = decide(spent, e, workflow);
+      expect(out.events.map((x) => x.type)).not.toContain('ticket.blocked');
+      const held = after(spent, e);
+      expect(held.waitingOn).toMatchObject({ blockers: ['REL-2'], start: { job: 'dev' } });
+      expect(starts(held, done)).toEqual([]);
+      expect(after(held, done)).toMatchObject({ blocked: true, blockKind: kind, blockReason: expect.stringContaining(reason), ciFixAttempts: bound });
+    });
+
+    it('a red CI after a conflict leaves the rebase as the lift: the same head conflicts again with no new event', () => {
+      const held = after(after(inReview(), conflicted), red);
+      expect(held.waitingOn?.lift).toEqual({ job: 'rebase' });
+    });
+
+    it('a green CI after a red one takes the fix-ci off the wait: the blockers done make the start it waited for', () => {
+      const held = after(after(inReview(), red), green);
+      expect(held.waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    });
+
+    it('a ticket a human moved back to Todo meanwhile starts no fix-ci at the end of the wait, but the start it waited for', () => {
+      const held = { ...after(inReview(), red), logical: 'todo' as const };
+      expect(starts(held, done)).toEqual([expect.objectContaining({ job: 'dev' })]);
+      // The wait's own start relaunches nothing (ORC-440).
+      expect(starts(held, done)[0]).not.toHaveProperty('relaunches');
+      expect(after(held, done)).toMatchObject({ ciFixAttempts: 0 });
+    });
+
+    it('a green CI of another PR leaves the fix-ci kept', () => {
+      const held = after(after(inReview(), red), event('pr.checks_passed', { ...pr, number: 5 }));
+      expect(held.waitingOn).toMatchObject({ lift: { job: 'fix-ci' }, round: 'red_ci' });
+    });
+
+    it('another PR drops what the wait kept of the previous one', () => {
+      const held = after(after(inReview(), conflicted), event('pr.opened', { ...pr, number: 8 }));
+      expect(held.waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    });
+
+    it('In Progress, a conflict is not kept: the start it waits for comes first, and its published head raises it again', () => {
+      const t = inReview({ logical: 'dev', ciFixAttempts: bound });
+      const out = decide(t, conflicted, workflow);
+      expect(out.events.map((x) => x.type)).not.toContain('ticket.blocked');
+      expect(after(t, conflicted).waitingOn).toEqual({ blockers: ['REL-2'], start: { job: 'dev' } });
+    });
+
+    it('a relaunch the wait keeps in place of a kept round is no round of the loop (ORC-432)', () => {
+      const t = { ...after(inReview(), red), blocked: true, blockReason: 'Which?', blockKind: 'question' as const, blockedJob: 'dev' };
+      const reply = event('session.prompted', { linearSessionId: 's1', body: 'Go', author: 'L', ack: true, kind: 'instruction' });
+      const held = after(t, reply);
+      expect(held.waitingOn?.round).toBeUndefined();
+      // In review, the end of the wait resumes nothing (ORC-432), and says so: the ack promised a resume.
+      expect(decide(held, done, workflow).effects).toContainEqual({ kind: 'activity', type: 'thought', body: expect.stringContaining('stays blocked') });
+    });
+  });
+
   it.each([
     ['a block', { type: 'ticket.blocked', reason: 'Stopped.', kind: 'stopped' }],
     ['an undelegation', event('ticket.undelegated', {})],
