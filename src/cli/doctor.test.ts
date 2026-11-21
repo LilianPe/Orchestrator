@@ -5,17 +5,23 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
 import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
-import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
+import { UnreadableAnswerError, type HttpClient, type HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
 import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
+import { GITHUB_APP_PERMISSIONS } from './init.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
   failEnvironments?: boolean;
   failProtection?: boolean;
   protection?: BranchProtection;
+  failInstallation?: 'network' | 'unreadable';
+  permissions?: Record<string, string>;
 }
+
+/** The permissions the manifest asks for (docs/github-app-manifest.json): what a conforming installation holds. */
+const MANIFEST_PERMISSIONS: Record<string, string> = GITHUB_APP_PERMISSIONS;
 
 class FakeApi implements DoctorApi {
   workflowCalls = 0;
@@ -42,6 +48,12 @@ class FakeApi implements DoctorApi {
   async branchProtection(): Promise<BranchProtection> {
     if (this.options.failProtection) throw new Error('403 Resource not accessible');
     return this.options.protection ?? { branch: 'main', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 1, bypass: 'never' }] };
+  }
+
+  async installationPermissions(): Promise<Record<string, string>> {
+    if (this.options.failInstallation === 'network') throw new Error('getaddrinfo ENOTFOUND api.github.com');
+    if (this.options.failInstallation === 'unreadable') throw new UnreadableAnswerError('GitHub API GET /repos/acme/app/installation: unreadable answer');
+    return this.options.permissions ?? MANIFEST_PERMISSIONS;
   }
 }
 
@@ -458,6 +470,7 @@ jobs:
       (url) => (url.pathname === '/repos/acme/app/branches/main' ? { body: { name: 'main', protected: true, protection: { enabled: false } } } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rules/branches/main' ? { body: [{ type: 'pull_request', ruleset_id: 9 }] } : undefined),
       (url) => (url.pathname === '/repos/acme/app/rulesets/9' ? { body: { id: 9, current_user_can_bypass: 'never' } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/installation' ? { body: { id: 42, permissions: MANIFEST_PERMISSIONS } } : undefined),
     ];
     const http: HttpClient = async (url, init) => {
       const parsed = new URL(url);
@@ -493,6 +506,7 @@ jobs:
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('Host: accepted');
     expect(lines.join('\n')).toContain('Default branch main: accepted');
+    expect(lines.join('\n')).toContain('GitHub App installation: accepted');
     expect(lines.join('\n')).toContain('verdict: accepted');
     // No `.factory/config.yml` on the default branch: no `commands.test` either (ORC-412).
     expect(lines).toContain(MISSING_TEST_COMMAND);
@@ -1035,5 +1049,58 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
     const report = JSON.parse(result.text) as { accepted: boolean; branchProtection: { branch: string; verdict: string } };
     expect(report.accepted).toBe(false);
     expect(report.branchProtection).toMatchObject({ branch: 'main', verdict: 'refused' });
+  });
+});
+
+describe("the GitHub App's installation permissions (ORC-439)", () => {
+  it.each([
+    ['administration', 'write', 'Administration'],
+    ['administration', 'read', 'Administration'],
+    // Organization rulesets: edited with the organization's Administration.
+    ['organization_administration', 'write', 'Organization permissions → Administration'],
+  ])('refuses an installation holding %s (%s), and says how to remove it', async (permission, level, named) => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, [permission]: level } } });
+    expect(result.code).toBe(1);
+    const line = result.lines.find((l) => l.startsWith('GitHub App installation: refused'));
+    expect(line).toContain(`${permission} (${level})`);
+    expect(line).toContain(named);
+    for (const named of ['Permissions & events', 'Administration', 'No access', 'Installed GitHub Apps']) expect(line).toContain(named);
+    expect(result.text).toContain('Result: refused — the GitHub App is installed with the Administration permission');
+    const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions: { [permission]: level } } })).text) as { accepted: boolean; installation: { verdict: string } };
+    expect(json).toMatchObject({ accepted: false, installation: { verdict: 'refused', permissions: { [permission]: level } } });
+  });
+
+  it('accepts an installation holding what the manifest asks for, and no more', async () => {
+    const result = await doctor([], []);
+    expect(result.code).toBe(0);
+    expect(result.text).toContain('GitHub App installation: accepted — installed without the Administration permission');
+    const json = JSON.parse((await doctor([], [], { json: true })).text) as { installation: object };
+    expect(json.installation).toEqual({ permissions: MANIFEST_PERMISSIONS, verdict: 'accepted', reasons: ['installed without the Administration permission'] });
+  });
+
+  it('warns, never refuses, when the installation cannot be read (network, authentication), and tells it unchecked', async () => {
+    const result = await doctor([], [], { fake: { failInstallation: 'network' } });
+    expect(result.code).toBe(0);
+    expect(result.text).toContain('GitHub App installation: unchecked');
+    const warning = result.lines.find((l) => l.startsWith("  Warning: the App's installation permissions not read"));
+    expect(warning).toContain('getaddrinfo ENOTFOUND api.github.com');
+    expect(warning).toContain('Administration');
+    expect(result.text).toContain('Result: accepted');
+    expect(result.text).not.toContain('installed without the Administration permission');
+    const json = JSON.parse((await doctor([], [], { json: true, fake: { failInstallation: 'network' } })).text) as { accepted: boolean; installation: { verdict: string; warnings: string[] } };
+    expect(json).toMatchObject({ accepted: true, installation: { verdict: 'unchecked', warnings: [warning?.trim()] } });
+  });
+
+  it('refuses an answer it cannot read: never taken for an installation without Administration (ORC-273)', async () => {
+    const result = await doctor([], [], { fake: { failInstallation: 'unreadable' } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('GitHub App installation: refused — Cannot read the installation\'s permissions: GitHub API GET /repos/acme/app/installation: unreadable answer');
+    expect(result.text).toContain("Result: refused — the GitHub App installation's permissions cannot be read");
+  });
+
+  it('tells the installation beside the other verdicts when the workflows cannot be read', async () => {
+    const result = await doctor([], [], { fake: { failWorkflows: true, permissions: { administration: 'write' } } });
+    expect(result.code).toBe(1);
+    expect(result.text).toContain('GitHub App installation: refused');
   });
 });
