@@ -29,7 +29,7 @@ vi.mock('../exec.js', async (importOriginal) => {
 
 function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}): RunRequest {
   return {
-    runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false, sandboxId: ON_HOST,
+    runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:build\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false, sandboxId: ON_HOST,
     model: 'sonnet', pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false,
     limits: { turns: 50, durationMs: 10_000 }, env, ...patch,
   };
@@ -118,7 +118,7 @@ describeAgentRuntimeContract('ClaudeCodeRunner (fake claude CLI)', () => ({ runt
 describe('buildClaudeArgs', () => {
   it('starts a new session', () => {
     expect(buildClaudeArgs(req())).toEqual([
-      '-p', '/factory:dev\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
+      '-p', '/factory:build\n\n## Ticket', '--output-format', 'stream-json', '--verbose', '--session-id', 'uuid-1', '--model', 'sonnet',
       '--plugin-dir', '/pack', '--settings', '/pack/settings.json', '--setting-sources', '', '--strict-mcp-config', '--mcp-config', expect.any(String),
     ]);
   });

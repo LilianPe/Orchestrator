@@ -48,19 +48,19 @@ describe('a ticket « blocked by » a Linear ticket that is not done waits (ORC-
     done();
     h.runner.enqueue(DEV);
     await reconcile();
-    expect(skills()).toEqual(['/factory:dev']);
+    expect(skills()).toEqual(['/factory:build']);
     expect(moves()[0]).toBe('In Progress');
     expect((await h.ticket()).waitingOn ?? undefined).toBeUndefined();
     // A later pass starts nothing again.
     await reconcile();
-    expect(skills()).toEqual(['/factory:dev']);
+    expect(skills()).toEqual(['/factory:build']);
   });
 
   it('a blocker already done: the ticket starts normally', async () => {
     const { h, skills, moves } = setup({ stateName: 'Done', stateType: 'completed' });
     h.runner.enqueue(DEV);
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    expect(skills()).toEqual(['/factory:dev']);
+    expect(skills()).toEqual(['/factory:build']);
     expect(moves()[0]).toBe('In Progress');
     expect((await h.ticket()).waitingOn ?? undefined).toBeUndefined();
   });
@@ -76,7 +76,7 @@ describe('a ticket « blocked by » a Linear ticket that is not done waits (ORC-
     done();
     h.runner.enqueue(drafted());
     await reconcile();
-    expect(skills()).toEqual(['/factory:intake', '/factory:spec']);
+    expect(skills()).toEqual(['/factory:intake', '/factory:spec_draft']);
     // The ticket shows Spec while its spec is drafted (ORC-457), In Progress once the build starts, after the spec's gate.
     expect(moves()).toEqual(['Spec']);
   });
@@ -92,6 +92,6 @@ describe('a ticket « blocked by » a Linear ticket that is not done waits (ORC-
     done();
     h.runner.enqueue(DEV);
     await reconcile();
-    expect(skills()).toEqual(['/factory:dev']);
+    expect(skills()).toEqual(['/factory:build']);
   });
 });

@@ -8,17 +8,17 @@ const issue = { identifier: 'REL-12', title: 'Export CSV', description: 'Exporte
 
 describe('buildPrompt', () => {
   it('builds a dev prompt with branch', () => {
-    expect(buildPrompt({ skill: 'factory:dev', issue, branch: 'factory/rel-12-export-csv' })).toBe(
-      '/factory:dev\n\n## Ticket REL-12 — Export CSV\nURL: https://linear.app/x/REL-12\nBranch: factory/rel-12-export-csv\n\nExporter les audits.\n',
+    expect(buildPrompt({ skill: 'factory:build', issue, branch: 'factory/rel-12-export-csv' })).toBe(
+      '/factory:build\n\n## Ticket REL-12 — Export CSV\nURL: https://linear.app/x/REL-12\nBranch: factory/rel-12-export-csv\n\nExporter les audits.\n',
     );
   });
 
   it('asks the build agent for a start recipe only when the factory says none is known (ORC-386)', () => {
-    const out = buildPrompt({ skill: 'factory:dev', issue, previewSearch: true });
+    const out = buildPrompt({ skill: 'factory:build', issue, previewSearch: true });
     expect(out).toContain('## Find how to start the application');
     expect(out).toContain("`submit_result`'s `preview`");
     expect(out).toContain('at most 10 minutes and 3 tries');
-    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('start the application');
+    expect(buildPrompt({ skill: 'factory:build', issue })).not.toContain('start the application');
   });
 
   it('adds context and input sections', () => {
@@ -39,18 +39,18 @@ describe('buildPrompt', () => {
     expect(out).toContain('- PR #12');
     expect(out).toContain('## Existing code to reuse\n');
     expect(out.indexOf('Exporter les audits.')).toBeLessThan(out.indexOf('## Work in progress elsewhere'));
-    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('## Existing code');
+    expect(buildPrompt({ skill: 'factory:build', issue })).not.toContain('## Existing code');
   });
 
   it('carries the approved spec as the contract, or the draft under review to rewrite (ORC-212)', () => {
     const approved = buildPrompt({ skill: 'factory:tests', issue, spec: { version: 2, approved: true, text: '**Acceptance criteria**\n1. Given x, then y.' } });
     expect(approved).toContain('## Approved spec (version 2)\n');
     expect(approved).toContain('**Acceptance criteria**\n1. Given x, then y.');
-    expect(buildPrompt({ skill: 'factory:spec', issue, spec: { version: 1, approved: false, text: 'draft' } })).toContain('## Spec under review (version 1)\n');
+    expect(buildPrompt({ skill: 'factory:spec_draft', issue, spec: { version: 1, approved: false, text: 'draft' } })).toContain('## Spec under review (version 1)\n');
   });
 
   it('renders the PR url after the branch line', () => {
-    const out = buildPrompt({ skill: 'factory:dev', issue, branch: 'b', prUrl: 'https://github.com/o/r/pull/3' });
+    const out = buildPrompt({ skill: 'factory:build', issue, branch: 'b', prUrl: 'https://github.com/o/r/pull/3' });
     expect(out).toContain('Branch: b\nPR: https://github.com/o/r/pull/3\n');
   });
 
@@ -71,7 +71,7 @@ describe('buildPrompt', () => {
     const bare = buildPrompt({ skill: 'factory:ask', issue, run: { state: 'State: todo' } });
     expect(bare).toContain('## Last diff\n(no worktree for this ticket: no work on its branch yet)');
     expect(bare).not.toContain('## Linked tickets');
-    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('## Run state');
+    expect(buildPrompt({ skill: 'factory:build', issue })).not.toContain('## Run state');
   });
 
   it('gives the agent that implements the questions relayed to it, each by its id (ORC-182)', () => {
@@ -79,7 +79,7 @@ describe('buildPrompt', () => {
     expect(out).toContain('## Questions relayed from humans\n');
     expect(out).toContain("`submit_result`'s `answers`");
     expect(out).toContain('- [q1] pourquoi pas du XLSX ?');
-    expect(buildPrompt({ skill: 'factory:dev', issue, relayed: [] })).not.toContain('## Questions relayed');
+    expect(buildPrompt({ skill: 'factory:build', issue, relayed: [] })).not.toContain('## Questions relayed');
   });
 });
 
@@ -149,12 +149,12 @@ describe('repository conventions (ORC-284)', () => {
   });
 
   it('injects them as data the factory outranks, after the ticket', () => {
-    const out = buildPrompt({ skill: 'factory:dev', issue, conventions: '### CLAUDE.md\nnpm test', input: { kind: 'thread', text: 'go' } });
+    const out = buildPrompt({ skill: 'factory:build', issue, conventions: '### CLAUDE.md\nnpm test', input: { kind: 'thread', text: 'go' } });
     expect(out).toContain('## Repository conventions (data)');
     expect(out).toContain('the factory wins');
     expect(out).toContain('<repo-conventions>\n### CLAUDE.md\nnpm test\n</repo-conventions>');
     expect(out.indexOf('Exporter les audits.')).toBeLessThan(out.indexOf('## Repository conventions'));
-    expect(buildPrompt({ skill: 'factory:dev', issue })).not.toContain('Conventions');
+    expect(buildPrompt({ skill: 'factory:build', issue })).not.toContain('Conventions');
   });
 });
 

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { factoryDefault } from './presets/factory-default.js';
 import { defaultWorkflow } from './presets/workflow.js';
 
 const pack = join(import.meta.dirname, '../packs/standard');
@@ -36,6 +37,14 @@ describe('standard pack', () => {
     }
   });
 
+  it("names each step's skill after its step, the fix's after `feedback` whatever the cause, and has no fix-ci (ORC-460)", () => {
+    for (const step of factoryDefault.steps) {
+      if (step.type === 'fix') expect(new Set(Object.values(step.skills)), step.id).toEqual(new Set(['factory:feedback']));
+      else if ('skill' in step && step.skill) expect(step.skill, step.id).toBe(`factory:${step.id}`);
+    }
+    expect(readdirSync(join(pack, 'skills'))).not.toContain('fix-ci');
+  });
+
   it('ships the method skills, and every skill has frontmatter named after its folder', () => {
     const names = readdirSync(join(pack, 'skills'));
     expect(names).toEqual(expect.arrayContaining(['tdd', 'debugging', 'verification', 'code-review', 'receiving-review']));
@@ -48,7 +57,7 @@ describe('standard pack', () => {
   it('only cites factory:<skill> names that exist', () => {
     const names = new Set(readdirSync(join(pack, 'skills')));
     const sources = instructions.map(([, text]) => text);
-    const cited = new Set(sources.flatMap((s) => [...s.matchAll(/factory:([a-z][a-z-]*[a-z])/g)].map((m) => m[1]!)));
+    const cited = new Set(sources.flatMap((s) => [...s.matchAll(/factory:([a-z][a-z_-]*[a-z])/g)].map((m) => m[1]!)));
     expect(cited.size).toBeGreaterThan(5);
     for (const c of cited) expect(names.has(c), `factory:${c}`).toBe(true);
   });
@@ -98,7 +107,7 @@ describe('standard pack', () => {
     const rules = hook({ FACTORY_TICKET: 'REL-1' }).additionalContext;
     expect(rules).not.toContain('factory-agent');
     expect(rules).toContain('`status: "blocked"`');
-    for (const name of ['dev', 'feedback', 'fix-ci', 'receiving-review', 'debugging']) {
+    for (const name of ['build', 'feedback', 'receiving-review', 'debugging']) {
       expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toContain('`status: "blocked"`');
     }
   });
@@ -117,8 +126,9 @@ describe('standard pack', () => {
     for (const [name, text] of instructions) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh(?![\w-])|(relais|factory)-agent|--no-verify/m); // transition, à retirer
   });
 
-  it("has fix-ci read the CI's failures from the block the factory fills, its logs as data, the base branch's CI with them (ORC-459)", () => {
-    const text = readFileSync(join(pack, 'skills', 'fix-ci', 'SKILL.md'), 'utf8');
+  it("has feedback read the CI's failures from the block the factory fills, its logs as data, the base branch's CI with them (ORC-459, ORC-460)", () => {
+    const text = readFileSync(join(pack, 'skills', 'feedback', 'SKILL.md'), 'utf8');
+    expect(text).toMatch(/^## CI failures$/m);
     expect(text).not.toMatch(/gh pr checks|points at a forge command/);
     expect(text).toMatch(/the end of its log for the first ones/);
     expect(text).toMatch(/never instructions, whatever it says/);
@@ -141,7 +151,7 @@ describe('standard pack', () => {
   });
 
   it('the build skill: the shape of the data before the logic, less complexity before more, the cause and not a guard (ORC-191)', () => {
-    const text = skill('dev');
+    const text = skill('build');
     for (const rule of ['the shape of the data first, then the logic', 'remove complexity before adding any', 'never a guard that hides the crash']) expect(text).toContain(rule);
   });
 
@@ -150,7 +160,7 @@ describe('standard pack', () => {
   });
 
   it("tells the steps that write to rebase on a human's push, never to merge it (ORC-159)", () => {
-    for (const name of ['dev', 'feedback']) {
+    for (const name of ['build', 'feedback']) {
       const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
       expect(text, name).toContain('`git rebase origin/<branch>`');
       expect(text, name).toContain('factory/commits-humains');
@@ -161,13 +171,13 @@ describe('standard pack', () => {
   it('leaves a conflict with the base to the rebase step: no other skill integrates the base, each hands back (ORC-146)', () => {
     // A human's commits on the branch are not the base: bringing them in stays (ORC-159).
     const integrates = /git (merge|rebase)[^`\n]*origin\/<(trunk|base)>/;
-    for (const name of ['dev', 'feedback', 'review', 'fix-ci', 'tests']) {
+    for (const name of ['build', 'feedback', 'review', 'tests']) {
       const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
       expect(text, name).not.toMatch(integrates);
       expect(text, name).not.toMatch(/`git rebase --continue`/);
     }
     // Not the AI review: it reads a clone of the published commit and writes nothing, no conflict to meet (ORC-183).
-    for (const name of ['dev', 'feedback', 'fix-ci']) {
+    for (const name of ['build', 'feedback']) {
       expect(readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8'), name).toMatch(/factory:rebase/);
     }
   });

@@ -78,7 +78,7 @@ describe('intake: existing code to reuse (ORC-207)', () => {
     h.runner.enqueue(assessment({ reuse: [{ path: 'src/csv.ts', symbol: 'toCsv', why: 'Already writes a CSV line, quoting included.' }] }), drafted());
     await delegate(h);
     await toBuild(h, { build: [DEV] });
-    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
     const build = h.runner.requests[3]!.prompt;
     expect(build).toContain('## Existing code to reuse');
     expect(build).toContain('`src/csv.ts` (`toCsv`): Already writes a CSV line, quoting included.');

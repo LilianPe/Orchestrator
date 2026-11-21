@@ -768,7 +768,7 @@ describe('the ticket session across attempts', () => {
     await h.send('status.changed', { from: 'human_review', to: 'todo' });
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     const [dev, again] = h.runner.requests;
-    expect(again!.prompt.startsWith('/factory:dev\n')).toBe(true);
+    expect(again!.prompt.startsWith('/factory:build\n')).toBe(true);
     expect(again).toMatchObject({ resume: true, claudeSessionId: dev!.claudeSessionId });
     expect(claudeHost(h, 1)).toBe(ticketDir(h));
     expect(await roles(h)).toEqual(['implementer', 'implementer']);

@@ -38,9 +38,18 @@ export function frozenWorkflow(version: WorkflowVersion): Workflow {
   if (format !== WORKFLOW_FORMAT) {
     throw new FrozenFormatError(`workflow version ${version.hash.slice(0, 12)} is of format ${String(format)}, not ${WORKFLOW_FORMAT}: its ticket is refused (format 1: frozen before ORC-393)`);
   }
-  const wf = version.definition as Workflow;
+  const wf = renamedSkills(version.definition as Workflow);
   // A version frozen before ORC-382 has neither step table in its preset: the constants the chain read then.
   return (wf.preset as Partial<Preset>).statuses ? wf : { ...wf, preset: { ...wf.preset, statuses: FORMER_STATUSES, posts: FORMER_POSTS } };
+}
+
+/** The skills ORC-460 renamed after their step, `fix-ci` folded into `feedback`: the pack no longer ships the old names. */
+const FORMER_SKILLS: Readonly<Record<string, string>> = { 'factory:dev': 'factory:build', 'factory:spec': 'factory:spec_draft', 'factory:fix-ci': 'factory:feedback' };
+
+/** A version frozen before ORC-460, its jobs on the skills of today's pack: the launch reads `job.skill`, never the preset's steps. */
+function renamedSkills(wf: Workflow): Workflow {
+  const jobs = Object.fromEntries(Object.entries(wf.jobs).map(([name, job]) => [name, { ...job, skill: FORMER_SKILLS[job.skill] ?? job.skill }]));
+  return { ...wf, jobs };
 }
 
 /** The step → status and step → post tables of the chain before ORC-382 moved them into the preset. */

@@ -43,7 +43,7 @@ export const factoryDefault: Preset = {
     { id: 'intake', type: 'agent_step', skill: 'factory:intake', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'clarify' },
     { id: 'clarify', type: 'agent_step', writes: 'nothing', readOnly: true, model: SONNET, effort: 'low', maxTurns: DEFAULT_TURNS, network: 'limited', optional: true, next: 'spec_draft' },
     // Read-only (ORC-383): it hands the spec back through `submit_result`, nothing in the worktree.
-    { id: 'spec_draft', type: 'agent_step', skill: 'factory:spec', writes: 'spec', readOnly: true, model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
+    { id: 'spec_draft', type: 'agent_step', skill: 'factory:spec_draft', writes: 'spec', readOnly: true, model: SONNET, effort: 'high', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'spec_check' },
     { id: 'spec_check', type: 'spec_check', network: 'none', next: 'spec_review', onFailure: { goto: 'spec_draft', counter: 'spec_check' } },
     { id: 'spec_review', type: 'human_gate', gate: 'spec', next: 'tests', onFailure: { goto: 'spec_draft', counter: 'spec_review' } },
     { id: 'tests', type: 'agent_step', skill: 'factory:tests', writes: 'tests', model: SONNET, effort: 'medium', maxTurns: DEFAULT_TURNS, network: 'limited', next: 'red' },
@@ -51,7 +51,7 @@ export const factoryDefault: Preset = {
     { id: 'red', type: 'verify', mode: 'red', red: 'measure', network: 'none', next: 'freeze_tests', onFailure: { goto: 'tests', counter: 'red' } },
     { id: 'freeze_tests', type: 'verify', mode: 'freeze', network: 'none', next: 'build' },
     {
-      id: 'build', type: 'agent_step', skill: 'factory:dev', writes: 'code',
+      id: 'build', type: 'agent_step', skill: 'factory:build', writes: 'code',
       model: SONNET, effort: 'medium', maxTurns: 150, network: 'limited', next: 'verify',
     },
     { id: 'verify', type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'build', counter: 'verify' } },
@@ -68,7 +68,7 @@ export const factoryDefault: Preset = {
     { id: 'after_merge', type: 'factory_step', does: 'after_merge', next: null },
     // The loop after publication: fix → verify → publish → AI review, then the human gate again.
     {
-      id: 'fix', type: 'fix', skills: { ci: 'factory:fix-ci', review: 'factory:feedback', human: 'factory:feedback', instruction: 'factory:feedback', relay: 'factory:feedback' },
+      id: 'fix', type: 'fix', skills: { ci: 'factory:feedback', review: 'factory:feedback', human: 'factory:feedback', instruction: 'factory:feedback', relay: 'factory:feedback' },
       model: SONNET, effort: 'medium', maxTurns: 60, network: 'limited', next: 'verify_fix',
     },
     { id: 'verify_fix', type: 'verify', mode: 'full', network: 'none', next: 'publish', onFailure: { goto: 'fix', counter: 'verify' } },

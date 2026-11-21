@@ -83,7 +83,7 @@ describe('GitHub webhooks', () => {
     await delegated(h);
     for (const head of ['h1', 'h2', 'h3']) await post(h, 'check_run', checkRunBody('failure', { head }));
     // Two fix-ci (limits.ci_fix_attempts: 2), then the ticket is blocked.
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:fix-ci', '/factory:fix-ci']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:feedback', '/factory:feedback']);
     expect(await h.ticket()).toMatchObject({ blocked: true, ciFixAttempts: 2 });
   });
 
@@ -139,7 +139,7 @@ describe('GitHub webhooks', () => {
       { id: 'pr:REL-1:3:review:11', taint: 'untrusted', payload: { kind: 'review', author: 'lilian', body: 'Renomme la fonction', state: 'changes_requested' } },
     ]);
     expect(await events(h, 'pr.conflicted')).toMatchObject([{ id: 'pr:REL-1:3:conflicted:head1:base1', payload: { headSha: 'head1', baseRef: 'main' } }]);
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:rebase']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:rebase']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false, humanInbox: [] });
   });
 
