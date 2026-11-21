@@ -12,7 +12,7 @@ import type { ReviewLens } from './workflow.js';
 
 /**
  * `cancelled`: a ticket a human moved to a status of type canceled (ORC-170), read on that type, never mapped by name. `spec`: the
- * spec being drafted and reviewed (ORC-139, ORC-382), a status only when `factory.yml` names one.
+ * spec being drafted and reviewed (ORC-139, ORC-382), Spec unless `factory.yml` turns it off (ORC-457).
  */
 export const LOGICAL_STATES = ['todo', 'dev', 'human_review', 'ai_review', 'ready', 'done', 'cancelled', 'spec'] as const;
 export type LogicalState = (typeof LOGICAL_STATES)[number];

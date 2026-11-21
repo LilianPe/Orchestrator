@@ -18,12 +18,13 @@ describe('intake, the first step (ORC-206)', () => {
     expect(skills(h)).toEqual(['/factory:intake', '/factory:spec']);
     expect(h.runner.requests[0]!.effort).toBe('low');
     const t = await h.ticket();
-    expect(t).toMatchObject({ size: 's', risk: 'medium', visualProof: 'required', blocked: false, logical: 'todo' });
+    expect(t).toMatchObject({ size: 's', risk: 'medium', visualProof: 'required', blocked: false, logical: 'spec' });
     const moves = () => h.tracker.calls.filter((c) => c.method === 'moveTo').map((c) => c.args[1]);
-    expect(moves()).toEqual([]);
+    // Spec while the spec is drafted and reviewed (ORC-457).
+    expect(moves()).toEqual(['Spec']);
     await toBuild(h, { build: [DEV] });
     expect(skills(h)).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
-    expect(moves()[0]).toBe('In Progress');
+    expect(moves()[1]).toBe('In Progress');
     // The dev attempt carries the risk intake assessed (ORC-226 labels).
     const dev = await h.store.getRun(h.runner.requests[3]!.runId);
     expect(dev?.labels?.risk).toBe('medium');

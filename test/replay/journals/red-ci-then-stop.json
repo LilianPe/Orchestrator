@@ -3,7 +3,7 @@
   "projectId": "p",
   "ticketId": "REL-1",
   "workflows": {
-    "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71": {
+    "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190": {
       "version": 2,
       "tracker": {
         "kind": "linear",
@@ -16,6 +16,7 @@
       },
       "states": {
         "todo": "Todo",
+        "spec": "Spec",
         "dev": "In Progress",
         "human_review": "Human Review",
         "ai_review": "AI Review",
@@ -748,7 +749,7 @@
         "ticketId": "REL-1",
         "seq": 1,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "ticket": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -764,7 +765,7 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71"
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190"
         },
         "effects": [
           {
@@ -801,7 +802,7 @@
         "ticketId": "REL-1",
         "seq": 2,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -817,7 +818,7 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "activeRunId": "id-1",
           "activeJob": "intake",
           "activeStart": {
@@ -839,7 +840,7 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "activeRunId": "id-1",
           "activeJob": "intake",
           "activeStart": {
@@ -896,7 +897,7 @@
         "ticketId": "REL-1",
         "seq": 3,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -912,7 +913,7 @@
           "costUsd": 0,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "activeRunId": "id-1",
           "activeJob": "intake",
           "activeStart": {
@@ -934,11 +935,15 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low"
         },
         "effects": [
+          {
+            "kind": "move",
+            "to": "spec"
+          },
           {
             "kind": "start_run",
             "job": "spec"
@@ -965,7 +970,7 @@
         "type": "effect.done",
         "payload": {
           "effectId": "REL-1:3:1",
-          "kind": "start_run",
+          "kind": "move",
           "eventId": "attempt:id-1:finished",
           "attempts": 1
         }
@@ -976,12 +981,12 @@
         "ticketId": "REL-1",
         "seq": 4,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -992,9 +997,10 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1008,7 +1014,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1019,9 +1025,97 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "activeRunId": "id-4",
+          "activeJob": "spec",
+          "activeStart": {
+            "job": "spec"
+          }
+        },
+        "effects": [],
+        "timers": [],
+        "clearTimers": false,
+        "trace": [
+          "built-in effect.done"
+        ]
+      }
+    },
+    {
+      "event": {
+        "schemaVersion": 3,
+        "taint": "trusted",
+        "id": "effect:REL-1:3:2",
+        "at": 1791622800000,
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "type": "effect.done",
+        "payload": {
+          "effectId": "REL-1:3:2",
+          "kind": "start_run",
+          "eventId": "attempt:id-1:finished",
+          "attempts": 1
+        }
+      },
+      "decision": {
+        "eventId": "effect:REL-1:3:2",
+        "projectId": "p",
+        "ticketId": "REL-1",
+        "seq": 5,
+        "at": 1791622800000,
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
+        "before": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "spec",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
+          "size": "s",
+          "risk": "low",
+          "recordedStatus": "spec",
+          "worktreePath": "/tmp/factory-fake/p/REL-1",
+          "port": 4200,
+          "branch": "feat/rel-1-export-csv",
+          "activeRunId": "id-4",
+          "activeJob": "spec",
+          "activeStart": {
+            "job": "spec"
+          }
+        },
+        "ticket": {
+          "projectId": "p",
+          "ticketId": "REL-1",
+          "title": "Export CSV",
+          "logical": "spec",
+          "delegated": true,
+          "questionSessionIds": [],
+          "blocked": false,
+          "verifyAttempts": 0,
+          "ciFixAttempts": 0,
+          "humanInbox": [],
+          "priority": 0,
+          "costUsd": 0.1,
+          "updatedAt": 1791622800000,
+          "linearSessionId": "ls-1",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
+          "size": "s",
+          "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1089,14 +1183,14 @@
         "eventId": "attempt:id-4:finished",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 5,
+        "seq": 6,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1107,9 +1201,10 @@
           "costUsd": 0.1,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1123,7 +1218,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1134,9 +1229,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1202,30 +1298,30 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:3:2",
+        "id": "effect:REL-1:3:3",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:3:2",
+          "effectId": "REL-1:3:3",
           "kind": "settle",
           "eventId": "attempt:id-1:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:3:2",
+        "eventId": "effect:REL-1:3:3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 6,
+        "seq": 7,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1236,9 +1332,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1269,7 +1366,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1280,9 +1377,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1321,30 +1419,30 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:5:1",
+        "id": "effect:REL-1:6:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:5:1",
+          "effectId": "REL-1:6:1",
           "kind": "publish_spec",
           "eventId": "attempt:id-4:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:5:1",
+        "eventId": "effect:REL-1:6:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 7,
+        "seq": 8,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1355,9 +1453,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1388,7 +1487,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1399,9 +1498,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1440,30 +1540,30 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:5:2",
+        "id": "effect:REL-1:6:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:5:2",
+          "effectId": "REL-1:6:2",
           "kind": "settle",
           "eventId": "attempt:id-4:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:5:2",
+        "eventId": "effect:REL-1:6:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 8,
+        "seq": 9,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1474,9 +1574,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1507,7 +1608,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1518,9 +1619,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1580,14 +1682,14 @@
         "eventId": "t-2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 9,
+        "seq": 10,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1598,9 +1700,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1631,7 +1734,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1652,9 +1755,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1709,30 +1813,30 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:9:1",
+        "id": "effect:REL-1:10:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:9:1",
+          "effectId": "REL-1:10:1",
           "kind": "activity",
           "eventId": "t-2",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:9:1",
+        "eventId": "effect:REL-1:10:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 10,
+        "seq": 11,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1753,9 +1857,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1797,7 +1902,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1818,9 +1923,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1870,30 +1976,30 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:9:2",
+        "id": "effect:REL-1:10:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:9:2",
+          "effectId": "REL-1:10:2",
           "kind": "start_run",
           "eventId": "t-2",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:9:2",
+        "eventId": "effect:REL-1:10:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 11,
+        "seq": 12,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1914,9 +2020,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -1958,7 +2065,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -1979,9 +2086,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2060,14 +2168,14 @@
         "eventId": "attempt:id-7:finished",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 12,
+        "seq": 13,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2088,9 +2196,10 @@
           "costUsd": 0.2,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2132,7 +2241,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2153,9 +2262,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2220,30 +2330,30 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:12:1",
+        "id": "effect:REL-1:13:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:12:1",
+          "effectId": "REL-1:13:1",
           "kind": "run_verify",
           "eventId": "attempt:id-7:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:12:1",
+        "eventId": "effect:REL-1:13:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 13,
+        "seq": 14,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2264,9 +2374,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2304,7 +2415,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2325,9 +2436,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2403,14 +2515,14 @@
         "eventId": "check:id-7",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 14,
+        "seq": 15,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2431,9 +2543,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2471,7 +2584,7 @@
           "projectId": "p",
           "ticketId": "REL-1",
           "title": "Export CSV",
-          "logical": "todo",
+          "logical": "spec",
           "delegated": true,
           "questionSessionIds": [],
           "blocked": false,
@@ -2492,9 +2605,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "spec",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2559,25 +2673,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:12:2",
+        "id": "effect:REL-1:13:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:12:2",
+          "effectId": "REL-1:13:2",
           "kind": "settle",
           "eventId": "attempt:id-7:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:12:2",
+        "eventId": "effect:REL-1:13:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 15,
+        "seq": 16,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2603,9 +2717,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2645,7 +2760,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -2678,9 +2792,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2720,7 +2835,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -2740,25 +2854,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:14:1",
+        "id": "effect:REL-1:15:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:14:1",
+          "effectId": "REL-1:15:1",
           "kind": "move",
           "eventId": "check:id-7",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:14:1",
+        "eventId": "effect:REL-1:15:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 16,
+        "seq": 17,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2784,9 +2898,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2826,7 +2941,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -2859,9 +2973,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -2901,7 +3016,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -2921,25 +3035,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:14:2",
+        "id": "effect:REL-1:15:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:14:2",
+          "effectId": "REL-1:15:2",
           "kind": "start_run",
           "eventId": "check:id-7",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:14:2",
+        "eventId": "effect:REL-1:15:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 17,
+        "seq": 18,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -2965,9 +3079,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3007,7 +3122,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -3040,9 +3154,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3082,7 +3197,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -3131,9 +3245,9 @@
         "eventId": "attempt:id-10:finished",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 18,
+        "seq": 19,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -3159,9 +3273,10 @@
           "costUsd": 0.30000000000000004,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3201,7 +3316,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "activeRunId": "id-10",
           "activeJob": "dev",
@@ -3234,9 +3348,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3276,7 +3391,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "verifyingRunId": "id-10"
         },
@@ -3311,25 +3425,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:14:3",
+        "id": "effect:REL-1:15:3",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:14:3",
+          "effectId": "REL-1:15:3",
           "kind": "settle",
           "eventId": "check:id-7",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:14:3",
+        "eventId": "effect:REL-1:15:3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 19,
+        "seq": 20,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -3355,9 +3469,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3397,7 +3512,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "verifyingRunId": "id-10"
         },
@@ -3426,9 +3540,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3468,7 +3583,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "verifyingRunId": "id-10"
         },
@@ -3484,25 +3598,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:18:1",
+        "id": "effect:REL-1:19:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:18:1",
+          "effectId": "REL-1:19:1",
           "kind": "run_verify",
           "eventId": "attempt:id-10:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:18:1",
+        "eventId": "effect:REL-1:19:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 20,
+        "seq": 21,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -3528,9 +3642,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3570,7 +3685,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "verifyingRunId": "id-10"
         },
@@ -3599,9 +3713,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3641,7 +3756,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "verifyingRunId": "id-10"
         },
@@ -3688,9 +3802,9 @@
         "eventId": "check:id-10",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 21,
+        "seq": 22,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -3716,9 +3830,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3758,7 +3873,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null,
           "verifyingRunId": "id-10"
         },
@@ -3787,9 +3901,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "dev",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3829,7 +3944,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "dev",
           "untrustedSince": null
         },
         "effects": [
@@ -3867,25 +3981,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:18:2",
+        "id": "effect:REL-1:19:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:18:2",
+          "effectId": "REL-1:19:2",
           "kind": "settle",
           "eventId": "attempt:id-10:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:18:2",
+        "eventId": "effect:REL-1:19:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 22,
+        "seq": 23,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -3911,9 +4025,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -3953,7 +4068,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -3981,9 +4095,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4023,7 +4138,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -4038,25 +4152,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:21:1",
+        "id": "effect:REL-1:22:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:21:1",
+          "effectId": "REL-1:22:1",
           "kind": "move",
           "eventId": "check:id-10",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:21:1",
+        "eventId": "effect:REL-1:22:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 23,
+        "seq": 24,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -4082,9 +4196,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4124,7 +4239,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -4152,9 +4266,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4194,7 +4309,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -4209,25 +4323,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:21:2",
+        "id": "effect:REL-1:22:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:21:2",
+          "effectId": "REL-1:22:2",
           "kind": "post_output",
           "eventId": "check:id-10",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:21:2",
+        "eventId": "effect:REL-1:22:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 24,
+        "seq": 25,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -4253,9 +4367,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4295,7 +4410,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -4323,9 +4437,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4365,7 +4480,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -4380,25 +4494,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:21:3",
+        "id": "effect:REL-1:22:3",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:21:3",
+          "effectId": "REL-1:22:3",
           "kind": "settle",
           "eventId": "check:id-10",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:21:3",
+        "eventId": "effect:REL-1:22:3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 25,
+        "seq": 26,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -4424,9 +4538,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4466,7 +4581,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -4494,9 +4608,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4536,7 +4651,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -4569,9 +4683,9 @@
         "eventId": "t-3",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 26,
+        "seq": 27,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -4597,9 +4711,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4639,7 +4754,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -4667,9 +4781,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4709,7 +4824,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [
@@ -4730,25 +4844,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:26:1",
+        "id": "effect:REL-1:27:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:26:1",
+          "effectId": "REL-1:27:1",
           "kind": "start_run",
           "eventId": "t-3",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:26:1",
+        "eventId": "effect:REL-1:27:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 27,
+        "seq": 28,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -4774,9 +4888,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4816,7 +4931,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "activeRunId": "id-12",
           "activeJob": "fix-ci",
@@ -4850,9 +4964,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -4892,7 +5007,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "activeRunId": "id-12",
           "activeJob": "fix-ci",
@@ -4942,9 +5056,9 @@
         "eventId": "attempt:id-12:finished",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 28,
+        "seq": 29,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -4970,9 +5084,10 @@
           "costUsd": 0.4,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5012,7 +5127,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "activeRunId": "id-12",
           "activeJob": "fix-ci",
@@ -5046,9 +5160,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5088,7 +5203,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "verifyingRunId": "id-12"
         },
@@ -5123,25 +5237,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:28:1",
+        "id": "effect:REL-1:29:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:28:1",
+          "effectId": "REL-1:29:1",
           "kind": "run_verify",
           "eventId": "attempt:id-12:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:28:1",
+        "eventId": "effect:REL-1:29:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 29,
+        "seq": 30,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -5167,9 +5281,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5209,7 +5324,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "verifyingRunId": "id-12"
         },
@@ -5238,9 +5352,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5280,7 +5395,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "verifyingRunId": "id-12"
         },
@@ -5327,9 +5441,9 @@
         "eventId": "check:id-12",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 30,
+        "seq": 31,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -5355,9 +5469,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5397,7 +5512,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "verifyingRunId": "id-12"
         },
@@ -5426,9 +5540,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5468,7 +5583,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [
@@ -5502,25 +5616,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:28:2",
+        "id": "effect:REL-1:29:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:28:2",
+          "effectId": "REL-1:29:2",
           "kind": "settle",
           "eventId": "attempt:id-12:finished",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:28:2",
+        "eventId": "effect:REL-1:29:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 31,
+        "seq": 32,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -5546,9 +5660,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5588,7 +5703,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -5616,9 +5730,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5658,7 +5773,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -5673,25 +5787,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:30:1",
+        "id": "effect:REL-1:31:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:30:1",
+          "effectId": "REL-1:31:1",
           "kind": "post_output",
           "eventId": "check:id-12",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:30:1",
+        "eventId": "effect:REL-1:31:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 32,
+        "seq": 33,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -5717,9 +5831,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5759,7 +5874,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -5787,9 +5901,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5829,7 +5944,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -5844,25 +5958,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:30:2",
+        "id": "effect:REL-1:31:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:30:2",
+          "effectId": "REL-1:31:2",
           "kind": "settle",
           "eventId": "check:id-12",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:30:2",
+        "eventId": "effect:REL-1:31:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 33,
+        "seq": 34,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -5888,9 +6002,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -5930,7 +6045,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -5958,9 +6072,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6000,7 +6115,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "effects": [],
@@ -6033,9 +6147,9 @@
         "eventId": "t-4",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 34,
+        "seq": 35,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -6061,9 +6175,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6103,7 +6218,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null
         },
         "ticket": {
@@ -6131,9 +6245,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6173,7 +6288,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
           "blockKind": "ci_bound",
@@ -6212,25 +6326,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:34:1",
+        "id": "effect:REL-1:35:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:34:1",
+          "effectId": "REL-1:35:1",
           "kind": "block_comment",
           "eventId": "t-4",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:34:1",
+        "eventId": "effect:REL-1:35:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 35,
+        "seq": 36,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -6256,9 +6370,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6298,7 +6413,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
           "blockKind": "ci_bound",
@@ -6329,9 +6443,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6371,7 +6486,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
           "blockKind": "ci_bound",
@@ -6389,25 +6503,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:34:2",
+        "id": "effect:REL-1:35:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:34:2",
+          "effectId": "REL-1:35:2",
           "kind": "labels",
           "eventId": "t-4",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:34:2",
+        "eventId": "effect:REL-1:35:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 36,
+        "seq": 37,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -6433,9 +6547,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6475,7 +6590,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
           "blockKind": "ci_bound",
@@ -6506,9 +6620,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6548,7 +6663,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
           "blockKind": "ci_bound",
@@ -6579,9 +6693,9 @@
         "eventId": "t-5",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 37,
+        "seq": 38,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -6607,9 +6721,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6649,7 +6764,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "CI still failing after 1 attempts of fix-ci.",
           "blockKind": "ci_bound",
@@ -6680,9 +6794,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6722,7 +6837,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "Stopped on request",
           "blockKind": "stopped"
@@ -6748,25 +6862,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:37:1",
+        "id": "effect:REL-1:38:1",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:37:1",
+          "effectId": "REL-1:38:1",
           "kind": "stop_run",
           "eventId": "t-5",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:37:1",
+        "eventId": "effect:REL-1:38:1",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 38,
+        "seq": 39,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -6792,9 +6906,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6834,7 +6949,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "Stopped on request",
           "blockKind": "stopped"
@@ -6864,9 +6978,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -6906,7 +7021,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "Stopped on request",
           "blockKind": "stopped"
@@ -6923,25 +7037,25 @@
       "event": {
         "schemaVersion": 3,
         "taint": "trusted",
-        "id": "effect:REL-1:37:2",
+        "id": "effect:REL-1:38:2",
         "at": 1791622800000,
         "projectId": "p",
         "ticketId": "REL-1",
         "type": "effect.done",
         "payload": {
-          "effectId": "REL-1:37:2",
+          "effectId": "REL-1:38:2",
           "kind": "activity",
           "eventId": "t-5",
           "attempts": 1
         }
       },
       "decision": {
-        "eventId": "effect:REL-1:37:2",
+        "eventId": "effect:REL-1:38:2",
         "projectId": "p",
         "ticketId": "REL-1",
-        "seq": 39,
+        "seq": 40,
         "at": 1791622800000,
-        "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+        "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
         "before": {
           "projectId": "p",
           "ticketId": "REL-1",
@@ -6967,9 +7081,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -7009,7 +7124,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "Stopped on request",
           "blockKind": "stopped"
@@ -7039,9 +7153,10 @@
           "costUsd": 0.5,
           "updatedAt": 1791622800000,
           "linearSessionId": "ls-1",
-          "workflowHash": "0b160ad5780f53dc3beb941c3d94d4495c79831b614a12f53f865ab0e1217c71",
+          "workflowHash": "0a13094a88c5b48c3dcb6623d01b54c946777e45b99a40ba6232cdeee743a190",
           "size": "s",
           "risk": "low",
+          "recordedStatus": "human_review",
           "worktreePath": "/tmp/factory-fake/p/REL-1",
           "port": 4200,
           "branch": "feat/rel-1-export-csv",
@@ -7081,7 +7196,6 @@
               "Given 2 audits, when I click CSV, then a file of 3 lines downloads."
             ]
           },
-          "recordedStatus": "human_review",
           "untrustedSince": null,
           "blockReason": "Stopped on request",
           "blockKind": "stopped"

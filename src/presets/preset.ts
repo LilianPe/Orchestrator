@@ -52,7 +52,7 @@ export interface Preset {
   /**
    * The logical state each step shows while it works or waits (ORC-382), the step → status table frozen with the preset's version
    * (decided 15/11): a step moves the ticket when the chain reaches it, to the Linear status `Workflow.states` names for it. A step
-   * whose status has no name there (`spec`, unless `factory.yml` names one) moves nothing, nor does `todo`, a human's status.
+   * whose status has no name there (`spec`, when `factory.yml` turns it off) moves nothing, nor does `todo`, a human's status.
    */
   statuses: Readonly<Record<string, StepStatus>>;
   /** What the end of each step posts in the ticket's session (ORC-391), frozen with the preset as its statuses are. */

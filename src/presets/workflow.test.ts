@@ -9,10 +9,10 @@ import { agentStep, DEFAULT_STATES, defaultWorkflow, workflowViolations, type St
 /**
  * The hashes of the workflow of `factory/default`: the canonical one, which each ticket's frozen version and the replay
  * journals carry, and the one of its JSON text, keys in their order, which the journals hold. A change of either changes the
- * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-382, the step → status and step → post tables in the preset).
+ * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-457, the Spec status by default).
  */
-const CANONICAL = '273dc7ca1fe1658c37fd9e7decd02f6f305535de4535014469c4c572f5655a4c';
-const TEXT = 'sha256:c668f4c707c36a49fff8cb226d17041e19841635f99c72bda988df389743f805';
+const CANONICAL = 'f04fbef5ffca3fe31bd00352fc69be2b43218f43aedc07524b7bff2ed534f6c2';
+const TEXT = 'sha256:198137ad9858a97e2f5b1b255da276841837403270b4692c85c9f2d081ede425';
 
 describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
   // The safety net of ORC-177's later parts: a change of the workflow is a change of the journals, seen in their diff.
@@ -96,18 +96,34 @@ describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
 describe("factory.yml's statuses (ORC-382)", () => {
   const job = (wf: ReturnType<typeof defaultWorkflow>, name: string) => wf.jobs[name]!;
 
-  it("are ORC-170's by default: the spec shows no status, the build In Progress", () => {
+  it("are ORC-170's and Spec by default (ORC-457): the spec shows Spec, the build In Progress", () => {
     const wf = defaultWorkflow();
     expect(wf.states).toEqual(DEFAULT_STATES);
+    expect(DEFAULT_STATES.spec).toBe('Spec');
     expect(wf.preset.statuses).toEqual({ intake: 'todo', spec_draft: 'spec', build: 'dev', review: 'ai_review', human_review: 'human_review' });
-    expect(stepStatus(wf, 'spec_draft')).toBeUndefined();
-    expect(nextOf(wf, job(wf, 'intake')).move).toBeUndefined();
+    expect(stepStatus(wf, 'spec_draft')).toBe('spec');
+    expect(nextOf(wf, job(wf, 'intake'))).toMatchObject({ move: 'spec', run: { name: 'spec' } });
     expect(stepStatus(wf, 'build')).toBe('dev');
   });
 
+  it('ORC-457 criterion 2: `spec_draft: off` turns the Spec status off, the ticket stays in Todo until the build', () => {
+    const wf = defaultWorkflow({ statuses: { spec_draft: 'off' } });
+    expect(wf.states).not.toHaveProperty('spec');
+    expect(stepStatus(wf, 'spec_draft')).toBeUndefined();
+    expect(nextOf(wf, job(wf, 'intake')).move).toBeUndefined();
+    expect(nextOf(wf, job(wf, 'tests'))).toMatchObject({ move: 'dev', run: { name: 'dev' } });
+    // The spec and its human gate stay: only the status goes.
+    expect(wf.preset.steps.map((s) => s.id)).toContain('spec_review');
+  });
+
+  it('ORC-457: refuses `off` for a step whose status the factory needs', () => {
+    expect(() => defaultWorkflow({ statuses: { build: 'off' } })).toThrow(/statuses\.build: `off` turns off only the status of spec_draft/);
+    expect(() => defaultWorkflow({ statuses: { intake: 'off' } })).toThrow(/statuses\.intake: `off` turns off only the status of spec_draft/);
+  });
+
   it('criterion 1: a step named in the table moves the ticket to its status when the chain reaches it', () => {
-    const wf = defaultWorkflow({ statuses: { intake: 'Todo', spec_draft: 'Spec', build: 'Doing', review: 'AI Review', human_review: 'Human Review' } });
-    expect(wf.states).toEqual({ ...DEFAULT_STATES, spec: 'Spec', dev: 'Doing' });
+    const wf = defaultWorkflow({ statuses: { intake: 'Todo', spec_draft: 'Drafting', build: 'Doing', review: 'AI Review', human_review: 'Human Review' } });
+    expect(wf.states).toEqual({ ...DEFAULT_STATES, spec: 'Drafting', dev: 'Doing' });
     // intake's end reaches the spec: Spec; the approved spec's tests show no status of their own; the build In Progress, named Doing.
     expect(nextOf(wf, job(wf, 'intake'))).toMatchObject({ move: 'spec', run: { name: 'spec' } });
     expect(nextOf(wf, job(wf, 'spec'), true)).not.toHaveProperty('move');
@@ -119,7 +135,7 @@ describe("factory.yml's statuses (ORC-382)", () => {
   it('criterion 4: refuses at load a step the preset does not have, a step with no status, and a Linear status for two', () => {
     expect(() => defaultWorkflow({ statuses: { deploy: 'Deploying' } })).toThrow(/statuses\.deploy: is not a step of factory\/default/);
     expect(() => defaultWorkflow({ statuses: { tests: 'Testing' } })).toThrow(/statuses\.tests: shows no status of its own .*the steps with one: intake, spec_draft, build, review, human_review/);
-    expect(() => defaultWorkflow({ statuses: { spec_draft: 'In Progress' } })).toThrow(/« In Progress » would name both dev and spec/);
+    expect(() => defaultWorkflow({ statuses: { spec_draft: 'In Progress' } })).toThrow(/« In Progress » would name both spec and dev/);
   });
 
   it('refuses a status the preset table gives a step it does not have, and one no step shows', () => {

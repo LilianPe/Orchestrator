@@ -77,8 +77,8 @@ describe('a ticket « blocked by » a Linear ticket that is not done waits (ORC-
     h.runner.enqueue(drafted());
     await reconcile();
     expect(skills()).toEqual(['/factory:intake', '/factory:spec']);
-    // The ticket moves to In Progress when the build starts, after the spec's gate.
-    expect(moves()).toEqual([]);
+    // The ticket shows Spec while its spec is drafted (ORC-457), In Progress once the build starts, after the spec's gate.
+    expect(moves()).toEqual(['Spec']);
   });
 
   it('a reply while it waits starts nothing, even In Progress where a reply starts dev-feedback: the message is kept', async () => {
