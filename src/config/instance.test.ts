@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { loadFactoryYml, parseFactoryYml } from './factory-yml.js';
 import {
+  currentProjectIds,
   daemonSecretValues,
   effectiveInstance,
   homePaths,
@@ -39,6 +40,17 @@ describe('instance config', () => {
     saveInstance(home, cfg);
     expect(loadInstance(home)).toEqual(cfg);
     expect(readFileSync(homePaths(home).factoryYml, 'utf8')).toContain('repo_path: /code/perso\n    linear_team_key: REL');
+  });
+
+  it('reads the projects as factory.yml is now, a project added or removed since included; the fallback when it does not read (ORC-454)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    const project = (id: string) => ({ id, repoPath: `/code/${id}`, linearTeamKey: 'REL' });
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project('a')] });
+    expect(currentProjectIds(home, ['x'])).toEqual(['a']);
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project('b')] });
+    expect(currentProjectIds(home, ['x'])).toEqual(['b']);
+    writeFileSync(homePaths(home).factoryYml, 'port: [\n');
+    expect(currentProjectIds(home, ['x'])).toEqual(['x']);
   });
 
   it('never reads config.yaml: its keys are not the instance (ORC-199)', () => {

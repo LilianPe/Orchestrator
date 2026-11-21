@@ -103,6 +103,18 @@ export function loadInstance(home: string): InstanceConfig {
   return effectiveInstance(text === undefined ? undefined : parseInstanceKeys(text));
 }
 
+/**
+ * The ids of factory.yml's projects as the file is now (ORC-454): one `factory init` added while the daemon runs included, one
+ * removed left out. `fallback` when the file does not read (an edit under way).
+ */
+export function currentProjectIds(home: string, fallback: readonly string[]): readonly string[] {
+  try {
+    return loadInstance(home).projects.map((p) => p.id);
+  } catch {
+    return fallback;
+  }
+}
+
 /** A project as factory.yml writes it. */
 function projectYml({ id, repoPath, linearTeamKey, authz, effects, preset }: ProjectConfig): Record<string, unknown> {
   return {

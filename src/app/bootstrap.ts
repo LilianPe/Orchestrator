@@ -40,7 +40,7 @@ import { startRefusals, type StartChecks } from '../config/start-refusals.js';
 import { ignoredWorkflowWarning } from '../config/repo-config.js';
 import { cloneAuth, httpsGithub, projectGithub } from './project-github.js';
 import { ignoredWorkflowFilesOn, makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
+import { currentProjectIds, daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning, presetWorkflow } from '../presets/workflow.js';
@@ -505,7 +505,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       heldRows: (ticketId) => daemon.heldRows(ticketId),
       // `factory dry-run`: a new one, after any under way, which reads what changed meanwhile (a known flaky test, a variable).
       dryRun: (projectId) => daemon.dryRun(projectId, { fresh: true }),
-      projects: projects.map((p) => p.id),
+      // Read again at each request: a project `factory init` adds while the daemon runs has its cards to approve (ORC-454).
+      projects: () => currentProjectIds(o.home, projects.map((p) => p.id)),
       secrets: allSecrets,
       oauth: linearSettings(o.home, yml)
         ? {
