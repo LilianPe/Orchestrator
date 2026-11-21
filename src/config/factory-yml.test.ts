@@ -436,7 +436,7 @@ secrets_key: "coffre:factory#secrets_key"
       expect(stepSettings({ budgets: { perStepTokens: 'off', maxTurns: { build: 10 } } })).toEqual({ budgets: { maxTurns: { build: 10 } } });
     });
 
-    it('gives the orchestrator no ticket cap when it is off: no run is stopped for it', () => {
+    it('gives the daemon no ticket cap when it is off: no run is stopped for it', () => {
       expect(ticketCapOf({ budgets: { perTicketTokens: 'off' } })).toBeUndefined();
       expect(ticketCapOf({ budgets: { perTicketTokens: 1000 } })).toBe(1000);
       expect(ticketCapOf(undefined)).toBeUndefined();

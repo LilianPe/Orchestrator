@@ -1,15 +1,17 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
-import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
+import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
+import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConfig } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import type { MaturityPoint } from '../store/types.js';
-import { MATURITY_HEADER, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
+import { GITHUB_APP_PERMISSIONS, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
+import { runValidateCommand } from './validate.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
   const printed: string[] = [];
@@ -74,7 +76,7 @@ describe('factory init', () => {
       }
     };
     const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: realExec });
+    await runInit({ io, home, cwd: repo, dev: true, createSmee: async () => 'https://smee.io/abc', exec: realExec });
 
     const cfg = loadInstance(home);
     expect(cfg.relay).toEqual({ kind: 'smee', url: 'https://smee.io/abc' });
@@ -170,7 +172,7 @@ describe('factory init', () => {
       },
       print: () => {},
     };
-    await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec });
+    await runInit({ io, home, cwd: repo, dev: true, createSmee: async () => 'https://smee.io/abc', exec });
 
     expect(asked.filter((q) => q === 'Webhook signing secret')).toHaveLength(3);
     expect(loadSecrets(home).linear?.webhookSecret).toBe('whsecret');
@@ -268,5 +270,142 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     expect(out).toContain('  [to approve] Stack: Node (npm)');
     expect(out).toContain('Cards not stored (connection refused): run factory init again once the database is reachable.');
     expect(out).toContain('Configuration written.');
+  });
+});
+
+/** A fresh home and repository, and what one `init` run with `answers` printed. */
+async function initOnce(o: { home?: string; repo?: string; answers?: string[]; dev?: boolean; smee?: () => Promise<string>; config?: Partial<InstanceConfig> } = {}) {
+  const home = o.home ?? mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+  if (o.config) saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {}, ...o.config });
+  const repo = o.repo ?? mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+  const io = scriptedIO(o.answers ?? ['REL', 'cid', 'csecret', 'whsecret']);
+  await runInit({ io, home, cwd: repo, dev: o.dev, createSmee: o.smee ?? (async () => 'https://smee.io/abc'), exec: gitTop(repo) });
+  return { home, repo, out: io.printed.join('\n') };
+}
+
+describe('factory init: Smee only for development (ORC-411)', () => {
+  it('criterion 2: without a public URL nor --dev, creates no Smee channel and says how to get the webhooks', async () => {
+    let created = 0;
+    const { home, out } = await initOnce({ smee: async () => (created++, 'https://smee.io/abc') });
+    expect(created).toBe(0);
+    expect(loadInstance(home).relay).toEqual({ kind: 'none' });
+    expect(out).not.toContain('https://smee.io');
+    expect(out).toContain(NO_PUBLIC_URL);
+    // Linear gives its webhook secret only for a webhook URL: none asked, none stored.
+    expect(out).not.toContain('OAuth applications');
+    expect(loadSecrets(home).linear).toBeUndefined();
+    expect(loadInstance(home).projects).toEqual([expect.objectContaining({ linearTeamKey: 'REL' })]);
+  });
+
+  it('with --dev, creates the channel and gives it as the webhook URL', async () => {
+    const { home, out } = await initOnce({ dev: true });
+    expect(loadInstance(home).relay).toEqual({ kind: 'smee', url: 'https://smee.io/abc' });
+    expect(out).toContain('https://smee.io/abc');
+  });
+
+  it('with a public URL, gives its webhook URLs and creates no channel, even with --dev', async () => {
+    let created = 0;
+    const { home, out } = await initOnce({ config: { publicUrl: 'https://factory.example.com' }, dev: true, smee: async () => (created++, 'https://smee.io/abc') });
+    expect(created).toBe(0);
+    expect(out).toContain('https://factory.example.com/webhooks/linear');
+    expect(out).toContain('https://factory.example.com/webhooks/github');
+    expect(loadInstance(home).relay).toEqual({ kind: 'none' });
+  });
+
+  it('keeps a channel config.yaml already has, without --dev', async () => {
+    const { home, out } = await initOnce({ config: { relay: { kind: 'smee', url: 'https://smee.io/old' } } });
+    expect(loadInstance(home).relay).toEqual({ kind: 'smee', url: 'https://smee.io/old' });
+    expect(out).toContain('https://smee.io/old');
+  });
+});
+
+describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
+  const ENV = { GH_APP_ID: '123', GH_APP_KEY: '/k.pem', GH_WEBHOOK_SECRET: 'w', CLAUDE_CODE_OAUTH_TOKEN: 't' };
+
+  it('criterion 1: guides the App with the manifest\'s permissions, and writes a factory.yml that factory validate accepts', async () => {
+    const { home, repo, out } = await initOnce();
+    expect(out).toContain('https://github.com/settings/apps/new');
+    expect(out).toContain('Contents: read and write');
+    expect(out).toContain('Install the App on the repository');
+    expect(out).toContain('Active');
+    const text = readFileSync(join(home, 'factory.yml'), 'utf8');
+    const lines: string[] = [];
+    expect(runValidateCommand({ repoPath: repo, out: (l) => lines.push(l), factoryYml: () => loadFactoryLimits(home) })).toBe(0);
+    // As `factory doctor` and `factory up` read it, with the daemon's environment.
+    const yml = parseFactoryYml(text, ENV);
+    expect(yml.github).toMatchObject({ appId: '123', privateKey: '/k.pem' });
+    expect(yml.claude?.accounts).toEqual([{ name: 'main', token: 't' }]);
+    // Every secret a reference, and each one said to export.
+    expect(Object.keys(yml.secretRefs ?? {}).sort()).toEqual(['claude.accounts[0].token', 'github.private_key']);
+    expect(text).toContain('app_id: env:GH_APP_ID');
+    for (const name of ['GH_APP_ID', 'GH_APP_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) expect(out).toContain(`export ${name}=`);
+    expect(out).not.toContain('GH_WEBHOOK_SECRET');
+  });
+
+  it('with a public URL, the App\'s webhook is optional: its secret is said to add, never written, as an unset variable would stop the daemon', async () => {
+    const { home, out } = await initOnce({ config: { publicUrl: 'https://factory.example.com' } });
+    expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), { GH_APP_ID: '1', GH_APP_KEY: '/k', CLAUDE_CODE_OAUTH_TOKEN: 't' }).github?.webhookSecret).toBeUndefined();
+    expect(out).toContain('webhook_secret: env:GH_WEBHOOK_SECRET');
+  });
+
+  it('writes no factory.yml on an instance that runs without one: it would change how it runs', async () => {
+    const { home } = await initOnce({ dev: true });
+    rmSync(join(home, 'factory.yml'));
+    const { out } = await initOnce({ home, dev: true });
+    expect(existsSync(join(home, 'factory.yml'))).toBe(false);
+    expect(out).not.toContain('https://github.com/settings/apps/new');
+  });
+
+  it('replaces every entry of the repository an older init wrote in another form, keeping the first one\'s fields', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    const authz = { maintainers: [], validators: ['v'], githubLogins: {} };
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'a', repoPath: `${repo}/`, linearTeamKey: 'OLD', authz }, { id: 'b', repoPath: repo, linearTeamKey: 'OLD' }], limits: {} });
+    await initOnce({ home, repo });
+    expect(loadInstance(home).projects).toEqual([{ id: 'a', repoPath: repo, linearTeamKey: 'REL', authz }]);
+  });
+
+  it('leaves the GitHub App of config.yaml in place: no github in the factory.yml it writes, which would replace it', async () => {
+    const { home, out } = await initOnce({ config: { github: { appId: '7', privateKey: '/k.pem' } } });
+    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
+    expect(yml.github).toBeUndefined();
+    expect(yml.claude?.active).toBe('main');
+    expect(out).not.toContain('GH_APP_ID');
+    expect(out).not.toContain('https://github.com/settings/apps/new');
+    expect(loadInstance(home).github).toEqual({ appId: '7', privateKey: '/k.pem' });
+  });
+
+  it('the permissions it prints are the manifest\'s', () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '../../docs/github-app-manifest.json'), 'utf8')) as { default_permissions: unknown };
+    expect(GITHUB_APP_PERMISSIONS).toEqual(manifest.default_permissions);
+  });
+
+  it('criterion 3 (ORC-83): run again with empty answers, it erases no credential, nor factory.yml, nor the project\'s roles', async () => {
+    const first = await initOnce({ dev: true });
+    const { home, repo } = first;
+    // Edited since: a credential init never asked, the OAuth tokens of « Connect Linear », the roles added by hand.
+    writeFileSync(join(home, 'factory.yml'), 'github: { app_id: "42", private_key: env:MY_KEY }\n');
+    const secrets = loadSecrets(home);
+    saveSecrets(home, { ...secrets, linear: { ...secrets.linear!, accessToken: 'at', refreshToken: 'rt', expiresAt: 1 } });
+    const cfg = loadInstance(home);
+    saveInstance(home, { ...cfg, projects: cfg.projects.map((p) => ({ ...p, authz: { maintainers: [], validators: ['v1', 'v2'], githubLogins: { u: 'login' } } })) });
+    const before = { yml: readFileSync(join(home, 'factory.yml'), 'utf8'), secrets: loadSecrets(home), config: loadInstance(home) };
+
+    const { out } = await initOnce({ home, repo, answers: [] });
+    expect(readFileSync(join(home, 'factory.yml'), 'utf8')).toBe(before.yml);
+    expect(loadSecrets(home)).toEqual(before.secrets);
+    expect(loadInstance(home)).toEqual(before.config);
+    expect(out).toContain('factory.yml kept');
+  });
+
+  it('a new value replaces the stored one; another client ID keeps nothing of the old application', async () => {
+    const { home, repo } = await initOnce({ dev: true });
+    const s = loadSecrets(home);
+    saveSecrets(home, { ...s, linear: { ...s.linear!, accessToken: 'at' } });
+    await initOnce({ home, repo, answers: ['', '', 'csecret2', ''] });
+    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid', clientSecret: 'csecret2', webhookSecret: 'whsecret', accessToken: 'at' });
+    // Its secrets are asked: an empty webhook secret is asked again, not taken from the old application.
+    await initOnce({ home, repo, answers: ['', 'cid2', 'cs3', '', 'wh3'] });
+    expect(loadSecrets(home).linear).toEqual({ clientId: 'cid2', clientSecret: 'cs3', webhookSecret: 'wh3' });
   });
 });

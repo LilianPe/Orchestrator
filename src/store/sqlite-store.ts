@@ -13,6 +13,7 @@ import type { ReviewLens } from '../core/workflow.js';
 import type { Finding } from '../core/agent-output.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline, BaselineMeasure, BaselineValue } from '../core/baseline.js';
+import type { DryRun } from '../core/dry-run.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { OutboxEffect } from '../core/decision.js';
 import { findingRowId, type ReviewFinding } from '../core/review.js';
@@ -83,6 +84,8 @@ CREATE TABLE IF NOT EXISTS artifacts (seq INTEGER PRIMARY KEY AUTOINCREMENT, id 
 CREATE TABLE IF NOT EXISTS changelog (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS changelog_at ON changelog (at);
 CREATE TABLE IF NOT EXISTS baselines (project_id TEXT NOT NULL, since INTEGER NOT NULL, until INTEGER NOT NULL, measure TEXT NOT NULL, computed_at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (project_id, since, until, measure));
+CREATE TABLE IF NOT EXISTS dry_runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, sha TEXT NOT NULL, target TEXT NOT NULL, ended_at INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS dry_runs_project ON dry_runs (project_id, ended_at);
 CREATE TABLE IF NOT EXISTS ghost_replays (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ghost_tickets (replay_id TEXT NOT NULL, ticket_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (replay_id, ticket_id));
 CREATE TABLE IF NOT EXISTS ghost_judgments (replay_id TEXT NOT NULL, ticket_id TEXT NOT NULL, side TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (replay_id, ticket_id, side));
@@ -891,6 +894,18 @@ export class SqliteStore implements Store {
 
   async ghostReplays(): Promise<GhostReplay[]> {
     return (this.db.prepare('SELECT data FROM ghost_replays ORDER BY started_at DESC, id').all() as { data: string }[]).map((r) => JSON.parse(r.data) as GhostReplay);
+  }
+
+  async putDryRun(d: DryRun): Promise<void> {
+    this.db
+      .prepare('INSERT INTO dry_runs (id, project_id, sha, target, ended_at, data) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET project_id = excluded.project_id, sha = excluded.sha, target = excluded.target, ended_at = excluded.ended_at, data = excluded.data')
+      .run(d.id, d.projectId, d.sha, d.target, d.endedAt, JSON.stringify(d));
+  }
+
+  async lastDryRun(projectId: string, sha?: string): Promise<DryRun | undefined> {
+    const [which, args] = sha === undefined ? ["target = 'main'", [projectId]] : ['sha = ?', [projectId, sha]];
+    const row = this.db.prepare(`SELECT data FROM dry_runs WHERE project_id = ? AND ${which} ORDER BY ended_at DESC, rowid DESC LIMIT 1`).get(...args) as { data: string } | undefined;
+    return row && (JSON.parse(row.data) as DryRun);
   }
 
   async putGhostTicket(t: GhostTicket): Promise<void> {

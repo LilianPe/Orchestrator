@@ -41,7 +41,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
    For the dashboard's GitHub sign-in (ORC-399), under **Identifying and authorizing users**: *Callback URL* `<publicUrl>/auth/github/callback`, *Expire user authorization tokens* left on, *Request user authorization (OAuth) during installation* off. If `dashboard` in `factory.yml` names an `org` or a `team`, add the **Organization permission** *Members*: read, and install the App on that org: GitHub answers a membership to the App's user token only then. A list of `logins` needs neither.
 4. Create the App, note its **App ID** and its **Client ID**, **Generate a client secret** (for the dashboard's sign-in, `GH_APP_CLIENT_SECRET`), then **Generate a private key**. Place the `.pem` outside the repository, with mode `0600` (for example `~/.relais/github-app.pem`).
 5. **Install** the App on the repositories entrusted to Relais. The installation ID is visible in the URL `https://github.com/settings/installations/<id>`; it is optional, the daemon can look it up repository by repository.
-6. Fill in `config.yaml` or the `GH_APP_*` variables, then restart `relais up`. Startup logs the chosen forge, without secrets.
+6. Fill in `config.yaml` or the `GH_APP_*` variables (`factory init` prints these steps and writes `factory.yml` with `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, ORC-411), then restart `relais up`. Startup logs the chosen forge, without secrets.
 
 #### Tokens
 

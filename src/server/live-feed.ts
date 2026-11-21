@@ -25,7 +25,7 @@ export class EventBus {
       try {
         fn(m);
       } catch {
-        // a broken subscriber must never break the orchestrator
+        // a broken subscriber must never break the daemon
       }
     }
   }

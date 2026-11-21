@@ -150,7 +150,7 @@ export abstract class DaemonBase {
   }
 
   /**
-   * The only way the orchestrator changes a ticket outside a decision (an effect recording what it
+   * The only way the daemon changes a ticket outside a decision (an effect recording what it
    * did): through `reduce`, on the projection read again under the ticket's lock.
    */
   protected async apply(t: TicketState, ...events: InternalEvent[]): Promise<TicketState> {
@@ -255,7 +255,7 @@ export abstract class DaemonBase {
     return t;
   }
 
-  /** A project without effects (ORC-231): the outbox keeps its effects, and the orchestrator makes none of its writes outside it. */
+  /** A project without effects (ORC-231): the outbox keeps its effects, and the daemon makes none of its writes outside it. */
   protected noEffect(projectId: string): boolean {
     return this.d.projects.find((p) => p.id === projectId)?.effects === 'none';
   }

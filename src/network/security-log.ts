@@ -55,7 +55,7 @@ const egressLine = z.object({
   suspicious: z.literal(true).optional(),
 });
 
-/** What the lockfiles of a run's repository declared when it started (`DeclaredReads`, written by the orchestrator). */
+/** What the lockfiles of a run's repository declared when it started (`DeclaredReads`, written by the daemon). */
 const declaredFile = z.object({ judged: z.array(z.enum(READ_KINDS)), reads: z.array(z.string()) });
 const DECLARED_MAX_BYTES = 16 * 1024 * 1024;
 

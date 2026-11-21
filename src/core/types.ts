@@ -455,7 +455,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'assumed'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'assumed' | 'nextJob'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** A question the answer agent relays to the agent that implements, into the run inbox (ORC-182). */
@@ -478,7 +478,7 @@ export type DecidedEvent =
  */
 export type PendingJob = { job: string; input?: InputKind; inputText?: string; resume?: boolean; sensitivePaths?: readonly string[]; relaunchOf?: string };
 
-/** Facts the orchestrator records around an effect it carried out, applied to the ticket by `reduce`. */
+/** Facts the daemon records around an effect it carried out, applied to the ticket by `reduce`. */
 export type ShellEvent =
   /** The factory itself moved the ticket in the tracker. */
   /** `reviewSha`: the PR's head when the factory moves the ticket to Human Review, the commit the human reviews (ORC-148). */
@@ -562,6 +562,11 @@ export interface TicketState {
   blockedEvent?: string;
   /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job. */
   blockedJob?: string;
+  /**
+   * The next step a run's end asked for while the ticket was blocked (ORC-416): the launch refuses it, so the lift of the block
+   * starts it. Kept by a new block (a failed effect's), cleared with the block and when the work stops (`work.cancelled`).
+   */
+  nextJob?: string;
   claudeSessionId?: string;
   linearSessionId?: string;
   branch?: string;
@@ -669,8 +674,9 @@ export interface TicketState {
   /**
    * The ticket waits for the Linear tickets it is « blocked by » to be done (ORC-363), then makes `start`: no block, nothing for a human
    * to answer. Lifted by `blockers.done`; a block, an undelegation or a dev run ends it (`reduce`): `null` then. A move or a delegation again do not.
+   * `lift`: on a ticket blocked while it waits, the step a relaunch resumes (ORC-432), made in place of `start` with the block's lift.
    */
-  waitingOn?: { blockers: string[]; start: PendingJob } | null;
+  waitingOn?: { blockers: string[]; start: PendingJob; lift?: PendingJob } | null;
   /**
    * Signed actor of the last authorized delegation (ORC-186): the run's initiator, who never validates
    * its spec, and its requester, who may answer it.
@@ -732,7 +738,7 @@ export interface TicketState {
 }
 
 /** What lifting a block clears, the whole block with it: its reason, its kind and their data. */
-export const UNBLOCKED = { blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined, blockedJob: undefined } as const satisfies Partial<TicketState>;
+export const UNBLOCKED = { blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined, blockedJob: undefined, nextJob: undefined } as const satisfies Partial<TicketState>;
 
 export function newTicketState(
   projectId: string,

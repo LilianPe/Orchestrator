@@ -13,6 +13,7 @@ import type { SignIn } from '../adapters/forge/github-login.js';
 import { auditSheet, humanReviewed, prsOf, type ReviewDefect } from '../core/audit.js';
 import type { BusMessage, EventBus } from './live-feed.js';
 import type { Clock } from '../core/clock.js';
+import type { DryRun } from '../core/dry-run.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { blockPareto, causeOf, isTakenOver } from '../core/block-cause.js';
 import type { TakeOverDesk } from '../runtime/daemon.js';
@@ -82,6 +83,8 @@ export interface ServerDeps {
   heldRows?: (ticketId: string) => HeldRow[];
   /** The daemon's secret values (`transcriptSecrets`), masked in what the diagnosis tells with the secret shapes; read once per request. */
   secrets?: () => string[];
+  /** The dry run of a project's default branch (ORC-409), run and recorded, which `factory dry-run` asks for. Absent: none. */
+  dryRun?: (projectId: string) => Promise<DryRun>;
   /** `audit.serious_defect` of factory.yml (ORC-153): absent, the defects of the audit sheets are kept, never counted (ORC-229). */
   seriousDefect?: string;
 }
@@ -181,11 +184,12 @@ const cliHostOf = (c: Context): string | undefined => (c.env as { [CLI_HOST]?: s
 /** What no guard of the interface holds: a public path, or a request of the CLI's socket (ORC-405). */
 const unguarded = (c: Context) => isPublicPath(c.req.method, c.req.path) || cliHostOf(c) !== undefined;
 
-/** What `factory status|stop|pause|resume` call (src/cli/control.ts). */
+/** What `factory status|stop|pause|resume|dry-run` call (src/cli/control.ts). */
 const CLI_ROUTES: readonly (readonly [string, RegExp])[] = [
   ['GET', /^\/api\/state$/],
   ['POST', /^\/api\/control\/(pause|resume)$/],
   ['POST', /^\/api\/tickets\/[^/]+\/[^/]+\/stop$/],
+  ['POST', /^\/api\/projects\/[^/]+\/dry-run$/],
 ];
 
 /**
@@ -618,6 +622,17 @@ export function createApp(d: ServerDeps): Hono {
     const ticketId = c.req.param('ticketId');
     await d.submit({ ...TRUSTED, ...operator(c), id: `ui:stop:${ticketId}:${at}`, type: 'control.stop', at, projectId: c.req.param('projectId'), ticketId, payload: {} });
     return c.json({ ok: true });
+  });
+  // The dry run of a project (ORC-409), answered once it is recorded: red or green, with what breaks. One that cannot run (no
+  // sandboxes, the engine or the forge down) records nothing, and says why.
+  app.post('/api/projects/:projectId/dry-run', async (c) => {
+    if (!d.dryRun) return c.json({ error: 'no dry run on this instance' }, 404);
+    const projectId = c.req.param('projectId');
+    try {
+      return c.json(await d.dryRun(projectId));
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 409);
+    }
   });
   // A run's inspection (ORC-301): the stop names its run, which `decide` stops only while it is its ticket's agent run (not a check,
   // not a question). The same check here answers the operator at once; `decide`'s is the one journaled.

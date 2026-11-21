@@ -120,7 +120,7 @@ describe('diffSizeCheck', () => {
   });
 
   it('leaves lockfiles out, wherever they are, and lists them', () => {
-    const locks = ['package-lock.json', 'web/pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'npm-shrinkwrap.json', 'bun.lock', 'pylock.toml', 'pylock.dev.toml'];
+    const locks = ['package-lock.json', 'web/pnpm-lock.yaml', 'yarn.lock', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'npm-shrinkwrap.json', 'bun.lock', 'pylock.toml', 'pylock.dev.toml', 'deno.lock', 'Cargo.lock', 'api/go.sum', 'Gemfile.lock', 'composer.lock'];
     const diff = locks.map((p) => addedFile(p, 2000)).join('') + modifiedFile('package.json', 1, 0);
     const result = diffSizeCheck(diff);
     expect(result.ok).toBe(true);

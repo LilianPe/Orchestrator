@@ -35,8 +35,8 @@ import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
 import { claudeAccountReader, disabledControls, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { loadSealedFactoryYml, SECRETS_KEY_REQUIRED } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, type InstanceConfig } from '../config/instance.js';
+import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
+import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
@@ -147,6 +147,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   }));
   // Said at each start, not only by `factory doctor`.
   for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
+  for (const line of validatorWarnings(instance.projects)) log(line);
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
@@ -285,12 +286,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     await store.setMeta(SANDBOXES_META, sandboxes ? '1' : '0');
     const replays = new Replays({
       store, tracker: trackerSwitch, projects: replaying, dir: paths.ghost, sandboxes: !!sandboxes,
-      accept: (e): Promise<boolean> => orchestrator.accept(e), now: () => clock.now(), log: (level, m) => log(`${level === 'warn' ? 'Warning: ' : ''}replay: ${m}`),
+      accept: (e): Promise<boolean> => daemon.accept(e), now: () => clock.now(), log: (level, m) => log(`${level === 'warn' ? 'Warning: ' : ''}replay: ${m}`),
       startTime,
     });
     // One turn for the webhook, the reconciliation and the factory's own label writes around the known labels (ORC-185, ORC-346).
     const labelsTurn = serial();
-    const orchestrator = new Daemon({
+    const daemon = new Daemon({
       replays,
       labelsWritten: (projectId, ticketId, written) => labelsTurn(() => recordWrite(store, projectId, ticketId, written)),
       reconcile: (p) => reconcileProject(p),
@@ -345,6 +346,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             runsDir: paths.runs,
             egressJournal: (runId: string) => egress.journalPath(runId),
             registries: registriesViaEgress(egress),
+            // Required with sandboxes (`makeSandboxes`): the dry run's fingerprint (ORC-408).
+            runnerImage: env['FACTORY_RUNNER_IMAGE']!,
+            // A delegated ticket waits for the repository's dry run, run again when its fingerprint changes (ORC-409).
+            dryRunFiles: makeDryRunFiles({ log }),
           }
         : {}),
       // In a sandbox, no host path: the agent reaches the factory through its MCP alone (ORC-192).
@@ -358,12 +363,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         FACTORY_API: sandboxes ? `http://${agentHostInSandbox}:${agentPort}/agent` : `http://127.0.0.1:${port}/agent`,
       }),
     });
-    await orchestrator.recover();
+    await daemon.recover();
     // Planned in the store, every 5 minutes (ORC-185): a restart finds the timer and arms no second one.
-    await orchestrator.armReconciliation();
+    await daemon.armReconciliation();
     // Every source writes its events to the inbox and gets the promise of the committed row
-    // (ORC-147); the orchestrator's worker then decides them from the inbox (ORC-149).
-    const accept = (e: FactoryEvent) => orchestrator.accept(e);
+    // (ORC-147); the daemon's worker then decides them from the inbox (ORC-149).
+    const accept = (e: FactoryEvent) => daemon.accept(e);
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
@@ -401,7 +406,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     });
 
     const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects: fromLinear, submit: accept, clock, log, serial: labelsTurn });
-    const timers = new TimerService(store, clock, () => orchestrator.wake(), (e) => log(`timers: ${e.message}`));
+    const timers = new TimerService(store, clock, () => daemon.wake(), (e) => log(`timers: ${e.message}`));
     const poller = new PrPoller({ store, forge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
       await reconcileOnce({ tracker: trackerSwitch, store, projects: fromLinear, only: p.id, submit: accept, clock, log, serial: labelsTurn });
@@ -418,7 +423,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const oauthStates = new Set<string>();
     // A human's take-over (ORC-234): only with the sandboxes, never a shell on the host.
-    const takeOver = orchestrator.takeOverDesk();
+    const takeOver = daemon.takeOverDesk();
     const app = createApp({
       ...(takeOver ? { takeOver } : {}),
       // A replayed ticket's run searches its knowledge base at transaction time (ORC-376), `repo`.
@@ -428,8 +433,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       bus,
       clock,
       submit: accept,
-      isPaused: () => orchestrator.isPaused(),
-      usageLimitedUntil: () => orchestrator.usageLimitedUntil(),
+      isPaused: () => daemon.isPaused(),
+      usageLimitedUntil: () => daemon.usageLimitedUntil(),
       ...(ticketCap ? { perTicketTokens: ticketCap } : {}),
       ...(yml?.audit ? { seriousDefect: yml.audit.seriousDefect } : {}),
       disabledControls: disabled,
@@ -444,7 +449,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       webDir: existsSync(webDir) ? webDir : undefined,
       githubLogin,
       configProblems: problems,
-      heldRows: (ticketId) => orchestrator.heldRows(ticketId),
+      heldRows: (ticketId) => daemon.heldRows(ticketId),
+      // `factory dry-run`: a new one, after any under way, which reads what changed meanwhile (a known flaky test, a variable).
+      dryRun: (projectId) => daemon.dryRun(projectId, { fresh: true }),
       secrets: () => transcriptSecrets(env, daemonSecrets()),
       oauth: linearSettings(o.home, yml)
         ? {
@@ -504,8 +511,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       await ingest.settled();
       // A pass under way finishes first, so it never reads or writes a closed store.
       await Promise.all([timers.stop(), poller.stop(), reconciler.stop(), replays.stop(), pruning]);
-      orchestrator.stopAll();
-      await orchestrator.drained();
+      daemon.stopAll();
+      await daemon.drained();
       // The sandboxes it let run on keep their socket folders: the next start listens in them again (ORC-344).
       await egress.closeAll({ keep: true });
       const close = (s: typeof server) =>
@@ -535,7 +542,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
         // The egress journals (ORC-213), `*.jsonl` too: the same 30 days.
         purgeTranscripts(paths.network, now);
         // The captures of PRs merged or closed 30 days ago, off each repository's `factory/artifacts` (ORC-407).
-        pruning = orchestrator.pruneCaptures(now).then(
+        pruning = daemon.pruneCaptures(now).then(
           (folders) => folders.length && log(`captures: ${folders.length} folder(s) removed from factory/artifacts, PRs closed for 30 days (${folders.join(', ')})`),
           (e: unknown) => log(`captures purge: ${(e as Error).message}`),
         );
@@ -544,12 +551,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       purgeInterval = setInterval(purge, 24 * 60 * 60 * 1000);
       purgeInterval.unref();
       tickInterval = setInterval(() => {
-        orchestrator.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
+        daemon.tick().catch((e: unknown) => log(`tick: ${(e as Error).message}`));
       }, 60_000);
       tickInterval.unref();
       // The heartbeat of the attempts (ORC-220): their leases, in the store.
       beatInterval = setInterval(() => {
-        orchestrator.supervise().catch((e: unknown) => log(`heartbeat: ${(e as Error).message}`));
+        daemon.supervise().catch((e: unknown) => log(`heartbeat: ${(e as Error).message}`));
       }, RUN_BEAT_MS);
       beatInterval.unref();
       // The GitHub webhooks carry the PRs (ORC-134), the 5-minute reconciliation catches what they lose (ORC-185);
@@ -560,7 +567,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // The worker (ORC-149) executes the effects decided before a crash, then the events written
       // before it (or whose processing failed), oldest first; it then polls the inbox and the outbox
       // every second, for what another process wrote and for leases that expired.
-      orchestrator.startWorker().catch((e: unknown) => log(`inbox: ${(e as Error).message}`));
+      daemon.startWorker().catch((e: unknown) => log(`inbox: ${(e as Error).message}`));
       // The replays `factory ghost start` wrote (ORC-376): each ticket rebuilt delegated to its project, at start and then each minute.
       if (replaying.length) replays.start();
       if (!isUsableWebhookSecret(webhookSecret()))

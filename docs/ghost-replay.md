@@ -37,7 +37,7 @@ without touching Linear or GitHub.
 **Enforced in the outbox, not the adapters.** `EFFECT_REACH` classifies every kind of effect, `inside` (runs, checks, workspaces,
 the store) or `outside` (Linear and GitHub, `reconcile` included). The outbox executor hands each `outside` row of such a project
 to `keep`, never to the adapters: an adapter that forgets the mode cannot push. A new effect kind does not compile until it is
-classified. The few writes the orchestrator makes outside the outbox (the move to In Progress at a start, the run's activities,
+classified. The few writes the daemon makes outside the outbox (the move to In Progress at a start, the run's activities,
 a block notice, a wait's thought, a new Linear session) check the same mode (`silenced`).
 
 **Kept as artifacts.** Each kept effect is a JSON file under `<FACTORY_HOME>/kept/<ticket>/` with its row in `artifacts`
@@ -127,7 +127,8 @@ from GitHub when judged.
 
 ## Not yet
 
-- **The dry run on each start commit** (criterion 3) needs ORC-208, which waits on ORC-209. Every ticket's environment is
+- **The dry run on each start commit** (criterion 3): the dry run exists and runs on a given commit
+  ([dry-run.md](dry-run.md), ORC-408), but `factory ghost start` does not call it yet. Every ticket's environment is
   `unchecked` until then, and the report says how many: the hook is `GhostTicket.env` (`ok`, `failed`, `unchecked`), which the
   report already keeps out of the comparison when `failed`.
 - The pilot repository (ORC-137) is a decision still to take.

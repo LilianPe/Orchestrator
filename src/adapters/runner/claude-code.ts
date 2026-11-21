@@ -350,7 +350,7 @@ export class ClaudeCodeRunner implements Runner {
     let usageLimit: RunResult['usageLimit'];
     let model = a.model;
 
-    // Sandboxed, this kills the `docker exec` client, not `claude` in the container: the orchestrator
+    // Sandboxed, this kills the `docker exec` client, not `claude` in the container: the daemon
     // destroys the sandbox at the end of the run, which ends it.
     const signal = (sig: NodeJS.Signals) => {
       if (pid === undefined) return;

@@ -5,6 +5,7 @@ import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline } from '../core/baseline.js';
+import type { DryRun } from '../core/dry-run.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
@@ -502,7 +503,7 @@ export interface SecurityStats {
 
 /**
  * A move of a ticket into Blocked (ORC-300), wherever it was made: by a decision (its projection blocked, and not before
- * it), or outside one by the orchestrator (a launch error, a refused pickup), which journals nothing; such a move is
+ * it), or outside one by the daemon (a launch error, a refused pickup), which journals nothing; such a move is
  * found by the next decision of the ticket (its `before` blocked, the decision before it left the ticket free) or, when
  * none came since, by the projection. `at`: the decision's clock, or the blocked ticket's `updatedAt` for a move outside
  * a decision (a later change outside a decision, a session linked, pushes it back). `kind`: the typed kind, got back
@@ -620,7 +621,7 @@ export interface Store {
    * inbox in the same transaction (ORC-150). Only under the claim token `lease`: false, and nothing
    * changed, when the lease was lost to another worker. Without `lease`: the legacy queue rows of
    * `claim` (Postgres), no inbox event. `at`: the time of the result event (the store's clock by
-   * default; the orchestrator passes its own, the time of every event it writes). `outcome`: what
+   * default; the daemon passes its own, the time of every event it writes). `outcome`: what
    * the result carries beyond success, a replay found already made (ORC-162).
    */
   completeEffect(id: string, lease?: string, at?: number, outcome?: EffectOutcome): Promise<boolean>;
@@ -792,6 +793,13 @@ export interface Store {
   putBaseline(b: Baseline, replace: boolean): Promise<boolean>;
   /** The baseline computed last, whichever project and period (ORC-230); null without one. */
   latestBaseline(): Promise<Baseline | null>;
+  /** Keeps a dry run (ORC-408), in place of one with its id. */
+  putDryRun(d: DryRun): Promise<void>;
+  /**
+   * A project's last dry run, by its end: on the forge's default branch, or with `sha` on that commit, whichever way it was asked;
+   * undefined without one.
+   */
+  lastDryRun(projectId: string, sha?: string): Promise<DryRun | undefined>;
   /**
    * Writes a replay of closed tickets (ORC-231), its thresholds with it, once: false, nothing written, when its id is kept already.
    * There is no other write of it: a threshold written before the replay is never changed after (criterion 4, ORC-385).

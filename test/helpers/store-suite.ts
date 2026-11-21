@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
+import type { DryRun } from '../../src/core/dry-run.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../../src/ghost/replay.js';
 import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type MaturityCard, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
@@ -413,6 +414,29 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     expect(await s.putGhostJudgment({ ...j, grade: 'as_is' })).toBe(false);
     expect(await s.putGhostJudgment({ ...j, side: 'human', grade: 'as_is' })).toBe(true);
     expect(await s.ghostJudgments('g1')).toEqual([j, { ...j, side: 'human', grade: 'as_is' }]);
+  });
+
+  it('keeps each dry run, the last one on the default branch or on a commit read back (ORC-408)', async () => {
+    const s = await store();
+    const fingerprint = { setup: 'a'.repeat(64), image: 'img@sha256:1', lockfiles: { 'package-lock.json': 'b1' }, hash: 'c'.repeat(64) };
+    const green: DryRun = { id: 'd1', projectId: 'p', sha: 's1', target: 'main', ok: true, fingerprint, breaks: [], commands: ['npm test'], startedAt: 1_710_000_000_000, endedAt: 1_710_000_060_000 };
+    const red: DryRun = {
+      ...green, id: 'd2', sha: 's2', ok: false, startedAt: 1_710_000_100_000, endedAt: 1_710_000_160_000,
+      breaks: [{ kind: 'dependency', step: 'setup', command: 'npm ci', detail: 'No matching version found for left-pad@9.9.9', output: 'npm error code ETARGET' }],
+    };
+    const onCommit: DryRun = { ...green, id: 'd3', sha: 's0', target: 'commit', startedAt: 1_710_000_200_000, endedAt: 1_710_000_260_000 };
+    expect(await s.lastDryRun('p')).toBeUndefined();
+    await s.putDryRun(green);
+    await s.putDryRun(red);
+    await s.putDryRun(onCommit);
+    // A dry run on a given commit is not the default branch's.
+    expect(await s.lastDryRun('p')).toEqual(red);
+    expect(await s.lastDryRun('p', 's0')).toEqual(onCommit);
+    expect(await s.lastDryRun('p', 's1')).toEqual(green);
+    expect(await s.lastDryRun('other')).toBeUndefined();
+    // Written again (a recovery), it replaces itself.
+    await s.putDryRun({ ...red, ok: true, breaks: [] });
+    expect(await s.lastDryRun('p')).toEqual({ ...red, ok: true, breaks: [] });
   });
 
   it('keeps a baseline frozen, its rows all or none: the same period again only on replace, the last computed read back (ORC-230)', async () => {
