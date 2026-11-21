@@ -167,7 +167,7 @@ Rerunning `factory init` with the **same** client ID keeps the tokens; with a di
 
 ### The key of a workstation (ORC-470)
 
-`factory init --dev` draws a `secrets_key` when `factory.yml` names none: 32 random bytes in base64, written to `<FACTORY_HOME>/secrets.key` (mode `0600`, beside `secrets.json`, never in it), then declared in `factory.yml` as a `file` source:
+`factory init --dev` draws a `secrets_key` when `factory.yml` names none and `host` is on the loopback (never for an exposed server): 32 random bytes in base64, written to `<FACTORY_HOME>/secrets.key` (mode `0600`, beside `secrets.json`, never in it), then declared in `factory.yml` as a `file` source:
 
 ```yaml
 secret_sources:
@@ -175,7 +175,7 @@ secret_sources:
 secrets_key: factory_home:secrets.key
 ```
 
-The key is never printed. Run again, `init --dev` keeps the file it drew, and `init` without `--dev` reads it the same way. `factory doctor` says this key `in clear`: a file on the workstation's disk, its owner's alone; on a server, keep `secrets_key` in a sealed source (`systemd-creds`, [Server secrets](#server-secrets-orc-398)). The `file` source refuses a file others than its owner can read, or a symbolic link ([its options](ports/secret-source.md#file)).
+The key is never printed. Run again, `init --dev` keeps the file it drew, and `init` without `--dev` reads it the same way. It refuses, before asking anything, a key file shorter than 32 characters, a `secret_sources.factory_home` already declared, and a `secrets.json` already encrypted with a key `factory.yml` no longer names (a new key would never open it). A `secrets_key` whose source `init`'s shell cannot read (`systemd-creds` outside the service) stops `init` when it would ask the Linear values: run it where the source is readable, or write the Linear values in `factory.yml`'s `linear` section. `factory doctor` says this key `in clear`, with the file's date: a file on the workstation's disk, its owner's alone; on a server, keep `secrets_key` in a sealed source (`systemd-creds`, [Server secrets](#server-secrets-orc-398)). The `file` source refuses a file others than its owner can read, or a symbolic link ([its options](ports/secret-source.md#file)).
 
 ## `factory.yml` (ORC-209)
 

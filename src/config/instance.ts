@@ -143,6 +143,8 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
   if (keyFile) {
     // Another declaration of that name would lose its references.
     if (doc.hasIn(['secret_sources', keyFile.source])) throw new FactoryYmlError([`secret_sources.${keyFile.source}: already declared: write secrets_key in factory.yml by hand`]);
+    // A bare `secret_sources:` holds no map to add to.
+    if (doc.get('secret_sources') == null) doc.set('secret_sources', doc.createNode({}));
     doc.setIn(['secret_sources', keyFile.source], doc.createNode({ kind: 'file', dir: keyFile.dir }));
     doc.set('secrets_key', `${keyFile.source}:${keyFile.name}`);
   }

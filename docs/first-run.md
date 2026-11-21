@@ -200,7 +200,7 @@ Visual proof on this instance: unavailable — FACTORY_BROWSER_IMAGE is not set 
 Server secrets:
   github.private_key (env:GH_APP_KEY): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk
   claude.accounts[0].token (env:CLAUDE_CODE_OAUTH_TOKEN): in clear — warning: in clear in the daemon's environment: a sealed source (systemd-creds) keeps it off the disk
-  secrets_key (factory_home:secrets.key): in clear — warning: in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk
+  secrets_key (factory_home:secrets.key): in clear, rotated <date> — warning: in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk
   secrets.json: sealed
 ```
 

@@ -415,6 +415,47 @@ describe('factory init: secrets_key, Linear never in clear (ORC-470)', () => {
     for (const canary of CANARY) expect(filesText(home)).not.toContain(canary);
   });
 
+  it('--dev draws no key off the loopback, nor beside a secrets.json sealed with another key, nor over a source of its name', async () => {
+    const refusals: [string, (home: string) => void, string][] = [
+      ['exposed', (home) => saveInstance(home, { port: 4100, host: '0.0.0.0', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [] }), `${LINEAR_NEEDS_SECRETS_KEY}.`],
+      ['sealed', (home) => saveSecrets(home, {}, 'another-key-'.repeat(4)), 'secrets.json is encrypted at rest with a key factory.yml no longer names'],
+      ['its name', (home) => writeFileSync(join(home, 'factory.yml'), 'secret_sources: { factory_home: { kind: systemd-creds } }\n'), 'secret_sources.factory_home in factory.yml'],
+    ];
+    for (const [name, arrange, refusal] of refusals) {
+      const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+      arrange(home);
+      const asked: string[] = [];
+      const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+      const io: InitIO = { ask: async (q) => (asked.push(q), ''), print: () => {} };
+      await expect(runInit({ io, home, cwd: repo, dev: true, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) }), name).rejects.toThrow(refusal);
+      expect({ name, asked, drawn: existsSync(join(home, 'secrets.key')) }).toEqual({ name, asked: [], drawn: false });
+    }
+  });
+
+  it('--dev refuses a key file too short, naming it, before asking anything', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'secrets.key'), 'short\n', { mode: 0o600 });
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    await expect(runInit({ io: scriptedIO([]), home, cwd: repo, dev: true, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) })).rejects.toThrow(`${join(home, 'secrets.key')}: at least 32 characters expected`);
+  });
+
+  it('declares its key under a bare secret_sources:', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'secret_sources:\n');
+    await initOnce({ home, dev: true });
+    expect(await readSecretsKey(home, {})).toBe(readFileSync(join(home, 'secrets.key'), 'utf8').trim());
+  });
+
+  it('says how to go on when the key\'s source is out of this shell\'s reach', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    saveInstance(home, { port: 4100, host: '127.0.0.1', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [] });
+    appendFileSync(join(home, 'factory.yml'), 'secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n');
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    await expect(runInit({ io: scriptedIO([]), home, cwd: repo, env: {}, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo) })).rejects.toThrow(
+      /CREDENTIALS_DIRECTORY is not set.*\nfactory init seals Linear's values with secrets_key, never in clear \(ORC-470\): run it where that source is readable, or write the Linear values in factory\.yml's linear section/s,
+    );
+  });
+
   it('without --dev nor secrets_key, refuses before asking anything, and writes no secrets.json', async () => {
     for (const config of [{ publicUrl: 'https://factory.example.com' }, { relay: { kind: 'smee' as const, url: 'https://smee.io/old' } }]) {
       const asked: string[] = [];

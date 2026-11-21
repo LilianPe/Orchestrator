@@ -7,8 +7,8 @@ import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { factoryYmlText } from '../config/factory-yml.js';
 import { fileSecretKind } from '../adapters/secrets/file.js';
-import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets, secretsText, type SecretsKeyFile } from '../config/instance.js';
-import { LINEAR_NEEDS_SECRETS_KEY } from '../config/secrets-file.js';
+import { isLoopbackHost, loadInstance, loadSecrets, samePath, saveInstance, saveSecrets, secretsText, type SecretsKeyFile } from '../config/instance.js';
+import { isSealed, LINEAR_NEEDS_SECRETS_KEY, MIN_SECRETS_KEY_LENGTH, SECRETS_KEY_REQUIRED } from '../config/secrets-file.js';
 import { readSecretsKey } from '../config/server-secrets.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
@@ -249,16 +249,38 @@ const DEV_KEY: Omit<SecretsKeyFile, 'dir'> = { source: 'factory_home', name: 'se
 /**
  * The `secrets_key` of a workstation (ORC-470), drawn into its file when there is none, a file left by an init that stopped
  * before writing factory.yml taken again: it may have sealed secrets.json already. Read back as the daemon reads it. Never printed.
+ * Checked before anything is asked or sealed: a new key beside a secrets.json sealed with another one would never open it, and
+ * factory.yml must take its declaration.
  */
-async function drawDevSecretsKey(home: string): Promise<{ key: string; file: SecretsKeyFile }> {
+async function drawDevSecretsKey(home: string, yml: Record<string, unknown> | null | undefined): Promise<{ key: string; file: SecretsKeyFile }> {
   const file = { ...DEV_KEY, dir: resolve(home) };
+  const sources = yml?.['secret_sources'];
+  if (sources != null && typeof sources === 'object' && file.source in sources) {
+    throw new Error(`secret_sources.${file.source} in factory.yml: factory init --dev declares its secrets_key under that name: ${SECRETS_KEY_REQUIRED}.`);
+  }
+  const path = join(file.dir, file.name);
+  const stored = secretsText(home);
+  if (!existsSync(path) && stored !== undefined && isSealed(stored)) {
+    throw new Error(`secrets.json is encrypted at rest with a key factory.yml no longer names (secrets_key): set it back, or delete secrets.json and run factory init --dev again, then « Connect Linear ».`);
+  }
   mkdirSync(file.dir, { recursive: true });
   try {
-    writeFileSync(join(file.dir, file.name), `${randomBytes(32).toString('base64')}\n`, { mode: 0o600, flag: 'wx' });
+    writeFileSync(path, `${randomBytes(32).toString('base64')}\n`, { mode: 0o600, flag: 'wx' });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
   }
-  return { key: await fileSecretKind.create({ dir: file.dir }, {}).read(file.name), file };
+  const key = await fileSecretKind.create({ dir: file.dir }, {}).read(file.name);
+  if (key.length < MIN_SECRETS_KEY_LENGTH) throw new Error(`${path}: at least ${MIN_SECRETS_KEY_LENGTH} characters expected: delete it and run factory init --dev again`);
+  return { key, file };
+}
+
+/** factory.yml's `secrets_key`, read for `init`: a source out of this shell's reach (systemd-creds) says how to go on. */
+async function initSecretsKey(home: string, env: NodeJS.ProcessEnv | undefined): Promise<string | undefined> {
+  try {
+    return await readSecretsKey(home, env);
+  } catch (err) {
+    throw new Error(`${(err as Error).message}\nfactory init seals Linear's values with secrets_key, never in clear (ORC-470): run it where that source is readable, or write the Linear values in factory.yml's linear section (docs/configuration.md).`, { cause: err });
+  }
 }
 
 /**
@@ -305,9 +327,10 @@ export async function runInit(d: InitDeps): Promise<void> {
   const ymlKeys = ymlText === undefined ? undefined : (parse(ymlText) as Record<string, unknown> | null);
   const appDeclared = ymlKeys?.['github'] != null;
   // Linear's values are sealed with secrets_key, never written in clear (ORC-470): --dev draws one when factory.yml names none.
-  const drawn = d.dev && ymlKeys?.['secrets_key'] == null ? await drawDevSecretsKey(d.home) : undefined;
+  // On the loopback alone: a key in clear on its disk is a workstation's, never an exposed server's.
+  const drawn = d.dev && ymlKeys?.['secrets_key'] == null && isLoopbackHost(cfg.host) ? await drawDevSecretsKey(d.home, ymlKeys) : undefined;
   const asksLinear = !!cfg.publicUrl || cfg.relay.kind === 'smee' || !!d.dev;
-  const key = drawn?.key ?? (asksLinear || secretsText(d.home) !== undefined ? await readSecretsKey(d.home, d.env) : undefined);
+  const key = drawn?.key ?? (asksLinear || secretsText(d.home) !== undefined ? await initSecretsKey(d.home, d.env) : undefined);
   // Read first: a secrets.json sealed with another key, or without the one to open it, stops init before it asks anything.
   const secrets = loadSecrets(d.home, key);
   if (asksLinear && !key) throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);

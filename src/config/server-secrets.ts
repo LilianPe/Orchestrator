@@ -43,8 +43,12 @@ export async function readSecretsKey(home: string, env: NodeJS.ProcessEnv = proc
   const text = factoryYmlText(home);
   if (text === undefined) return undefined;
   const raw = parse(text) as Record<string, unknown> | null;
-  if (raw?.['secrets_key'] == null) return undefined;
-  const kept = { secret_sources: raw['secret_sources'] ?? undefined, secrets_key: raw['secrets_key'] };
+  const ref = raw?.['secrets_key'];
+  if (ref == null) return undefined;
+  // Its own source alone: another one's `env:` options need not be in this shell.
+  const source = typeof ref === 'string' ? ref.slice(0, ref.indexOf(':')) : '';
+  const sources = raw?.['secret_sources'] as Record<string, unknown> | null | undefined;
+  const kept = { ...(sources?.[source] !== undefined ? { secret_sources: { [source]: sources[source] } } : {}), secrets_key: ref };
   return (await sealedFrom(stringify(kept), env, { only: ['secrets_key'] })).yml?.secretsKey;
 }
 
@@ -127,19 +131,20 @@ async function describeRef(key: string, ref: SecretRef, yml: FactoryYml | undefi
   const kind = ref.source === 'env' ? 'env' : yml?.secretSources?.[ref.source]?.kind;
   if (kind === 'env') return { key, reference, inClear: true, warnings: [IN_CLEAR_ENV] };
   // A workstation's key, mode 0600 (ORC-470): in clear on its disk all the same.
-  if (kind === 'file') return { key, reference, inClear: true, warnings: [IN_CLEAR_FILE] };
+  const inClear = kind === 'file';
+  const clear = inClear ? [IN_CLEAR_FILE] : [];
   let rotatedAt: Date | undefined;
   try {
     rotatedAt = (await sources[ref.source]?.describe?.(ref.path))?.rotatedAt;
   } catch (err) {
-    return { key, reference, inClear: false, warnings: [`its rotation date could not be read: ${(err as Error).message}`] };
+    return { key, reference, inClear, warnings: [...clear, `its rotation date could not be read: ${(err as Error).message}`] };
   }
   // Rotating `secrets_key` would leave secrets.json unreadable, nothing re-encrypts it yet: never asked for.
   const rotates = key !== 'secrets_key';
-  if (!rotatedAt) return { key, reference, inClear: false, warnings: rotates ? ['its source knows no rotation date'] : [] };
+  if (!rotatedAt) return { key, reference, inClear, warnings: [...clear, ...(rotates ? ['its source knows no rotation date'] : [])] };
   const days = Math.floor((now - rotatedAt.getTime()) / DAY_MS);
   const stale = rotates && days > ROTATION_MAX_DAYS;
-  return { key, reference, inClear: false, rotatedAt: rotatedAt.toISOString(), warnings: stale ? [`rotated ${days} days ago, past ${ROTATION_MAX_DAYS}`] : [] };
+  return { key, reference, inClear, rotatedAt: rotatedAt.toISOString(), warnings: [...clear, ...(stale ? [`rotated ${days} days ago, past ${ROTATION_MAX_DAYS}`] : [])] };
 }
 
 /** The report in text, for `doctor`. */

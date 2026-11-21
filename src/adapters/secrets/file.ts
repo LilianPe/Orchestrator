@@ -1,9 +1,13 @@
-import { lstat, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import type { SecretSourceKind } from './types.js';
 
 /** A file's name in its folder: letters, digits, `_`, `.`, `-`, never a dot name nor a path. */
 const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
+
+/** No symbolic link followed, no FIFO waited on; Windows has neither flag. */
+const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
 const errnoCode = (err: unknown): string | undefined => (err as NodeJS.ErrnoException | undefined)?.code;
 
@@ -24,20 +28,25 @@ export const fileSecretKind: SecretSourceKind = {
     const dir = options['dir'] as string;
     return {
       read: async (name) => {
-        const file = join(dir, name);
-        let text: string;
+        const notRegular = new Error(`the file ${name} is not a regular file`);
+        let handle: FileHandle;
         try {
-          const st = await lstat(file);
-          if (!st.isFile()) throw new Error(`the file ${name} is not a regular file`);
-          // Windows has no mode bits: the folder's ACL keeps it (docs/installation.md).
-          if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) throw new Error(`the file ${name} is readable by others than its owner: chmod 600 it`);
-          text = await readFile(file, 'utf8');
+          // A symbolic link is refused at the open: what is checked is what is read.
+          handle = await open(join(dir, name), OPEN_FLAGS);
         } catch (err) {
-          if (!errnoCode(err)) throw err;
+          if (errnoCode(err) === 'ELOOP') throw notRegular;
           // The cause carries a path, never a content.
           throw new Error(errnoCode(err) === 'ENOENT' ? `no file ${name} in its folder` : `the file ${name} could not be read`, { cause: err });
         }
-        return text.replace(/\r?\n$/, '');
+        try {
+          const st = await handle.stat();
+          if (!st.isFile()) throw notRegular;
+          // Windows has no mode bits: the folder's ACL keeps it (docs/installation.md).
+          if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) throw new Error(`the file ${name} is readable by others than its owner: chmod 600 it`);
+          return (await handle.readFile('utf8')).replace(/\r?\n$/, '');
+        } finally {
+          await handle.close();
+        }
       },
       describe: async (name) => {
         try {

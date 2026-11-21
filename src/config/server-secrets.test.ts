@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { FactoryYmlError } from './factory-yml.js';
 import { saveSecrets } from './instance.js';
 import { SECRETS_KEY_REQUIRED } from './secrets-file.js';
-import { loadSealedFactoryYml, ROTATION_MAX_DAYS, serverSecretLines, serverSecretReport } from './server-secrets.js';
+import { loadSealedFactoryYml, readSecretsKey, ROTATION_MAX_DAYS, serverSecretLines, serverSecretReport } from './server-secrets.js';
 
 const PEM = '-----BEGIN RSA PRIVATE KEY-----\nsealed\n-----END RSA PRIVATE KEY-----\n';
 const NOW = Date.parse('2026-11-15T00:00:00Z');
@@ -132,16 +132,27 @@ describe("doctor's report of the server secrets (ORC-398)", () => {
     ]);
   });
 
-  it('says a key of a file in clear, for a workstation (ORC-470)', async () => {
-    const h = home(`secret_sources: { factory_home: { kind: file, dir: ${JSON.stringify(tmpdir())} } }\nsecrets_key: factory_home:secrets.key\n`);
+  it('says a key of a file in clear, for a workstation, with its date (ORC-470)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'factory-key-'));
+    const at = new Date(NOW - 400 * 86_400_000);
+    writeFileSync(join(dir, 'secrets.key'), 'k'.repeat(44), { mode: 0o600 });
+    utimesSync(join(dir, 'secrets.key'), at, at);
+    const h = home(`secret_sources: { factory_home: { kind: file, dir: ${JSON.stringify(dir)} } }\nsecrets_key: factory_home:secrets.key\n`);
     expect(await serverSecretReport(h, {}, { now: NOW })).toEqual([
       {
         key: 'secrets_key',
         reference: 'factory_home:secrets.key',
         inClear: true,
+        rotatedAt: at.toISOString(),
         warnings: ["in clear in a file, its owner's alone: for a workstation; on a server, a sealed source (systemd-creds) keeps it off the disk"],
       },
     ]);
+  });
+
+  it('reads secrets_key alone for init: another source\'s options need not be in its shell (ORC-470)', async () => {
+    const h = home('secret_sources: { other: { kind: systemd-creds, store: env:CRED_STORE } }\nsecrets_key: env:FACTORY_SECRETS_KEY\ngithub: { app_id: 1, private_key: env:GH_APP_KEY }\n');
+    expect(await readSecretsKey(h, { FACTORY_SECRETS_KEY: 'k'.repeat(32) })).toBe('k'.repeat(32));
+    expect(await readSecretsKey(home('concurrency: 1\n'), {})).toBeUndefined();
   });
 
   it('says it in lines, the date first, then each warning', () => {
