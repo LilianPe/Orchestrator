@@ -44,13 +44,17 @@ const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py|^test
 /** A walk stops past this many entries: init stays quick on a large repository, and says so. */
 const WALK_LIMIT = 20_000;
 
-/** The names of every dependency of the repository's package.json and pyproject.toml. */
-function dependencies(repo: string): Set<string> {
-  const read = (file: string) => (existsSync(join(repo, file)) ? readFileSync(join(repo, file), 'utf8') : '');
-  return new Set([...packageJsonDependencies(read('package.json')), ...pyprojectDependencies(read('pyproject.toml'))]);
+/** The names of every dependency of the repository's package.json and pyproject.toml, and the manifests not read in full, with why. */
+function dependencies(repo: string): { deps: Set<string>; problems: string[] } {
+  const manifests = [['package.json', packageJsonDependencies], ['pyproject.toml', pyprojectDependencies]] as const;
+  const read = manifests.filter(([file]) => existsSync(join(repo, file))).map(([file, names]) => ({ file, ...names(readFileSync(join(repo, file), 'utf8')) }));
+  return {
+    deps: new Set(read.flatMap((r) => r.names)),
+    problems: read.filter((r) => r.problem !== undefined).map((r) => `${r.file} not fully read (${r.problem})`),
+  };
 }
 
-function stack(repo: string, deps: Set<string>): string {
+function stack(repo: string, { deps, problems }: { deps: Set<string>; problems: string[] }): string {
   const parts: string[] = [];
   if (existsSync(join(repo, 'package.json'))) {
     const pm = existsSync(join(repo, 'package-lock.json')) ? 'npm' : existsSync(join(repo, 'pnpm-lock.yaml')) ? 'pnpm' : existsSync(join(repo, 'yarn.lock')) ? 'yarn' : 'no lockfile';
@@ -59,7 +63,8 @@ function stack(repo: string, deps: Set<string>): string {
   if (existsSync(join(repo, 'pyproject.toml'))) parts.push(existsSync(join(repo, 'uv.lock')) ? 'Python (uv)' : 'Python (no uv.lock)');
   if (!parts.length) return 'none detected (no package.json, no pyproject.toml)';
   const front = FRONT_ENDS.find(([pkg]) => deps.has(pkg));
-  return [...parts, ...(front ? [front[1]] : [])].join(', ');
+  const found = [...parts, ...(front ? [front[1]] : [])].join(', ');
+  return problems.length ? `${found}; ${problems.join('; ')}: Stack, Services and Visual paths may miss some of ${problems.length > 1 ? 'their' : 'its'} dependencies` : found;
 }
 
 function commands({ setup, commands, preview }: DetectedChecks): string {
@@ -138,9 +143,10 @@ export type MaturityReport = (lastDryRun?: DryRun) => MaturityPoint[];
  * its files only, never by running its code (`main` is the last dry run's, `lastDryRun`, when one is stored).
  */
 export function maturityReport(repo: string, detected: DetectedChecks, lastDryRun?: DryRun): MaturityPoint[] {
-  const deps = dependencies(repo);
+  const read = dependencies(repo);
+  const { deps } = read;
   return [
-    { key: 'stack', title: 'Stack', value: stack(repo, deps) },
+    { key: 'stack', title: 'Stack', value: stack(repo, read) },
     { key: 'commands', title: 'Commands', value: commands(detected) },
     { key: MAIN_CARD, title: 'main green or red', value: mainCardValue(lastDryRun) },
     { key: 'services', title: 'Services', value: services(repo, deps) },

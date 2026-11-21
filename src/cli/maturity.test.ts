@@ -148,6 +148,22 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
   });
 });
 
+describe('the maturity report on what it reads only in part (ORC-454)', () => {
+  it('a malformed entry of package.json is said on the Stack card, the dependencies read before it kept', () => {
+    const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { react: '^18.0.0', pg: 8 } }), 'package-lock.json': '{}' }));
+    expect(v['stack']).toBe('Node (npm), React; package.json not fully read (the version of "pg" in "dependencies" is not a string): Stack, Services and Visual paths may miss some of its dependencies');
+  });
+
+  it('a package.json that does not parse, a pyproject.toml either: each said, neither read as no dependency', () => {
+    const v = valueOf(repoOf({ 'package.json': '{ "dependencies": ', 'pyproject.toml': '[project\n', 'uv.lock': '' }));
+    expect(v['stack']).toMatch(/^Node \(no lockfile\), Python \(uv\); package\.json not fully read \(invalid JSON .*\); pyproject\.toml not fully read \(unreadable TOML .*\): Stack, Services and Visual paths may miss some of their dependencies$/);
+  });
+
+  it('well-formed manifests add nothing to the Stack card', () => {
+    expect(valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }))['stack']).toBe('Node (npm), Vue');
+  });
+});
+
 describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
   const run = (o: Partial<DryRun>): DryRun => ({
     id: 'dry-1',
