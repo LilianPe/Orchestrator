@@ -18,8 +18,11 @@ export interface ControlDeps {
   fetch?: (url: string, init?: RequestInit) => Promise<Response> | Response;
 }
 
-/** The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. */
-const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK']);
+/**
+ * The socket's errors before any byte is sent: nothing reached the daemon, HTTP may be tried instead. A path past the
+ * OS's limit is refused as EINVAL on Linux, ENAMETOOLONG on macOS (ORC-431).
+ */
+const NOT_REACHED = new Set(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM', 'ENOTSOCK', 'EINVAL', 'ENAMETOOLONG']);
 
 /**
  * A request of the CLI's (its commands carry no body) with node's own client, which never gives up on a slow answer: through the

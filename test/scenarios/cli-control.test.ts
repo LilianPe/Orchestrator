@@ -288,4 +288,14 @@ describe.skipIf(process.platform === 'win32')("the CLI through the daemon's Unix
     expect(await runStatusCommand({ ...deps, fetch: http })).toBe(1);
     expect(asked).toHaveLength(2);
   });
+
+  // A FACTORY_HOME deep enough to put its socket past the OS's limit (108 bytes on Linux): EINVAL, ENAMETOOLONG on macOS.
+  it('falls back to HTTP on the loopback when the socket path is too long to connect to (ORC-431)', async () => {
+    const c = control(createHarness());
+    const asked: string[] = [];
+    const tooLong = join(tmpdir(), 'x'.repeat(200), 'factory.sock');
+    expect(await runStatusCommand({ ...c, socket: tooLong, fetch: (url, init) => (asked.push(url), c.fetch!(url, init)) })).toBe(0);
+    expect(asked).toEqual(['http://127.0.0.1:4100/api/state']);
+    expect(c.lines[0]).toContain('dev slots 1/3');
+  });
 });
