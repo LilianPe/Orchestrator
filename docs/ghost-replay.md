@@ -26,11 +26,11 @@ intake → spec_draft → spec_check → tests → red → freeze_tests → buil
 
 The engine walks the preset's own steps (ORC-391): delegation runs `intake`, `intake` the spec, the spec the tests, the tests
 `dev`, whose publication ends the run. A project runs it with `preset: factory/fantome`
-in `config.yaml`; such a project always has no effects.
+in `factory.yml`; such a project always has no effects.
 
 ## No-effect mode
 
-A project with `effects: none` in `config.yaml`, or on the `factory/fantome` preset, runs its tickets as any other, and nothing of
+A project with `effects: none` in `factory.yml`, or on the `factory/fantome` preset, runs its tickets as any other, and nothing of
 it leaves the factory: no push, no PR, no comment, no move, no activity. Also of use to try a prompt, a skill or a preset change
 without touching Linear or GitHub.
 

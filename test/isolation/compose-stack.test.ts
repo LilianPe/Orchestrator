@@ -137,8 +137,7 @@ describe.skipIf(!enabled)(`the compose stack (${cli})`, () => {
     if (!runnerImage) throw new Error('FACTORY_RUNNER_IMAGE names the runner image to test.');
     asEngineRoot(
       `cd /base && mkdir -p ${base}/data/network ${base}/repos ${base}/install ${base}/egress-ca && ` +
-        `printf 'host: 0.0.0.0\\nport: 4100\\npublicUrl: https://localhost\\nrelay: { kind: none }\\nprojects: []\\nlimits: {}\\n' > ${base}/data/config.yaml && ` +
-        `printf 'concurrency: 1\\ndashboard: { logins: [recette] }\\nsecrets_key: env:FACTORY_SECRETS_KEY\\n' > ${base}/data/factory.yml && chown -R 1000:1000 ${base}`,
+        `printf 'host: 0.0.0.0\\nport: 4100\\npublic_url: https://localhost\\nrelay: { kind: none }\\nprojects: []\\nconcurrency: 1\\ndashboard: { logins: [recette] }\\nsecrets_key: env:FACTORY_SECRETS_KEY\\n' > ${base}/data/factory.yml && chown -R 1000:1000 ${base}`,
     );
     compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '180');
     for (let i = 0; ; i++) {

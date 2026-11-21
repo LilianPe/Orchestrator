@@ -44,7 +44,7 @@ async function main(): Promise<number> {
     return 1;
   }
   const home = factoryHome();
-  // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
+  // The instance keys of factory.yml alone (ORC-199): its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);
   const api = `http://127.0.0.1:${cfg.port}`;
   // No credential: on the server, the daemon's socket in FACTORY_HOME, its file mode the guard (ORC-405); else HTTP on the

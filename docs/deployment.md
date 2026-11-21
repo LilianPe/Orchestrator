@@ -19,7 +19,7 @@ Runners are not services: `factoryd` creates one per attempt, then destroys it. 
 
 ## TLS and webhooks
 
-Linear and GitHub call the server directly, in HTTPS (ORC-221): `<publicUrl>/webhooks/linear`, `<publicUrl>/webhooks/github`, and Linear's OAuth callback `<publicUrl>/oauth/callback`. The factory itself brings no TLS: `factoryd` listens in plain HTTP, published on the host's loopback alone (`127.0.0.1:${FACTORY_LOOPBACK_PORT:-4100}`; `port` in `config.yaml` stays at 4100, the container's side), and `publicUrl` in `config.yaml` says the public HTTPS URL. A reverse proxy in front of it holds the certificate, by one of two means:
+Linear and GitHub call the server directly, in HTTPS (ORC-221): `<public_url>/webhooks/linear`, `<public_url>/webhooks/github`, and Linear's OAuth callback `<public_url>/oauth/callback`. The factory itself brings no TLS: `factoryd` listens in plain HTTP, published on the host's loopback alone (`127.0.0.1:${FACTORY_LOOPBACK_PORT:-4100}`; `port` in `factory.yml` stays at 4100, the container's side), and `public_url` in `factory.yml` says the public HTTPS URL. A reverse proxy in front of it holds the certificate, by one of two means:
 
 - **the host's reverse proxy** (the default): the server's own nginx, Caddy, Traefik or Apache, the operator's choice, forwards the public name to `http://127.0.0.1:4100`;
 - **the `caddy` service** of `compose.yaml`, for a server without one: `docker compose --profile tls up -d` (or `COMPOSE_PROFILES=tls` in `.env`). It takes ports 80 and 443 and a Let's Encrypt certificate for `FACTORY_PUBLIC_HOST` (`docker/Caddyfile`), and refuses to start without it.
@@ -31,7 +31,7 @@ What the proxy must do, and nothing more:
 - **not forward `/agent`**: the run-token agent API, which the runners reach through the `proxy` service on port 4101, never through the public name. The examples below and the `tls` profile answer it 404;
 - **not buffer the live stream** (`/api/events`, server-sent events, one `ping` every 15 s): nginx needs `proxy_buffering off;`. Caddy flushes it on its own.
 
-`factoryd` reads no `X-Forwarded-*` header: it decides nothing on the client's address or scheme, and `publicUrl` already gives the URLs it hands out. A forged `X-Forwarded-Host` changes nothing. The interface stays behind the GitHub sign-in (ORC-399, [interface and security](interface-and-security.md#network-exposure-and-github-sign-in)); the webhooks, the OAuth callbacks and the agent API answer to their own guards (signatures, `state`, run token).
+`factoryd` reads no `X-Forwarded-*` header: it decides nothing on the client's address or scheme, and `public_url` already gives the URLs it hands out. A forged `X-Forwarded-Host` changes nothing. The interface stays behind the GitHub sign-in (ORC-399, [interface and security](interface-and-security.md#network-exposure-and-github-sign-in)); the webhooks, the OAuth callbacks and the agent API answer to their own guards (signatures, `state`, run token).
 
 An nginx on the host, with a certificate from certbot:
 
@@ -70,19 +70,19 @@ usine.exemple.fr {
 
 Both examples take `127.0.0.1:4100`: the port of `FACTORY_LOOPBACK_PORT` if it is set. To check it: `curl -sS https://usine.exemple.fr/health` answers `{"ok":…,"store":…,"takingTickets":…}` (from `factoryd`, not the proxy: open, the state alone, ORC-405) and `curl -sS https://usine.exemple.fr/api/state` 401 `{"error":"sign in with GitHub first"}`, and the deliveries of a Linear webhook (the application's page) and of a GitHub webhook (the App's *Advanced* tab) show a 200. A 401 there is the signature's (secret, clock), not the proxy's.
 
-**Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. The daemon refuses to start a smee relay with `dev: false` or with `dev: true` beside a `publicUrl`, and warns of one without `dev: true`, the development mode `factory init --dev` writes (ORC-444, ORC-446); `factory doctor` warns and fails as the start does. A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
+**Smee and ngrok are for a workstation only, never the server** (ORC-221): `relay: { kind: none }` in production. The daemon refuses to start a smee relay with `dev: false` or with `dev: true` beside a `public_url`, and warns of one without `dev: true`, the development mode `factory init --dev` writes (ORC-444, ORC-446); `factory doctor` warns and fails as the start does. A smee channel is public, and it relays a re-encoded body ([`linear.md`](linear.md#3-webhooks-production-and-development)).
 
 ## Why the same paths on both sides
 
 The engine reads a mount's paths **on the host**, not in the `factoryd` container. Three consequences:
 
 - `$FACTORY_DIR` is an absolute path, mounted at the same place in the container.
-- The paths in `config.yaml` are those paths (`repoPath: /srv/factory/repos/mon-app`, written in full).
+- The paths in `factory.yml` are those paths (`repo_path: /srv/factory/repos/mon-app`, written in full).
 - The factory's installation, which each runner mounts read-only, only exists in the image. At startup, `docker/entrypoint.sh` copies it into `$FACTORY_DIR/install/<fingerprint>`, once per image, and launches the daemon from that copy.
 
 | Directory | Contents | Mounted by |
 |---|---|---|
-| `data` | `FACTORY_HOME`: `config.yaml`, `factory.yml`, `secrets.json`, transcripts, worktrees | `factoryd` |
+| `data` | `FACTORY_HOME`: `factory.yml`, `secrets.json`, transcripts, worktrees | `factoryd` |
 | `data/network` | Run sockets and logs, control socket | `factoryd`, `proxy` |
 | `repos` | The repository clones, over HTTPS | `factoryd` |
 | `install` | The copy of the installation | `factoryd` |
@@ -100,7 +100,7 @@ No image receives a secret at build time. Isolation test no. 7 looks for tokens 
 
 - **Publishing**: the factory pushes and opens the PR, with the GitHub App (ORC-125, [`github.md`](github.md#publishing)). Without it, a verified ticket is blocked: configure `github.*` or `GH_APP_*`. An agent in a runner has neither `gh` nor a token, and the proxy refuses `git push`. `factoryd` has neither either since ORC-181: the App reads the PRs.
 - **`factoryd`'s own `git fetch`** (ORC-442): the image gives git no credential of its own (the GitHub CLI's credential helper went with ORC-181). A private repository's clone under `repos/`, and the knowledge base's, are read with the App's installation token, as the push is, when their `origin` is an `https://github.com/` URL the App is installed on: no SSH key nor credential helper is needed in the container. An `origin` over SSH, or a repository the App is not installed on, is still read with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read` ([`github.md`](github.md#the-daemons-own-git)).
-- **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repoPath` is never mounted.
+- **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repo_path` is never mounted.
 
 ## Variables
 
@@ -116,7 +116,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |
 | `FACTORY_BROWSER_IMAGE` | no | The capture image of the visual proof (`docker/browser.Dockerfile`), built on the runner image. Unset, or absent from the engine, the visual proof is unavailable. |
 | `FACTORY_LOOPBACK_PORT` | no | Port of `factoryd` on the host's loopback, for its reverse proxy (4100 by default). |
-| `FACTORY_PUBLIC_HOST` | with the `tls` profile | Domain of `publicUrl`, for `caddy`'s certificate. |
+| `FACTORY_PUBLIC_HOST` | with the `tls` profile | Domain of `public_url`, for `caddy`'s certificate. |
 | `POSTGRES_PASSWORD` | yes | Database password, reused in a URL: letters and digits only. |
 | `FACTORY_COMMIT` | no | At build time: the commit, recorded on each attempt. |
 | `FACTORY_HTTP_PORT`, `FACTORY_HTTPS_PORT` | no | Ports published by `caddy`, under the `tls` profile (80 and 443 by default). |
@@ -125,7 +125,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 
 > **Transition note**: compose still passes `ANTHROPIC_API_KEY` through, only as the key of the small model of messages when `factory.yml` sets no `message_model.api_key` (ORC-445): it never logs `claude` in, which runs in the sandboxes alone (ORC-179). Compose does not require it, nor the tokens above: without a Claude token, runs fail at authentication.
 
-GitHub webhooks read `github.webhookSecret` in `config.yaml` or `factory.yml` ([`github.md`](github.md#github-webhooks)): `compose.yaml` does not pass `GH_WEBHOOK_SECRET` through.
+GitHub webhooks read `github.webhook_secret` in `factory.yml` ([`github.md`](github.md#github-webhooks)): `compose.yaml` does not pass `GH_WEBHOOK_SECRET` through.
 
 ## First start
 
@@ -138,19 +138,17 @@ On the server, with the user's rootless engine running:
    mkdir -p "$FACTORY_DIR"/data/network "$FACTORY_DIR"/repos "$FACTORY_DIR"/install "$FACTORY_DIR"/egress-ca
    ```
 
-2. Clone the repositories into `repos/` (over HTTPS), create the Linear application with URLs based on `publicUrl` ([`linear.md`](linear.md)), and write `data/secrets.json` (`clientId`, `clientSecret`, `webhookSecret`, format: [`configuration.md`](configuration.md#secretsjson)), `data/config.yaml` and `data/factory.yml`:
+2. Clone the repositories into `repos/` (over HTTPS), create the Linear application with URLs based on `public_url` ([`linear.md`](linear.md)), and write `data/secrets.json` (`clientId`, `clientSecret`, `webhookSecret`, format: [`configuration.md`](configuration.md#secretsjson)) and `data/factory.yml`:
 
    ```yaml
-   # data/config.yaml, with FACTORY_DIR=/srv/factory
+   # data/factory.yml, with FACTORY_DIR=/srv/factory
    host: 0.0.0.0
-   publicUrl: https://usine.exemple.fr
+   port: 4100
+   public_url: https://usine.exemple.fr
    relay: { kind: none }
    projects:
-     - { id: mon-app, repoPath: /srv/factory/repos/mon-app, linearTeamKey: APP }
-   ```
-
-   ```yaml
-   # data/factory.yml: one ticket at a time to start with
+     - { id: mon-app, repo_path: /srv/factory/repos/mon-app, linear_team_key: APP }
+   # one ticket at a time to start with
    concurrency: 1
    # who may sign in to the dashboard with GitHub (ORC-399): logins, or an org, or a team
    dashboard: { logins: [armand] }
@@ -195,7 +193,7 @@ docker compose exec factoryd node dist/src/cli/factory.js stop REL-12
 docker compose logs -f factoryd
 ```
 
-`factory doctor` runs there too, on the clone `config.yaml` names, before a repository is entrusted to the factory: it asks the engine through the same socket ([`github.md`](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)):
+`factory doctor` runs there too, on the clone `factory.yml` names, before a repository is entrusted to the factory: it asks the engine through the same socket ([`github.md`](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)):
 
 ```bash
 docker compose exec factoryd node dist/src/cli/factory.js doctor /srv/factory/repos/mon-app
@@ -237,6 +235,6 @@ docker compose up -d
 
 Each image has its copy of the installation in `$FACTORY_DIR/install`. The old ones remain, since a container may still be running from one of them: remove them by hand once the update is done.
 
-**When moving to ORC-317:** workspaces become separate repositories. A ticket whose directory is still a `git worktree` is refused at launch (« is not the one the factory created »): delete `workspaces/<project>/<ticket>/` and `workspaces/<project>/_trunk/`, then `git -C <repoPath> worktree prune`. An unpushed commit there would be lost: push it first, by hand. And an agent may have written into the git directory of a repository already entrusted to the factory: check its `config`, its `hooks/` and `info/attributes`, or better, reclone it. The fix protects against what an agent will write, not against what it has already left behind.
+**When moving to ORC-317:** workspaces become separate repositories. A ticket whose directory is still a `git worktree` is refused at launch (« is not the one the factory created »): delete `workspaces/<project>/<ticket>/` and `workspaces/<project>/_trunk/`, then `git -C <repo_path> worktree prune`. An unpushed commit there would be lost: push it first, by hand. And an agent may have written into the git directory of a repository already entrusted to the factory: check its `config`, its `hooks/` and `info/attributes`, or better, reclone it. The fix protects against what an agent will write, not against what it has already left behind.
 
 **When moving to ORC-341:** a new workspace takes only an allow list of the repository's git config, its remote URL without credentials. A workspace made before keeps the config it was given, a token in `remote.origin.url` or an extraheader included, for as long as it exists: delete `workspaces/<project>/<ticket>/` once its commits are pushed, and the next launch recreates it. A credential that has already reached an agent should be revoked.

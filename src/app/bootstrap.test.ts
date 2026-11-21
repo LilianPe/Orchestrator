@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -11,7 +11,7 @@ import { Daemon, type DaemonDeps } from '../runtime/daemon.js';
 import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
-import { saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
+import { oldInstanceFileWarnings, saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { createMissingStatuses, startFactory, type BootOptions } from './bootstrap.js';
 import { runStatusCommand } from '../cli/control.js';
@@ -25,7 +25,7 @@ const startOnMemory = (o: BootOptions) => startFactory({ store: new MemoryStore(
 describe('bootstrap', () => {
   it('starts without Linear, serves state and stops cleanly', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4199, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4199, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const app = await startOnMemory({ home, fakeRunner: true, log: () => {} });
     expect(app.url).toBe('http://localhost:4199');
     const state = await (await fetch('http://127.0.0.1:4199/api/state')).json();
@@ -37,7 +37,7 @@ describe('bootstrap', () => {
 
   it('starts beside a relais.db or factory.db left from SQLite without opening it, and names each to archive (ORC-178)', async () => { // transition, à retirer
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4171, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4171, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     // Not a SQLite file: a start that opened one would fail on it.
     writeFileSync(join(home, 'relais.db'), 'not a database'); // transition, à retirer
     writeFileSync(join(home, 'factory.db'), 'not a database either');
@@ -49,17 +49,38 @@ describe('bootstrap', () => {
     expect(readFileSync(join(home, 'relais.db'), 'utf8')).toBe('not a database'); // transition, à retirer
   });
 
+  it('refuses to start without factory.yml, a config.yaml beside it never read (ORC-199)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    writeFileSync(join(home, 'config.yaml'), 'port: 4170\nhost: 127.0.0.1\n');
+    await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/^no factory\.yml in FACTORY_HOME: .*never config\.yaml \(ORC-199\)/);
+  });
+
+  it('starts on factory.yml beside the files of the instance before it, without reading them, and names each to delete (ORC-199)', async () => { // transition, à retirer
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4170, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+    // Neither parses: a start that read one would fail on it.
+    writeFileSync(join(home, 'config.yaml'), 'port: nope\n');
+    writeFileSync(join(home, 'run-settings.json'), 'not json');
+    mkdirSync(join(home, 'logs'));
+    const logs: string[] = [];
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    await app.stop();
+    expect(app.url).toBe('http://localhost:4170');
+    expect(logs.filter((m) => m.includes('not read') && !m.includes('SQLite'))).toEqual(oldInstanceFileWarnings(home));
+    expect(oldInstanceFileWarnings(home)).toHaveLength(3);
+  });
+
   it('refuses to start without FACTORY_DATABASE_URL: Postgres is the only store (ORC-178)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4172, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4172, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     await expect(startFactory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/^FACTORY_DATABASE_URL is not set/);
   });
 
   it('says at startup that no token budget caps a ticket, and only then (ORC-216)', async () => {
     const started = async (factoryYml?: string) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-      if (factoryYml) writeFileSync(join(home, 'factory.yml'), factoryYml);
+      saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+      if (factoryYml) appendFileSync(join(home, 'factory.yml'), factoryYml);
       const logs: string[] = [];
       const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
       await app.stop();
@@ -73,16 +94,9 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-    saveInstance(home, {
-      port: 4190,
-      host: '127.0.0.1',
-      relay: { kind: 'none' },
-      projects: [],
-      limits: {},
-      github: { appId: '123', privateKey: pem },
-    });
+    saveInstance(home, { port: 4190, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const logs: string[] = [];
-    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { GH_APP_ID: '123', GH_APP_KEY: pem } });
     await app.stop();
     expect(logs.some((m) => m.includes('GitHub App 123'))).toBe(true);
     expect(logs.join('\n')).not.toContain('PRIVATE KEY');
@@ -92,8 +106,8 @@ describe('bootstrap', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
-    saveInstance(home, { port: 4191, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    writeFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
+    saveInstance(home, { port: 4191, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+    appendFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
     const logs: string[] = [];
     const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { GH_APP_KEY: pem } });
     await app.stop();
@@ -102,8 +116,8 @@ describe('bootstrap', () => {
 
   it('takes the dev capacity from concurrency in factory.yml (ORC-203)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4179, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    writeFileSync(join(home, 'factory.yml'), 'concurrency: 1\n');
+    saveInstance(home, { port: 4179, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+    appendFileSync(join(home, 'factory.yml'), 'concurrency: 1\n');
     const app = await startOnMemory({ home, fakeRunner: true, log: () => {} });
     try {
       const state = (await (await fetch('http://127.0.0.1:4179/api/state')).json()) as { capacity: { dev: { total: number } } };
@@ -117,8 +131,8 @@ describe('bootstrap', () => {
     /** What bootstrap gave the daemon: its `recover` is the first thing to run with them. */
     const depsOf = async (port: number, yml?: string) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-      if (yml) writeFileSync(join(home, 'factory.yml'), yml);
+      saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+      if (yml) appendFileSync(join(home, 'factory.yml'), yml);
       let deps: DaemonDeps | undefined;
       const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
         deps = (this as unknown as { d: DaemonDeps }).d;
@@ -148,8 +162,8 @@ describe('bootstrap', () => {
     const repo = mkdtempSync(join(tmpdir(), 'factory-boot-repo-'));
     mkdirSync(join(repo, '.factory'));
     writeFileSync(join(repo, '.factory/workflow.yml'), 'version: 1\nlimits: { verify_attempts: 9 }\njobs:\n  dev:\n    model: opus\n');
-    saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }], limits: {} });
-    writeFileSync(join(home, 'factory.yml'), 'budgets: { max_turns: { build: 40 } }\n');
+    saveInstance(home, { port: 4178, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: repo, linearTeamKey: 'REL' }] });
+    appendFileSync(join(home, 'factory.yml'), 'budgets: { max_turns: { build: 40 } }\n');
     let deps: DaemonDeps | undefined;
     const recover = vi.spyOn(Daemon.prototype, 'recover').mockImplementation(async function (this: Daemon) {
       deps = (this as unknown as { d: DaemonDeps }).d;
@@ -167,7 +181,7 @@ describe('bootstrap', () => {
 
   it('refuses to start on a Claude token a header cannot carry, naming the variable (ORC-337)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' } })).rejects.toThrow(/^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/);
   });
 
@@ -180,9 +194,9 @@ describe('bootstrap', () => {
       const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
       writeFileSync(join(credentials, 'github-key'), privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
       writeFileSync(join(credentials, 'secrets-key'), 'a-secrets-key-of-at-least-32-characters\n');
-      saveInstance(home, { port: 4174, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+      saveInstance(home, { port: 4174, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
       saveSecrets(home, { linear: { clientId: 'c', clientSecret: 'linear-client-secret', webhookSecret: 'linear-webhook-secret', accessToken: 'linear-access-token' } });
-      writeFileSync(join(home, 'factory.yml'), SEALED_YML);
+      appendFileSync(join(home, 'factory.yml'), SEALED_YML);
       const logs: string[] = [];
       const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { CREDENTIALS_DIRECTORY: credentials } });
       await app.stop();
@@ -194,8 +208,8 @@ describe('bootstrap', () => {
 
     it('refuses to start when the credential cannot be read, naming the key and its reference', async () => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4173, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-      writeFileSync(join(home, 'factory.yml'), SEALED_YML);
+      saveInstance(home, { port: 4173, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+      appendFileSync(join(home, 'factory.yml'), SEALED_YML);
       await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(
         /the secret github\.private_key \(creds:github-key\) could not be read: CREDENTIALS_DIRECTORY is not set/,
       );
@@ -204,8 +218,8 @@ describe('bootstrap', () => {
 
   it('refuses to start on an invalid factory.yml, naming the key', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    writeFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
+    saveInstance(home, { port: 4192, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+    appendFileSync(join(home, 'factory.yml'), 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n');
     await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env: {} })).rejects.toThrow(/github\.private_key: the environment variable GH_APP_KEY/);
   });
 
@@ -219,7 +233,7 @@ describe('bootstrap', () => {
       return timers.sort();
     };
     const start = async (projects: ReturnType<typeof project>[]) => {
-      saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects, limits: {} });
+      saveInstance(home, { port: 4193, host: '127.0.0.1', relay: { kind: 'none' }, projects });
       const app = await startOnMemory({ home, fakeRunner: true, log: () => {}, env: {}, store });
       await app.stop();
     };
@@ -236,7 +250,7 @@ describe('bootstrap', () => {
   // ORC-200: nothing pauses or resumes the queue any more; a pause left from before would hold every launch for good.
   it('lifts a pause of the queue left from before the global pause was removed, and says so', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: 'REL' }], limits: {} });
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: 'REL' }] });
     const store = new MemoryStore();
     await store.setMeta('paused', '1');
     const logs: string[] = [];
@@ -255,7 +269,7 @@ describe('bootstrap', () => {
 
   it('starts without a GitHub App, warning that it reads no PR and publishes nothing: no gh fallback (ORC-181)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4189, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const logs: string[] = [];
     const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
@@ -267,7 +281,7 @@ describe('bootstrap', () => {
 
   it('purges the transcripts older than 30 days at start', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4186, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4186, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const dir = join(home, 'transcripts');
     mkdirSync(dir, { recursive: true });
     const old = join(dir, 'r-old.jsonl');
@@ -284,7 +298,7 @@ describe('bootstrap', () => {
 
   it('closes the store it opened when the start fails afterwards', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4185, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4185, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const recover = vi.spyOn(Daemon.prototype, 'recover').mockRejectedValue(new Error('boom'));
     const close = vi.spyOn(MemoryStore.prototype, 'close');
     try {
@@ -298,7 +312,7 @@ describe('bootstrap', () => {
 
   it('stops the server and the timers it started when the start fails after them', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4184, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4184, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const worker = vi.spyOn(Daemon.prototype, 'startWorker').mockImplementation(() => {
       throw new Error('boom');
     });
@@ -321,7 +335,7 @@ describe('bootstrap', () => {
 
   it('ticks the daemon every minute until stopped', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4198, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4198, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const tick = vi.spyOn(Daemon.prototype, 'tick').mockResolvedValue();
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
@@ -339,7 +353,7 @@ describe('bootstrap', () => {
 
   it('stops even while an SSE client is connected', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4197, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4197, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const app = await startOnMemory({ home, fakeRunner: true, log: () => {} });
     const ctrl = new AbortController();
     const res = await fetch('http://127.0.0.1:4197/api/events', { signal: ctrl.signal });
@@ -355,7 +369,7 @@ describe('bootstrap', () => {
     { webhookSecret: 'whsecret', warns: false, port: 4191 },
   ])('warns at startup only when the webhook signing secret is unusable ($webhookSecret)', async ({ webhookSecret, warns, port }) => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     if (webhookSecret !== undefined) saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret } });
     const logs: string[] = [];
     const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m) });
@@ -374,7 +388,7 @@ describe('bootstrap', () => {
       // The replay of closed tickets approves its own specs.
       { id: 'ghost', repoPath: repo(), linearTeamKey: 'DDD', preset: 'factory/fantome' as const },
     ];
-    saveInstance(home, { port: 4172, host: '127.0.0.1', relay: { kind: 'none' }, projects, limits: {} });
+    saveInstance(home, { port: 4172, host: '127.0.0.1', relay: { kind: 'none' }, projects });
     const logs: string[] = [];
     const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
@@ -389,7 +403,7 @@ describe('bootstrap', () => {
     const smee = { kind: 'smee' as const, url: 'http://127.0.0.1:9/channel' };
     const startWith = async (dev: boolean | undefined) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port: 4171, host: '127.0.0.1', relay: smee, projects: [], limits: {}, ...(dev === undefined ? {} : { dev }) });
+      saveInstance(home, { port: 4171, host: '127.0.0.1', relay: smee, projects: [], ...(dev === undefined ? {} : { dev }) });
       const logs: string[] = [];
       const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
       try {
@@ -401,8 +415,8 @@ describe('bootstrap', () => {
       return logs;
     };
 
-    it('refuses to start, naming publicUrl and factory init --dev', async () => {
-      await expect(startWith(false)).rejects.toThrow(/relay: \{ kind: smee \}.*publicUrl.*factory init --dev/);
+    it('refuses to start, naming public_url and factory init --dev', async () => {
+      await expect(startWith(false)).rejects.toThrow(/relay: \{ kind: smee \}.*public_url.*factory init --dev/);
     });
 
     it('starts with the relay of a config written by factory init --dev', async () => {
@@ -467,34 +481,34 @@ describe('bootstrap', () => {
   });
 
   // ORC-399: off the loopback, the dashboard is reached through a GitHub sign-in alone; the shared password is gone.
-  it("refuses a non-loopback host without the GitHub sign-in: the App's OAuth client, who is let in, an HTTPS publicUrl", async () => {
+  it("refuses a non-loopback host without the GitHub sign-in: the App's OAuth client, who is let in, an HTTPS public_url", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const client = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
     const start = (env: NodeJS.ProcessEnv) => startOnMemory({ home, fakeRunner: true, log: () => {}, env });
-    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [] });
     // The old password opens nothing any more.
     await expect(start({ FACTORY_UI_PASSWORD: 'pw' })).rejects.toThrow(/GitHub sign-in.*github\.client_id.*GH_APP_CLIENT_ID/);
     await expect(start(client)).rejects.toThrow(/dashboard: \{ logins, org, team \}/);
-    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
-    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'http://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
-    await expect(start(client)).rejects.toThrow(/publicUrl.*https/);
+    appendFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
+    saveInstance(home, { port: 4196, host: '0.0.0.0', publicUrl: 'http://factory.example', relay: { kind: 'none' }, projects: [] });
+    await expect(start(client)).rejects.toThrow(/public_url.*https/);
   });
 
   // ORC-398: exposed, secrets.json must be encrypted at rest; on the loopback, secrets_key stays optional.
   it('refuses a non-loopback host without secrets_key, naming it; starts on the loopback without it', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
-    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
-    saveInstance(home, { port: 4197, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [], limits: {} });
+    appendFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\n');
+    saveInstance(home, { port: 4197, host: '0.0.0.0', publicUrl: 'https://factory.example', relay: { kind: 'none' }, projects: [] });
     await expect(startOnMemory({ home, fakeRunner: true, log: () => {}, env })).rejects.toThrow(/outside this machine.*: set secrets_key in factory\.yml/);
-    saveInstance(home, { port: 4197, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4197, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const app = await startOnMemory({ home, fakeRunner: true, log: () => {}, env });
     await app.stop();
   });
 
   it('refuses to start real runs without a container engine, FACTORY_ALLOW_HOST_RUNS=1 or not (ORC-349, ORC-179)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4194, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4194, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     for (const env of [{}, { FACTORY_ALLOW_HOST_RUNS: '1' }, { FACTORY_ALLOW_HOST_RUNS: '1', FACTORY_ALLOW_HOST_VERIFY: '1' }]) {
       await expect(startOnMemory({ home, log: () => {}, env })).rejects.toThrow(/^FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container/);
     }
@@ -502,7 +516,7 @@ describe('bootstrap', () => {
 
   it('launches no run on a configuration that would block every ticket, and says why on /health (ORC-350)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4176, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4176, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const logs: string[] = [];
     // No GitHub App: every verified ticket would be blocked. The engine is named, never asked for a run here.
     const app = await startOnMemory({ home, log: (m) => void logs.push(m), env: { FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: 'factory-runner:test' } });
@@ -521,7 +535,7 @@ describe('bootstrap', () => {
 
   it('serves /health while it takes tickets (ORC-350)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-    saveInstance(home, { port: 4175, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4175, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const app = await startOnMemory({ home, fakeRunner: true, log: () => {}, env: {} });
     try {
       const res = await fetch('http://127.0.0.1:4175/health');
@@ -535,9 +549,9 @@ describe('bootstrap', () => {
   it("guards the dashboard with the GitHub sign-in of the factory's App on a non-loopback host", async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     // Written with its trailing slash: the callback URL is the one the App declares all the same.
-    saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example/', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4195, host: '0.0.0.0', publicUrl: 'https://factory.example/', relay: { kind: 'none' }, projects: [] });
     // secrets_key required off the loopback (ORC-398).
-    writeFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\nsecrets_key: env:FACTORY_SECRETS_KEY\n');
+    appendFileSync(join(home, 'factory.yml'), 'dashboard: { logins: [armand] }\nsecrets_key: env:FACTORY_SECRETS_KEY\n');
     const env = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRETS_KEY: 'k'.repeat(44) };
     const app = await startOnMemory({ home, fakeRunner: true, log: () => {}, env });
     try {
@@ -577,7 +591,7 @@ describe('bootstrap', () => {
     const tenMinutesAgo = () => Date.now() - 10 * 60_000;
     const boot = (port: number, relay: Parameters<typeof saveInstance>[1]['relay'], o: { env?: NodeJS.ProcessEnv; log?: (m: string) => void } = {}) => {
       const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
-      saveInstance(home, { port, host: '127.0.0.1', relay, projects: [], limits: {} });
+      saveInstance(home, { port, host: '127.0.0.1', relay, projects: [] });
       saveSecrets(home, { linear: { clientId: 'cid', clientSecret: 'cs', webhookSecret: 'linear-secret' } });
       return startOnMemory({ home, fakeRunner: true, log: o.log ?? (() => {}), env: o.env ?? {} });
     };

@@ -10,18 +10,18 @@ Nothing below can be skipped for a real run: without rootless Podman and the run
 
 | # | What | How | Where the value goes |
 |---|---|---|---|
-| 1 | **The pilot repository**, cloned locally, with `origin` on GitHub and `origin/HEAD` set | ORC-137 chose two pilots: `Intersektion/intersektion-platform` (the product repository, the first 20 real tickets) and `LilianPe/Orchestrator` (dogfooding: run the factory from a pinned commit, never from the branch it changes). For a first run, the one whose tests you know. `git clone` sets `origin/HEAD`; on an older clone, `git remote set-head origin --auto`. | `config.yaml`, `projects[].repoPath` (written by `factory init`) |
+| 1 | **The pilot repository**, cloned locally, with `origin` on GitHub and `origin/HEAD` set | ORC-137 chose two pilots: `Intersektion/intersektion-platform` (the product repository, the first 20 real tickets) and `LilianPe/Orchestrator` (dogfooding: run the factory from a pinned commit, never from the branch it changes). For a first run, the one whose tests you know. `git clone` sets `origin/HEAD`; on an older clone, `git remote set-head origin --auto`. | `factory.yml`, `projects[].repo_path` (written by `factory init`) |
 | 2 | **`.factory/config.yml` with `commands.test`**, merged on the default branch | `factory init` proposes it (step 2); commit it through a normal PR. Without `commands.test` every ticket blocks at the tests step. | the repository, default branch |
 | 3 | **Branch protection** on the default branch: a ruleset with *Require a pull request before merging* that the App cannot bypass | GitHub → repository → Settings → Rules → Rulesets ([`github.md`](github.md#branch-protection-required-by-factory-doctor)). `factory doctor` refuses without it. | GitHub |
 | 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory reads the PRs at its reconciliation, every 5 minutes. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
 | 5 | **A Linear OAuth application** (not a personal API key), created by a Linear workspace admin, with webhooks on | `factory init` prints the exact callback URL, webhook URL and categories (step 2); details in [`linear.md`](linear.md#1-create-the-oauth-application). | Client ID, client secret and webhook signing secret typed into `factory init` → `secrets.json`. The OAuth tokens come later, from « Connect Linear ». |
-| 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `config.yaml` has neither `publicUrl` nor a relay (ORC-411: without `--dev`, `init` creates none and asks nothing of Linear, which has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `publicUrl` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `config.yaml`: `relay` (smee, written by `factory init --dev`) or `publicUrl` |
+| 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `factory.yml` has neither `public_url` nor a relay (ORC-411: without `--dev`, `init` creates none and asks nothing of Linear, which has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `public_url` of `factory.yml` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `factory.yml`: `relay` (smee, written by `factory init --dev`) or `public_url` |
 | 7 | **A Claude Code token** | `claude setup-token` on a machine logged in to the subscription account. | `factory.yml`: `claude.accounts[].token: env:CLAUDE_CODE_OAUTH_TOKEN` (any variable name), and that variable in the daemon's environment. In a sandbox the egress proxy sets it on the model calls; the agent only holds a placeholder. |
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
 | 9 | **The runner image**, built from this repository | `podman build -f docker/runner.Dockerfile -t localhost/factory-runner docker` | `FACTORY_RUNNER_IMAGE=localhost/factory-runner` |
 | 10 | **Postgres** | The only store (ORC-178): without the URL the daemon does not start. A database of its own (never the test suites' one). | `FACTORY_DATABASE_URL=postgres://user:password@host:5432/database` |
-| 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `config.yaml`: `projects[].authz.validators` |
-| 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `config.yaml`: `projects[].authz.githubLogins` (Linear id → GitHub login) |
+| 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `factory.yml`: `projects[].authz.validators` |
+| 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `factory.yml`: `projects[].authz.github_logins` (Linear id → GitHub login) |
 
 Also on the machine: Node 24.22.1+ and git (no `claude`: it is the runner image's, run in the sandboxes; no `gh`: the factory reads and publishes on GitHub by its App alone, ORC-181) ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
 
@@ -40,7 +40,7 @@ cd <pilot repository>
 factory init --dev
 ```
 
-`--dev` is what a local run needs: with no `publicUrl` in `config.yaml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel, says `No public URL for Linear's webhooks: …` and skips the Linear application; with a `publicUrl`, `--dev` changes nothing. A channel already in `config.yaml` is kept either way.
+`--dev` is what a local run needs: with no `public_url` in `factory.yml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel, says `No public URL for Linear's webhooks: …` and skips the Linear application; with a `public_url`, `--dev` changes nothing. A channel already in `factory.yml` is kept either way.
 
 It asks the Linear team key, then prints what to create in Linear, with your instance's URLs:
 
@@ -99,24 +99,11 @@ Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them
   export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
 ```
 
-It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay, `dev: true`), `FACTORY_HOME/secrets.json` (mode `0600`) and `FACTORY_HOME/factory.yml`.
+It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/factory.yml` (its secrets as references, then the project, the relay, `dev: true`) and `FACTORY_HOME/secrets.json` (mode `0600`). There is no `config.yaml` any more (ORC-199): the daemon reads `factory.yml` alone, refuses to start without it, and names a `config.yaml` left from an older install, never read, to delete.
 
-Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, an existing `factory.yml` is kept as it is (`… factory.yml kept as it is.`), and an instance that already runs without one gets none. A new client ID asks for its secrets: nothing of the old application is kept.
+Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, and of an existing `factory.yml` it writes only the projects and the webhook relay, the rest of the file and its comments kept (`… factory.yml: its projects and webhook relay written, the rest kept as it is.`). A new client ID asks for its secrets: nothing of the old application is kept.
 
-Now add by hand, in `config.yaml`, the roles of items 11 and 12:
-
-```yaml
-projects:
-  - id: pilot
-    repoPath: /home/<user>/code/pilot
-    linearTeamKey: PIL
-    authz:
-      validators: [<linear id of validator 1>, <linear id of validator 2>]
-      githubLogins:
-        <linear id of the delegator>: <their github login>
-```
-
-`FACTORY_HOME/factory.yml` is read by `factory up` and `factory doctor` with the daemon's environment, and by `factory validate` for its budgets, `max_diff` and tools. The one `init` wrote:
+`FACTORY_HOME/factory.yml` is read whole by `factory up` and `factory doctor` with the daemon's environment, by `factory validate` for its budgets, `max_diff` and tools, and by the other commands for its port and projects alone. The one `init` wrote:
 
 ```yaml
 # Written by factory init: every secret is a reference, read from the daemon's environment.
@@ -133,9 +120,32 @@ claude:
 budgets:
   per_step_tokens: off
   per_ticket_tokens: 5000000
+port: 4100
+host: 127.0.0.1
+dev: true
+relay:
+  kind: smee                     # workstation only (factory init --dev)
+  url: https://smee.io/<channel> # the workstation relay's channel
+projects:
+  - id: pilot
+    repo_path: /home/<user>/code/pilot
+    linear_team_key: PIL
 ```
 
-With a `publicUrl`, the App's steps give its webhook URL, optional: if you enable it, add `webhook_secret: env:GH_WEBHOOK_SECRET` under `github` and export it (`init` does not write it: an unset variable stops the daemon). `concurrency` is left to its default; `concurrency: 1` keeps a first run to one ticket at a time. The ticket cap is a first one, to calibrate (ORC-216).
+Now add by hand, under the project, the roles of items 11 and 12:
+
+```yaml
+projects:
+  - id: pilot
+    repo_path: /home/<user>/code/pilot
+    linear_team_key: PIL
+    authz:
+      validators: [<linear id of validator 1>, <linear id of validator 2>]
+      github_logins:
+        <linear id of the delegator>: <their github login>
+```
+
+With a `public_url`, the App's steps give its webhook URL, optional: if you enable it, add `webhook_secret: env:GH_WEBHOOK_SECRET` under `github` and export it (`init` does not write it: an unset variable stops the daemon). `concurrency` is left to its default; `concurrency: 1` keeps a first run to one ticket at a time. The ticket cap is a first one, to calibrate (ORC-216).
 
 `claude.runtime` and `claude.default_model` are required once `claude` is there. The budgets: `factory validate` refuses a step cap left unset, and the daemon warns without a ticket cap; `per_step_tokens: off` with a ticket cap is the simplest accepted choice for a first run ([`configuration.md`](configuration.md#factoryyml-orc-209)).
 
@@ -188,7 +198,7 @@ Server secrets:
 
 These warnings are expected on a workstation. Two other warnings must not be there for a first run:
 
-- `Warning: pilot: no spec validator (authz.validators in config.yaml): …`, or `one spec validator`: item 11. With none, every ticket stops at the spec gate; with one, the tickets they delegate.
+- `Warning: pilot: no spec validator (authz.validators in factory.yml): …`, or `one spec validator`: item 11. With none, every ticket stops at the spec gate; with one, the tickets they delegate.
 - `` Warning: .factory/config.yml has no `commands.test`: … ``: item 2, or the file is not yet on `origin/HEAD` (`git fetch`).
 
 `Warning: pilot: the Linear team … has no status « Spec », …` shows on a connected factory whose team lacks that status: the spec shows it by default (ORC-457), and « Connect Linear » and the daemon's start create it, so it goes once the daemon has started after the upgrade, unless Linear refused (the start logs why). Before « Connect Linear », `doctor` says `Linear statuses not checked: Linear not connected: …` instead. To keep tickets in Todo through their spec instead, set `statuses: { spec_draft: off }` in `factory.yml`.
@@ -206,8 +216,8 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 |---|---|---|
 | `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell | run it in the daemon's environment (step 2) |
 | `invalid factory.yml:` then `claude.default_model: required` or `` claude.runtime: only `claude-code` exists `` | the `claude` section | as in step 2 |
-| any message `factory up` refuses to start with (`factory.yml: statuses.…`, `host: … exposes …`) | the same as at the start: `doctor` runs the start's checks of `config.yaml` and `factory.yml` | as the message says |
-| `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml` nor in `config.yaml`, and no `GH_APP_*` | item 4 |
+| any message `factory up` refuses to start with (`factory.yml: statuses.…`, `host: … exposes …`) | the same as at the start: `doctor` runs the start's checks of `factory.yml` (`no factory.yml in FACTORY_HOME: …` without one) | as the message says |
+| `` GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml`, and no `GH_APP_*` | item 4 |
 | `Cannot read the repository's branch naming: unreadable default branch (origin/main): origin/HEAD is not set …` | clone without `origin/HEAD` | `git remote set-head origin --auto` |
 | `Host: refused — no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox` | item 8 | export `FACTORY_CONTAINER_CLI=podman` |
 | `Host: refused — FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.` (or `FACTORY_CONTAINER_CLI=…: docker or podman expected.`) | item 9, or a typo in item 8: `factory up` refuses to start the same | export `FACTORY_RUNNER_IMAGE=localhost/factory-runner` (step 2) |
@@ -255,7 +265,7 @@ Then open `http://localhost:4100`, click **Connect Linear** and authorize the ap
 
 In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: 0 waiting`), which lists the tickets the factory holds and their runs.
 
-Then the dry run of the pilot, with the project's `id` in `config.yaml` (`pilot` in step 2), in that same terminal:
+Then the dry run of the pilot, with the project's `id` in `factory.yml` (`pilot` in step 2), in that same terminal:
 
 ```bash
 factory dry-run <project>
@@ -265,13 +275,13 @@ It says `Dry run of <project> under way: …`, waits as long as the setup and th
 
 ## 5. Delegate the ticket
 
-Pick a small ticket of the pilot repository with explicit acceptance criteria, a description of at least 30 characters, and no branch of the factory's for it yet (`feat/<id>-…`, `fix/<id>-…`, `factory/<id>-…`). In Linear, set its **delegate** to `Orchestrator` (the application's name), as a user mapped in `githubLogins`.
+Pick a small ticket of the pilot repository with explicit acceptance criteria, a description of at least 30 characters, and no branch of the factory's for it yet (`feat/<id>-…`, `fix/<id>-…`, `factory/<id>-…`). In Linear, set its **delegate** to `Orchestrator` (the application's name), as a user mapped in `github_logins`.
 
 What you should see, step by step ([`preset.md`](preset.md#sequence)):
 
 | Step | In Linear / GitHub | If it breaks |
 |---|---|---|
-| Delegation | within 10 s, the comment « Got it. » and the session's plan | Nothing at all: a webhook that does not arrive (the workstation's smee channel, `publicUrl`, the clock: Linear's signature is refused past 60 s of offset) or a refused signature; the log says `relay: webhook rejected with 401 (…)`. A refusal by the matrix (no `githubLogins` entry, no write access) is replied in the session and logged `authz: refused …`. |
+| Delegation | within 10 s, the comment « Got it. » and the session's plan | Nothing at all: a webhook that does not arrive (the workstation's smee channel, `public_url`, the clock: Linear's signature is refused past 60 s of offset) or a refused signature; the log says `relay: webhook rejected with 401 (…)`. A refusal by the matrix (no `github_logins` entry, no write access) is replied in the session and logged `authz: refused …`. |
 | `intake` | the session's live feed (« Reading the code »…); the ticket stays in Todo, then moves to **Spec** when the spec starts | An incomplete ticket goes to `clarify`. |
 | `clarify` (if needed) | up to 3 questions in the session, one at a time | Answer in the **session**, not in a ticket comment. Unanswered after 72 h, the ticket is blocked. |
 | Spec | the spec in a comment of the ticket, « **Spec, version N** »; past 5 000 characters, in a Linear document linked to the ticket (« <ID>: spec, version N »), the comment giving its summary and the link. Then the session says « Spec published (risk: …). N acceptance criteria → tests. Version N, waiting for review. » and where to read it. The ticket shows **Spec** until the build starts, after the spec is approved (ORC-457); `statuses: { spec_draft: off }` in `factory.yml` keeps it in Todo instead, the spec and its `/approve` unchanged ([`configuration.md`](configuration.md)) | A spec that fails `spec_check` twice blocks the ticket. |

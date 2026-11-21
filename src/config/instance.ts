@@ -1,67 +1,25 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { parse, stringify } from 'yaml';
-import { z } from 'zod';
-import type { FactoryYml } from './factory-yml.js';
+import { Document, parseDocument } from 'yaml';
+import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
 import { isSealed, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 import { validatorsNeeded } from '../core/authz.js';
 
-/** The preset of the replay of closed tickets (ORC-231), named here without loading the presets: `isFantome` reads `fantome.name`. */
-const FANTOME = 'factory/fantome';
+export type { ProjectConfig } from './factory-yml.js';
 
-/**
- * The roles of a project no source gives (ORC-186), by Linear user id, until `.factory/config.yml`
- * (ORC-209): designated maintainers (`/refreeze`) and spec validators, and the GitHub login of each
- * Linear user whose rights on the repo count (Linear gives none the factory can read).
- */
-const authzSchema = z.object({
-  maintainers: z.array(z.string().min(1)).default([]),
-  validators: z.array(z.string().min(1)).default([]),
-  githubLogins: z.record(z.string().min(1), z.string().min(1)).default({}),
-});
-
-const projectSchema = z.object({
-  id: z.string().min(1),
-  repoPath: z.string().min(1),
-  linearTeamKey: z.string().min(1),
-  authz: authzSchema.optional(),
-  /** `none` (ORC-231): nothing of the project leaves the factory, its effects are kept as artifacts of its runs. */
-  effects: z.literal('none').optional(),
-  /** The preset its runs follow (ORC-231): `factory/fantome` replays closed tickets, at the Rapide level, always without effects. */
-  preset: z.literal(FANTOME).optional(),
-});
-
-const idSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);
-
-const githubSchema = z.object({
-  appId: idSchema,
-  /** PEM inline, or a path to a PEM file. Resolved by resolveGithubApp before use. */
-  privateKey: z.string().min(1),
-  installationId: idSchema.optional(),
-  webhookSecret: z.string().optional(),
-  /** The App's OAuth client, for the dashboard's GitHub sign-in (ORC-399). */
-  clientId: z.string().optional(),
-  clientSecret: z.string().optional(),
-});
-
-const instanceSchema = z.object({
-  port: z.number().int().positive().default(4100),
-  host: z.string().default('127.0.0.1'),
-  publicUrl: z.string().url().optional(),
-  relay: z.discriminatedUnion('kind', [z.object({ kind: z.literal('smee'), url: z.string().url() }), z.object({ kind: z.literal('none') })]).default({ kind: 'none' }),
-  /** The development mode (ORC-444), written by `factory init --dev` alone: the daemon starts the Smee relay only in it. */
-  dev: z.boolean().optional(),
-  projects: z.array(projectSchema).default([]),
-  // The daily budget in dollars is gone (ORC-216, ORC-194): a config.yaml that still has its key loads without it.
-  limits: z.object({}).default({}),
-  knowledge: z.object({ repoPath: z.string() }).optional(),
-  github: githubSchema.optional(),
-});
-
-export type ProjectConfig = z.infer<typeof projectSchema>;
-export type GithubConfig = z.infer<typeof githubSchema>;
-export type InstanceConfig = z.infer<typeof instanceSchema>;
+/** The instance as the daemon runs it (ORC-199): factory.yml's instance keys, each with its default, and its GitHub App. */
+export interface InstanceConfig {
+  port: number;
+  host: string;
+  publicUrl?: string;
+  relay: Relay;
+  dev?: boolean;
+  projects: ProjectConfig[];
+  knowledge?: { repoPath: string };
+  github?: FactoryYml['github'];
+}
 
 export interface LinearSecrets {
   clientId: string;
@@ -84,13 +42,12 @@ export function factoryHome(env: NodeJS.ProcessEnv = process.env): string {
 
 export function homePaths(home: string) {
   return {
-    config: join(home, 'config.yaml'),
+    factoryYml: join(home, 'factory.yml'),
     secrets: join(home, 'secrets.json'),
     /** The daemon's Unix socket for the CLI on its server (ORC-405), 0600 in a folder 0700: no GitHub sign-in through it. */
     socket: join(home, 'cli', 'factory.sock'),
     transcripts: join(home, 'transcripts'),
     workspaces: join(home, 'workspaces'),
-    logs: join(home, 'logs'),
     /** Each ticket's Claude session dir, mounted as `~/.claude` of its sandboxes (ORC-204). */
     sessions: join(home, 'sessions'),
     /** Each sandboxed run's own dir: its refusals log, its `~/.claude` out of the ticket session (ORC-217). */
@@ -110,27 +67,96 @@ export function homePaths(home: string) {
 
 function ensureTree(home: string): void {
   const p = homePaths(home);
-  for (const dir of [home, p.transcripts, p.workspaces, p.logs, p.sessions, p.runs]) mkdirSync(dir, { recursive: true });
+  for (const dir of [home, p.transcripts, p.workspaces, p.sessions, p.runs]) mkdirSync(dir, { recursive: true });
 }
 
-function validate(raw: unknown): InstanceConfig {
-  const res = instanceSchema.safeParse(raw ?? {});
-  if (!res.success) {
-    const i = res.error.issues[0]!;
-    throw new Error(`invalid config.yaml: ${i.path.join('.')}: ${i.message}`);
-  }
-  return res.data;
+/** The instance of a factory.yml (ORC-199), each key it leaves unset at its default; the defaults alone without one. */
+export function effectiveInstance(yml: FactoryYml | undefined): InstanceConfig {
+  return {
+    port: yml?.port ?? 4100,
+    host: yml?.host ?? '127.0.0.1',
+    relay: yml?.relay ?? { kind: 'none' },
+    projects: yml?.projects ?? [],
+    ...(yml?.publicUrl ? { publicUrl: yml.publicUrl } : {}),
+    ...(yml?.dev !== undefined ? { dev: yml.dev } : {}),
+    ...(yml?.knowledge ? { knowledge: yml.knowledge } : {}),
+    ...(yml?.github ? { github: yml.github } : {}),
+  };
 }
 
+/**
+ * The instance keys of `<home>/factory.yml` alone (ORC-199), without its GitHub App nor its secrets: what the CLI reads (the
+ * port it calls, the projects), in a shell without the daemon's variables. The defaults without the file: the daemon refuses to
+ * start then (`startRefusals`). `config.yaml` is never read.
+ */
 export function loadInstance(home: string): InstanceConfig {
-  const file = homePaths(home).config;
-  return validate(existsSync(file) ? parse(readFileSync(file, 'utf8')) : {});
+  const text = factoryYmlText(home);
+  return effectiveInstance(text === undefined ? undefined : parseInstanceKeys(text));
 }
 
-export function saveInstance(home: string, cfg: InstanceConfig): void {
-  const valid = validate(cfg);
+/** A project as factory.yml writes it. */
+function projectYml({ id, repoPath, linearTeamKey, authz, effects, preset }: ProjectConfig): Record<string, unknown> {
+  return {
+    id,
+    repo_path: repoPath,
+    linear_team_key: linearTeamKey,
+    ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, github_logins: authz.githubLogins } } : {}),
+    ...(effects ? { effects } : {}),
+    ...(preset ? { preset } : {}),
+  };
+}
+
+/**
+ * Writes the instance keys into `<home>/factory.yml` (ORC-199), for `factory init`: only those whose value, as the daemon reads
+ * it, changed, so the rest of the file and the comments of what did not change stay as they are; a default the file leaves out is
+ * never written. `base` is the rest of a file written where there is none. Never its GitHub App, whose key is a reference only a
+ * person writes. Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the
+ * daemon, which reads its Claude account there at each launch (`claudeAccountReader`), never reads it half-written.
+ */
+export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, base?: string): void {
+  const text = factoryYmlText(home) ?? base;
+  const doc = text === undefined ? new Document({}) : parseDocument(text);
+  if (doc.errors.length > 0) throw new FactoryYmlError([`unreadable YAML: ${doc.errors[0]!.message}`]);
+  const before = effectiveInstance(text === undefined ? undefined : parseInstanceKeys(text));
+  const keys: [keyof typeof cfg, string, unknown][] = [
+    ['port', 'port', cfg.port],
+    ['host', 'host', cfg.host],
+    ['publicUrl', 'public_url', cfg.publicUrl],
+    ['dev', 'dev', cfg.dev],
+    ['relay', 'relay', cfg.relay],
+    ['projects', 'projects', cfg.projects.map(projectYml)],
+    ['knowledge', 'knowledge', cfg.knowledge && { repo_path: cfg.knowledge.repoPath }],
+  ];
+  for (const [key, yml, value] of keys) {
+    if (isDeepStrictEqual(before[key], cfg[key])) continue;
+    if (value === undefined) doc.delete(yml);
+    else doc.set(yml, doc.createNode(value));
+  }
+  const written = doc.toString();
+  parseInstanceKeys(written);
   ensureTree(home);
-  writeFileSync(homePaths(home).config, stringify(valid));
+  const file = homePaths(home).factoryYml;
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, written);
+  renameSync(temp, file);
+}
+
+/**
+ * The files of the instance before ORC-199, in `home`: never read again, `factory.yml` holds what `config.yaml` held, and the
+ * daemon writes neither the run settings (ORC-179) nor logs there.
+ */
+const OLD_INSTANCE_FILES = ['config.yaml', 'run-settings.json', 'logs']; // transition, à retirer
+
+/**
+ * What the start and `factory doctor` say of each file of the instance before ORC-199 still in `home`: not read, its content not
+ * taken into `factory.yml`, to delete. Only its presence is looked at; `config.yaml` may hold the GitHub App's key in clear.
+ */
+export function oldInstanceFileWarnings(home: string): string[] {
+  return OLD_INSTANCE_FILES.filter((name) => existsSync(join(home, name))).map((name) =>
+    name === 'config.yaml'
+      ? "config.yaml: left from before factory.yml, not read (ORC-199): write what it declares in factory.yml (port, host, public_url, dev, relay, projects, knowledge, github), its keys in snake_case (publicUrl is public_url, repoPath repo_path…), then delete it; it may hold the GitHub App's key in clear"
+      : `${name}: left from before ORC-199, not read: delete it`,
+  );
 }
 
 /**
@@ -174,16 +200,6 @@ export function isLoopbackHost(host: string): boolean {
   return h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h);
 }
 
-/**
- * The instance as the daemon runs it: `config.yaml`, its GitHub App taken from `factory.yml` (read once, at the
- * daemon's start) when declared there (ORC-209). Never saved: `saveInstance` takes `loadInstance`, so a secret of the environment never reaches the file.
- */
-export function effectiveInstance(home: string, yml: FactoryYml | undefined): InstanceConfig {
-  const cfg = loadInstance(home);
-  // Field by field: an installation id or webhook secret left in config.yaml stays.
-  return yml?.github ? { ...cfg, github: { ...cfg.github, ...yml.github } } : cfg;
-}
-
 /** Whether two paths name one directory: a project's `repoPath` an older init wrote in another form (`C:/x`, `x/`) is the same repo. */
 export function samePath(a: string, b: string): boolean {
   const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
@@ -202,28 +218,28 @@ export function validatorWarnings(projects: readonly Pick<ProjectConfig, 'id' | 
     // By id, as the role resolver reads them: one id twice is one validator.
     const count = new Set(p.authz?.validators).size;
     if (count >= needed) return [];
-    if (count === 0) return [`Warning: ${p.id}: no spec validator (authz.validators in config.yaml): every ticket waits at the spec gate for a designated validator's \`/approve\`, and stops there. Designate validators by their Linear user ids.`];
-    return [`Warning: ${p.id}: one spec validator (authz.validators in config.yaml): a ticket they delegate themselves stops at the spec gate, as no one may approve the spec of a run they launched. Designate a second validator.`];
+    if (count === 0) return [`Warning: ${p.id}: no spec validator (authz.validators in factory.yml): every ticket waits at the spec gate for a designated validator's \`/approve\`, and stops there. Designate validators by their Linear user ids.`];
+    return [`Warning: ${p.id}: one spec validator (authz.validators in factory.yml): a ticket they delegate themselves stops at the spec gate, as no one may approve the spec of a run they launched. Designate a second validator.`];
   });
 }
 
 /**
  * The Smee relay in the development mode alone (ORC-444), the `dev: true` that `factory init --dev` writes, for `factory doctor` and
  * the daemon's start (ORC-446): a public channel, for a workstation, never a server. `dev: false` is refused, as is `dev: true` beside a
- * `publicUrl`, a server's or a tunnel's, which brings Linear's webhooks already; a config.yaml written before the marker, with none, is
+ * `publicUrl`, a server's or a tunnel's, which brings Linear's webhooks already; a factory.yml without the marker is
  * a warning.
  */
 export function relayWarnings(instance: Pick<InstanceConfig, 'relay' | 'dev' | 'publicUrl'>): string[] {
   if (instance.relay.kind !== 'smee') return [];
   const fix = instance.publicUrl
-    ? `publicUrl: ${instance.publicUrl} brings Linear's webhooks already, set relay: { kind: none }`
-    : 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev (it writes dev: true)';
+    ? `public_url: ${instance.publicUrl} brings Linear's webhooks already, set relay: { kind: none }`
+    : 'on a server, set public_url to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev (it writes dev: true)';
   if (instance.dev) {
-    if (instance.publicUrl) throw new Error(`relay: { kind: smee } in config.yaml beside ${fix}, or remove publicUrl on a workstation.`);
+    if (instance.publicUrl) throw new Error(`relay: { kind: smee } in factory.yml beside ${fix}, or remove public_url on a workstation.`);
     return [];
   }
-  if (instance.dev === false) throw new Error(`relay: { kind: smee } in config.yaml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
-  return [`Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: the daemon starts it as before that marker; ${fix}.`];
+  if (instance.dev === false) throw new Error(`relay: { kind: smee } in factory.yml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
+  return [`Warning: relay: { kind: smee } in factory.yml without dev: true, the development mode factory init --dev writes: the daemon starts it as before that marker; ${fix}.`];
 }
 
 /**

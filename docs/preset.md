@@ -205,7 +205,7 @@ A timer only acts on the round that armed it (`at`): a round answered, asked aga
 
 ## `spec_draft`, `spec_check` and the `spec_review` gate (ORC-212)
 
-The `spec` job (agent, skill `factory:spec_draft`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
+The `spec` job (agent, skill `factory:spec-draft`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
 
 | Section | What it holds |
 | -- | -- |
@@ -239,7 +239,7 @@ A command with no spec waiting (none yet, a ticket blocked or undelegated), on a
 
 **After approval.** Every later step of the ticket's dev queue reads the approved spec in its prompt (« Approved spec »): `tests` writes its criteria as the acceptance tests, the build works within it. The freeze after `red` (ORC-131) keeps the approved criteria with the frozen tests (`frozenTests.criteria`); like its files, a later freeze adds the criteria of a version approved since to those already frozen, and the tests of a changed criterion stay frozen until `/refreeze`, which keeps the criteria approved then. A new delegation clears the ticket's spec: the work starts afresh. A redraft reads its last version (« Spec under review »).
 
-`spec` runs after `intake` and `clarify` (ORC-395): every ticket waits for a designated validator's `/approve` before its tests and its code. A project whose `config.yaml` designates no validator (`authz.validators`, empty by default) approves no spec: its tickets stop at the gate; with a lone validator, the tickets they delegate. `factory doctor` and the daemon's start warn of it (ORC-421).
+`spec` runs after `intake` and `clarify` (ORC-395): every ticket waits for a designated validator's `/approve` before its tests and its code. A project whose entry in `factory.yml` designates no validator (`authz.validators`, empty by default) approves no spec: its tickets stop at the gate; with a lone validator, the tickets they delegate. `factory doctor` and the daemon's start warn of it (ORC-421).
 
 **Not yet**: the spec as an editable comment (ORC-139), and with it a spec edited by hand; a `knowledge.candidate` event for each `/changes` and `/reject` (ORC-258); the decisions of the scope given to `spec_draft` (ORC-254); the properties frozen as tests (ORC-261); « assumed without verification » in the PR description (ORC-195); the spec's critique (out of scope).
 

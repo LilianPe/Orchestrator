@@ -63,7 +63,7 @@ Anyone who can write in Linear or on the PR can write text the agent will read.
 | A review or a diff comment on the PR that steers the agent | Mapped as untrusted; a review counts only from someone with write access (ORC-190) | `src/adapters/forge/github-webhook.test.ts` « maps a human review and a diff comment as untrusted pr.reviewed »; `src/core/authz.test.ts` « refuses a team member without write access, and anyone else » |
 | A CI log that steers the fix of a red CI (a test's output, a dependency's message) | Read by the factory, not by the run (no token): fenced as data, said so, control characters and secrets masked, bounded; the run that reads it is marked untrusted, so the base's `sensitive_paths` are refused (ORC-459) | `src/core/ci-failures.test.ts`; `test/scenarios/workflow.test.ts` « the fix of a red CI reads, from the forge, the failed checks, the end of their logs and the base branch CI, as untrusted data (ORC-459) » |
 | An injection that makes the agent publish something in Linear or on GitHub | The factory composes what it publishes from the agent's capped result, through its `OutputPolicy` (ORC-214, ORC-288) | `src/publish/output-policy.test.ts` |
-| Read the tickets in transit | **Open** with the smee relay: the channel is public, anyone with its URL reads it. Use `publicUrl` ([`linear.md`](linear.md#3-webhooks-production-and-development)) | none |
+| Read the tickets in transit | **Open** with the smee relay: the channel is public, anyone with its URL reads it. Use `public_url` ([`linear.md`](linear.md#3-webhooks-production-and-development)) | none |
 
 ## 4. Compromised member account
 

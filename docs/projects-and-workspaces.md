@@ -2,20 +2,20 @@
 
 ## Projects
 
-A **project** associates a local git repository with a Linear team. They are listed in `projects` in `<FACTORY_HOME>/config.yaml`:
+A **project** associates a local git repository with a Linear team. They are listed in `projects` in `<FACTORY_HOME>/factory.yml`:
 
 ```yaml
 projects:
   - id: mon-app                       # internal identifier (directories, API)
-    repoPath: /home/moi/code/mon-app  # local clone, with an origin remote
-    linearTeamKey: APP                # key of the tracked Linear team
+    repo_path: /home/moi/code/mon-app # local clone, with an origin remote
+    linear_team_key: APP              # key of the tracked Linear team
 ```
 
 Rules:
 
 - tickets are routed by team key; a delegation on a team without a project is blocked, the rest ignored ([`linear.md`](linear.md#4-using-the-agent-day-to-day)). A team can have several projects: see [One team, several repositories](#one-team-several-repositories);
 - every project runs the `factory/default` workflow ([`preset.md`](preset.md)); its own part is its `.factory/config.yml`, read on its default branch ([`repository-configuration.md`](repository-configuration.md)). A `.factory/workflow.yml` is ignored since ORC-388;
-- `repoPath` must be a clone with `origin`: the factory runs `git fetch origin` there and copies its objects for each workspace. You can keep working in it. The agents' commits only reach it through the forge.
+- `repo_path` must be a clone with `origin`: the factory runs `git fetch origin` there and copies its objects for each workspace. You can keep working in it. The agents' commits only reach it through the forge.
 
 ### Adding a project
 
@@ -24,17 +24,17 @@ cd <other repository>
 factory init       # same Linear application key: answer with the same credentials
 ```
 
-`init` adds the project (or replaces the one with the same `repoPath`) and proposes its `.factory/config.yml`, which it does not write. Then restart `factory up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
+`init` adds the project (or replaces the one with the same `repo_path`) and proposes its `.factory/config.yml`, which it does not write. Then restart `factory up`: the statuses and labels are created in the new team on the next Linear connection (« Connect Linear » button or `/oauth/start`).
 
 > The queue capacities are global to the instance: `concurrency` of `factory.yml` for the `dev` queue, a fixed 2 for the `questions` queue (ORC-390). The other settings are specific to each project.
 
 ### One team, several repositories
 
-Several projects can declare the same `linearTeamKey`. The ticket then designates its repository with a **`repo:<id>`** label, where `<id>` is the project's `id` in `config.yaml` (case-insensitive): `repo:api` sends the ticket to the `api` project. Create these labels in the Linear team.
+Several projects can declare the same `linear_team_key`. The ticket then designates its repository with a **`repo:<id>`** label, where `<id>` is the project's `id` in `factory.yml` (case-insensitive): `repo:api` sends the ticket to the `api` project. Create these labels in the Linear team.
 
 - Team with a single project: nothing changes, the label is useless and ignored.
 - The label is only read for a ticket no project holds yet, at its delegation (or at a mention, a command). **Routing is sticky**: a delegated ticket, or one that already has a branch or a PR, stays under its project, whatever its labels say afterwards, and a project added to the team takes no existing ticket. Adding the label of another repository of the team to a ticket in progress changes nothing: the factory replies in a comment that the repository does not change midway. Without a branch or PR, you change it by stopping the work and removing the delegation, then, once the removal is seen by reconciliation (up to 5 minutes: no webhook reports it), delegating again; otherwise, a new ticket is needed. A `repo:` label that names no repository of the team is ignored. A reply or a stop on a ticket no project holds also follows its label, including when its delegation has not been processed yet: without a label, it receives the question; with a label, a reply goes to the copy of the ticket that opened its session.
-- Ticket without a `repo:` label naming one of the projects: the delegation is blocked (label « Bloqué ») and the Linear session asks for the label, with the list of choices. The ticket waits under the team's **first** project (order of `config.yaml`), even if it was blocked for another reason, which it replaces. A cancellation or a move to done ends the wait. While it waits, a reply, a mention, a command or a stop receives the same question, and nothing else (status, label) starts work: no work starts in a repository chosen by default.
+- Ticket without a `repo:` label naming one of the projects: the delegation is blocked (label « Bloqué ») and the Linear session asks for the label, with the list of choices. The ticket waits under the team's **first** project (order of `projects` in `factory.yml`), even if it was blocked for another reason, which it replaces. A cancellation or a move to done ends the wait. While it waits, a reply, a mention, a command or a stop receives the same question, and nothing else (status, label) starts work: no work starts in a repository chosen by default.
 - To unblock: add the `repo:<id>` label, then delegate the ticket again (remove the agent then put it back): the work starts in that repository, including if it is the one where the ticket was waiting, and the « Bloqué » label is removed. Both stores keep a copy of the ticket per project: the one that was waiting stays under the first project until reconciliation ends it. The new delegation is necessary: reconciliation does file the ticket under its repository and removes the waiting ticket from the first project (its block lifted), but a delegation it finds has no signed author, and permissions (ORC-186) start nothing without an author.
 - Several valid `repo:` labels: the first project in the list among them wins. A ticket that touches several repositories is split into one sub-ticket per repository.
 
@@ -42,7 +42,7 @@ Only one project holds a ticket, across both stores (key `(project, ticket)`, OR
 
 ### Removing a project
 
-Delete its entry from `config.yaml` and restart. The remaining directories under `workspaces/<id>/` are deleted like any directory.
+Delete its entry from `projects` in `factory.yml` and restart. The remaining directories under `workspaces/<id>/` are deleted like any directory.
 
 ## Per-ticket worktrees
 
@@ -97,7 +97,7 @@ How it is used:
 
 ### Setup
 
-`factory init` does not create the repository (ORC-193). For an existing repository, record its clone in `config.yaml`; to create one, make an empty private repository on the forge, then:
+`factory init` does not create the repository (ORC-193). For an existing repository, record its clone in `factory.yml`; to create one, make an empty private repository on the forge, then:
 
 ```bash
 git clone <URL of the repository> factory-knowledge
@@ -106,11 +106,11 @@ mkdir -p notes && touch notes/.gitkeep && printf '# Knowledge base\n\n' > INDEX.
 git add . && git commit -m "init knowledge base" && git push
 ```
 
-then in `config.yaml`:
+then in `factory.yml`:
 
 ```yaml
 knowledge:
-  repoPath: /chemin/absolu/vers/factory-knowledge
+  repo_path: /chemin/absolu/vers/factory-knowledge
 ```
 
 Without `knowledge`, everything works: no index in the system prompt, and `kb_search` answers that the factory has no knowledge base.

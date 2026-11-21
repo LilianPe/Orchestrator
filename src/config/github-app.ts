@@ -21,8 +21,8 @@ function expandPem(value: string): string {
 }
 
 /**
- * Accepts either a PEM inline or a path to a PEM file (github.privateKey or GH_APP_KEY).
- * Reads the file only when needed so config.yaml may keep a path instead of a secret.
+ * Accepts either a PEM inline or a path to a PEM file (github.private_key or GH_APP_KEY).
+ * Reads the file only when needed so the reference may hold a path instead of a secret.
  */
 export function readPrivateKey(
   value: string,
@@ -43,7 +43,7 @@ function expandHome(path: string): string {
 }
 
 /**
- * Builds the GitHub App settings from config.yaml, with GH_APP_* env vars as fallback.
+ * Builds the GitHub App settings from factory.yml, with GH_APP_* env vars as fallback.
  * Returns undefined when no GitHub App is configured: the daemon then reads and publishes nothing on GitHub (ORC-181).
  * A partial configuration is an error rather than a silent start without the App.
  */
@@ -54,7 +54,7 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
   if (!appId && !key) return undefined;
   if (!appId || !key) {
     throw new Error(
-      'Incomplete GitHub App configuration: set github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY), ' +
+      'Incomplete GitHub App configuration: set github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY), ' +
         'or remove the github section to start without the App (nothing is then read or published on GitHub).',
     );
   }
@@ -68,7 +68,7 @@ export function resolveGithubApp(config: InstanceConfig, env: NodeJS.ProcessEnv 
 
 /**
  * The App's OAuth client (ORC-399), for the dashboard's GitHub sign-in: `github.clientId` and `github.clientSecret` of
- * config.yaml or factory.yml, else `GH_APP_CLIENT_ID` and `GH_APP_CLIENT_SECRET`. Undefined when neither is set; one
+ * factory.yml, else `GH_APP_CLIENT_ID` and `GH_APP_CLIENT_SECRET`. Undefined when neither is set; one
  * without the other is an error.
  */
 export function githubOAuthClient(config: InstanceConfig, env: NodeJS.ProcessEnv = process.env): { clientId: string; clientSecret: string } | undefined {
@@ -82,7 +82,7 @@ export function githubOAuthClient(config: InstanceConfig, env: NodeJS.ProcessEnv
 }
 
 /**
- * Secret of the GitHub webhooks (ORC-134): `github.webhookSecret` of config.yaml, else the
+ * Secret of the GitHub webhooks (ORC-134): `github.webhook_secret` of factory.yml, else the
  * `GH_WEBHOOK_SECRET` env var. Empty when neither is set: every GitHub webhook is then refused.
  */
 export function githubWebhookSecret(config: InstanceConfig, env: NodeJS.ProcessEnv = process.env): string {
