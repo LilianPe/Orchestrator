@@ -5,6 +5,7 @@ import type { Exec } from '../adapters/exec.js';
 import { DEFAULT_REQUIREMENTS, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
+import { isLockfile } from '../checks/diff-size.js';
 import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
@@ -27,14 +28,23 @@ export interface DryRunBreak {
 }
 
 /**
- * What the dry run ran with: part 3 (ORC-409) runs it again when this changes. `setup`, a hash of its commands; `image`, the
- * runner image as configured; `lockfiles`, the blob of each lockfile at the commit's root; `hash`, of the three.
+ * What the dry run ran with: a delegated ticket runs it again when this changes (ORC-409). `setup`, a hash of its commands;
+ * `image`, the runner image as configured; `lockfiles`, the blob of each lockfile at the commit's root; `config`, the blob of
+ * `.factory/config.yml` (its `env`, `services` and `commands`), null without one, absent from a dry run recorded before ORC-409;
+ * `hash`, of them all.
  */
 export interface DryRunFingerprint {
   setup: string;
   image: string;
   lockfiles: Record<string, string>;
+  config?: string | null;
   hash: string;
+}
+
+/** The files of the fingerprint on a commit (ORC-409): each lockfile at its root and `.factory/config.yml`, by their blobs. */
+export interface FingerprintFiles {
+  lockfiles: Record<string, string>;
+  config: string | null;
 }
 
 /** A dry run of a repository (ORC-408): `setup`, then its commands, on a commit of its default branch, in the sandbox. */
@@ -79,25 +89,27 @@ export interface DryRunRequest {
   exec?: Exec;
 }
 
-/** The lockfiles the fingerprint reads, at the commit's root. */
-export const LOCKFILES = [
-  'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb',
-  'uv.lock', 'poetry.lock', 'Pipfile.lock', 'pdm.lock', 'Cargo.lock', 'go.sum', 'Gemfile.lock', 'composer.lock',
-] as const;
-
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
-export function dryRunFingerprint(i: { setup: readonly string[]; image: string; lockfiles: Record<string, string> }): DryRunFingerprint {
+export function dryRunFingerprint(i: { setup: readonly string[]; image: string } & FingerprintFiles): DryRunFingerprint {
   const lockfiles = Object.fromEntries(Object.entries(i.lockfiles).sort(([a], [b]) => a.localeCompare(b)));
   const setup = sha256(JSON.stringify(i.setup));
-  return { setup, image: i.image, lockfiles, hash: sha256(JSON.stringify({ setup, image: i.image, lockfiles })) };
+  const inputs = { setup, image: i.image, lockfiles, config: i.config };
+  return { ...inputs, hash: sha256(JSON.stringify(inputs)) };
 }
 
-/** Each lockfile of `LOCKFILES` at the root of `sha`, by its blob: git's own hash of its content. */
-async function lockfilesAt(git: CloneGit, sha: string): Promise<Record<string, string>> {
-  const out = await git.raw('ls-tree', '-z', sha, '--', ...LOCKFILES);
-  const entries = zFields(out).map((e) => /^\d+ blob (\w+)\t(.+)$/.exec(e)).filter((m) => m !== null);
-  return Object.fromEntries(entries.map((m) => [m[2]!, m[1]!]));
+/**
+ * The files of the fingerprint on `ref`, by their blobs: git's own hash of their content. Each lockfile at the root (the shared
+ * rule of `isLockfile`, as `max_diff` knows them), `.factory/config.yml` by its path: `ls-tree` does not go through a `.factory`
+ * that is a link, which the config then is not. `lsTree`: `git ls-tree` with these arguments, its output.
+ */
+export async function fingerprintFiles(lsTree: (...args: string[]) => Promise<string>, ref: string): Promise<FingerprintFiles> {
+  const [root, config] = await Promise.all([lsTree('-z', ref), lsTree('-z', ref, '--', REPO_CONFIG_PATH)]);
+  const blobs = (out: string) => zFields(out).flatMap((e) => {
+    const m = /^\d+ blob (\w+)\t(.+)$/.exec(e);
+    return m ? [[m[2]!, m[1]!] as const] : [];
+  });
+  return { lockfiles: Object.fromEntries(blobs(root).filter(([name]) => isLockfile(name))), config: blobs(config)[0]?.[1] ?? null };
 }
 
 /** As a ticket's `verify`, unless the request says otherwise: each sandbox, and each fetch from the forge. */
@@ -250,10 +262,10 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   const git = cloneGit(req, cloneDir);
   await initHardenedClone(git);
   const sha = await fetchCommit(req, git, cloneDir);
-  const lockfiles = await lockfilesAt(git, sha);
+  const files = await fingerprintFiles((...args) => git.raw('ls-tree', ...args), sha);
   const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
     id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length,
-    fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, lockfiles }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
+    fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, ...files }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
   });
   let config: RepoConfig;
   try {
@@ -304,4 +316,25 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
     }
   }, { ...DEFAULT_REQUIREMENTS, services: config.services });
   return dryRun(breaksOfRuns(failed, standing, config), setup, commands);
+}
+
+/**
+ * Whether a project's last dry run still tells the state of its default branch (ORC-409): it ran with what a dry run would run
+ * with now (`fingerprint`), and, red, on the commit `sha` itself, so that a fix of the code lifts it once the branch moved. A
+ * green one holds over a branch that moved with the same inputs.
+ */
+export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRunFingerprint }): boolean =>
+  last.fingerprint.hash === now.fingerprint.hash && (last.ok || last.sha === now.sha);
+
+/**
+ * What the block of a ticket a red dry run refuses says (ORC-409): what breaks, each break in its step, its command and the
+ * line that names its cause; and how it runs again.
+ */
+export function dryRunRefusal(run: DryRun): { reason: string; tried: string[]; question: string } {
+  const broke = [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
+  return {
+    reason: `The dry run of the repository is red on its default branch (${run.sha.slice(0, 12)}): ${broke}. No ticket of the repository starts until it is green.`,
+    tried: run.breaks.map((b) => `The dry run's ${b.step}, \`${b.command}\`: ${b.kind}, ${b.detail}`),
+    question: `Can you fix it on the default branch, then reply here? The dry run runs again once the branch has moved, or when its setup, a lockfile, .factory/config.yml or the runner image change. A cause outside the repository (a variable of factory.yml, a registry, a flaky test now on the known list): run \`factory dry-run ${run.projectId}\` once it is fixed, then reply.`,
+  };
 }

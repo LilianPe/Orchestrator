@@ -13,7 +13,7 @@ import { goesThroughFreeze } from '../core/engine.js';
 import { isNote, noSearchReason, repoNameOf, searchAsked, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { type QueueName, type FactoryEvent, type TicketState, type VerifyFailure, TRUSTED } from '../core/types.js';
 import { checkBranchPaths, classOfBranch, runCleanVerify, untrustedCheck, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from '../core/clean-verify.js';
-import { runDryRun, type DryRun } from '../core/dry-run.js';
+import { dryRunFingerprint, dryRunHolds, runDryRun, type DryRun } from '../core/dry-run.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, cappedExit, type VerifyResult } from '../core/verify.js';
 import { needsRefreeze, type ClassifiedDiff } from '../core/diff-class.js';
@@ -180,12 +180,44 @@ export abstract class DaemonChecks extends DaemonBase {
     };
   }
 
+  /** The dry run of each project's default branch under way (ORC-409): the launches and `factory dry-run` that ask meanwhile wait for it. */
+  private readonly dryRunsUnderWay = new Map<string, Promise<DryRun>>();
+
   /**
    * The dry run of a project (ORC-408), on the forge's default branch or on the commit `sha`: its `setup` and commands in the
    * sandboxes (`runDryRun`), in a place of its own under `runsDir/<id>`, then recorded, red or green. It rejects when it cannot run
-   * (no sandboxes, an engine or a forge down): nothing is recorded then.
+   * (no sandboxes, an engine or a forge down): nothing is recorded then. On the default branch, one at a time by project: who asks
+   * while one is under way gets its result (ORC-409).
    */
   async dryRun(projectId: string, o: { sha?: string } = {}): Promise<DryRun> {
+    if (o.sha) return this.runDry(projectId, o.sha);
+    const under = this.dryRunsUnderWay.get(projectId);
+    if (under) return under;
+    const run = this.runDry(projectId).finally(() => this.dryRunsUnderWay.delete(projectId));
+    this.dryRunsUnderWay.set(projectId, run);
+    return run;
+  }
+
+  /** Whether a delegated ticket of `project` waits for its dry run (ORC-409): with sandboxes, which run it; never a replayed ticket's. */
+  protected dryRunGates(project: ProjectRuntime): boolean {
+    return !!(this.d.sandboxes && this.d.runnerImage && this.d.dryRunFiles) && !project.replayed;
+  }
+
+  /**
+   * The red dry run that refuses a delegated ticket of `project` (ORC-409), or undefined: the last one on the default branch while
+   * it holds (`dryRunHolds`), else one run now, which the launch waits for. A project's first delegation runs its first dry run.
+   * `config`: `.factory/config.yml` as the launch read it, whose `setup` the dry run would run.
+   */
+  protected async refusingDryRun(project: ProjectRuntime, config: RepoConfig): Promise<DryRun | undefined> {
+    if (!this.dryRunGates(project)) return undefined;
+    const { sha, ...files } = await this.d.dryRunFiles!(project);
+    const fingerprint = dryRunFingerprint({ setup: config.setup ? [config.setup] : project.workflow.workspace.setup, image: this.d.runnerImage!, ...files });
+    const last = await this.d.store.lastDryRun(project.id);
+    const run = last && dryRunHolds(last, { sha, fingerprint }) ? last : await this.dryRun(project.id);
+    return run.ok ? undefined : run;
+  }
+
+  private async runDry(projectId: string, sha?: string): Promise<DryRun> {
     const project = this.d.projects.find((p) => p.id === projectId);
     if (!project) throw new Error(`no project ${projectId}`);
     const { sandboxes, runsDir, originUrl, runnerImage } = this.d;
@@ -200,7 +232,7 @@ export abstract class DaemonChecks extends DaemonBase {
         runId: id,
         projectId,
         originUrl: await originUrl(project),
-        ...(o.sha ? { sha: o.sha } : {}),
+        ...(sha ? { sha } : {}),
         workDir,
         setup: project.workflow.workspace.setup,
         // The commands `verify` runs on a ticket's code when `.factory/config.yml` declares none: the `dev` job's.

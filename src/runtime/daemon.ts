@@ -31,7 +31,7 @@ import type { Scheduler } from './capacity.js';
 import { CREATES_TICKET, type EventPayloads, type IssueSnapshot, type LogicalState, type FactoryEvent, type RunOutcome, type TicketState, TRUSTED } from '../core/types.js';
 import type { RegistryOpener } from '../checks/registry.js';
 import type { CleanVerifier } from '../core/clean-verify.js';
-import type { DryRun, DryRunRequest } from '../core/dry-run.js';
+import type { DryRun, DryRunRequest, FingerprintFiles } from '../core/dry-run.js';
 import type { Verifier } from '../core/verify.js';
 import type { VisualShooter } from '../adapters/browser/types.js';
 import { isTakenOver } from '../core/block-cause.js';
@@ -95,6 +95,11 @@ export interface DaemonDeps {
   dryRunner?: (req: DryRunRequest) => Promise<DryRun>;
   /** The image the sandboxes run (`FACTORY_RUNNER_IMAGE`), in the dry run's fingerprint (ORC-408); required for a dry run. */
   runnerImage?: string;
+  /**
+   * The default branch's head and the files of the dry run's fingerprint there, as the factory's repository has it, without a fetch
+   * (ORC-409). Absent, or without sandboxes: no dry run gates a delegated ticket.
+   */
+  dryRunFiles?: (project: ProjectRuntime) => Promise<FingerprintFiles & { sha: string }>;
   /** The package registries `verify` asks (`factory/dependances`, ORC-371), through the egress proxy. */
   registries?: RegistryOpener;
   projects: ProjectRuntime[];

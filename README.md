@@ -58,7 +58,7 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 
 ### Operate
 - [Operations](docs/operations.md): limits reached, blocked tickets, pause, logs and transcripts, restarts, troubleshooting.
-- [Dry run of a repository](docs/dry-run.md): `setup`, build and tests of the default branch (or of a commit) in the sandbox, what breaks classified, the fingerprint of its inputs.
+- [Dry run of a repository](docs/dry-run.md): `setup`, build and tests of the default branch (or of a commit) in the sandbox, what breaks classified, the fingerprint of its inputs; a delegated ticket refused while it is red, `factory dry-run <project>`.
 - [Acceptance testing](docs/acceptance.md): end-to-end verification on a test Linear.
 
 ### Transition to the factory

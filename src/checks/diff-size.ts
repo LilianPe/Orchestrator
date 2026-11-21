@@ -67,6 +67,7 @@ export function resolveMaxDiff(config?: Partial<MaxDiff> | null, off = false): M
   return { ...(off ? { files: Infinity, lines: Infinity } : MAX_DIFF), ...repoMaxDiff(config) };
 }
 
+/** The lockfiles by name, wherever they are: what a tool writes whole. The dry run's fingerprint reads them too, at the root (ORC-409). */
 const LOCKFILES = new Set([
   'package-lock.json',
   'npm-shrinkwrap.json',
@@ -74,19 +75,26 @@ const LOCKFILES = new Set([
   'pnpm-lock.yaml',
   'bun.lock',
   'bun.lockb',
+  'deno.lock',
   'poetry.lock',
   'uv.lock',
   'Pipfile.lock',
   'pdm.lock',
   'pylock.toml',
-  'deno.lock',
+  'Cargo.lock',
+  'go.sum',
+  'Gemfile.lock',
+  'composer.lock',
 ]);
+
+/** A file's name that is a lockfile's: `LOCKFILES`, or `pylock.<name>.toml` (PEP 751). */
+export const isLockfile = (name: string): boolean => LOCKFILES.has(name) || /^pylock\.[^/]+\.toml$/.test(name);
 
 /** A lockfile (`package-lock.json`, `uv.lock`, `pylock.toml`, `pylock.<name>.toml`…), or drizzle-kit's `meta/NNNN_snapshot.json` and `meta/_journal.json`. */
 export function isGeneratedFile(path: string): boolean {
   const segments = normalizePath(path).split('/');
   const name = segments.at(-1) ?? '';
-  if (LOCKFILES.has(name) || /^pylock\.[^/]+\.toml$/.test(name)) return true;
+  if (isLockfile(name)) return true;
   return segments.at(-2) === 'meta' && (/^\d+_snapshot\.json$/.test(name) || name === '_journal.json');
 }
 

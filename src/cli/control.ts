@@ -1,5 +1,6 @@
 import { request } from 'node:http';
 import { PRODUCT_NAME } from '../product.js';
+import type { DryRun } from '../core/dry-run.js';
 import type { RunRecord } from '../store/types.js';
 import { holds } from '../core/routing.js';
 import type { TicketState } from '../core/types.js';
@@ -140,4 +141,28 @@ export async function runStopCommand(d: ControlDeps, ticketId: string): Promise<
   }
   d.out(`Stop requested for ${ticketId}.`);
   return 0;
+}
+
+/**
+ * `factory dry-run <project>` (ORC-409): the daemon runs the dry run of the project's default branch and records it, as a delegated
+ * ticket's launch does, and the CLI prints it once recorded: green, or red with each break, its step, command, cause and an excerpt
+ * of what the command printed. 0 when green.
+ */
+export async function runDryRunCommand(d: ControlDeps, projectId: string): Promise<number> {
+  d.out(`Dry run of ${projectId} under way: its setup and commands in the sandbox, as verify runs them (minutes)…`);
+  const res = await ask(d, `/api/projects/${encodeURIComponent(projectId)}/dry-run`, { method: 'POST' });
+  if (!res) return 1;
+  if (!res.ok) {
+    const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+    d.out(`No dry run recorded (${res.status}): ${error ?? 'the daemon refuses it'}.`);
+    return 1;
+  }
+  const run = (await res.json()) as DryRun;
+  d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : 'red'}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
+  for (const b of run.breaks) {
+    d.out(`  ${b.kind}, ${b.step} \`${b.command}\`: ${b.detail}`);
+    for (const line of b.output.split('\n').filter((l) => l.trim())) d.out(`    | ${line}`);
+  }
+  if (!run.ok) d.out(`The tickets of ${projectId} are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.`);
+  return run.ok ? 0 : 1;
 }

@@ -4,7 +4,8 @@ import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
+import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand, type ControlDeps } from '../../src/cli/control.js';
+import type { DryRun } from '../../src/core/dry-run.js';
 import { EventBus } from '../../src/server/live-feed.js';
 import { newTicketState, type FactoryEvent } from '../../src/core/types.js';
 import { createApp, type ServerDeps } from '../../src/server/app.js';
@@ -122,6 +123,57 @@ describe('factory status and factory stop (ORC-220)', () => {
     expect(await runQueueCommand({ ...deps, fetch: down }, 'resume')).toBe(1);
     expect(lines.at(-1)).toContain('factory up');
     expect(lines.join('\n')).not.toMatch(/Queue (paused|resumed)\./);
+  });
+});
+
+/** ORC-409: `factory dry-run <project>` asks the daemon to run the dry run, and prints it once recorded. */
+describe('factory dry-run', () => {
+  const FINGERPRINT = { setup: 'a'.repeat(64), image: 'factory/runner:test', lockfiles: {}, config: null, hash: 'b'.repeat(64) };
+  const dryRun = (ok: boolean): DryRun => ({
+    id: 'dry-1', projectId: 'p', sha: 'c'.repeat(40), target: 'main', ok, fingerprint: FINGERPRINT, commands: ['npm test'], startedAt: 0, endedAt: 1,
+    breaks: ok ? [] : [{ kind: 'dependency', step: 'setup', command: 'npm ci', detail: 'a dependency is missing: No matching version found for left-pad@9.9.9', output: 'npm error code ETARGET\nnpm error notarget' }],
+  });
+
+  it('runs it through the daemon, which records it, and prints it green', async () => {
+    const h = createHarness({ sandboxed: true, dryRunner: async (req) => ({ ...dryRun(true), id: req.runId }) });
+    const c = control(h, { dryRun: (id) => h.orch.dryRun(id) });
+    expect(await runDryRunCommand(c, 'p')).toBe(0);
+    expect(c.lines.at(-1)).toBe(`Dry run of p on ${'c'.repeat(12)}: green (npm test).`);
+    expect(await h.store.lastDryRun('p')).toMatchObject({ ok: true });
+  });
+
+  it('red, it prints each break with its cause and what the command printed, and fails', async () => {
+    const h = createHarness();
+    const c = control(h, { dryRun: async () => dryRun(false) });
+    expect(await runDryRunCommand(c, 'p')).toBe(1);
+    expect(c.lines.slice(1)).toEqual([
+      `Dry run of p on ${'c'.repeat(12)}: red (npm test).`,
+      '  dependency, setup `npm ci`: a dependency is missing: No matching version found for left-pad@9.9.9',
+      '    | npm error code ETARGET',
+      '    | npm error notarget',
+      expect.stringContaining('The tickets of p are refused while its dry run is red'),
+    ]);
+  });
+
+  it('one that cannot run records nothing, and says why', async () => {
+    const h = createHarness();
+    const c = control(h, { dryRun: (id) => h.orch.dryRun(id) });
+    expect(await runDryRunCommand(c, 'p')).toBe(1);
+    expect(c.lines.at(-1)).toMatch(/^No dry run recorded \(409\): a dry run runs in the sandboxes: FACTORY_CONTAINER_CLI/);
+    expect(await h.store.lastDryRun('p')).toBeUndefined();
+  });
+
+  it.skipIf(process.platform === 'win32')("goes through the daemon's Unix socket too", async () => {
+    const h = createHarness();
+    const { app, lines, ...http } = control(h, { dryRun: async () => dryRun(true) });
+    const socket = join(mkdtempSync(join(tmpdir(), 'factory-home-')), 'cli', 'factory.sock');
+    const server = (await listenCliSocket(app, socket, { host: 'srv-1', log: () => {} }))!;
+    try {
+      expect(await runDryRunCommand({ ...http, fetch: () => expect.unreachable(), socket }, 'p')).toBe(0);
+      expect(lines.at(-1)).toContain('green');
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
   });
 });
 

@@ -15,6 +15,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory status` | State of the running instance: tickets, blocks, runs. | yes |
 | `relais pause` / `relais resume` | Suspend / resume the queue. | yes |
 | `factory stop <ID>` | Stop a ticket's run. | yes |
+| `factory dry-run <project>` | Run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks. | yes (with sandboxes) |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 | `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
@@ -109,6 +110,29 @@ For each ticket: its state, a check in progress, the reason for a block, and its
 ### `factory stop <ID>`
 
 Stops the run of ticket `<ID>` (e.g. `REL-12`): SIGINT to the Claude Code process, then SIGKILL after 10 s, and the container is destroyed; a run the daemon reattached to after a restart stops the same way. The ticket is blocked until a reply in the Linear ticket (comment or session). Equivalent to the UI's « Stop » button, to the Linear session's "stop" and to the `agent:stop` label. Without options: an unknown ticket is refused, exit code 1.
+
+### `factory dry-run <project>` (ORC-409)
+
+Asks the daemon to run the [dry run](dry-run.md) of project `<project>` (its `id` in `config.yaml`) on the forge's default branch:
+its `setup`, then its build and test commands, in the sandbox, as `verify` runs them for a ticket. The daemon records it, then the
+command prints it, which takes as long as the setup and the tests:
+
+```
+Dry run of app on 3f2a9c1b7d4e: red (npm run build · npm test).
+  dependency, setup `npm ci`: a dependency is missing, or younger than the 7 days the setup allows: No matching version found for left-pad@9.9.9
+    | npm error code ETARGET
+    | npm error notarget No matching version found for left-pad@9.9.9.
+The tickets of app are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.
+```
+
+Exit code 0 when green, 1 when red or when no dry run could run: no sandboxes (`FACTORY_CONTAINER_CLI` and
+`FACTORY_RUNNER_IMAGE`), the container engine, the forge or a registry not answering (`No dry run recorded (409): …`). A dry run of
+the project already under way, started by a delegated ticket, is not run twice: the command prints its result.
+
+Run it before a project's first ticket, to see it green; and after fixing a cause outside the repository that the fingerprint does
+not see (a variable's value in `factory.yml`, a registry, a test put on the known flaky list): the delegated tickets then read the
+new result. Over HTTP (no socket, Windows), `fetch` gives up after 5 minutes without an answer: the dry run goes on in the daemon
+and is recorded all the same.
 
 ### `factory replay <journal.json | directory>...` (ORC-174)
 

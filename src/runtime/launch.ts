@@ -20,6 +20,7 @@ import { attemptLabels, packFingerprints } from '../core/attempt-labels.js';
 import { formatReuse, ownWork, ticketBranches } from '../core/intake-checks.js';
 import { branchName, namesTicket } from '../core/naming.js';
 import { openBlockers, pickupFailures, searchDuplicates } from '../core/pickup.js';
+import { dryRunRefusal } from '../core/dry-run.js';
 import { buildPrompt, formatFeedback, formatVerifyFailures, readConventions, withHumanInbox, type PromptInput } from '../core/prompt.js';
 import { knowledgePrompt, type KbIndex } from '../knowledge/kb.js';
 import { searchAsked, searchCounted } from '../knowledge/preview-recipe.js';
@@ -774,7 +775,8 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // ticket's own branches on the forge. A worktree's launch reads it here once, fetching the forge for the launch,
       // which its `prepare` then does not do again; another launch reads the config again once its workspace is there.
       const worktree = job.workspace === 'worktree';
-      const early = worktree || guarded ? await this.repoConfigOf(project, { fetch: worktree }) : undefined;
+      // Fetched too for the dry run's gate (ORC-409): its fingerprint read on a stale default branch would run it again for nothing.
+      const early = worktree || guarded ? await this.repoConfigOf(project, { fetch: worktree || (guarded && this.dryRunGates(project)) }) : undefined;
       // Fetched by that read only when a reader of the repository is wired: without one, `prepare` fetches as before.
       const fetched = worktree && !!this.d.repoConfig;
       const naming = early?.branches;
@@ -805,6 +807,15 @@ export abstract class DaemonLaunch extends DaemonEffects {
         } catch (err) {
           this.log('warn', `could not tell ${ticketId}'s session that it waits: ${(err as Error).message}`);
         }
+        return undefined;
+      }
+      // The repository's own state, before the ticket's first run (ORC-409): a red dry run refuses it, whatever the job.
+      const red = guarded ? await this.refusingDryRun(project, early!) : undefined;
+      if (red) {
+        this.d.scheduler.release(key);
+        const { reason, tried, question } = dryRunRefusal(red);
+        const refused = await state(this.apply(t, blockedOn('repo_config', reason, job.name)));
+        await this.tellBlock(project, refused, blockFacts({ reason, step: stepOf(wf, job.name), tried, question })).catch((err: Error) => this.log('warn', `could not post the dry run that refused ${ticketId}: ${err.message}`));
         return undefined;
       }
       // An AI review reads the commit the factory published, the one `verify` found green (ORC-183): never the agent's worktree.
