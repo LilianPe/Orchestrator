@@ -99,7 +99,7 @@ Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them
   export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
 ```
 
-It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay), `FACTORY_HOME/secrets.json` (mode `0600`) and `FACTORY_HOME/factory.yml`.
+It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay, `dev: true`), `FACTORY_HOME/secrets.json` (mode `0600`) and `FACTORY_HOME/factory.yml`.
 
 Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, an existing `factory.yml` is kept as it is (`… factory.yml kept as it is.`), and an instance that already runs without one gets none. A new client ID asks for its secrets: nothing of the old application is kept.
 
