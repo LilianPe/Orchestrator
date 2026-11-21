@@ -435,11 +435,13 @@ describe('server', () => {
     });
 
     it('neither lists nor approves the cards of a project no longer in the configuration (ORC-454)', async () => {
-      const { app, store } = await setup({ projects: () => ['p'] });
+      let reads = 0;
+      const { app, store } = await setup({ projects: () => (reads++, ['p']) });
       await store.putMaturityCards('p', points, 4);
       await store.putMaturityCards('gone', [points[0]!], 5);
       const cards = (await (await app.request('/api/maturity')).json()).cards;
       expect(cards.map((c: { projectId: string }) => c.projectId)).toEqual(['p', 'p']);
+      expect(reads).toBe(1);
       const res = await approve(app, '/api/maturity/gone/stack/approve');
       expect(res.status).toBe(404);
       expect((await res.json()).error).toContain('gone');
