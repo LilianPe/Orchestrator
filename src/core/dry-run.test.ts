@@ -148,7 +148,7 @@ describe('runDryRun (ORC-408)', () => {
   });
 
   it('the host git\'s config stays out of the commit\'s working tree: a repository that tracks a `gitconfig` at its root is set up as any other', async () => {
-    const { req } = forge({}, { gitconfig: '[core]\n', '.factory/config.yml': 'setup: npm ci\ncommands:\n  test: grep green state.txt && test -z "$(git status --porcelain)"\n' });
+    const { req } = forge({}, { gitconfig: '[core]\n', '.factory/config.yml': 'setup: npm ci\ncommands:\n  test: grep green state.txt && s=$(git status --porcelain) && test -z "$s"\n' });
     expect(await runDryRun(req)).toMatchObject({ ok: true, breaks: [] });
   });
 
@@ -249,7 +249,6 @@ describe('runDryRun (ORC-408)', () => {
     expect(run.breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'config', detail: expect.stringContaining('postgres') })]);
     expect(run.commands).toEqual([]);
     expect(sandboxes.ran).toEqual([]);
-    expect(run.commands).toEqual([]);
   });
 
   it('a .factory/config.yml refused at the commit is recorded red, as a failure of its config', async () => {
