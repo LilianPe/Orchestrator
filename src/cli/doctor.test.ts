@@ -1120,8 +1120,8 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
   });
 
   it('requires only the controllers of the limits set: one at none no longer needs its own (ORC-451)', async () => {
-    const asked = (env: NodeJS.ProcessEnv, controllers: string[]) =>
-      checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER, ...env }, engine({ host: { ...PODMAN_INFO.host, cgroupControllers: controllers } }).exec);
+    const asked = (env: NodeJS.ProcessEnv, controllers: string[], host: object = {}) =>
+      checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER, ...env }, engine({ host: { ...PODMAN_INFO.host, cgroupControllers: controllers, ...host } }).exec);
     // Rootless Podman without `cpu` delegated, the documented way out: FACTORY_SANDBOX_CPUS=none.
     const noCpu = await asked({ FACTORY_SANDBOX_CPUS: 'none' }, ['memory', 'pids']);
     expect(noCpu).toMatchObject({ verdict: 'accepted', controllers: ['memory', 'pids'] });
@@ -1135,13 +1135,13 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     // No limit at all: no controller required, the other host checks stay.
     const unlimited = { FACTORY_SANDBOX_PIDS: 'none', FACTORY_SANDBOX_MEMORY: 'none', FACTORY_SANDBOX_CPUS: 'none' };
     expect(await asked(unlimited, [])).toMatchObject({ verdict: 'accepted', reasons: ['rootless podman on cgroup v2, no limit set (FACTORY_SANDBOX_*)'] });
-    expect((await checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER, ...unlimited }, engine({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs' } }).exec)).verdict).toBe('refused');
+    expect((await asked(unlimited, [], { cgroupManager: 'cgroupfs' })).verdict).toBe('refused');
     // A limit the start refuses: its controller stays required beside the refusal.
     const malformed = await asked({ FACTORY_SANDBOX_CPUS: 'lots' }, ['memory', 'pids']);
     expect(malformed.reasons).toHaveLength(2);
     expect(malformed.reasons[1]).toContain('cannot limit through the cpu controller(s)');
     // Another refusal of the start keeps the limits read: no controller of a limit at none.
-    const noImage = await checkHost({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_SANDBOX_CPUS: 'none' }, engine({ host: { ...PODMAN_INFO.host, cgroupControllers: ['memory', 'pids'] } }).exec);
+    const noImage = await asked({ FACTORY_RUNNER_IMAGE: '', FACTORY_SANDBOX_CPUS: 'none' }, ['memory', 'pids']);
     expect(noImage.reasons).toEqual(['FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.']);
   });
 

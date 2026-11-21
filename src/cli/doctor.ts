@@ -74,12 +74,9 @@ export interface HostReport {
   reasons: string[];
 }
 
-/** The limits of an attempt's containers: processes, memory, CPUs (docs/tests.md, isolation 9). */
-const REQUIRED_CONTROLLERS = ['cpu', 'memory', 'pids'];
-
-/** The controller each `FACTORY_SANDBOX_*` limit is set through, in `REQUIRED_CONTROLLERS`' order. */
+/** The limits of an attempt's containers, each by the controller it is set through: CPUs, memory, processes (docs/tests.md, isolation 9). */
 const LIMIT_CONTROLLERS: Record<keyof SandboxLimits, string> = { cpus: 'cpu', memory: 'memory', pids: 'pids' };
-const LIMITS = Object.keys(LIMIT_CONTROLLERS) as (keyof SandboxLimits)[];
+const REQUIRED_CONTROLLERS = Object.values(LIMIT_CONTROLLERS);
 
 /** What `info` says of the cgroups, whichever the engine. */
 interface EngineCgroups {
@@ -116,7 +113,9 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed one, refused
   // above, leaves them unread: every controller stays required.
   const limits = sandboxLimits(env);
-  const required = 'refused' in limits ? REQUIRED_CONTROLLERS : LIMITS.filter((limit) => limits[limit] !== undefined).map((limit) => LIMIT_CONTROLLERS[limit]);
+  const required = Object.entries(LIMIT_CONTROLLERS)
+    .filter(([limit]) => 'refused' in limits || limits[limit as keyof SandboxLimits] !== undefined)
+    .map(([, controller]) => controller);
   const missing = required.filter((controller) => !controllers.includes(controller));
   // On cgroups v1, no delegation makes the limits work: the version alone is said.
   if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);

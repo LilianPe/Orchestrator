@@ -99,13 +99,9 @@ describe('sandboxLimits', () => {
   it("takes FACTORY_SANDBOX_MEMORY as docs/configuration.md writes it, each example as the row says (ORC-451)", () => {
     const row = readFileSync(join(import.meta.dirname, '../../docs/configuration.md'), 'utf8').split('\n').find((line) => line.startsWith('| `FACTORY_SANDBOX_MEMORY`'));
     expect(row).toContain('`^[1-9][0-9]*[bkmg]?$`');
-    for (const size of ['512m', '4g', '4G']) {
+    for (const [size, taken] of [['512m', true], ['4g', true], ['4G', true], ['1.5g', false], ['4gb', false], ['512 m', false]] as const) {
       expect(row).toContain(`\`${size}\``);
-      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toMatchObject({ memory: size });
-    }
-    for (const size of ['1.5g', '4gb', '512 m']) {
-      expect(row).toContain(`\`${size}\``);
-      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toHaveProperty('refused');
+      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual(taken ? expect.objectContaining({ memory: size }) : { refused: expect.any(String) });
     }
   });
 });
