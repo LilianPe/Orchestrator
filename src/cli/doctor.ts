@@ -2,12 +2,11 @@ import { parseAllDocuments } from 'yaml';
 import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
 import {
   GitHubAppApi,
-  UnreadableInstallationError,
   type BranchProtection,
   type EnvironmentProtection,
   type WorkflowSource,
 } from '../adapters/forge/github-app-api.js';
-import type { HttpClient } from '../adapters/forge/github-app.js';
+import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
 import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
@@ -677,7 +676,7 @@ function judgeInstallation(permissions: Record<string, string>): InstallationRep
  * GitHub gave without readable permissions refuses, never taken for one without Administration (ORC-273).
  */
 function unreadInstallation(error: unknown): InstallationReport {
-  if (error instanceof UnreadableInstallationError) return { verdict: 'refused', reasons: [`Cannot read the installation's permissions: ${error.message}`] };
+  if (error instanceof UnreadableAnswerError) return { verdict: 'refused', reasons: [`Cannot read the installation's permissions: ${error.message}`] };
   return {
     verdict: 'unchecked',
     reasons: ['not checked, see the warning'],
@@ -724,6 +723,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   }
   const protection = await protectionRead;
   const installation = await installationRead;
+  const unchecked = installation.verdict === 'unchecked';
   const { host } = options;
   const environmentMap = new Map(environments.map((environment) => [environment.name, environment] as const));
   const factory = factoryBranches(options.naming ?? DEFAULT_BRANCH_NAMING);
@@ -773,8 +773,8 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? `Result: accepted — a cgroup v2 host, a protected default branch, ${installation.warnings ? '' : 'an App installed without Administration, '}and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. ` +
-            `Check by hand what the warning under the default branch names${installation.warnings ? ', and the one under the GitHub App installation' : ''}.`
+        ? `Result: accepted — a cgroup v2 host, a protected default branch, ${unchecked ? '' : 'an App installed without Administration, '}and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. ` +
+            `Check by hand what the warning under the default branch names${unchecked ? ', and the one under the GitHub App installation' : ''}.`
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }

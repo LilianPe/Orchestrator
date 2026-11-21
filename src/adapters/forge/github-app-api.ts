@@ -92,11 +92,9 @@ const isBranch = (v: unknown): v is { protection: { enabled: boolean } } =>
 const isRule = (r: unknown): r is { type: string; ruleset_id: number } => isRecord(r) && typeof r.type === 'string' && typeof r.ruleset_id === 'number';
 const isRuleset = (v: unknown): v is { current_user_can_bypass: string } => isRecord(v) && typeof v.current_user_can_bypass === 'string';
 
-/** An installation's permissions, each a level (`read`, `write`): anything else is no proof of what it holds. */
-const isPermissions = (v: unknown): v is Record<string, string> => isRecord(v) && Object.values(v).every((level) => typeof level === 'string');
-
-/** GitHub answered, but not with permissions it can read: told apart from a call that failed, `doctor` refuses it (ORC-439). */
-export class UnreadableInstallationError extends Error {}
+/** An installation with its permissions, each a level (`read`, `write`): anything else is no proof of what it holds. */
+const isInstallation = (v: unknown): v is { permissions: Record<string, string> } =>
+  isRecord(v) && isRecord(v.permissions) && Object.values(v.permissions).every((level) => typeof level === 'string');
 
 function hasRequiredReviewers(rules: EnvironmentDto['protection_rules']): boolean {
   return (rules ?? []).some((rule) => rule.type === 'required_reviewers' && (rule.reviewers ?? []).length > 0);
@@ -161,9 +159,7 @@ export class GitHubAppApi extends GitHubAppAuth {
 
   /** What the App's installation on the repository holds, as granted, not as the manifest asks: read with the App's JWT. */
   async installationPermissions(repoPath: string): Promise<Record<string, string>> {
-    const path = `${repoApi(await this.repo(repoPath))}/installation`;
-    const { permissions } = await this.read('GET', path, this.appJwt(), isRecord, 'an installation');
-    if (!isPermissions(permissions)) throw new UnreadableInstallationError(`GitHub API GET ${path}: unreadable answer, not an installation with its permissions`);
-    return permissions;
+    const repo = await this.repo(repoPath);
+    return (await this.read('GET', `${repoApi(repo)}/installation`, this.appJwt(), isInstallation, 'an installation with its permissions')).permissions;
   }
 }

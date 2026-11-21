@@ -2,7 +2,8 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../../adapters/exec.js';
 import type { HttpClient, HttpRequest } from '../forge/github-app.js';
-import { GitHubAppApi, UnreadableInstallationError } from './github-app-api.js';
+import { UnreadableAnswerError } from './github-app.js';
+import { GitHubAppApi } from './github-app-api.js';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -292,11 +293,12 @@ describe('GitHubAppApi.installationPermissions (ORC-439)', () => {
     expect(jwt?.split('.')).toHaveLength(3);
   });
 
-  it.each([{ id: 42 }, { id: 42, permissions: { administration: 'write', contents: null } }])(
+  it.each([{ id: 42 }, { id: 42, permissions: { administration: 'write', contents: null } }, '<html>Bad gateway</html>'])(
     'rejects an installation answered without readable permissions as unreadable, apart from a failed call: %j',
     async (body) => {
-      const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { body } : undefined)]);
-      await expect(api.installationPermissions('/repo')).rejects.toThrow(UnreadableInstallationError);
+      const http: HttpClient = async () => ({ ok: true, status: 200, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) });
+      const api = new GitHubAppApi({ appId: '123', privateKey: privatePem, http, exec, now: () => NOW });
+      await expect(api.installationPermissions('/repo')).rejects.toThrow(UnreadableAnswerError);
       await expect(api.installationPermissions('/repo')).rejects.toThrow(/unreadable answer/);
     },
   );
@@ -304,6 +306,6 @@ describe('GitHubAppApi.installationPermissions (ORC-439)', () => {
   it('rejects a refused call as a GitHub error, not as an unreadable answer', async () => {
     const api = makeApi([(url) => (url.pathname === '/repos/acme/app/installation' ? { status: 401, body: { message: 'Bad credentials' } } : undefined)]);
     await expect(api.installationPermissions('/repo')).rejects.toThrow(/401 Bad credentials/);
-    await expect(api.installationPermissions('/repo')).rejects.not.toThrow(UnreadableInstallationError);
+    await expect(api.installationPermissions('/repo')).rejects.not.toThrow(UnreadableAnswerError);
   });
 });

@@ -1,14 +1,15 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
-import { UnreadableInstallationError, type BranchProtection, type EnvironmentProtection, type WorkflowSource } from '../adapters/forge/github-app-api.js';
-import type { HttpClient, HttpRequest } from '../adapters/forge/github-app.js';
+import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
+import { UnreadableAnswerError, type HttpClient, type HttpRequest } from '../adapters/forge/github-app.js';
 import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
 import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
+import { GITHUB_APP_PERMISSIONS } from './init.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
@@ -20,8 +21,7 @@ interface FakeOptions {
 }
 
 /** The permissions the manifest asks for (docs/github-app-manifest.json): what a conforming installation holds. */
-const MANIFEST_PERMISSIONS = (JSON.parse(readFileSync(new URL('../../docs/github-app-manifest.json', import.meta.url), 'utf8')) as { default_permissions: Record<string, string> })
-  .default_permissions;
+const MANIFEST_PERMISSIONS: Record<string, string> = GITHUB_APP_PERMISSIONS;
 
 class FakeApi implements DoctorApi {
   workflowCalls = 0;
@@ -52,7 +52,7 @@ class FakeApi implements DoctorApi {
 
   async installationPermissions(): Promise<Record<string, string>> {
     if (this.options.failInstallation === 'network') throw new Error('getaddrinfo ENOTFOUND api.github.com');
-    if (this.options.failInstallation === 'unreadable') throw new UnreadableInstallationError('GitHub API GET /repos/acme/app/installation: unreadable answer');
+    if (this.options.failInstallation === 'unreadable') throw new UnreadableAnswerError('GitHub API GET /repos/acme/app/installation: unreadable answer');
     return this.options.permissions ?? MANIFEST_PERMISSIONS;
   }
 }
