@@ -64,7 +64,11 @@ There is no fallback any more (ORC-181: the `gh` CLI and `GH_TOKEN` are gone). W
 
 ### The daemon's own git
 
-The App's token serves the factory's push alone ([Publishing](#publishing)). The daemon's other git commands (`git fetch` of the clones before a launch, the default branch `verify` and `doctor` read, the knowledge base, `factory ghost`'s clones and diffs) use the git credentials of the machine that runs it: an SSH key or agent, or a git credential helper, able to read `origin`. Check with `git fetch` from the repository. The Docker image configures none since ORC-181: see [`deployment.md`](deployment.md#variables).
+The daemon's git reads the forge with the App's installation token too (ORC-442), as the factory's push does ([Publishing](#publishing)): the `git fetch` of the clones before a launch, `git ls-remote` of a ticket's branch, the default branch `verify`, the dry run and `doctor` read, the knowledge base's pull and its note's push, `factory ghost`'s clones and diffs. A private repository is read without any git credential on the machine: that is how the Docker image reads it, which configures none since ORC-181 ([`deployment.md`](deployment.md#current-limits)).
+
+- **Which repositories**: those whose `origin` is an `https://github.com/` URL, the token being the one of that repository (limited to it), so the App must be installed on the knowledge base's repository as well to read a private one. An `origin` over SSH (`git@github.com:…`), on another host or a path, and a repository the App has no token for (not installed there, logged `GitHub App: no installation token to read …`), are read with the git credentials of the machine that runs the daemon, as before: an SSH key or agent, or a git credential helper.
+- **Without the App** (a run on a workstation, `factory init` before the App): nothing changes, the user's own git credentials read `origin`. Check with `git fetch` from the repository.
+- **Where the token goes**: in git's environment alone, as an `http.https://github.com/.extraheader` passed through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`. Never in a URL, a command line (visible to every process of the host, and quoted in git's errors), a log line, nor a repository's `.git/config`: the clone's `origin` stays the URL it was. A test with a fake private git server holds it (`src/adapters/forge/fetch-auth.test.ts`).
 
 ### Publishing
 
@@ -106,7 +110,7 @@ On the agent side: `git push` and `gh` writes are refused by the pack and its ho
 
 ### Read access for the daemon's git
 
-On each repository entrusted to Relais, the daemon's git credentials ([above](#the-daemons-own-git)) must read its branches (`git fetch`, `git ls-remote`): with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
+On each repository entrusted to Relais, the daemon's git must read its branches (`git fetch`, `git ls-remote`). With an `https://github.com/` origin, the App's token does it (*Contents*, [above](#the-daemons-own-git)); with an SSH origin, the machine's credentials must: with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
 
 ## Human permissions
 

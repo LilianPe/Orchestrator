@@ -90,6 +90,8 @@ export interface GitHubAppForgeOptions {
   /** Known installation; otherwise discovered with GET /repos/{owner}/{repo}/installation. */
   installationId?: string | number;
   apiBase?: string;
+  /** Where the repositories are served over HTTPS, the scope of the git token (`gitAccess`); `https://github.com` by default. */
+  webBase?: string;
   http?: HttpClient;
   exec?: Exec;
   /** Overrides `git remote get-url origin` (tests). */
@@ -272,6 +274,15 @@ function unreadable(method: string, path: string, what: string, data: unknown, s
 
 /** `/repos/{owner}/{name}`, encoded. */
 /** The repository's page: the root of a link to one of its files (ORC-407), and of its git URL. */
+/** Whether `url` is served by `base` (scheme, host and port), its userinfo aside; false for an scp-like `git@host:path` or a path. */
+function sameOrigin(url: string, base: string): boolean {
+  try {
+    return new URL(url).origin === new URL(base).origin;
+  } catch {
+    return false;
+  }
+}
+
 const repoWebUrl = (repo: GitHubRepoRef): string => `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 
 export function repoApi(repo: GitHubRepoRef): string {
@@ -335,6 +346,7 @@ export class GitHubAppAuth {
   readonly #privateKey: string;
   protected readonly installationId: string | undefined;
   protected readonly apiBase: string;
+  protected readonly webBase: string;
   protected readonly http: HttpClient;
   protected readonly exec: Exec;
   private readonly resolveRepoFn: ((repoPath: string) => Promise<GitHubRepoRef>) | undefined;
@@ -348,6 +360,7 @@ export class GitHubAppAuth {
     this.#privateKey = options.privateKey;
     this.installationId = options.installationId === undefined ? undefined : String(options.installationId);
     this.apiBase = (options.apiBase ?? 'https://api.github.com').replace(/\/+$/, '');
+    this.webBase = (options.webBase ?? 'https://github.com').replace(/\/+$/, '');
     this.http = options.http ?? fetchHttp;
     this.exec = options.exec ?? execCmd;
     this.resolveRepoFn = options.resolveRepo;
@@ -605,9 +618,26 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const token = await this.installationToken(repo);
     const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
     return {
-      url: `${repoWebUrl(repo)}.git`,
-      env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` },
+      url: `${this.webBase}/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}.git`,
+      env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `http.${this.webBase}/.extraheader`, GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` },
     };
+  }
+
+  /**
+   * The env of the daemon's own git that reads the repository (ORC-442): a fetch, an `ls-remote`, the knowledge base's pull and
+   * push. The installation token as `gitAccess` gives it, for an origin served over HTTPS by the App's forge. Empty for any other
+   * origin (ssh, a path, another host) and when the App has no token for the repository (not installed there): the machine's own
+   * git credentials serve then, as on a workstation.
+   */
+  async fetchEnv(repoPath: string): Promise<Record<string, string>> {
+    const origin = await this.exec('git', ['remote', 'get-url', 'origin'], { cwd: repoPath });
+    if (origin.code !== 0 || !sameOrigin(origin.stdout.trim(), this.webBase)) return {};
+    try {
+      return (await this.gitAccess(repoPath)).env;
+    } catch (err) {
+      this.log?.(`GitHub App: no installation token to read ${repoPath}, read with the machine's git credentials: ${(err as Error).message}`);
+      return {};
+    }
   }
 
   /**

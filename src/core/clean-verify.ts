@@ -46,6 +46,8 @@ export interface CleanVerifyRequest {
   workDir: string;
   /** Where the base branch is read: on the forge, not on the refs of a local repository. */
   originUrl: string;
+  /** The env that reads a private forge (ORC-442, `GitAuth` of the project's repository): the App's token, never in `originUrl`. */
+  forgeEnv?: () => Promise<Record<string, string>>;
   /** The workflow's, the factory's own (`jobs.<job>.verify`, `workspace.setup`): what `.factory/config.yml` does not declare, until ORC-177. */
   setup: readonly string[];
   commands: readonly string[];
@@ -442,10 +444,10 @@ async function fetchBase(req: CleanVerifyRequest, cloneDir: string, pushed = fal
 }
 
 /** `refspecs` from the forge into the clone, with the daemon's credentials, kept out of the error it throws (`said` not read: …). */
-export async function fetchFromForge(req: Pick<CleanVerifyRequest, 'originUrl' | 'exec'>, cloneDir: string, refspecs: readonly string[], said: string, config: readonly string[] = []): Promise<void> {
+export async function fetchFromForge(req: Pick<CleanVerifyRequest, 'originUrl' | 'exec' | 'forgeEnv'>, cloneDir: string, refspecs: readonly string[], said: string, config: readonly string[] = []): Promise<void> {
   const args = [...[...HARDENING, ...config].flatMap((c) => ['-c', c]), '-C', cloneDir, 'fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', req.originUrl, ...refspecs];
   try {
-    await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0' } });
+    await mustExec(req.exec ?? execCmd, 'git', args, { env: { GIT_TERMINAL_PROMPT: '0', ...(await req.forgeEnv?.()) } });
   } catch (err) {
     // eslint-disable-next-line preserve-caught-error -- its message holds the URL and its credentials: it stays out of what is journaled.
     throw new Error(`${said} not read: ${withoutCredentials((err as Error).message, req.originUrl)}`);

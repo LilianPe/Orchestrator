@@ -7,6 +7,7 @@ import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/
 import { githubAuthorizeUrl, githubSignIn } from '../adapters/forge/github-login.js';
 import { GithubReconciler } from '../adapters/forge/github-reconcile.js';
 import { NoForge } from '../adapters/forge/no-forge.js';
+import type { GitAuth } from '../adapters/forge/types.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
@@ -244,9 +245,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const runner: Runner = o.fakeRunner
       ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: chosenClaudeToken, proxyHasToken: () => !!claudeTokenOf(), log, ...(sandboxes ? { sandboxes } : {}) });
-    const workspaces = new GitWorkspaces({ root: paths.workspaces, log });
     // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
     const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
+    // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
+    const gitAuth: GitAuth | undefined = appForge && ((repoPath) => appForge.fetchEnv(repoPath));
+    const workspaces = new GitWorkspaces({ root: paths.workspaces, log, ...(gitAuth ? { auth: gitAuth } : {}) });
     const forge = appForge ?? new NoForge();
     if (githubApp) {
       log(
@@ -270,7 +273,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       budgets: yml?.budgets,
     });
     for (const p of problems) log(`Invalid configuration, no run is launched until it is fixed and the factory restarted: ${p}`);
-    const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath) : undefined;
+    const kb = instance.knowledge ? new KnowledgeBase(instance.knowledge.repoPath, undefined, undefined, gitAuth) : undefined;
     // The roles of a human event's signed actor (ORC-186): Linear team members and GitHub rights, read
     // again past their TTL, and the designations of config.yaml.
     const roles = new CachedRoleResolver({
@@ -343,8 +346,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       roles,
       repoVariables: makeRepoVariables({ yml, log }),
       readSecrets: (refs) => repoSecrets.read(refs),
-      repoConfig: makeRepoConfig({ log }),
+      repoConfig: makeRepoConfig({ log, ...(gitAuth ? { auth: gitAuth } : {}) }),
       originUrl,
+      ...(gitAuth ? { gitAuth } : {}),
       fullReadPaths: (t) => Object.keys(t.frozenTests?.files ?? {}),
       ...(sandboxes && capture ? { visualProof: { shooter: new PlaywrightShooter(), artifactsDir: paths.artifacts } } : {}),
       ...(sandboxes

@@ -211,6 +211,8 @@ export function createHarness(
     cleanVerify?: CleanVerifier;
     /** The dry run itself (ORC-408); by default the real one, which a scenario without a forge cannot run. */
     dryRunner?: DaemonDeps['dryRunner'];
+    /** The daemon's git env for a private forge (ORC-442). */
+    gitAuth?: DaemonDeps['gitAuth'];
     /** The default branch's head and the files of the dry run's fingerprint there (ORC-409): given, a delegated ticket waits for the dry run. */
     dryRunFiles?: DaemonDeps['dryRunFiles'];
     /** An instance without the GitHub App or the sandboxes: it cannot publish (ORC-125). */
@@ -346,6 +348,7 @@ export function createHarness(
       // The proxy's journal of a run (ORC-296) beside its refusals log: a test writes both.
       ...(sessionsDir ? { sandboxes: life.gate(sandboxes), sessionsDir, runsDir, runnerImage: 'factory/runner:test', egressJournal: (id: string) => join(runsDir!, id, 'egress.jsonl') } : {}),
       ...(opts.dryRunner ? { dryRunner: opts.dryRunner } : {}),
+      ...(opts.gitAuth ? { gitAuth: opts.gitAuth } : {}),
       ...(opts.dryRunFiles ? { dryRunFiles: opts.dryRunFiles } : {}),
       ...(visualProof ? { visualProof } : {}),
       ...(opts.previewRecipes ? { previewRecipes: opts.previewRecipes } : {}),

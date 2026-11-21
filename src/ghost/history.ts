@@ -27,11 +27,11 @@ const fetchArgs = (remote: string, depth: number | undefined, sha: string) => [
  * `dir` as a repository at `sha`: `sha` and its ancestors, or `sha` alone at `depth` 1, checked out detached, no remote. Nothing
  * after it is in it, nor anything a `git fetch` of the agent could bring back.
  */
-async function checkoutAt(remote: string, sha: string, dir: string, exec: Exec, depth?: number): Promise<void> {
-  const git = (args: string[]) => mustExec(exec, 'git', ['-C', dir, ...args]);
+async function checkoutAt(remote: string, sha: string, dir: string, exec: Exec, depth?: number, env?: Record<string, string>): Promise<void> {
+  const git = (args: string[], opts?: { env?: Record<string, string> }) => mustExec(exec, 'git', ['-C', dir, ...args], opts);
   await mkdir(dir, { recursive: true });
   await git(['init', '-q']);
-  await git(fetchArgs(remote, depth, sha));
+  await git(fetchArgs(remote, depth, sha), { env: { GIT_TERMINAL_PROMPT: '0', ...env } });
   await git(['checkout', '-q', '--detach', sha]);
 }
 
@@ -42,24 +42,25 @@ async function checkoutAt(remote: string, sha: string, dir: string, exec: Exec, 
  *
  * A rebase merge puts the PR's commits one by one on the base, the merge commit being the last of them: its parent would already
  * hold the human's work. Given `prCommits`, the PR's commit headlines oldest first, a merge commit with a single parent whose last
- * commits carry exactly these headlines is taken for a rebase, and the start is the commit before the first of them.
+ * commits carry exactly these headlines is taken for a rebase, and the start is the commit before the first of them. `env`, in the
+ * fetches from `remote` alone: the App's token for a private repository (ORC-442), never on their command line.
  */
-export async function cloneAtStart(o: { remote: string; mergeSha: string; dir: string; prCommits?: readonly string[]; exec?: Exec }): Promise<string> {
+export async function cloneAtStart(o: { remote: string; mergeSha: string; dir: string; prCommits?: readonly string[]; exec?: Exec; env?: Record<string, string> }): Promise<string> {
   const exec = o.exec ?? execCmd;
   const probe = await mkdtemp(join(tmpdir(), 'factory-ghost-probe-'));
   const n = o.prCommits?.length ?? 0;
   let start: string;
   try {
-    const git = async (args: string[]) => (await mustExec(exec, 'git', ['-C', probe, ...args])).trim();
+    const git = async (args: string[], opts?: { env?: Record<string, string> }) => (await mustExec(exec, 'git', ['-C', probe, ...args], opts)).trim();
     await git(['init', '-q']);
-    await git(fetchArgs(o.remote, Math.max(2, n + 1), o.mergeSha));
+    await git(fetchArgs(o.remote, Math.max(2, n + 1), o.mergeSha), { env: { GIT_TERMINAL_PROMPT: '0', ...o.env } });
     const parents = (await git(['rev-list', '--parents', '-n', '1', o.mergeSha])).split(' ').length - 1;
     const headlines = n > 1 && parents === 1 ? (await git(['log', '--format=%s', '-n', String(n), o.mergeSha])).split('\n').reverse() : [];
     const rebased = n > 1 && headlines.length === n && headlines.every((h, i) => h === o.prCommits![i]);
     start = await git(['rev-parse', rebased ? `${o.mergeSha}~${n}` : `${o.mergeSha}^1`]);
     // With its whole history, not shallow (ORC-376): the run's worktree and the verify clone are fetched from it, and a fetch
     // refuses the refs of a shallow repository. Its ancestors only: still nothing after the start.
-    await checkoutAt(o.remote, start, o.dir, exec);
+    await checkoutAt(o.remote, start, o.dir, exec, undefined, o.env);
   } finally {
     await rm(probe, { recursive: true, force: true });
   }

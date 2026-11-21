@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ArtifactHost, Forge, ForgeWriter } from '../adapters/forge/types.js';
+import type { ArtifactHost, Forge, ForgeWriter, GitAuth } from '../adapters/forge/types.js';
 import type { SecretRef } from '../adapters/secrets/types.js';
 import type { Publisher } from '../adapters/publisher/types.js';
 import type { RoleResolver } from '../adapters/roles/types.js';
@@ -165,6 +165,8 @@ export interface DaemonDeps {
   repoConfig?: (project: ProjectRuntime, read?: RepoConfigRead) => Promise<RepoConfig>;
   /** Where a project's base branch is fetched (ORC-151): required with `sandboxes`. */
   originUrl?: (project: ProjectRuntime) => Promise<string>;
+  /** The env of the daemon's git that reads a private forge (ORC-442): the App's token. Absent: the machine's git credentials. */
+  gitAuth?: GitAuth;
   /** `budgets.per_ticket_tokens` of factory.yml (ORC-340): a ticket past it is blocked before its next run. The repository's own cap lowers it. */
   perTicketTokens?: number;
   /** `max_diff: off` of factory.yml (ORC-381): `verify` bounds the diff's size only where the repository's `max_diff` does. */

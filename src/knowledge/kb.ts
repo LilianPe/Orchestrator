@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { execCmd, HARDENING, mustExec, type Exec } from '../adapters/exec.js';
+import type { GitAuth } from '../adapters/forge/types.js';
 import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { within } from '../core/clean-verify.js';
 import { STALLED } from '../publish/publish.js';
@@ -53,6 +54,8 @@ export class KnowledgeBase {
     readonly repoPath: string,
     exec: Exec = execCmd,
     private freshMs = FRESH_MS,
+    /** What reads and pushes a private remote (ORC-442): the App's token, in git's environment alone. */
+    private auth?: GitAuth,
   ) {
     this.git = (cmd, args, opts) => exec(cmd, [...HARDENING.flatMap((c) => ['-c', c]), ...args], opts);
   }
@@ -64,10 +67,11 @@ export class KnowledgeBase {
   async pull(): Promise<string | undefined> {
     const git = (...a: string[]) => this.git('git', ['-C', this.repoPath, ...a]);
     if (!(await git('remote')).stdout.trim()) return 'no remote: it is never pulled, the agents read it as it is';
-    await fetchOrigin(this.git, this.repoPath, { deadlineMs: FETCH_DEADLINE_MS });
+    await fetchOrigin(this.git, this.repoPath, { deadlineMs: FETCH_DEADLINE_MS, auth: this.auth });
     // In full, never a tag of its name (ORC-354). A clone without origin/HEAD asks the remote its default branch.
     let head = await originHeadOf(this.git, this.repoPath);
-    if (!head.set && (await git('remote', 'set-head', 'origin', '--auto')).code === 0) head = await originHeadOf(this.git, this.repoPath);
+    const asked = !head.set && (await this.git('git', ['-C', this.repoPath, 'remote', 'set-head', 'origin', '--auto'], { env: await this.remoteEnv() })).code === 0;
+    if (asked) head = await originHeadOf(this.git, this.repoPath);
     const branch = head.name.replace(/^origin\//, '');
     const current = (await git('branch', '--show-current')).stdout.trim();
     if (current !== branch) return `on ${current || 'a detached HEAD'}, not on its default branch ${branch}: not pulled, the agents read it as it is`;
@@ -90,6 +94,11 @@ export class KnowledgeBase {
     next.index.then(ended, ended);
     this.last = next;
     return next.index;
+  }
+
+  /** The env of a git that reaches the remote: never a prompt, the App's token where it has one. */
+  private async remoteEnv(): Promise<Record<string, string>> {
+    return { GIT_TERMINAL_PROMPT: '0', ...(await this.auth?.(this.repoPath)) };
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -131,7 +140,7 @@ export class KnowledgeBase {
       if (!remote) return `knowledge base: no remote, ${path} is committed in the clone only`;
       // As `fetchOrigin` reaches the forge: a stalled transfer aborted, and the deadline kept even by an ssh child that holds the output.
       const silent = `the knowledge base's remote no longer responds after ${FETCH_DEADLINE_MS / 1000} s`;
-      const push = this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env: { GIT_TERMINAL_PROMPT: '0', ...STALLED }, timeoutMs: FETCH_DEADLINE_MS });
+      const push = this.git('git', ['-C', this.repoPath, 'push', '--quiet', 'origin', 'HEAD'], { env: { ...STALLED, ...(await this.remoteEnv()) }, timeoutMs: FETCH_DEADLINE_MS });
       const pushed = await within(push, FETCH_DEADLINE_MS + PUSH_GRACE_MS, silent).catch((err: Error) => ({ code: 1, stdout: '', stderr: err.message }));
       if (pushed.code === 0) return undefined;
       await git('reset', '--quiet', '--keep', before);
