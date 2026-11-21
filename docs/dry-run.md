@@ -28,11 +28,11 @@ result in the store:
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
 a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
 or timed out, a 502 or the proxy's 502 to a `CONNECT`, the relay at `127.0.0.1:3128` refusing, pip's or uv's connection or DNS
-error, pip's `ProxyError`), even when it then says a dependency is missing. A setup that broke on a variable, or on a service of
-the repository's own refusing on the loopback (`connect ECONNREFUSED 127.0.0.1:5432`, `could not connect to server`), is
-recorded red as such, past an installer's retry warning. Reading the repository's variables failing (its entry in `factory.yml`
-not looked up) rejects too, and so does a factory without sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are
-required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
+error, pip's `ProxyError`), even when it then says a dependency is missing. A setup that exited on a variable, or on a service
+refusing (`connect ECONNREFUSED` on the loopback, `could not connect to server`), is recorded red as such, past an installer's
+retry warning. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
+sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
 ## What breaks
 
