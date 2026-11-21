@@ -854,12 +854,16 @@ export class SqliteStore implements Store {
     return row && (JSON.parse(row.data) as MaturityCard);
   }
 
+  private writeMaturityCard(card: MaturityCard): void {
+    this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), card.projectId, card.key);
+  }
+
   async setMaturityCardValue(projectId: string, key: string, value: string, at: number): Promise<boolean> {
     return this.atomically(() => {
       const stored = this.readMaturityCard(projectId, key);
       if (!stored) return false;
       const card = maturityCard(projectId, { ...stored, value }, at, stored);
-      this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
+      this.writeMaturityCard(card);
       return true;
     });
   }
@@ -869,7 +873,7 @@ export class SqliteStore implements Store {
       const stored = this.readMaturityCard(projectId, key);
       if (!stored) return undefined;
       const card = approvedCard(stored, value, by, at);
-      if (typeof card !== 'string' && card !== stored) this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
+      if (typeof card !== 'string' && card !== stored) this.writeMaturityCard(card);
       return card;
     });
   }
