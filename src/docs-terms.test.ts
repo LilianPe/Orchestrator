@@ -18,7 +18,7 @@ const TERMS: { name: string; pattern: RegExp; allowedOn?: RegExp }[] = [
   { name: 'Ready to Merge', pattern: /ready to merge/i },
   // smee is the workstation's relay (`factory init --dev`): a line that says so may name it, and so may a channel's URL
   // alone on its line, as `init` prints it.
-  { name: 'smee', pattern: /smee/i, allowedOn: /--dev\b|\bdev\b|development|workstation|locally|\blocal\b|^\s*https:\/\/smee\.io\/\S*$/i },
+  { name: 'smee', pattern: /smee/i, allowedOn: /--dev\b|workstation|development|^\s*https:\/\/smee\.io\/\S*$/i },
 ];
 
 const MARKER = /^>\s*\*\*(?:Historical|Transition) note\*\*/;
@@ -64,7 +64,8 @@ describe('the docs speak of the factory, Relais only in a historical note (ORC-2
       'smee in production.',
       '  https://smee.io/…',
       'smee relays the webhooks on a workstation (`factory init --dev`).',
+      'smee in production; a local tunnel is optional.',
     ].join('\n');
-    expect(forbidden(md).map((f) => f.split(':').slice(0, 2).join(':'))).toEqual(['1: relais', '7: ANTHROPIC_API_KEY', '8: smee']);
+    expect(forbidden(md).map((f) => f.split(':').slice(0, 2).join(':'))).toEqual(['1: relais', '7: ANTHROPIC_API_KEY', '8: smee', '11: smee']);
   });
 });

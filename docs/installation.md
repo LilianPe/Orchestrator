@@ -13,7 +13,7 @@ To take a first real ticket from delegation to its PR on your machine, follow [`
 | git | recent (worktrees) | One git worktree per ticket. |
 | A GitHub App | installed on the repository ([`github.md`](github.md#creating-the-app)) | The daemon reads and publishes on GitHub by its App alone: the `gh` CLI is no longer used (ORC-181). |
 | Claude Code CLI `claude` | logged in (subscription; a run gets the token of `claude.active` in `factory.yml`, else the daemon's `CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`) | Each run is a `claude -p … --output-format stream-json`. It must be on the daemon's `PATH`. |
-| bash | — | The `workspace.setup` and `verify` commands are run via `bash -c`, without a login profile: the `PATH` is the daemon's (or the sandbox image's). A tool that only your profile puts on the `PATH` (nvm, asdf, volta, `~/.local/bin`) must be on the daemon's: `Environment=PATH=…` in the systemd unit, for example. |
+| bash | — | The `setup` and `verify` commands of `.factory/config.yml` are run via `bash -c`, without a login profile: the `PATH` is the daemon's (or the sandbox image's). A tool that only your profile puts on the `PATH` (nvm, asdf, volta, `~/.local/bin`) must be on the daemon's: `Environment=PATH=…` in the systemd unit, for example. |
 
 > **Transition note**: until the runs on the host go (ORC-179), `claude` on the host also logs in with an `ANTHROPIC_API_KEY` from the daemon's environment, when neither `factory.yml` nor `CLAUDE_CODE_OAUTH_TOKEN` gives a Claude token.
 

@@ -88,7 +88,7 @@ Its cadence is a **timer in the database** (ORC-185): each project's pseudo-tick
 | Reply in the session, or review on the PR, while in *Human Review* | After 3 minutes without a new message, `fix-human`: the agent fixes on the same PR, then `verify`, the AI review and *Human Review* again; 3 rounds, then the ticket is blocked (ORC-190). Moving the ticket back to *In Progress* starts nothing. |
 | Move to *AI Review* | The AI review of the published commit again (two read-only lenses, findings on the PR, ORC-183), then back to *Human Review*. The end of `dev`, `dev-feedback`, `fix-ci`, `fix-review` and `fix-human` starts it by itself (ORC-170): this move is never needed to review the factory's work. |
 | `@Orchestrator <question>` in a comment | Read-only answer (`ask`, the answer agent), including on a non-delegated ticket. |
-| `@Orchestrator <instruction>` in a comment | On a delegated ticket, kept for the agent as a reply in its session is; the answer agent replies too. On a non-delegated ticket, only the answer: code work needs a delegation. |
+| `@Orchestrator <instruction>` in a comment | On a delegated ticket, it is kept for the agent as a reply in its session would be, and the answer agent replies too. On a non-delegated ticket, only the answer: code work needs a delegation. |
 | `agent:stop` label, the session's stop button, or removing the delegation | Run stopped, ticket blocked. |
 | Reply on a blocked ticket (comment or session) | Relaunches the blocked step, with the reply as input: see [The blocking comment](#the-blocking-comment-orc-196). |
 

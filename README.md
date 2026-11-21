@@ -5,7 +5,7 @@ Coding agent orchestrator: a Linear ticket delegated to the agent becomes a PR, 
 - The factory runs as a daemon (`factory up`) connected to **Linear** (OAuth agent application + webhooks) and to **GitHub** (the factory's GitHub App).
 - Each delegated ticket gets its own git worktree and a headless **Claude Code** session, resumed from run to run (feedback, CI, review).
 - Behavior (events, jobs, models, limits, checks) is the `factory/default` preset, compiled in the code; a repository adds its commands, checks and limits in `.factory/config.yml`, never removes any. The agents' instructions live in a skills pack, not in the core.
-- Humans stay in control: only they merge, the agent asks its questions in Linear, and a shared knowledge base grows through reviewed PRs.
+- Humans stay in control: only they merge, the agent asks its questions in Linear, and a shared knowledge base, edited by humans, is read by the agents.
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ Without tokens, to try the interface: `factory up --fake-runner`.
 - [The workflow the engine runs](docs/preset.md#the-workflow-the-engine-runs-orc-389): events, jobs, models, limits, checks.
 - [Repository configuration (`.factory/config.yml`)](docs/repository-configuration.md): keys, what a configuration cannot remove from the baseline, `factory validate`.
 - [The `factory/default` preset](docs/preset.md): typed steps, loop bounds, single counter for review + red CI, models and network per step, invariants checked at compile time, hash.
-- [Projects, worktrees and knowledge base](docs/projects-and-workspaces.md): multiple repositories, worktrees per ticket, `workspace.setup`, ports, cleanup, knowledge repository.
+- [Projects, worktrees and knowledge base](docs/projects-and-workspaces.md): multiple repositories, worktrees per ticket, the `setup` of `.factory/config.yml`, ports, cleanup, knowledge repository.
 - [Pack and skills](docs/pack-and-skills.md): job skills and method skills (TDD, debugging, verification, tiered review), always-on rules, permissions, customizing or creating a skill.
 
 ### Use

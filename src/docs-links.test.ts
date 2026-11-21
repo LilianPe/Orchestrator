@@ -55,10 +55,12 @@ function links(markdown: string): { line: number; target: string }[] {
   prose(markdown)
     .split('\n')
     .forEach((text, i) => {
-      const inline = [...text.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)].map((m) => m[1]!);
-      const reference = /^\s*\[[^\]]+\]:\s*<?(\S+?)>?(?:\s+"[^"]*")?\s*$/.exec(text)?.[1];
-      for (const target of reference ? [...inline, reference] : inline) {
-        if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) found.push({ line: i + 1, target });
+      const inline = [...text.matchAll(/\]\(\s*(?:<([^>\n]+)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g)].map((m) => (m[1] ?? m[2])!);
+      const reference = /^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/.exec(text);
+      if (reference) inline.push((reference[1] ?? reference[2])!);
+      for (const target of inline) {
+        // A scheme (https:, mailto:) or `//host` leaves the repository: not followed.
+        if (!/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) found.push({ line: i + 1, target });
       }
     });
   return found;
@@ -74,7 +76,9 @@ const anchorsOf = (path: string): Set<string> => {
 function deadLink(page: string, target: string): string | undefined {
   const [rawPath = '', anchor] = target.split('#', 2);
   const path = decodeURIComponent(rawPath);
-  const file = path === '' ? page : relative(root, join(root, dirname(page), path)).split(sep).join('/');
+  // A leading `/` is the repository's root on GitHub, anything else the page's directory.
+  const base = path.startsWith('/') ? root : join(root, dirname(page));
+  const file = path === '' ? page : relative(root, join(base, path)).split(sep).join('/');
   if (file.startsWith('..')) return `${target}: outside the repository`;
   if (!existsSync(join(root, file))) return `${target}: no file ${file}`;
   if (!anchor || !file.endsWith('.md') || statSync(join(root, file)).isDirectory()) return undefined;
@@ -96,11 +100,13 @@ describe('links between README.md and docs/ (ORC-202)', () => {
     expect(slug('Branch protection, required by `factory doctor`')).toBe('branch-protection-required-by-factory-doctor');
     expect(slug('The blocking comment — ORC-196')).toBe('the-blocking-comment--orc-196');
     expect([...anchors('# A\n## A\n```\n# B\n```\n<a id="c"></a>\n')]).toEqual(['a', 'a-1', 'c']);
-    const md = 'See [x](a.md#b), `[y](no.md)`, [z](https://e.org/a.md) and [w](#c).\n```\n[v](no.md)\n```\n[r]: d.md\n';
+    const md = "See [x](a.md#b), `[y](no.md)`, [z](https://e.org/a.md), [u](//e.org) and [w](#c).\n```\n[v](no.md)\n```\n[r]: d.md\n[t](<e f.md> 'T') [s](g.md (G))\n";
     expect(links(md)).toEqual([
       { line: 1, target: 'a.md#b' },
       { line: 1, target: '#c' },
       { line: 5, target: 'd.md' },
+      { line: 6, target: 'e f.md' },
+      { line: 6, target: 'g.md' },
     ]);
   });
 
@@ -108,5 +114,6 @@ describe('links between README.md and docs/ (ORC-202)', () => {
     expect(deadLink('docs/first-run.md', 'nowhere.md')).toMatch(/no file docs\/nowhere\.md/);
     expect(deadLink('docs/first-run.md', 'github.md#no-such-heading')).toMatch(/no heading/);
     expect(deadLink('README.md', 'docs/first-run.md#0-what-you-must-create-first')).toBeUndefined();
+    expect(deadLink('docs/ports/README.md', '/docs/cli.md')).toBeUndefined();
   });
 });
