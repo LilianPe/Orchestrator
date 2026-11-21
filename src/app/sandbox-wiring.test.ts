@@ -50,14 +50,14 @@ describe('the sandboxes the start refuses before anything opens (ORC-450)', () =
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two']]) {
       const env = { ...ENGINE, [k!]: v };
       const { refused } = sandboxLimits(env) as { refused: string };
-      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusal: refused });
+      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusals: [refused] });
       expect(() => checkSandboxes(env)).toThrow(refused);
     }
   });
 
   it('refuses a daemon without a uid or a gid, with its message', () => {
     vi.spyOn(process, 'getgid').mockReturnValue(undefined as unknown as number);
-    expect(sandboxConfig(ENGINE)).toEqual({ cli: 'docker', refusal: 'The sandboxes require a daemon on Linux (uid and gid).' });
+    expect(sandboxConfig(ENGINE)).toEqual({ cli: 'docker', refusals: ['The sandboxes require a daemon on Linux (uid and gid).'] });
     expect(() => checkSandboxes(ENGINE)).toThrow('The sandboxes require a daemon on Linux (uid and gid).');
   });
 

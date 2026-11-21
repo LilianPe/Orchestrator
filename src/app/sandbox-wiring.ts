@@ -22,30 +22,37 @@ interface SandboxConfig {
 
 /**
  * What the sandboxes run with (ORC-204), `FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`, the daemon's uid and gid and
- * the `FACTORY_SANDBOX_*` limits: none without the CLI, or the start's refusal, with its message: another CLI than docker or
- * podman, no runner image, no uid or gid, a limit `sandboxLimits` refuses (`cli` kept, the engine still askable, ORC-450).
+ * the `FACTORY_SANDBOX_*` limits: none without the CLI, or every refusal of the start, each with its message (ORC-455): another
+ * CLI than docker or podman, no runner image, no uid or gid, the limits `sandboxLimits` refuses (`cli` kept when valid, the
+ * engine still askable, ORC-450).
  */
-export function sandboxConfig(env: NodeJS.ProcessEnv): SandboxConfig | { cli?: 'docker' | 'podman'; refusal: string } | undefined {
+export function sandboxConfig(env: NodeJS.ProcessEnv): SandboxConfig | { cli?: 'docker' | 'podman'; refusals: string[] } | undefined {
   const cli = containerCli(env);
   if (!cli) return undefined;
-  if (typeof cli !== 'string') return { refusal: `${cli.refused}.` };
   const image = env['FACTORY_RUNNER_IMAGE'];
-  if (!image) return { cli, refusal: 'FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.' };
   const uid = process.getuid?.();
   const gid = process.getgid?.();
-  if (uid === undefined || gid === undefined) return { cli, refusal: 'The sandboxes require a daemon on Linux (uid and gid).' };
   const limits = sandboxLimits(env);
-  return 'refused' in limits ? { cli, refusal: limits.refused } : { cli, image, uid, gid, limits };
+  const refusals = [
+    ...(typeof cli !== 'string' ? [`${cli.refused}.`] : []),
+    ...(!image ? ['FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.'] : []),
+    ...(uid === undefined || gid === undefined ? ['The sandboxes require a daemon on Linux (uid and gid).'] : []),
+    ...('refused' in limits ? [limits.refused] : []),
+  ];
+  if (typeof cli !== 'string' || !image || uid === undefined || gid === undefined || 'refused' in limits) {
+    return typeof cli === 'string' ? { cli, refusals } : { refusals };
+  }
+  return { cli, image, uid, gid, limits };
 }
 
 /**
  * The daemon's environment the start refuses, for the start and `factory doctor`'s host check alike (ORC-449), each with the
- * start's message: `sandboxConfig`'s refusal (a limit or the uid/gid too, ORC-450), or no container engine at all. An agent
+ * start's message: `sandboxConfig`'s refusals (a limit or the uid/gid too, ORC-450), or no container engine at all. An agent
  * runs in a sandbox or not at all: there is no run on the host any more (ORC-179).
  */
 export function sandboxRefusals(env: NodeJS.ProcessEnv): string[] {
   const sandbox = sandboxConfig(env);
-  if (sandbox) return 'refusal' in sandbox ? [sandbox.refusal] : [];
+  if (sandbox) return 'refusals' in sandbox ? sandbox.refusals : [];
   return [
     'FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container, there is no run on this machine. ' +
       'Set FACTORY_CONTAINER_CLI (podman, or docker) and FACTORY_RUNNER_IMAGE (docs/first-run.md).',
@@ -64,7 +71,7 @@ export function checkSandboxes(env: NodeJS.ProcessEnv): void {
  */
 export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress, o: { browserImage?: string; exec?: Exec } = {}): SandboxProvider {
   const sandbox = sandboxConfig(env);
-  if (!sandbox || 'refusal' in sandbox) throw new Error(sandboxRefusals(env)[0]);
+  if (!sandbox || 'refusals' in sandbox) throw new Error(sandboxRefusals(env).join(' '));
   return new SandboxRouter([
     {
       name: 'container',
