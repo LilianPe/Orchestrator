@@ -297,6 +297,47 @@ describe('GithubReconciler', () => {
       expect(writes()).toEqual([OTHER]);
     });
 
+    describe('a last push that names the head it replaced (ORC-438)', () => {
+      const replaced = (sha: string, before: string, n = 1): FactoryEvent<'publish.done'> => ({ ...published(sha, n), payload: { ...published(sha, n).payload, before } });
+      async function headAfter(head: string, events: FactoryEvent<'publish.done'>[], ticket: Partial<TicketState> = {}) {
+        const s = setup();
+        await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, ...ticket });
+        for (const e of events) await s.store.recordEvent(e);
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
+        await s.reconciler.once('p');
+        return s.events.filter((e) => e.type === 'push.human').map((e) => e.payload);
+      }
+
+      it('takes the head it replaced for the factory\'s, whoever pushed it: the forge may still read the PR on it', async () => {
+        // A human's push the factory went over, its webhook received then, no longer the ticket's `humanHead`.
+        expect(await headAfter(HUMAN, [published(OTHER, 1), replaced(PUBLISHED, HUMAN, 2)])).toEqual([]);
+        // The head read before the first publication, with no head kept from then.
+        expect(await headAfter(OTHER, [replaced(PUBLISHED, OTHER)])).toEqual([]);
+        expect(await headAfter(PUBLISHED, [replaced(PUBLISHED, OTHER)])).toEqual([]);
+      });
+
+      it('takes any older head for a human push, even one the factory pushed', async () => {
+        // OTHER, the factory's push before the last, which replaced a human's push: a branch put back on it.
+        expect(await headAfter(OTHER, [published(OTHER, 1), replaced(PUBLISHED, HUMAN, 2)])).toEqual([expect.objectContaining({ sha: OTHER, before: PUBLISHED })]);
+      });
+
+      it('reads no head kept before the first publication', async () => {
+        const s = setup();
+        await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
+        await s.store.recordEvent(replaced(PUBLISHED, OTHER));
+        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: HUMAN, checks: 'none', failedChecks: [] });
+        const getMeta = vi.spyOn(s.store, 'getMeta');
+        await s.reconciler.once('p');
+        expect(getMeta.mock.calls.filter(([key]) => key.startsWith('lost-push:'))).toEqual([]);
+        expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
+      });
+
+      it('falls back on the window when the last push names none, as an older journal\'s', async () => {
+        // A publication journaled before ORC-438, after one that named its head replaced.
+        expect(await headAfter(OTHER, [replaced(OTHER, HUMAN, 1), published(PUBLISHED, 2)])).toEqual([]);
+      });
+    });
+
     it("holds back no CI verdict when the head's judgement fails", async () => {
       const logs: string[] = [];
       const events: FactoryEvent[] = [];

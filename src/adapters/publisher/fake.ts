@@ -60,10 +60,12 @@ export class FakePublisher implements Publisher {
     }
     const refusal = this.refusals.shift();
     if (refusal) throw new PublishRefused(refusal.code, refusal.message);
+    // The branch's head before the push, as the publisher reads it on the forge: the last PR's, merged or not.
+    const before = (await this.forge.findPr(req.repoPath, req.branch))?.headSha;
     const { number, url } = await this.forge.ensurePr(req.repoPath, { branch: req.branch, base: 'main', title: req.title, body: req.body, draft: true });
     this.published.push(req);
     const pr = (await this.forge.findPr(req.repoPath, req.branch))!;
     this.forge.setPr(req.branch, { ...pr, headSha: req.sha });
-    return { prNumber: number, url, sha: req.sha };
+    return { prNumber: number, url, sha: req.sha, ...(before && before !== req.sha ? { before } : {}) };
   }
 }

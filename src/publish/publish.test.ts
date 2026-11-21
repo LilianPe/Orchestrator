@@ -324,6 +324,18 @@ describe('GitPublisher', () => {
       expect(s.onForge()).toBe(theirs);
     });
 
+    it('names the head each push replaced, and none when it pushed nothing or made the branch (ORC-438)', async () => {
+      const s = setup();
+      expect((await s.publisher.publish(s.request())).before).toBeUndefined();
+      // Already on the forge: nothing pushed, nothing replaced.
+      expect((await s.publisher.publish(s.request())).before).toBeUndefined();
+      write(s.repo, 'a.txt', 'two\n');
+      const next = commit(s.repo);
+      expect(await s.publisher.publish(s.request({ sha: next }))).toMatchObject({ sha: next, before: s.sha });
+      const sha = rebased(s);
+      expect(await s.publisher.publish(s.request({ sha, rewrites: next }))).toMatchObject({ sha, before: next });
+    });
+
     it('goes fast-forward over a human commit the work already holds', async () => {
       const s = setup();
       await s.publisher.publish(s.request());
@@ -412,7 +424,7 @@ describe('GitPublisher', () => {
       write(s.repo, 'a.txt', 'two\n');
       const sha = commit(s.repo);
       const next = await s.publisher.publish(s.request({ sha }));
-      expect(next).toEqual({ ...first, sha });
+      expect(next).toEqual({ ...first, sha, before: first.sha });
       expect(s.forge.opened).toHaveLength(1);
     });
   });

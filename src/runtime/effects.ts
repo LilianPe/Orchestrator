@@ -599,7 +599,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     const payload = { runId: c.runId, job: c.job, sha: c.sha };
     const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId };
     const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:${key.id}`, type: 'publish.refused', at: this.d.clock.now(), payload: { ...payload, reason } }));
-    const published = async (empty = false) => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}), ...(empty ? { empty: true as const } : {}) } }));
+    const published = async (empty = false, before?: string) => void (await this.accept({ ...base, id: `publish-done:${key.id}`, type: 'publish.done', at: this.d.clock.now(), payload: { ...payload, ...(c.output ? { output: c.output } : {}), ...(empty ? { empty: true as const } : {}), ...(before ? { before } : {}) } }));
     const known = key.replay ? await this.d.store.getMeta(mark) : undefined;
     if (known) return refuse(known);
     let reason: string;
@@ -620,7 +620,7 @@ export abstract class DaemonEffects extends DaemonChecks {
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
-        return published();
+        return published(false, pr.before);
       } catch (err) {
         if (err instanceof OutputRefused) reason = `the PR's text does not pass the output policy: ${err.refusals.map((r) => r.detail).join('; ')}.`;
         else if (err instanceof PublishRefused) {
