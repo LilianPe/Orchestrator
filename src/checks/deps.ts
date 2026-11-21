@@ -428,7 +428,7 @@ export function manifestDependencies(file: 'package.json' | 'pyproject.toml', te
   try {
     READERS[file](m, text);
   } catch (err) {
-    // Any error, not only a ManifestError: a report that reads files never stops init (a RangeError of overrides nested too deep).
+    // Any error of the reader, not only a ManifestError, is the manifest's problem: a RangeError of overrides nested too deep included.
     return { names: names(), problem: err instanceof Error ? err.message : String(err) };
   }
   return { names: names() };
