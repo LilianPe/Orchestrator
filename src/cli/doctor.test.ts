@@ -1129,11 +1129,17 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)"
     expect(line).toContain('actions (write)');
     for (const named of ['dispatch', 'secrets', 'Repository permissions → Actions', 'Read-only', 'Installed GitHub Apps']) expect(line).toContain(named);
     expect(line).not.toContain('No access');
+    expect(line).toContain('actions is Read-only');
     expect(result.text).toContain('Result: refused — the GitHub App is installed with the Actions (write) permission');
     const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions } })).text) as { accepted: boolean; installation: object };
     expect(json).toMatchObject({ accepted: false, installation: { verdict: 'refused', permissions: { actions: 'write' } } });
     // Refused, not also warned.
     expect(json.installation).not.toHaveProperty('warnings');
+  });
+
+  it('warns about Organization Members above read', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, members: 'write' } } });
+    expect(result.lines.find((l) => l.startsWith('  Warning: the App is installed with permissions'))).toContain('members (write, the manifest asks Read-only)');
   });
 
   it('refuses Actions and Workflows together, and names both', async () => {
@@ -1154,7 +1160,7 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)"
     expect(result.code).toBe(0);
     expect(result.text).toContain('GitHub App installation: accepted');
     const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with permissions the manifest does not ask for'));
-    expect(warning).toContain(`${permission} (${level})`);
+    expect(warning).toContain(`${permission} (${level}, `);
     for (const named of ['Permissions & events', 'docs/github-app-manifest.json', 'Installed GitHub Apps']) expect(warning).toContain(named);
     expect(result.text).toMatch(/Result: accepted — .*the one under the GitHub App installation/);
     const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions } })).text) as { accepted: boolean };
@@ -1165,11 +1171,19 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)"
     const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, secrets: 'write', environments: 'read' } } });
     const warnings = result.lines.filter((l) => l.startsWith('  Warning: the App is installed with permissions'));
     expect(warnings).toHaveLength(1);
-    for (const named of ['secrets (write)', 'environments (read)']) expect(warnings[0]).toContain(named);
+    for (const named of ['secrets (write, ', 'environments (read, ']) expect(warnings[0]).toContain(named);
   });
 
-  it('does not warn about a permission below the manifest, nor one the manifest asks at its level', async () => {
-    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, contents: 'read' } } });
+  it('names the level each permission in excess goes back to', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, statuses: 'write', secrets: 'write' } } });
+    const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with permissions'));
+    expect(warning).toContain('statuses (write, the manifest asks Read-only)');
+    expect(warning).toContain('secrets (write, not in the manifest: No access)');
+  });
+
+  // docs/github.md asks for it when the dashboard is gated on an org or a team (ORC-399); above read, it warns.
+  it('does not warn about a permission below the manifest, nor about Organization Members at read', async () => {
+    const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, contents: 'read', members: 'read' } } });
     expect(result.code).toBe(0);
     expect(result.lines.some((l) => l.startsWith('  Warning: the App is installed'))).toBe(false);
   });
@@ -1178,7 +1192,7 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441, ORC-443)"
     const result = await doctor([], [], { fake: { permissions: { ...MANIFEST_PERMISSIONS, secrets: 'write', workflows: 'write' } } });
     expect(result.code).toBe(1);
     const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with permissions the manifest does not ask for'));
-    expect(warning).toContain('secrets (write)');
+    expect(warning).toContain('secrets (write, ');
     expect(warning).not.toContain('workflows');
   });
 

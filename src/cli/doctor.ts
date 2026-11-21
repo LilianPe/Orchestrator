@@ -649,7 +649,7 @@ export interface InstallationReport {
 
 /**
  * A permission the App must not hold: where each of its kinds is set, and what it would let the daemon do. Forbidden at
- * any level, or, with `allowed`, at any level but that one.
+ * any level, or, with `allowed`, above that level.
  */
 interface Forbidden {
   name: string;
@@ -679,33 +679,43 @@ const FORBIDDEN_NAMES = FORBIDDEN.map(({ name }) => name)
   .join(', ')
   .replace(/, ([^,]*)$/, ' or $1');
 
-/** The forbidden permissions the installation holds, each with the kinds it holds. */
-const heldForbidden = (permissions: Record<string, string>) =>
-  FORBIDDEN.map((forbidden) => ({
-    ...forbidden,
-    held: Object.keys(forbidden.settings).filter((permission) => permissions[permission] !== undefined && permissions[permission] !== forbidden.allowed),
-  })).filter((forbidden) => forbidden.held.length > 0);
-
 const LEVELS = ['read', 'write', 'admin'];
+/** GitHub's label for a level, as the App's settings show it. */
+const LEVEL_LABELS: Record<string, string> = { read: 'Read-only', write: 'Read and write' };
 
-/** Above what the manifest asks: a permission it leaves out, or a higher level (an unknown level counts as higher). */
-function inExcess(permission: string, level: string): boolean {
-  const asked = (GITHUB_APP_PERMISSIONS as Record<string, string>)[permission];
+/** Whether `level` is above `asked`; any level is above none, and an unknown level above every one. */
+function above(level: string, asked: string | undefined): boolean {
   if (asked === undefined) return true;
   const rank = LEVELS.indexOf(level);
   return rank === -1 || rank > LEVELS.indexOf(asked);
 }
 
-/** The permissions above the manifest, but not forbidden (refused apart), named in one warning (ORC-443). */
+/** The forbidden permissions the installation holds, each with the kinds it holds. */
+const heldForbidden = (permissions: Record<string, string>) =>
+  FORBIDDEN.map((forbidden) => ({
+    ...forbidden,
+    held: Object.keys(forbidden.settings).filter((permission) => permissions[permission] !== undefined && above(permissions[permission], forbidden.allowed)),
+  })).filter((forbidden) => forbidden.held.length > 0);
+
+/**
+ * What an installation may hold without a warning: the manifest's permissions, and the Organization permission Members at
+ * read, which docs/github.md asks for a dashboard gated on an org or a team (ORC-399).
+ */
+const ACCEPTED_PERMISSIONS: Record<string, string> = { ...GITHUB_APP_PERMISSIONS, members: 'read' };
+
+/** The permissions above `ACCEPTED_PERMISSIONS`, but not forbidden (refused apart), named in one warning (ORC-443). */
 function excessWarning(permissions: Record<string, string>): string | undefined {
   const forbidden = new Set(FORBIDDEN.flatMap(({ settings }) => Object.keys(settings)));
-  const excess = Object.entries(permissions).filter(([permission, level]) => !forbidden.has(permission) && inExcess(permission, level));
+  const excess = Object.entries(permissions).filter(([permission, level]) => !forbidden.has(permission) && above(level, ACCEPTED_PERMISSIONS[permission]));
   if (excess.length === 0) return undefined;
+  const named = excess.map(([permission, level]) => {
+    const asked = ACCEPTED_PERMISSIONS[permission];
+    return `${permission} (${level}, ${asked === undefined ? 'not in the manifest: No access' : `the manifest asks ${LEVEL_LABELS[asked] ?? asked}`})`;
+  });
   return (
-    `Warning: the App is installed with permissions the manifest does not ask for: ${excess.map(([permission, level]) => `${permission} (${level})`).join(', ')}. ` +
-    "Each widens what the daemon can do with the App's token. In the App's settings (Permissions & events), set each back to the manifest's level " +
-    '(docs/github-app-manifest.json), or to No access when it does not list it, and save, then accept the change in the installation ' +
-    '(Settings → Applications → Installed GitHub Apps → Configure).'
+    `Warning: the App is installed with permissions the manifest does not ask for: ${named.join(', ')}. ` +
+    "Each widens what the daemon can do with the App's token. In the App's settings (Permissions & events), set each to the level named " +
+    '(docs/github-app-manifest.json) and save, then accept the change in the installation (Settings → Applications → Installed GitHub Apps → Configure).'
   );
 }
 
@@ -718,15 +728,17 @@ function judgeInstallation(permissions: Record<string, string>): InstallationRep
   return {
     permissions,
     verdict: 'refused',
-    reasons: held.map(
-      ({ name, settings, risk, allowed, held: kinds }, i) =>
+    reasons: held.map(({ name, settings, risk, allowed, held: kinds }, i) => {
+      const target = allowed === undefined ? 'No access' : (LEVEL_LABELS[allowed] ?? allowed);
+      return (
         // Joined after one another: each after the first opens a sentence.
         `${i === 0 ? 'installed' : 'Installed'} with ${kinds.map((permission) => `${permission} (${permissions[permission]})`).join(' and ')}: ${risk}. ` +
-        `${allowed ? 'Lower' : 'Remove'} it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), ` +
-        `set ${kinds.map((permission) => settings[permission]).join(' and ')} to ${allowed ? 'Read-only' : 'No access'} and save, then check in the installation ` +
-        `(Settings → Applications → Installed GitHub Apps → Configure) that ${allowed ? `${kinds.join(' and ')} reads ${allowed}` : `${name} is no longer listed`} ` +
-        '(docs/github-app-manifest.json).',
-    ),
+        `${allowed === undefined ? 'Remove' : 'Lower'} it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), ` +
+        `set ${kinds.map((permission) => settings[permission]).join(' and ')} to ${target} and save, then check in the installation ` +
+        `(Settings → Applications → Installed GitHub Apps → Configure) that ${allowed === undefined ? `${name} is no longer listed` : `${kinds.join(' and ')} is ${target}`} ` +
+        '(docs/github-app-manifest.json).'
+      );
+    }),
     ...warnings,
   };
 }
