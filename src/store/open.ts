@@ -12,7 +12,7 @@ export interface OpenStoreOptions {
   migrationsFolder: string;
   /** Reports a lost Postgres connection; the store reconnects on its next query. */
   log?: (m: string) => void;
-  /** `false` opens Postgres as it is, for a read-only command (`factory plan`): the daemon migrates. */
+  /** `false` opens Postgres as it is, for a command of the CLI (`factory run repair`, `flaky`…): the daemon migrates. */
   migrate?: boolean;
 }
 

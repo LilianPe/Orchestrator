@@ -352,7 +352,7 @@ After `red`, the factory freezes what judges the agent: the tests the `tests` st
 
 ## The class of the diff and the review label (ORC-198)
 
-**The class.** `verify` classifies the diff of the commit it checks against the default branch, on the same reads as the path rules (in the fresh clone, or, under `--fake-runner` without sandboxes, on the factory's repository), and journals it in `verify.passed` (`diffClass`: the class and at most 20 of the paths that made it so); the ticket keeps it with `verifiedSha`. A commit found green again keeps the class read of it before. The classes, lowest to highest; a diff takes the highest it touches:
+**The class.** `verify` classifies the diff of the commit it checks against the default branch, on the same reads as the path rules (in the fresh clone, or, under the test harness's fake runner without sandboxes, on the factory's repository), and journals it in `verify.passed` (`diffClass`: the class and at most 20 of the paths that made it so); the ticket keeps it with `verifiedSha`. A commit found green again keeps the class read of it before. The classes, lowest to highest; a diff takes the highest it touches:
 
 - `normal`: the rest;
 - `sensitive`: a path of the repository's `sensitive_paths` (`.factory/config.yml`, read on the default branch);
@@ -512,7 +512,7 @@ The pickup checks, `tracker.pickup.checks` (`has_description` and `not_started` 
 - `not_started`: no branch of the ticket's already exists on the forge (its name under the repository's naming, any type, or the legacy `factory/<ticket-id>-…`, ORC-283) (read through the forge port, every page, ORC-207). With `intake` on, its duplicate search makes this check at its launch, whatever the list says, and names the branch's open PR when it has one.
 - `has_acceptance_criteria`: the description holds acceptance criteria, however they are written (ORC-353): the words « critères d'acceptation » (or « critère d'acceptation », « criteres… ») or "acceptance criteria", case-insensitively; or a section of its own with something in it, under a heading such as « Definition of done », « Expected behavior », « Résultat attendu », « Acceptance tests »; or an example « Given … then » / « Étant donné … alors », on one line or the lines of its list item (a Gherkin `Scenario:` included); or a checklist (`- [ ]`). No model reads it: whether the criteria are enough is `intake`'s judgement (`complete`), when it runs. `factory/default` does not list it (ORC-395 will settle where it goes).
 
-If a check fails, the ticket is blocked and the factory says so in its block comment, with the failed checks (« Can you fix this, then reply here? »); under `intake`, they are a question of its guard instead (ORC-206). `factory plan` shows, for each delegated ticket, whether it would be picked up or not, and why.
+If a check fails, the ticket is blocked and the factory says so in its block comment, with the failed checks (« Can you fix this, then reply here? »); under `intake`, they are a question of its guard instead (ORC-206).
 
 ### Limits
 
@@ -577,7 +577,7 @@ The factory handles these types in hard-coded fashion: no reaction follows them.
 | `verify.passed` / `verify.failed` | The job's end, or a new attempt, or a block (see `verify`). After the PR is merged: nothing. |
 | `timer.fired` | A timer set by a decision expires (event `timer:<key>:<due>` written to the inbox). Kind `debounce`: launches the job whose `debounce` delay just expired (and unblocks the ticket). Kinds `clarify.remind` and `clarify.expire` (ORC-210): at 24 h the open `clarify` questions are asked again, at 72 h the ticket is blocked on `intake`; a round answered or ended since does nothing ([preset](#clarify-questions-reminder-and-expiry-orc-210)). Kind `usage.reset` (ORC-340): asks again the question the usage limit cut, as a relaunch of its run (a code step's, armed before ORC-357, relaunches it the same way); without a job: nothing. |
 | `pr.opened` | Records the PR and attaches it to the Linear session. |
-| `control.pause` / `control.resume` / `control.stop` | Pause / resume of the queue, stop of a ticket (UI, `factory pause`, `factory resume`, `factory stop`). |
+| `control.pause` / `control.resume` / `control.stop` | Pause / resume of the queue, which no command or route sends any more (ORC-200); stop of a ticket (UI, `factory stop`). |
 
 **Delegation withdrawn** (`ticket.undelegated`, internal). The reconciliation writes it when a human takes the ticket back from the agent in Linear, after a `session.stopped` when a run is under way, which stops that run as Linear's Stop does. On a delegated ticket that is not blocked, the factory cancels its work as a cancel of the ticket stops it (ORC-227): the run is stopped, the verdict of a check in progress is ignored, the waiting job and the `debounce` timers are deleted, nothing is published. It writes nothing in Linear and blocks nothing. A blocked ticket keeps its block and its job: its work already ended, by the `session.stopped` when a run was under way. Unlike a cancel, the block and the messages kept in `humanInbox` stay.
 

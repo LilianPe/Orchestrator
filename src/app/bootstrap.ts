@@ -137,7 +137,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
   // Before anything opens: no agent on the host (ORC-179), sandboxes only with docker or podman and their runner image,
-  // valid limits and the daemon's uid/gid (`sandboxRefusals`, said by `factory doctor` too, ORC-449, ORC-450). --fake-runner launches none.
+  // valid limits and the daemon's uid/gid (`sandboxRefusals`, said by `factory doctor` too, ORC-449, ORC-450). The test harness's fake runner launches none.
   if (!o.fakeRunner) checkSandboxes(env);
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
@@ -223,7 +223,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const daemonSecrets = (): string[] => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
     // Masked where the daemon shows a text it did not write: the diagnosis, the CI logs a fix reads (ORC-459).
     const allSecrets = () => transcriptSecrets(env, daemonSecrets());
-    // A container per attempt (ORC-204), from FACTORY_CONTAINER_CLI; --fake-runner launches no agent, and has none.
+    // A container per attempt (ORC-204), from FACTORY_CONTAINER_CLI; the test harness's fake runner launches no agent, and has none.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
@@ -249,7 +249,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const ticketCap = ticketCapOf(yml);
     if (disabled.length) log(`Disabled in factory.yml: ${disabled.join(', ')}.`);
     if (sandboxes && !claudeTokenOf()) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
-    // No sandboxes only under --fake-runner: `claude` runs in a sandbox or not at all (ORC-179).
+    // No sandboxes only under the test harness's fake runner: `claude` runs in a sandbox or not at all (ORC-179).
     const runner: Runner = sandboxes
       ? new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, proxyHasToken: () => !!claudeTokenOf(), log, sandboxes })
       : Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) });

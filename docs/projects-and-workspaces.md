@@ -40,8 +40,6 @@ Several projects can declare the same `linearTeamKey`. The ticket then designate
 
 Only one project holds a ticket, across both stores (key `(project, ticket)`, ORC-316). While another project of the same team holds it, an event routed on a stale read (a reconciliation pass that read Linear before a signed delegation, for example) is refused if it would create a copy of the ticket, or if it would make the copy that was waiting here hold the ticket. The ticket stays intact, the refusal is logged as an error, and the event is set aside as a dead letter, with no retry and without blocking the ticket. The ticket's session says so (a `thought` activity, which does not change the session's state), and the session the event came from replies if it is a different one; `factory run repair <ticket>` shows it. Ignoring it closes it; replaying it refuses it again as long as the other project holds the ticket. The row of a project that is no longer in the configuration (renamed, for example) refuses nothing: its events create a copy under the new id, and the old row remains, unrelated to it.
 
-`factory plan` lists each ticket once, under its project, and marks « repository to specify » those that name none.
-
 ### Removing a project
 
 Delete its entry from `config.yaml` and restart. The remaining directories under `workspaces/<id>/` are deleted like any directory.

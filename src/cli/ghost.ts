@@ -48,7 +48,7 @@ export interface GhostOptions {
   projects: readonly { id: string; repoPath: string; fantome: boolean }[];
   /**
    * Whether the daemon's runs have sandboxes, as it said at its last start (ORC-376); undefined when no daemon has said yet. A replay
-   * runs with sandboxes only: a daemon without them (`--fake-runner`) runs no agent (ORC-179).
+   * runs with sandboxes only: a daemon without them (the test harness's fake runner) runs no agent (ORC-179).
    */
   sandboxes(): Promise<boolean | undefined>;
   humanPr(repoPath: string, number: number): Promise<HumanPr>;

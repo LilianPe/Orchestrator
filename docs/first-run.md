@@ -116,7 +116,7 @@ projects:
         <linear id of the delegator>: <their github login>
 ```
 
-`FACTORY_HOME/factory.yml` is read by `factory up`, `factory doctor` and `factory plan` with the daemon's environment, and by `factory validate` for its budgets, `max_diff` and tools. The one `init` wrote:
+`FACTORY_HOME/factory.yml` is read by `factory up` and `factory doctor` with the daemon's environment, and by `factory validate` for its budgets, `max_diff` and tools. The one `init` wrote:
 
 ```yaml
 # Written by factory init: every secret is a reference, read from the daemon's environment.
@@ -204,7 +204,7 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 
 | Output | Cause | Fix |
 |---|---|---|
-| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell (`factory plan` says the same) | run it in the daemon's environment (step 2) |
+| `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell | run it in the daemon's environment (step 2) |
 | `invalid factory.yml:` then `claude.default_model: required` or `` claude.runtime: only `claude-code` exists `` | the `claude` section | as in step 2 |
 | any message `factory up` refuses to start with (`factory.yml: statuses.…`, `host: … exposes …`) | the same as at the start: `doctor` runs the start's checks of `config.yaml` and `factory.yml` | as the message says |
 | `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml` nor in `config.yaml`, and no `GH_APP_*` | item 4 |
@@ -253,7 +253,7 @@ The GitHub webhooks line is expected locally: a merge or a CI verdict then reach
 
 Then open `http://localhost:4100`, click **Connect Linear** and authorize the application: « Linear is connected. You can close this tab. ». The factory creates the missing statuses of the team (Todo, Spec, In Progress, Human Review, AI Review, Done) and the `Bloqué` label.
 
-In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: active …`) and `factory plan`, which lists the tickets delegated to the agent and whether each would be picked up, without starting anything (`` Linear not connected: run `factory up`, then connect Linear. `` before the connection).
+In another terminal, with the same `FACTORY_HOME`: `factory status` (`Linear: connected · queue: 0 waiting`), which lists the tickets the factory holds and their runs.
 
 Then the dry run of the pilot, with the project's `id` in `config.yaml` (`pilot` in step 2), in that same terminal:
 
@@ -287,5 +287,5 @@ A blocked ticket waits for a human: reply on the ticket (comment or session) and
 
 ## Troubleshooting
 
-- **`factory status` says `Orchestrator did not answer through …/cli/factory.sock (connect EINVAL …)`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes). `status`, `pause`, `resume` and `stop` then fail; use a shorter `FACTORY_HOME` and restart the daemon.
+- **`factory status` says `Orchestrator did not answer through …/cli/factory.sock (connect EINVAL …)`**, and the daemon logged `CLI socket: … cannot be listened on (listen EINVAL …)`: the socket's path is longer than Linux allows (108 bytes). `status`, `stop` and `dry-run` then fail; use a shorter `FACTORY_HOME` and restart the daemon.
 - More: [`operations.md`](operations.md#troubleshooting).

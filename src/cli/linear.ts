@@ -5,7 +5,7 @@ import type { FactoryYml } from '../config/factory-yml.js';
 import { linearSettings, saveLinearTokens } from '../config/instance.js';
 
 /**
- * Linear for a command of the CLI (`plan`, `baseline`), on the daemon's credentials: the OAuth tokens it saved, refreshed
+ * Linear for a command of the CLI (`doctor`, `baseline`), on the daemon's credentials: the OAuth tokens it saved, refreshed
  * and saved back when they expire. A message for the human when Linear is not connected.
  */
 export function cliLinearTracker(home: string, yml: FactoryYml | undefined): LinearTracker | string {

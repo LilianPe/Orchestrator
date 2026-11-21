@@ -14,7 +14,7 @@ import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { createMissingStatuses, startFactory, type BootOptions } from './bootstrap.js';
-import { runQueueCommand, runStatusCommand } from '../cli/control.js';
+import { runStatusCommand } from '../cli/control.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { oldDatabaseWarnings } from '../store/old-databases.js';
 import { TrackerSwitch } from './tracker-switch.js';
@@ -535,10 +535,8 @@ describe('bootstrap', () => {
         expect(statSync(join(home, 'cli')).mode & 0o777).toBe(0o700);
         const lines: string[] = [];
         const cli = { api: 'http://127.0.0.1:4195', socket, out: (l: string) => void lines.push(l) };
-        expect(await runQueueCommand(cli, 'pause')).toBe(0);
         expect(await runStatusCommand(cli)).toBe(0);
-        expect(lines[0]).toBe('Queue paused.');
-        expect(lines[1]).toMatch(/^Linear: not connected · queue: /);
+        expect(lines[0]).toBe('Linear: not connected · queue: 0 waiting');
       }
       // A page sends the browser to GitHub, to the App's authorization, coming back to the public URL.
       const page = await fetch('http://127.0.0.1:4195/', { headers: { accept: 'text/html' }, redirect: 'manual' });

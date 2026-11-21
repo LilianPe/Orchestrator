@@ -2,7 +2,7 @@
 
 The factory provides one executable, `factory`, for you, the operator (installed by `npm link`, see [`installation.md`](installation.md)). The agents have none: during a run they reach the factory through its MCP alone (`submit_result`, `kb_search`, see [`interface-and-security.md`](interface-and-security.md#factory-mcp)); the agents' former CLI is gone (ORC-192).
 
-All `factory` commands read `FACTORY_HOME` (default `~/.factory`) and `config.yaml`. An unknown or incomplete command prints the help and exits with code 1.
+All `factory` commands read `FACTORY_HOME` (default `~/.factory`) and `config.yaml`. `factory` alone prints the help, the commands of the table below and no others, and exits with code 1; an unknown command prints `Unknown command: <name>` then the help, an incomplete one the help, both with code 1. `plan`, `pause` and `resume` are gone (ORC-200): the guard before In Progress and `intake` do what `plan` previewed, and the queue has no global pause. `simulate`, which the MVP's list named, is withdrawn (ORC-157): the replay of closed tickets, `factory ghost`, covers its need.
 
 ## `factory`
 
@@ -11,10 +11,8 @@ All `factory` commands read `FACTORY_HOME` (default `~/.factory`) and `config.ya
 | `factory init [--dev]` | Configure the factory for the current repository (`--dev`: a smee.io relay for Linear's webhooks, on a workstation). | no |
 | `factory validate [repo]` | Check `.factory/config.yml` against the baseline, the tools of each agent step and the worst case of the budgets. | no |
 | `factory doctor [repo]` | Refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches. | no (GitHub App) |
-| `factory up [--fake-runner]` | Start the daemon. | — |
-| `factory plan` | List the delegated tickets and say which ones would be picked up. | no (Linear connected) |
+| `factory up` | Start the daemon. | — |
 | `factory status` | State of the running instance: tickets, blocks, runs. | yes |
-| `factory pause` / `factory resume` | Suspend / resume the queue. | yes |
 | `factory stop <ID>` | Stop a ticket's run. | yes |
 | `factory dry-run <project>` | Run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks. | yes (with sandboxes) |
 | `factory replay <journal>...` | Replay exported journals (bit-for-bit regression, `--what-if <preset>`, `--export <ID>`). | no (no instance needed, except `--export`) |
@@ -49,11 +47,11 @@ Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), the
 - If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
 - Refuses to start if `host` is not loopback without the dashboard's GitHub sign-in: the App's OAuth client, `dashboard` in `factory.yml`, an `https://` `publicUrl` (ORC-399).
-- Refuses to start without `FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`: an agent runs in a rootless container or not at all, there is no run on the host (ORC-349, ORC-179). `--fake-runner` launches no agent and needs neither; its checks pass without running any command.
+- Refuses to start without `FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`: an agent runs in a rootless container or not at all, there is no run on the host (ORC-349, ORC-179).
 
 `Ctrl+C` (SIGINT) or SIGTERM: clean shutdown (runs in progress are left running, then reattached on the next start, or started again if they vanished meanwhile, ORC-344).
 
-`--fake-runner`: replaces Claude Code with a simulated runner that answers « Done. » at no cost. For testing the UI and the Linear wiring.
+There is no `--fake-runner` any more (ORC-200): the simulated runner that answers « Done. » at no cost is the test harness's alone (`startFactory({ fakeRunner: true })`, see [`tests.md`](tests.md)).
 
 ### `factory validate [repo]`
 
@@ -81,38 +79,17 @@ Check before entrusting a repository, run where the daemon runs (`docker compose
 
 Full rule, examples and limits: [`github.md`](github.md).
 
-### `factory plan`
-
-Starts nothing. For each project, lists the tickets delegated to the agent in Linear, sorted by priority:
-
-```text
-REL-12  taken  Add the CSV export
-REL-15  clarify  Fix the login — intake, then clarify asks to complete the ticket: The description is shorter than 30 characters.
-REL-9  already handled  Menu redesign (human_review)
-```
-
-- `taken`: would pass the `tracker.pickup.checks` checks; at the Rapide level, a failed check follows as `assumed`, written in the spec;
-- `clarify`: fails a check: the delegation starts at `intake`, then `clarify` asks to complete the ticket, for the reasons that follow (ORC-423);
-- `not taken`: followed by the reasons: repository to specify, invalid `.factory/config.yml`, or a failed check when the chain does not start at `intake` (its launch refuses the ticket);
-- `already handled`: already tracked by the factory (with its logical state).
-
-Requires Linear to be connected (`Linear not connected: run `factory up`, then connect Linear.` otherwise).
-
 ### `factory status`
 
 ```text
-Linear: connected · queue: active (0 waiting) · dev slots 1/3
+Linear: connected · queue: 0 waiting
   REL-12  dev  Add the CSV export
-    run 7f3a…: dev, for 12 min, 0.80 $
+    run 7f3a…: dev, for 12 min
   REL-15  todo (blocked)  Fix the login
     Stopped on request
 ```
 
-For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable, silent past 1 min (ORC-434), or asking for a GitHub sign-in: says so, exit code 1.
-
-### `factory pause` / `factory resume`
-
-`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in the database (Postgres, `FACTORY_DATABASE_URL`) and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Resume » button.
+Neither the dev slots nor a cost in dollars (ORC-200). For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable, silent past 1 min (ORC-434), or asking for a GitHub sign-in: says so, exit code 1.
 
 ### `factory stop <ID>`
 
@@ -220,7 +197,7 @@ The replay of closed tickets: `start <project> --threshold <share> --as-is <shar
 its two thresholds, shares of the compared tickets: the factory's PRs to be mergeable, and those to be mergeable as is (both required, never
 changed after, ORC-385) and rebuilds each ticket at the parent of its PR's merge commit, for a project on the
 `factory/fantome` preset; the daemon then delegates each ticket to that project itself (ORC-376). It is refused when the daemon
-runs without sandboxes (`--fake-runner`), or has never started. `collect`, `judge` (the blind screen, PR A and PR B on the grid mergeable as is / after edits / to reject) and `report` follow. See
+runs without sandboxes (the test harness's fake runner), or has never started. `collect`, `judge` (the blind screen, PR A and PR B on the grid mergeable as is / after edits / to reject) and `report` follow. See
 [the replay of closed tickets](ghost-replay.md). Like `flaky`, the command writes to the instance's database, without the daemon.
 
 ## Development scripts

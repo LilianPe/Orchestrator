@@ -642,16 +642,13 @@ describe('server', () => {
     expect(labelled.labels.pending).not.toHaveProperty('factoryCommit');
   });
 
-  it('submits pause and stop controls', async () => {
+  it("submits a ticket's stop; the global pause and resume are gone (ORC-200)", async () => {
     const { app, submitted } = await setup();
-    await app.request('/api/control/pause', { method: 'POST' });
     await app.request('/api/tickets/p/REL-1/stop', { method: 'POST' });
-    expect(submitted.map((e) => [e.type, e.projectId, e.ticketId])).toEqual([
-      ['control.pause', '*', undefined],
-      ['control.stop', 'p', 'REL-1'],
-    ]);
+    for (const path of ['/api/control/pause', '/api/control/resume']) expect((await app.request(path, { method: 'POST' })).status, path).toBe(404);
+    expect(submitted.map((e) => [e.type, e.projectId, e.ticketId])).toEqual([['control.stop', 'p', 'REL-1']]);
     // A stop is checked on the matrix (ORC-301): its author, and the role the dashboard's guard gives, journaled with it.
-    expect(submitted[1]).toMatchObject({ actor: 'dashboard:local', roles: ['operator'] });
+    expect(submitted[0]).toMatchObject({ actor: 'dashboard:local', roles: ['operator'] });
   });
 
   describe("a run's inspection (ORC-301)", () => {
@@ -675,15 +672,11 @@ describe('server', () => {
       await atWork(store);
       const { headers } = await signIn(app);
       expect((await app.request('/api/runs/r1/pause', { method: 'POST' })).status).toBe(401);
-      for (const path of ['/api/control/pause', '/api/control/resume', '/api/runs/r1/pause', '/api/runs/r1/stop', '/api/runs/r1/take-over', '/api/tickets/p/REL-1/stop']) {
+      for (const path of ['/api/runs/r1/pause', '/api/runs/r1/stop', '/api/runs/r1/take-over', '/api/tickets/p/REL-1/stop']) {
         expect((await app.request(path, { method: 'POST', headers })).status, path).toBe(200);
       }
-      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
-        ['control.pause', 'github:armand', ['operator']],
-        ['control.resume', 'github:armand', ['operator']],
-        ...Array(4).fill(['control.stop', 'github:armand', ['operator']]),
-      ]);
-      expect(submitted[2]!.payload).toEqual({ runId: 'r1', pause: true });
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual(Array(4).fill(['control.stop', 'github:armand', ['operator']]));
+      expect(submitted[0]!.payload).toEqual({ runId: 'r1', pause: true });
       await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), prNumber: 3 });
       await store.recordEvent({ ...TRUSTED, id: 'o', type: 'pr.opened', at: 2, projectId: 'p', ticketId: 'REL-1', payload: { number: 3, url: 'https://gh/pr/3', branch: 'factory/rel-1' } } as FactoryEvent);
       const defect = await app.request('/api/audit/p/REL-1/defects', { method: 'POST', headers, body: JSON.stringify({ prNumber: 3, description: 'header row missing' }) });
@@ -949,7 +942,7 @@ describe('server', () => {
         expect(res.status, path).toBe(401);
         expect(res.headers.get('www-authenticate'), path).toBeNull();
       }
-      expect((await app.request('/api/control/pause', { method: 'POST' })).status).toBe(401);
+      expect((await app.request('/api/tickets/p/REL-1/stop', { method: 'POST' })).status).toBe(401);
       // A browser opening a page: GitHub's authorization of the App, its state kept in a cookie of this site alone.
       const { res, state, stateCookie } = await startSignIn(app);
       expect(res.status).toBe(302);
@@ -1072,17 +1065,13 @@ describe('server', () => {
       const viaSocket = cliOnly(app, 'srv-1');
       const ask = (path: string, method = 'GET') => viaSocket(new Request(`http://localhost${path}`, { method }));
       expect((await ask('/api/state')).status).toBe(200);
-      for (const path of ['/api/control/pause', '/api/control/resume', '/api/tickets/p/REL-1/stop']) expect((await ask(path, 'POST')).status, path).toBe(200);
-      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([
-        ['control.pause', 'cli:srv-1', ['operator']],
-        ['control.resume', 'cli:srv-1', ['operator']],
-        ['control.stop', 'cli:srv-1', ['operator']],
-      ]);
+      expect((await ask('/api/tickets/p/REL-1/stop', 'POST')).status).toBe(200);
+      expect(submitted.map((e) => [e.type, e.actor, e.roles])).toEqual([['control.stop', 'cli:srv-1', ['operator']]]);
       // The CLI's routes alone: the dashboard, a run's controls, the diagnosis and the rest are not reached this way.
-      for (const [path, method] of [['/', 'GET'], ['/api/runs/r1', 'GET'], ['/api/runs/r1/stop', 'POST'], ['/api/runs/r1/take-over', 'POST'], ['/tickets/REL-1/diagnosis', 'GET'], ['/health', 'GET'], ['/api/state', 'POST'], ['/api/control/pause', 'GET']]) {
+      for (const [path, method] of [['/', 'GET'], ['/api/runs/r1', 'GET'], ['/api/runs/r1/stop', 'POST'], ['/api/runs/r1/take-over', 'POST'], ['/tickets/REL-1/diagnosis', 'GET'], ['/health', 'GET'], ['/api/state', 'POST'], ['/api/control/pause', 'POST'], ['/api/control/resume', 'POST']]) {
         expect((await ask(path!, method)).status, `${method} ${path}`).toBe(404);
       }
-      expect(submitted).toHaveLength(3);
+      expect(submitted).toHaveLength(1);
     });
 
     // Criterion 2: the same routes over HTTP still ask for the sign-in, whatever a request claims.
@@ -1090,13 +1079,13 @@ describe('server', () => {
       const { app, submitted } = await setup({ githubLogin: GITHUB });
       const claims = { 'x-forwarded-for': '127.0.0.1', host: 'localhost', 'user-agent': 'factory-cli', cookie: 'cli=1' };
       expect((await app.request('/api/state', { headers: claims })).status).toBe(401);
-      for (const path of ['/api/control/pause', '/api/control/resume', '/api/tickets/p/REL-1/stop']) expect((await app.request(path, { method: 'POST', headers: claims })).status, path).toBe(401);
+      expect((await app.request('/api/tickets/p/REL-1/stop', { method: 'POST', headers: claims })).status).toBe(401);
       expect(submitted).toEqual([]);
     });
 
     it('answers on the loopback daemon too, under any Host the client sends, with the same actor', async () => {
       const { app, submitted } = await setup();
-      const res = await cliOnly(app, 'srv-1')(new Request('http://factory.sock/api/control/pause', { method: 'POST' }));
+      const res = await cliOnly(app, 'srv-1')(new Request('http://factory.sock/api/tickets/p/REL-1/stop', { method: 'POST' }));
       expect(res.status).toBe(200);
       expect(submitted.map((e) => e.actor)).toEqual(['cli:srv-1']);
     });
@@ -1105,7 +1094,7 @@ describe('server', () => {
   describe('CSRF', () => {
     it('rejects a mutating API call from another origin', async () => {
       const { app, submitted } = await setup();
-      const res = await app.request('/api/control/pause', { method: 'POST', headers: { origin: 'https://evil.example' } });
+      const res = await app.request('/api/tickets/p/REL-1/stop', { method: 'POST', headers: { origin: 'https://evil.example' } });
       expect(res.status).toBe(403);
       const stop = await app.request('/api/tickets/p/REL-1/stop', { method: 'POST', headers: { origin: 'null' } });
       expect(stop.status).toBe(403);
@@ -1114,8 +1103,8 @@ describe('server', () => {
 
     it('accepts same-origin and Origin-less calls', async () => {
       const { app, submitted } = await setup();
-      expect((await app.request('http://localhost:4100/api/control/pause', { method: 'POST', headers: { origin: 'http://localhost:4100' } })).status).toBe(200);
-      expect((await app.request('/api/control/resume', { method: 'POST' })).status).toBe(200);
+      expect((await app.request('http://localhost:4100/api/tickets/p/REL-1/stop', { method: 'POST', headers: { origin: 'http://localhost:4100' } })).status).toBe(200);
+      expect((await app.request('/api/tickets/p/REL-1/stop', { method: 'POST' })).status).toBe(200);
       expect(submitted).toHaveLength(2);
     });
   });
@@ -1125,10 +1114,10 @@ describe('server', () => {
     const PUBLIC = 'factory.example.com';
     const proxied = (headers: Record<string, string> = {}) => ({ host: PUBLIC, 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7', 'x-forwarded-host': PUBLIC, ...headers });
     /** A write of the interface's through the proxy, signed in: each test changes the headers it is about. */
-    const pause = async (url: string, headers: Record<string, string>) => {
+    const stop = async (url: string, headers: Record<string, string>) => {
       const { app, submitted } = await setup({ githubLogin: GITHUB });
       const session = await signIn(app);
-      return { status: (await app.request(`${url}/api/control/pause`, { method: 'POST', headers: proxied({ ...session.headers, ...headers }) })).status, submitted };
+      return { status: (await app.request(`${url}/api/tickets/p/REL-1/stop`, { method: 'POST', headers: proxied({ ...session.headers, ...headers }) })).status, submitted };
     };
 
     it('takes the webhooks under the public name, on plain HTTP, the headers passed on as they came', async () => {
@@ -1140,19 +1129,19 @@ describe('server', () => {
     });
 
     it("serves the interface's writes from the public HTTPS origin: the scheme never counts, only the name", async () => {
-      const { status, submitted } = await pause(`http://${PUBLIC}`, { origin: `https://${PUBLIC}` });
+      const { status, submitted } = await stop(`http://${PUBLIC}`, { origin: `https://${PUBLIC}` });
       expect(status).toBe(200);
       expect(submitted).toHaveLength(1);
     });
 
     it('trusts no X-Forwarded-Host: a forged one does not let another origin write', async () => {
-      const { status, submitted } = await pause(`http://${PUBLIC}`, { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' });
+      const { status, submitted } = await stop(`http://${PUBLIC}`, { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' });
       expect(status).toBe(403);
       expect(submitted).toEqual([]);
     });
 
     it("refuses the interface's writes behind a proxy that rewrites the Host: it must pass the public name on", async () => {
-      const { status, submitted } = await pause('http://127.0.0.1:4100', { host: '127.0.0.1:4100', origin: `https://${PUBLIC}` });
+      const { status, submitted } = await stop('http://127.0.0.1:4100', { host: '127.0.0.1:4100', origin: `https://${PUBLIC}` });
       expect(status).toBe(403);
       expect(submitted).toEqual([]);
     });
@@ -1166,8 +1155,8 @@ describe('server', () => {
       const { app, submitted } = await setup();
       expect((await app.request('/api/state', as('evil.example:4100'))).status).toBe(403);
       expect((await app.request('/', as('evil.example'))).status).toBe(403);
-      const pause = await app.request('/api/control/pause', as('evil.example:4100', { method: 'POST', headers: { origin: 'http://evil.example:4100' } }));
-      expect(pause.status).toBe(403);
+      const stop = await app.request('/api/tickets/p/REL-1/stop', as('evil.example:4100', { method: 'POST', headers: { origin: 'http://evil.example:4100' } }));
+      expect(stop.status).toBe(403);
       expect(submitted).toEqual([]);
     });
 

@@ -71,7 +71,7 @@ describe('docs/first-run.md', () => {
   const quoted = quotedCommands(guide);
 
   it('quotes the commands of a first run, flags included', () => {
-    for (const cmd of ['factory init', 'factory init --dev', 'factory validate', 'factory doctor', 'factory doctor --json', 'factory up', 'factory plan', 'factory status', 'factory stop <ID>']) {
+    for (const cmd of ['factory init', 'factory init --dev', 'factory validate', 'factory doctor', 'factory doctor --json', 'factory up', 'factory status', 'factory stop <ID>']) {
       expect(quoted).toContain(cmd);
     }
   });
@@ -85,10 +85,10 @@ describe('docs/first-run.md', () => {
     expect(problem('factory teleport')).toMatch(/not a command/);
     expect(problem('factory doctor --fix')).toMatch(/--fix is not in the usage of `doctor`/);
     expect(problem('factory up --json')).toMatch(/--json is not in the usage of `up`/);
-    expect(problem('factory up --fake-runner')).toBeUndefined();
+    expect(problem('factory up --fake-runner')).toMatch(/--fake-runner is not in the usage of `up`/);
     expect(problem('factory validate')).toBeUndefined();
-    expect(problem('factory pause')).toBeUndefined();
-    expect(problem('factory resume')).toBeUndefined();
+    expect(problem('factory plan')).toMatch(/not a command/);
+    expect(problem('factory pause')).toMatch(/not a command/);
     expect(problem('factory --json')).toMatch(/no command before --json/);
     expect(problem('factory')).toBeUndefined();
     expect(quotedCommands('```sh\n$ factory dry-run\n```')).toEqual(['factory dry-run']);

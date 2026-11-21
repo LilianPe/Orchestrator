@@ -2,25 +2,16 @@
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd } from '../adapters/exec.js';
-import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { startFactory } from '../app/bootstrap.js';
-import { makeRepoConfig } from '../app/repo-variables.js';
-import { repoRoot } from '../app/root.js';
-import { FactoryYmlError, loadFactoryLimits } from '../config/factory-yml.js';
-import { LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
+import { loadFactoryLimits } from '../config/factory-yml.js';
 import { homePaths, loadInstance, factoryHome } from '../config/instance.js';
 import { createSmeeChannel } from '../relay/smee.js';
-import { defaultWorkflow } from '../presets/workflow.js';
-import { openStore } from '../store/open.js';
-import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
-import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
+import { runDryRunCommand, runStatusCommand, runStopCommand } from './control.js';
 import { instanceCards, runInit } from './init.js';
-import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
 import { runFlakyCommand } from './flaky.js';
 import { runGhostCommand } from './ghost.js';
-import { formatPlan, planRows } from './plan.js';
 import { runReplayCommand } from './replay.js';
 import { runRepairCommand } from './repair.js';
 import { runValidateCommand } from './validate.js';
@@ -30,10 +21,8 @@ const USAGE = `Usage: factory <command>
   init [--dev]       set up ${PRODUCT_NAME} for the current repository (--dev: a smee.io relay for Linear's webhooks without a public URL, on a workstation)
   validate [repo]    check .factory/config.yml against the baseline (it can only add)
   doctor [repo] [--json] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
-  up [--fake-runner] start ${PRODUCT_NAME} (interface on http://localhost:4100)
-  plan               see which delegated tickets would be taken
+  up                 start ${PRODUCT_NAME} (interface on http://localhost:4100)
   status             state of the running instance
-  pause | resume     suspend or resume the queue
   stop <ID>          stop a ticket's run
   dry-run <project>  run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks
   replay <journal>... replay exported journals (bit-for-bit regression, --what-if <preset>, --export <ID>)
@@ -41,6 +30,9 @@ const USAGE = `Usage: factory <command>
   flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
   baseline <project> --since <YYYY-MM-DD> [--replace]  freeze the 90 days before the start as the overview's baseline, from Linear and GitHub
   ghost start|collect|judge|report|list  replay closed tickets without effects, and judge the PRs blind against the human ones`;
+
+/** The commands of the usage, the first word of each of its lines. */
+const COMMANDS = new Set(USAGE.split('\n').slice(1).map((line) => line.trim().split(' ')[0]!));
 
 async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
@@ -57,9 +49,16 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
+    options: { json: { type: 'boolean' } },
   });
   const [cmd, arg] = positionals;
+  // The help, before any configuration is read: `factory` alone, or a command it does not have (`plan`, `pause` and `resume`
+  // are gone, ORC-200).
+  if (cmd === undefined || !COMMANDS.has(cmd)) {
+    if (cmd !== undefined) console.log(`Unknown command: ${cmd}`);
+    console.log(USAGE);
+    return 1;
+  }
   const home = factoryHome();
   // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);
@@ -72,7 +71,7 @@ async function main(): Promise<number> {
     case 'doctor':
       return runDoctorCommand({ repoPath: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
-      const app = await startFactory({ home, fakeRunner: values['fake-runner'] });
+      const app = await startFactory({ home });
       console.log(`${PRODUCT_NAME} is running: ${app.url}  (Ctrl+C to stop)`);
       await new Promise<void>((resolve) => {
         process.once('SIGINT', () => resolve());
@@ -81,35 +80,8 @@ async function main(): Promise<number> {
       await app.stop();
       return 0;
     }
-    case 'plan': {
-      let tracker;
-      try {
-        tracker = cliLinearTracker(home, (await loadSealedFactoryYml(home, process.env, { only: LINEAR_SECRETS })).yml);
-      } catch (err) {
-        if (!(err instanceof FactoryYmlError)) throw err;
-        console.log(`${err.message}\n(plan reads the Linear credentials from factory.yml: run it with the daemon's environment.)`);
-        return 1;
-      }
-      if (typeof tracker === 'string') {
-        console.log(tracker);
-        return 1;
-      }
-      const workflow = defaultWorkflow();
-      const projects = cfg.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, teamKey: p.linearTeamKey, workflow }));
-      // Read-only: the schema is the daemon's to migrate.
-      const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
-      // The branch naming as the daemon reads it on the default branch (ORC-283), without a fetch: a preview.
-      const repoConfig = makeRepoConfig();
-      const naming = async (p: { repoPath: string }) => (await repoConfig(p, { fetch: false })).branches;
-      console.log(formatPlan(await planRows({ tracker, store, projects, workspaces: new GitWorkspaces({ root: homePaths(home).workspaces }), naming })));
-      await store.close();
-      return 0;
-    }
     case 'status':
       return runStatusCommand(control);
-    case 'pause':
-    case 'resume':
-      return runQueueCommand(control, cmd);
     case 'stop':
       if (!arg) break;
       return runStopCommand(control, arg);
