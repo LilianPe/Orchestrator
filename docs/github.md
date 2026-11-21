@@ -1,6 +1,6 @@
 # GitHub
 
-Relais talks to GitHub through **git** and a **factory GitHub App**, the only way the daemon reads or writes GitHub: the `gh` CLI and `GH_TOKEN` are gone (ORC-181). **Only the factory writes to GitHub** (ORC-125, [Publishing](#publishing)): agents commit, and have neither a token nor network access to push. The daemon tracks PRs in two ways, which write the same events to the inbox: **GitHub webhooks** (`POST /webhooks/github`, as soon as their secret is configured, see [GitHub webhooks](#github-webhooks)) and the **GitHub reconciliation**, every 5 minutes (ORC-185, [What the reconciliation reads](#what-the-reconciliation-reads)), which catches up what the webhooks lost. The 30-second poll is gone (ORC-181): without webhooks, a merge or a CI verdict is seen within 5 minutes.
+The factory talks to GitHub through **git** and a **factory GitHub App**, the only way the daemon reads or writes GitHub: the `gh` CLI and its token are gone (ORC-181). **Only the factory writes to GitHub** (ORC-125, [Publishing](#publishing)): agents commit, and have neither a token nor network access to push. The daemon tracks PRs in two ways, which write the same events to the inbox: **GitHub webhooks** (`POST /webhooks/github`, as soon as their secret is configured, see [GitHub webhooks](#github-webhooks)) and the **GitHub reconciliation**, every 5 minutes (ORC-185, [What the reconciliation reads](#what-the-reconciliation-reads)), which catches up what the webhooks lost. The 30-second poll is gone (ORC-181): without webhooks, a merge or a CI verdict is seen within 5 minutes.
 
 ## Daemon authentication
 
@@ -9,10 +9,10 @@ Relais talks to GitHub through **git** and a **factory GitHub App**, the only wa
 The GitHub App is the identity of the **daemon**, not of the agents. It is used to read PRs, checks and review threads, and to publish: push the ticket's branch, open its draft PR, merge.
 
 ```yaml
-# <RELAIS_HOME>/config.yaml
+# <FACTORY_HOME>/config.yaml
 github:
   appId: "123456"
-  privateKey: /home/relais/.relais/github-app.pem   # inline PEM or file path
+  privateKey: /home/factory/.factory/github-app.pem # inline PEM or file path
   installationId: "987654"                          # optional
 ```
 
@@ -29,7 +29,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 #### Creating the App
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
-2. Enter a name and a URL. **Webhook**: active, URL `<publicUrl>/webhooks/github`, secret = the value of `github.webhookSecret` (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). `<publicUrl>` is the server's HTTPS URL, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)); on a workstation, a tunnel (ngrok, `cloudflared tunnel`) in `publicUrl`, for development only (smee relays Linear's webhooks, not GitHub's). Without a public URL, leave it disabled: polling every 30 s tracks PRs on its own.
+2. Enter a name and a URL. **Webhook**: active, URL `<publicUrl>/webhooks/github`, secret = the value of `github.webhookSecret` (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). `<publicUrl>` is the server's HTTPS URL, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)); on a workstation, a tunnel (ngrok, `cloudflared tunnel`) in `publicUrl`, for development only (smee relays Linear's webhooks, not GitHub's). Without a public URL, leave it disabled: the reconciliation reads the PRs every 5 minutes (ORC-181).
 3. Under **Repository permissions**, apply the manifest [`github-app-manifest.json`](github-app-manifest.json):
    - **Contents**: read/write (the ticket's branch, and the captures' `factory/artifacts` branch, ORC-407);
    - **Pull requests**: read/write;
@@ -39,9 +39,9 @@ A value in `config.yaml` takes precedence over the environment variable. If only
    - **Metadata**: read (mandatory for every App).
    No **administration** permission, no `Actions` write, no `Workflows`. `factory doctor` refuses an installation that holds *Administration*, *Workflows* or *Actions* at write, and warns about any other permission above the manifest (ORC-439, ORC-441, ORC-443, [below](#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)).
    For the dashboard's GitHub sign-in (ORC-399), under **Identifying and authorizing users**: *Callback URL* `<publicUrl>/auth/github/callback`, *Expire user authorization tokens* left on, *Request user authorization (OAuth) during installation* off. If `dashboard` in `factory.yml` names an `org` or a `team`, add the **Organization permission** *Members*: read, and install the App on that org: GitHub answers a membership to the App's user token only then. A list of `logins` needs neither.
-4. Create the App, note its **App ID** and its **Client ID**, **Generate a client secret** (for the dashboard's sign-in, `GH_APP_CLIENT_SECRET`), then **Generate a private key**. Place the `.pem` outside the repository, with mode `0600` (for example `~/.relais/github-app.pem`).
-5. **Install** the App on the repositories entrusted to Relais. The installation ID is visible in the URL `https://github.com/settings/installations/<id>`; it is optional, the daemon can look it up repository by repository.
-6. Fill in `config.yaml` or the `GH_APP_*` variables (`factory init` prints these steps and writes `factory.yml` with `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, ORC-411), then restart `relais up`. Startup logs the chosen forge, without secrets.
+4. Create the App, note its **App ID** and its **Client ID**, **Generate a client secret** (for the dashboard's sign-in, `GH_APP_CLIENT_SECRET`), then **Generate a private key**. Place the `.pem` outside the repository, with mode `0600` (for example `~/.factory/github-app.pem`).
+5. **Install** the App on the repositories entrusted to the factory. The installation ID is visible in the URL `https://github.com/settings/installations/<id>`; it is optional, the daemon can look it up repository by repository.
+6. Fill in `config.yaml` or the `GH_APP_*` variables (`factory init` prints these steps and writes `factory.yml` with `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, ORC-411), then restart `factory up`. Startup logs the chosen forge, without secrets.
 
 #### Tokens
 
@@ -60,7 +60,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 
 ### Without a GitHub App
 
-There is no fallback any more (ORC-181: the `gh` CLI and `GH_TOKEN` are gone). Without a `github` section nor `GH_APP_*`, the daemon still starts, logs `Warning: no GitHub App (…): the factory reads no PR, publishes nothing and merges nothing.`, and every read of the forge fails with that reason (`NoForge`): no PR, check or permission is read as absent. `/health` names the publication as impossible, and a verified ticket is blocked with that reason. `factory baseline`, `factory doctor` and `factory ghost start` refuse without the App.
+There is no fallback any more (ORC-181: the `gh` CLI and its token are gone). Without a `github` section nor `GH_APP_*`, the daemon still starts, logs `Warning: no GitHub App (…): the factory reads no PR, publishes nothing and merges nothing.`, and every read of the forge fails with that reason (`NoForge`): no PR, check or permission is read as absent. `/health` names the publication as impossible, and a verified ticket is blocked with that reason. `factory baseline`, `factory doctor` and `factory ghost start` refuse without the App.
 
 ### The daemon's own git
 
@@ -112,7 +112,7 @@ On the agent side: `git push` and `gh` writes are refused by the pack and its ho
 
 ### Read access for the daemon's git
 
-On each repository entrusted to Relais, the daemon's git must read its branches (`git fetch`). With an `https://github.com/` origin, the App's token does it (*Contents*, [above](#the-daemons-own-git)); with an SSH origin, the machine's credentials must: with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
+On each repository entrusted to the factory, the daemon's git must read its branches (`git fetch`). With an `https://github.com/` origin, the App's token does it (*Contents*, [above](#the-daemons-own-git)); with an SSH origin, the machine's credentials must: with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
 
 ## Human permissions
 
@@ -138,7 +138,7 @@ Events produced (see [`preset.md`](preset.md#reactions)):
 | CI turning green | `pr.checks_passed` | lifts the block caused by the red-CI limit; the count of the loop stays, one per run (ORC-184) |
 | PR merged | `pr.merged` | *Done*, the `after_merge` step (the requester mentioned with the PR's link, the changelog entry, ORC-197), worktree deleted, no run (ORC-193); after that, no more code runs on the ticket |
 | Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |
-| PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`preset.md`](preset.md#configurable-events)) |
+| PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`preset.md`](preset.md#events-a-human-or-the-pr-sends)) |
 
 A CI state change is reported only once (not at every pass). The PR's **unresolved** review comments are re-read at the time of a `dev-feedback` or `fix-human` run (`feedback` input): resolve a thread on GitHub so it is no longer sent back to the agent. An inline comment that started a round of human feedback (ORC-190) reaches the agent through its thread only.
 
@@ -148,7 +148,7 @@ Without a GitHub webhook, it takes up to 5 minutes for a merge or CI to be taken
 
 `POST /webhooks/github` receives the App's webhooks (ORC-134), at `<publicUrl>/webhooks/github`. In production GitHub calls the server directly in HTTPS, through the host's reverse proxy or the optional `caddy` service (`--profile tls`), which pass the body unchanged to `factoryd` in plain HTTP: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221). On a workstation, a tunnel in `publicUrl` stands in for it.
 
-- **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhookSecret` in `config.yaml`, otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `relais up` reports it at startup;
+- **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhookSecret` in `config.yaml`, otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `factory up` reports it at startup;
 - **inbox written before the response** (ORC-147): a 200 means "written"; if the daemon goes down right after, even with `kill -9`, the event is processed at the next startup. If the write fails, the response is 500: GitHub does not resend a failed delivery on its own; redeliver it from the App's *Advanced* tab, or let the reconciliation catch it up;
 - **deduplication and replay**: each event's id comes from the signed body (PR number, SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does not cover (it is only used for the log). A redelivery, a replayed body, or the same fact seen by the reconciliation carries an id the inbox already has: it is not reprocessed. GitHub does not sign a timestamp: there is no freshness check; deduplication in the database stands in for it;
 - **linking to the ticket**: by the PR's (or push's) branch, like the reconciliation, and by repository: `repository.full_name` must be the `origin` repository of the ticket's project (read once via `git remote get-url origin`). Only a branch of a tracked ticket, in its project's repository, produces an event; everything else (another repository where the App is installed, another branch, a body of another shape) is accepted (200) and ignored. An older PR of the branch, already closed, is ignored too.
@@ -179,7 +179,7 @@ The merge push may arrive before the `pr.merged` of the same merge: it is then l
 
 ## Branches
 
-Each ticket works on `relais/<ticket>-<title-slug>` (e.g. `relais/rel-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). A local or remote branch with the same name is reused. The `not_started` check refuses to take a ticket that already has a `factory/<ticket>-…` branch on the forge; with `intake` on, it is part of intake's duplicate search ([preset](preset.md#duplicates-existing-code-and-scope-orc-207)).
+Each ticket works on a branch named by `branches` of the repository's `.factory/config.yml` (ORC-283, [`repository-configuration.md`](repository-configuration.md#branch-names)), by default `feat/<ticket>-<title-slug>`, or `fix/<ticket>-<title-slug>` for a ticket labelled *Bug* (e.g. `feat/orc-12-export-csv`), created from `origin/<default branch>` (read from `refs/remotes/origin/HEAD`, otherwise `main`). The branch recorded on the ticket stays its branch, so a label or a naming changed since opens no second PR, and a ticket that already has a legacy `factory/<ticket>-…` branch keeps it. A branch with the same name on the forge is reused, otherwise a local one. The `not_started` check refuses to take a ticket that already has one of its branches (any type of the naming, or the legacy `factory/`) on the forge; with `intake` on, it is part of intake's duplicate search ([preset](preset.md#duplicates-existing-code-and-scope-orc-207)).
 
 ## Branch protection (required by `factory doctor`)
 
@@ -188,9 +188,9 @@ The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](
 - **Require a pull request before merging** (with at least one approval if your team reviews);
 - **Block force pushes** and forbid deletion;
 - **Require status checks to pass** with your CI checks;
-- do not put Relais's account in the exceptions (*bypass*).
+- do not put the factory's GitHub App in the exceptions (*bypass*).
 
-The knowledge repository (`relais-knowledge`) deserves the same protection: a human merges there.
+The knowledge repository (`knowledge.repoPath`) deserves the same protection: a human merges there.
 
 `factory doctor` refuses a repository whose default branch has neither (ORC-208). It reads, with the App's read permissions only (*Metadata*): `GET /repos/{owner}/{repo}` for the default branch, `GET /repos/{owner}/{repo}/branches/{branch}` for the classic protection's flag, `protection.enabled` (not the branch's `protected`, which GitHub also sets for an active ruleset, whatever its rules), `GET /repos/{owner}/{repo}/rules/branches/{branch}` for the rules the repository's **active** rulesets apply to it (a ruleset in *Evaluate* mode applies none), and `GET /repos/{owner}/{repo}/rulesets/{id}` of each ruleset with a pull request rule, whose `current_user_can_bypass` says whether the App is in its bypass list. Accepted:
 
@@ -295,6 +295,6 @@ jobs:
 
 ## CI
 
-Relais does not impose a CI but makes use of it: `pr.checks_failed` triggers `fix-ci` (diagnosis, local reproduction, fix or question), and the `review` skill waits for a green CI. A CI that runs at least lint, types and tests is therefore recommended, in addition to the `verify` commands Relais runs itself after each run ([`preset.md`](preset.md#jobs)).
+The factory does not impose a CI but makes use of it: `pr.checks_failed` triggers `fix-ci` (diagnosis, local reproduction, fix or question), bounded by `limits.ciFixAttempts` (ORC-184), and the factory's merge refuses a head whose checks are not green (ORC-148). A CI that runs at least lint, types and tests is therefore recommended, in addition to the `verify` commands the factory runs itself after each run ([`preset.md`](preset.md#jobs)).
 
-The Relais repository itself has a GitHub Actions CI (`.github/workflows/ci.yml`): on every PR and every push to `main`, Node 24, `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`.
+The factory's repository itself has a GitHub Actions CI (`.github/workflows/ci.yml`): on every PR and every push to `main`, Node 24, `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run test:replay`, and the property, integration, chaos and isolation suites in jobs of their own ([`tests.md`](tests.md)).

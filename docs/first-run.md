@@ -2,7 +2,7 @@
 
 This guide takes one real Linear ticket through the whole factory on your own machine (a workstation or a dev container, not the ORC-126 server): delegated → `intake` → `clarify` if needed → spec → `/approve` by a validator → tests → red check → freeze → build → `verify` → PR opened by the GitHub App → AI review → *Human Review*. Every command and every message quoted here is the current code's: the commands are checked against the CLI by `src/docs-first-run.test.ts`, and the outputs were taken from a run of `factory init`, `factory validate`, `factory doctor` and `factory up` on a scratch repository (no real token, no container engine).
 
-The executable is `factory` (`npm link`, [`installation.md`](installation.md)), the product name in Linear and in the logs is `Orchestrator`, and the instance directory is `FACTORY_HOME`, `~/.factory` by default. Older pages still say `relais` and `RELAIS_HOME`: same things ([`transition.md`](transition.md#renaming-orc-167)).
+The executable is `factory` (`npm link`, [`installation.md`](installation.md)), the product name in Linear and in the logs is `Orchestrator`, and the instance directory is `FACTORY_HOME`, `~/.factory` by default.
 
 ## 0. What you must create first
 
@@ -23,7 +23,7 @@ Nothing below can be skipped for a real run: without a container engine nothing 
 | 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `config.yaml`: `projects[].authz.validators` |
 | 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `config.yaml`: `projects[].authz.githubLogins` (Linear id → GitHub login) |
 
-Also on the machine: Node 24.22.1+, git, `gh` 2.50+ and `claude` ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
+Also on the machine: Node 24.22.1+, git and `claude` (no `gh`: the factory reads and publishes on GitHub by its App alone, ORC-181) ([`installation.md`](installation.md#prerequisites)). The visual proof needs `FACTORY_BROWSER_IMAGE` too (`docker/browser.Dockerfile`); without it, a ticket that changes a screen gets its proof marked unavailable and still goes on.
 
 ## 1. Install
 
@@ -265,7 +265,7 @@ What you should see, step by step ([`preset.md`](preset.md#sequence)):
 
 | Step | In Linear / GitHub | If it breaks |
 |---|---|---|
-| Delegation | within 10 s, the comment « Got it. » and the session's plan | Nothing at all: a webhook that does not arrive (smee channel, `publicUrl`, the clock: Linear's signature is refused past 60 s of offset) or a refused signature; the log says `relay: webhook rejected with 401 (…)`. A refusal by the matrix (no `githubLogins` entry, no write access) is replied in the session and logged `authz: refused …`. |
+| Delegation | within 10 s, the comment « Got it. » and the session's plan | Nothing at all: a webhook that does not arrive (the workstation's smee channel, `publicUrl`, the clock: Linear's signature is refused past 60 s of offset) or a refused signature; the log says `relay: webhook rejected with 401 (…)`. A refusal by the matrix (no `githubLogins` entry, no write access) is replied in the session and logged `authz: refused …`. |
 | `intake` | the session's live feed (« Reading the code »…); the ticket stays in Todo | An incomplete ticket goes to `clarify`. |
 | `clarify` (if needed) | up to 3 questions in the session, one at a time | Answer in the **session**, not in a ticket comment. Unanswered after 72 h, the ticket is blocked. |
 | Spec | the spec in a comment of the ticket, « **Spec, version N** »; past 5 000 characters, in a Linear document linked to the ticket (« <ID>: spec, version N »), the comment giving its summary and the link. Then the session says « Spec published (risk: …). N acceptance criteria → tests. Version N, waiting for review. » and where to read it. The ticket stays in Todo, unless `factory.yml` gives the step a status: `statuses: { spec_draft: Spec }`, then restart the daemon and click **Connect Linear** again to create it ([`configuration.md`](configuration.md)) | A spec that fails `spec_check` twice blocks the ticket. |

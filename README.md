@@ -1,17 +1,15 @@
-> **Orchestrator** (the factory's beta name): these docs describe the starting state (Relais); they are being rewritten ticket by ticket. The code already uses the new names (CLI `factory`, variables `FACTORY_*`, `~/.factory`, `.factory/`): the mapping is in [`docs/transition.md`, "Renaming"](docs/transition.md#renaming-orc-167).
+# Orchestrator
 
-# Relais
+Coding agent orchestrator: a Linear ticket delegated to the agent becomes a PR, reviewed by an AI review loop and then by a human, who alone decides the merge. Public prototype, under the [Elastic 2.0 license](#license).
 
-Coding agent orchestrator: a Linear ticket delegated to the agent becomes a PR, reviewed by a human and then by an AI review loop, ready to merge. Public prototype, under the [Elastic 2.0 license](#license).
-
-- Relais runs as a daemon (`relais up`) connected to **Linear** (OAuth agent application + webhooks) and to **GitHub** (the factory's GitHub App).
+- The factory runs as a daemon (`factory up`) connected to **Linear** (OAuth agent application + webhooks) and to **GitHub** (the factory's GitHub App).
 - Each delegated ticket gets its own git worktree and a headless **Claude Code** session, resumed from run to run (feedback, CI, review).
-- Behavior (events, jobs, models, limits, checks) is described in YAML per repository (`.relais/workflow.yml`); the agents' instructions live in a skills pack, not in the core.
-- Humans stay in control: only they merge, the agent asks its questions in Linear, and a shared knowledge base grows through reviewed PRs.
+- Behavior (events, jobs, models, limits, checks) is the `factory/default` preset, compiled in the code; a repository adds its commands, checks and limits in `.factory/config.yml`, never removes any. The agents' instructions live in a skills pack, not in the core.
+- Humans stay in control: only they merge, the agent asks its questions in Linear, and a shared knowledge base, edited by humans, is read by the agents.
 
 ## Prerequisites
 
-Node.js 24+, git, GitHub CLI `gh` logged in, Claude Code CLI `claude` logged in, a Linear workspace you are an admin of, and a GitHub repository cloned locally. Details: [`docs/installation.md`](docs/installation.md).
+Node.js 24.22.1+, git, bash, Claude Code CLI `claude` logged in, the factory's GitHub App installed on the repository (no `gh`: the factory uses its App alone), a Linear workspace you are an admin of, and a GitHub repository cloned locally. Details: [`docs/installation.md`](docs/installation.md).
 
 ## Quick start
 
@@ -19,21 +17,22 @@ For a first real ticket, follow [`docs/first-run.md`](docs/first-run.md): it lis
 
 ```bash
 # 1. Install
-git clone https://github.com/LilianPe/relais.git && cd relais
+git clone https://github.com/LilianPe/Orchestrator.git && cd Orchestrator
 npm ci && npm run build && npm link
 
-# 2. Configure the repository to hand over to Relais
+# 2. Configure the repository to hand over to the factory
 cd <your repository>
-relais init          # Linear team, OAuth application, knowledge base, .relais/workflow.yml
+factory init --dev   # on a workstation: Linear team and OAuth application, smee.io relay, proposed .factory/config.yml, factory.yml
+factory doctor       # host, branch protection, CI secrets
 
 # 3. Start
-relais up            # http://localhost:4100, then « Connect Linear »
+factory up           # http://localhost:4100, then « Connect Linear »
 ```
 
-4. In Linear, create a clear ticket (at least 30 characters of description) and **delegate it to `@relais`**. Within 10 s: the comment « Got it. » and the plan in the session, then status *In Progress*, live output in the interface, then the PR opened, status *Human Review* and a summary in the Linear session.
-5. Reply in the session to request changes, move the ticket to *AI Review* for the AI review, merge the PR on GitHub: the ticket moves to *Done*.
+4. In Linear, create a clear ticket (at least 30 characters of description) and **delegate it to `Orchestrator`** (the Linear application). Within 10 s: the comment « Got it. » and the plan in the session; then the spec, approved by a validator with `/approve`, status *In Progress*, live output in the interface, then the PR opened, its AI review, status *Human Review* and a summary in the Linear session.
+5. Reply in the session to request changes; merge the PR on GitHub, or move the ticket to *Done* for the factory to merge it: the ticket ends in *Done*.
 
-Without tokens, to try the interface: `relais up --fake-runner`.
+Without tokens, to try the interface: `factory up --fake-runner`.
 
 ## Documentation
 
@@ -49,11 +48,11 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 - [The workflow the engine runs](docs/preset.md#the-workflow-the-engine-runs-orc-389): events, jobs, models, limits, checks.
 - [Repository configuration (`.factory/config.yml`)](docs/repository-configuration.md): keys, what a configuration cannot remove from the baseline, `factory validate`.
 - [The `factory/default` preset](docs/preset.md): typed steps, loop bounds, single counter for review + red CI, models and network per step, invariants checked at compile time, hash.
-- [Projects, worktrees and knowledge base](docs/projects-and-workspaces.md): multiple repositories, worktrees per ticket, `workspace.setup`, ports, cleanup, knowledge repository.
+- [Projects, worktrees and knowledge base](docs/projects-and-workspaces.md): multiple repositories, worktrees per ticket, the `setup` of `.factory/config.yml`, ports, cleanup, knowledge repository.
 - [Pack and skills](docs/pack-and-skills.md): job skills and method skills (TDD, debugging, verification, tiered review), always-on rules, permissions, customizing or creating a skill.
 
 ### Use
-- [Command line](docs/cli.md): `relais init|up|plan|status|pause|resume|stop`.
+- [Command line](docs/cli.md): `factory init|validate|doctor|up|plan|status|pause|resume|stop|dry-run|replay|run repair|flaky|baseline|ghost`.
 - [Web interface and security](docs/interface-and-security.md): interface, exposed routes, password, CSRF, known limitations.
 - [Threat model](docs/threat-model.md): the five threats, each attack linked to its defense and its test, the open holes, the limitations lifted.
 
@@ -63,7 +62,9 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 - [Acceptance testing](docs/acceptance.md): end-to-end verification on a test Linear.
 
 ### Transition to the factory
-- [Starting point](docs/transition.md): reference commit and tag (`relais-v1-final`), live tests outside CI, module inventory with their status and the ticket that touches them.
+- [Starting point](docs/transition.md): reference commit and tag, renaming, live tests outside CI, module inventory with their status and the ticket that touches them.
+
+> **Historical note**: the factory started from the prototype Relais; its last state is the tag `relais-v1-final`.
 
 ### Testing
 - [Tests and harness](docs/tests.md): writing a scenario with the fake adapters, the simulated clock and the test preset.
