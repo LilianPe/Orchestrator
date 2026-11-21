@@ -77,7 +77,9 @@ export interface BootOptions {
  * the HTTPS public URL GitHub calls back to, which `startRefusals` required. Undefined on the loopback, where nobody signs in.
  */
 function dashboardLogin(instance: InstanceConfig, yml: FactoryYml | undefined, client: { clientId: string; clientSecret: string } | undefined): ServerDeps['githubLogin'] {
-  if (isLoopbackHost(instance.host) || !client || !yml?.dashboard || !instance.publicUrl) return undefined;
+  if (isLoopbackHost(instance.host)) return undefined;
+  // Never an exposed daemon without its sign-in, should this run before `startRefusals`.
+  if (!client || !yml?.dashboard || !instance.publicUrl?.startsWith('https://')) throw new Error('the GitHub sign-in is checked by startRefusals first');
   // A publicUrl written with its trailing slash must still give the callback URL the App declares.
   const redirectUri = `${instance.publicUrl.replace(/\/+$/, '')}${GITHUB_CALLBACK_PATH}`;
   const options = { ...client, redirectUri, access: yml.dashboard };

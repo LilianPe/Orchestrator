@@ -984,8 +984,10 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     githubApp = resolveGithubApp(instance, env);
     // factory.yml's step settings and statuses (ORC-382) the daemon refuses at load.
     states = defaultWorkflow(stepSettings(yml)).states;
-    // The Claude token (ORC-337): one of a source other than env, unread here, leaves the daemon's own CLAUDE_CODE_OAUTH_TOKEN checked.
-    claudeAccountReader(options.home, env, undefined, sealed)();
+    // The Claude token (ORC-337). The active account's of a source other than env is unread here: the start, which reads it, never
+    // falls back to CLAUDE_CODE_OAUTH_TOKEN then, so neither is checked.
+    const unread = yml?.claude && !yml.claude.accounts.find((a) => a.name === yml.claude?.active)?.token;
+    if (!unread) claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {
     out(errorMessage(error));
     return 1;

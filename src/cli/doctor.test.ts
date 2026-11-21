@@ -971,13 +971,15 @@ describe("the daemon's start refusals, each one doctor's", () => {
     }
   });
 
-  it('takes a secrets_key doctor does not read, of a source other than env, for a key set', async () => {
+  it('takes the secrets it does not read, of a source other than env, as the start takes them read', async () => {
     const home = tempHome();
     saveInstance(home, exposed);
-    writeFileSync(join(home, 'factory.yml'), `secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n${signIn}`);
+    const claude = 'claude: { runtime: claude-code, default_model: claude-opus-5-5, active: main, accounts: [{ name: main, token: creds:claude }] }\n';
+    writeFileSync(join(home, 'factory.yml'), `secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n${claude}${signIn}`);
     const lines: string[] = [];
-    await runDoctorCommand({ repoPath: '/repo', home, env: client, out: (line) => lines.push(line) });
-    expect(lines.filter((l) => l.startsWith('host: 0.0.0.0'))).toEqual([]);
+    // The daemon would take the active account's token, never this one.
+    await runDoctorCommand({ repoPath: '/repo', home, env: { ...client, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, out: (line) => lines.push(line) });
+    expect(lines.filter((l) => l.startsWith('host: 0.0.0.0') || l.startsWith('CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([]);
     expect(lines).toContain('GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.');
   });
 });
