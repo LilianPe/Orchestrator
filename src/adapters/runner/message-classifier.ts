@@ -133,8 +133,8 @@ export function classifierBackend(
   env: NodeJS.ProcessEnv,
   claudeToken: string | undefined,
   hostClaude: boolean,
-  log: (m: string) => void = () => {},
   apiKey?: string,
+  log: (m: string) => void = () => {},
 ): 'api' | 'cli' | undefined {
   const setting = (env['FACTORY_MESSAGE_MODEL'] ?? '').trim().toLowerCase();
   if (OFF.includes(setting)) return undefined;
@@ -146,17 +146,17 @@ export function classifierBackend(
 }
 
 /** factory.yml's key, else the daemon's `ANTHROPIC_API_KEY`: a transition (ORC-445). */
-const apiKeyOf = (env: NodeJS.ProcessEnv, apiKey: string | undefined): string | undefined => apiKey || env['ANTHROPIC_API_KEY'] || undefined;
+const apiKeyOf = (env: NodeJS.ProcessEnv, apiKey: string | undefined): string | undefined => apiKey || env['ANTHROPIC_API_KEY'];
 
 /** Built once at the daemon's start: the transition key, when it is the one used, is warned of once. */
 export function messageClassifier(
   env: NodeJS.ProcessEnv,
   claudeToken: string | undefined,
   hostClaude: boolean,
-  log: (m: string) => void = () => {},
   apiKey?: string,
+  log: (m: string) => void = () => {},
 ): MessageClassifier | undefined {
-  const backend = classifierBackend(env, claudeToken, hostClaude, log, apiKey);
+  const backend = classifierBackend(env, claudeToken, hostClaude, apiKey, log);
   if (backend === 'api') {
     if (!apiKey) log('Warning: the small model of messages reads ANTHROPIC_API_KEY, in transition: set message_model.api_key in factory.yml (env:NAME).');
     return apiClassifier(apiKeyOf(env, apiKey)!);

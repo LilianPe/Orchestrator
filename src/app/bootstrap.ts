@@ -381,7 +381,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
-    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeTokenOf(), !sandboxes, log, yml?.messageModel?.apiKey);
+    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeTokenOf(), !sandboxes, yml?.messageModel?.apiKey, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
       // A message for the model is kept in the store and answered before it is classified (ORC-336); what an earlier
