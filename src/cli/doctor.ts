@@ -672,12 +672,16 @@ const heldForbidden = (permissions: Record<string, string>) =>
     (forbidden) => forbidden.held.length > 0,
   );
 
-/** `actions: write` lets the daemon re-run, cancel or dispatch workflows and delete their logs: warned, not refused (ORC-441). */
+/**
+ * `actions: write` lets the daemon dispatch a workflow on a factory branch, which `exposureReasons` does not count as
+ * reaching one, and re-run, cancel or delete runs: warned, not refused, as ORC-441 asks.
+ */
 function actionsWarnings(permissions: Record<string, string>): string[] {
   const level = permissions['actions'];
   if (level === undefined || level === 'read') return [];
   return [
-    `Warning: the App is installed with actions (${level}): the daemon could re-run, cancel or dispatch workflows and delete their runs' logs and artifacts; the manifest asks read. ` +
+    `Warning: the App is installed with actions (${level}): the daemon could dispatch a workflow on a factory branch, running that branch's code with the workflow's secrets, ` +
+      "and re-run, cancel or delete runs and their logs; the manifest asks read. " +
       "In the App's settings (Permissions & events), set Repository permissions → Actions to Read-only and save, then accept the change in the installation " +
       '(Settings → Applications → Installed GitHub Apps → Configure).',
   ];
@@ -698,8 +702,9 @@ function judgeInstallation(permissions: Record<string, string>): InstallationRep
       : {
           verdict: 'refused',
           reasons: held.map(
-            ({ name, settings, risk, held: kinds }) =>
-              `installed with ${kinds.map((permission) => `${permission} (${permissions[permission]})`).join(' and ')}: ${risk}. ` +
+            ({ name, settings, risk, held: kinds }, i) =>
+              // Joined after one another: each after the first opens a sentence.
+              `${i === 0 ? 'installed' : 'Installed'} with ${kinds.map((permission) => `${permission} (${permissions[permission]})`).join(' and ')}: ${risk}. ` +
               "Remove it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), " +
               `set ${kinds.map((permission) => settings[permission]).join(' and ')} to No access and save, then check in the installation (Settings → Applications → ` +
               `Installed GitHub Apps → Configure) that ${name} is no longer listed (docs/github-app-manifest.json).`,
@@ -813,7 +818,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     out(
       accepted
         ? `Result: accepted — a cgroup v2 host, a protected default branch, ${unchecked ? '' : 'an App installed without Administration or Workflows, '}and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. ` +
-            `Check by hand what the warning under the default branch names${installationWarned ? ', and the one under the GitHub App installation' : ''}.`
+            `Check by hand what the warning under the default branch names${installationWarned ? ', and act on the one under the GitHub App installation' : ''}.`
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }

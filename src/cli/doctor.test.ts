@@ -1124,7 +1124,7 @@ describe("the GitHub App's installation permissions (ORC-439, ORC-441)", () => {
     expect(result.code).toBe(0);
     expect(result.text).toContain('GitHub App installation: accepted');
     const warning = result.lines.find((l) => l.startsWith('  Warning: the App is installed with actions (write)'));
-    for (const named of ['Repository permissions → Actions', 'Read-only', 'Installed GitHub Apps']) expect(warning).toContain(named);
+    for (const named of ['dispatch', 'secrets', 'Repository permissions → Actions', 'Read-only', 'Installed GitHub Apps']) expect(warning).toContain(named);
     expect(result.text).toMatch(/Result: accepted — .*the one under the GitHub App installation/);
     const json = JSON.parse((await doctor([], [], { json: true, fake: { permissions: { ...MANIFEST_PERMISSIONS, actions: 'write' } } })).text) as { accepted: boolean };
     expect(json).toMatchObject({ accepted: true, installation: { verdict: 'accepted', warnings: [warning?.trim()] } });
