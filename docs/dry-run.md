@@ -27,10 +27,12 @@ result in the store:
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
 a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
-or timed out, a 502, pip's or uv's connection or DNS error, pip's `ProxyError`), whatever the installer printed after it, unless a
-service of the repository's own refuses on the loopback in that output; reading the repository's variables failing (its entry in
-`factory.yml` not looked up); no sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given,
-must be a full commit id: a branch name or a short sha is refused.
+or timed out, a 502 or the proxy's 502 to a `CONNECT`, the relay at `127.0.0.1:3128` refusing, pip's or uv's connection or DNS
+error, pip's `ProxyError`), even when it then says a dependency is missing. A setup that broke on a variable, or on a service of
+the repository's own refusing on the loopback (`connect ECONNREFUSED 127.0.0.1:5432`, `could not connect to server`), is
+recorded red as such, past an installer's retry warning. Reading the repository's variables failing (its entry in `factory.yml`
+not looked up) rejects too, and so does a factory without sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are
+required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
 ## What breaks
 
@@ -40,7 +42,7 @@ command, an excerpt of its output, and a detail line, classified as:
 | Kind | Read from | Example |
 |---|---|---|
 | `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (403) | `No matching version found for left-pad@9.9.9` |
-| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but a line naming the egress proxy's relay, `3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
+| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but a line naming the egress proxy's relay by its address, `127.0.0.1:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
