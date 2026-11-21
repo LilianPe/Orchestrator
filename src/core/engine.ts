@@ -886,9 +886,11 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
-  if (lifting) out.events.push({ type: 'ticket.unblocked' });
-  // The lift a pending job's resume deferred (ORC-435): off the ticket with this decision, as `startPending` takes it.
-  if (lifting && samePending(ticket.pendingJob, start)) out.events.push({ type: 'pending.cleared', job: start });
+  if (lifting) {
+    out.events.push({ type: 'ticket.unblocked' });
+    // The lift a pending job's start deferred (ORC-435): off the ticket with this decision, as `startPending` takes it.
+    if (samePending(ticket.pendingJob, start)) out.events.push({ type: 'pending.cleared', job: start });
+  }
   startAs(out, event, ticket, job, start);
   return out;
 }
@@ -1513,30 +1515,25 @@ function admitReply(out: Decision, event: FactoryEvent<'ticket.commented' | 'ses
   return true;
 }
 
-/** Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision. */
+/**
+ * Starts a stranded pending job as it was set pending, its input and restrictions, and takes it off the ticket with this decision.
+ * On a ticket waiting on its blockers, the block is kept and the job is the wait's lift (`liftOnWait`), which `blockers.done` starts (ORC-435).
+ */
 function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
   const job = workflow.jobs[pending.job]!;
   if (refused(ticket, job)) return out;
+  const waits = heldByWait(ticket, job);
+  if (waits) {
+    liftOnWait(out, event, ticket, pending);
+    out.trace.push(`${pending.job} not started, ${waits}`);
+    return out;
+  }
   unblock(out, event, ticket);
   // Off the ticket with this decision: the start it makes is the outbox's now, at least once.
   out.events.push({ type: 'pending.cleared', job: pending });
   // A round was counted when it was decided; a human reply gave the rounds back (`unblock`): this start is the first of the new ones (ORC-190).
   if (relaunchedByHuman(event, ticket)) humanRound(out, ticket, workflow, job, () => startAs(out, event, ticket, job, pending));
   else startAs(out, event, ticket, job, pending);
-  return out;
-}
-
-/**
- * A stranded pending job a reply or a debounce armed before the block resumes (ORC-339): at once, unless the ticket waits on its
- * blockers (ORC-435): the block is kept, the job the lift of the wait (`liftOnWait`), which `blockers.done` starts.
- */
-function resumePending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
-  const job = workflow.jobs[pending.job]!;
-  const waits = heldByWait(ticket, job);
-  // Merged, nothing resumes it: no lift promised (`startPending` refuses it as well).
-  if (!waits || refused(ticket, job)) return startPending(out, event, ticket, workflow, pending);
-  liftOnWait(out, event, ticket, pending);
-  out.trace.push(`${pending.job} not started, ${waits}`);
   return out;
 }
 
@@ -1563,7 +1560,7 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   // The pending job a reply resumes, at once (a debounce armed before the block resumes it when it fires: `timer.fired`).
   const reply = repliesToBlock(event, ticket);
   const pending = reply ? strandedPending(ticket, workflow) : undefined;
-  if (pending) return resumePending(out, event, ticket!, workflow, pending);
+  if (pending) return startPending(out, event, ticket!, workflow, pending);
   // The step a run published during the block asked for (ORC-416): it starts as it would have, the reply left in the inbox.
   const handed = reply ? handedJob(ticket, workflow) : undefined;
   // Read again for the run's input: only the blocked step resumed reads the reply.
@@ -1577,8 +1574,7 @@ function startReaction(out: Decision, event: FactoryEvent, ticket: TicketState |
   // The step it resumes reads the reply: read again for the run's input.
   const input = resumed ? 'feedback' : (r.input ?? job.input);
   // Waiting on its blockers, the ticket starts no dev work for a message or a move: a reply stays in the inbox (ORC-363). A
-  // blocked one keeps its block, never lifted with nothing at work (ORC-432): the step it resumes waits on the wait (`lift`), which
-  // `blockers.done` lifts and starts; a human gives the bounds back now.
+  // blocked one keeps its block, the step it resumes the wait's lift (`liftOnWait`, ORC-432).
   const waits = heldByWait(ticket, job);
   if (waits) {
     if (lifts) liftOnWait(out, event, ticket!, { job: job.name, ...(input ? { input } : {}) });
@@ -2424,7 +2420,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       if (!job) return out;
       // A debounce armed before the block of a pending job no settle could start: that very job starts (ORC-339).
       const stranded = ticket?.delegated ? strandedPending(ticket, workflow) : undefined;
-      if (stranded) return resumePending(out, event, ticket!, workflow, stranded);
+      if (stranded) return startPending(out, event, ticket!, workflow, stranded);
       const held = fired.payload.inbox ? heldInbox(ticket) : undefined;
       if (held) {
         out.trace.push(`timer.fired debounce: ${job.name} not started, ${held}`);
