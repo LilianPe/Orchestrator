@@ -599,6 +599,10 @@ describe('classifyBreak', () => {
     ['libpq before 14', 'psql: error: could not connect to server: No such file or directory\n\tIs the server running locally and accepting\n\tconnections on Unix domain socket "/var/run/postgresql/.s.PGSQL.5432"?'],
     ['MySQL, its socket', "ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)"],
     ['MySQL 5.7, the loopback without its port', "ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1' (111)"],
+    ['Node\'s pg, its socket refusing', 'Error: connect ECONNREFUSED /var/run/postgresql/.s.PGSQL.5432\n    at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)'],
+    ['Node\'s pg, its socket missing', 'Error: connect ENOENT /var/run/postgresql/.s.PGSQL.5432\n    at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)'],
+    ['Go\'s lib/pq, its socket missing', 'dial unix /var/run/postgresql/.s.PGSQL.5432: connect: no such file or directory'],
+    ['Go\'s pgx, its socket refusing', 'failed to connect to `host=/var/run/postgresql user=app database=app`: dial error (dial unix /var/run/postgresql/.s.PGSQL.5432: connect: connection refused)'],
   ])('a database client that cannot reach its server on the Unix socket or the loopback is a service: %s', (_, output) => {
     for (const step of ['setup', 'command'] as const) expect(classifyBreak(output, step, declared).kind).toBe('service');
     expect(unreachable(output)).toBeUndefined();
