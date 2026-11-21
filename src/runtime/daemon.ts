@@ -146,6 +146,8 @@ export interface DaemonDeps {
   /** Where the runner keeps the runs' transcripts (ORC-132): the answer agent reads the session at work there (ORC-182). Absent: it reads none. */
   transcriptsDir?: string;
   agentEnv: (run: RunRecord) => Record<string, string>;
+  /** The daemon's secret values (`transcriptSecrets`), masked in the CI logs a fix of a red CI reads (ORC-459). */
+  secretValues?: () => readonly string[];
   /**
    * Repository-relative paths a run of this ticket reads whole past the pack's read threshold (ORC-279): the frozen
    * tests (ORC-131). ORC-212 will add the ticket's spec.

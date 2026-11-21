@@ -85,6 +85,24 @@ export function describeForgeContract(name: string, make: () => ForgeSubject | P
       await expect(s.unreachable.unresolvedReviewComments(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
     });
 
+    it('ciFailures names the failed checks findPr counts, each with its conclusion, and the CI of the base branch (ORC-459)', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'pr');
+      const pr = (await s.forge.findPr(s.repoPath, s.pr.branch))!;
+      if (pr.state !== 'OPEN') return ctx.skip();
+      const report = await resolved(s.forge.ciFailures(s.repoPath, s.pr.number));
+      expect(report.failed.map((c) => c.name).sort()).toEqual([...pr.failedChecks].sort());
+      for (const check of report.failed) expect(check.conclusion).not.toBe('');
+      if (pr.headSha) expect(report.head).toBe(pr.headSha);
+      expect(report.base.branch).not.toBe('');
+      expect(['pending', 'pass', 'fail', 'none']).toContain(report.base.checks);
+      expect(report.base.failedChecks.length > 0).toBe(report.base.checks === 'fail');
+    });
+
+    it('ciFailures rejects when the forge does not answer', async (ctx) => {
+      const s = await subjectWith(make, () => ctx.skip(), 'unreachable');
+      await expect(s.unreachable.ciFailures(s.repoPath, s.pr?.number ?? 1)).rejects.toThrow();
+    });
+
     it('findPr rejects for checks it cannot read', async (ctx) => {
       const s = await subjectWith(make, () => ctx.skip(), 'unreadableChecks');
       await expect(s.forge.findPr(s.repoPath, s.unreadableChecks)).rejects.toThrow();

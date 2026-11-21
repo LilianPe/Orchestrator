@@ -456,7 +456,7 @@ A job describes **how** to launch a Claude Code run (`JobSpec`, `src/core/workfl
 
 The values of `input`:
 - `feedback`: the Linear thread messages accumulated since the last run, plus the PR's unresolved review comments (title « Feedback to address »).
-- `ci_failures`: « The PR's CI is failing. Run `gh pr checks` for the details. » (title « CI failures »).
+- `ci_failures`: what the factory read on the forge of the PR's red CI, its run having no token (ORC-459, title « CI failures »): each failed check of the head (the factory's own left out) with its conclusion, the end of its log for the first five (an Actions job's log, else the report its CI attached, or a commit status's description; else why there is none), then the CI of the base branch at its tip (passing, failing and which checks, running, none). A log is data, said so in the block: fenced so it cannot close its block, without colours, timestamps nor control characters, the secret shapes and the daemon's secret values masked, cut to its end (3,000 characters, the error lines before it kept); a run that reads it is marked as one that read untrusted content (`sensitive_paths`, ORC-338). Without a PR known to the ticket, one line says the factory could not read it.
 - `thread`: the text of the message that triggered the run (mention or command) (title « Message »). Empty if the event is not a message.
 - `verify_failures`: used by the factory itself when it relaunches a job after failed checks (title « Failed checks »); no need to configure it.
 

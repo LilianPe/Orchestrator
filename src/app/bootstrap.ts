@@ -313,6 +313,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       tracker: trackerSwitch,
       outputPolicy,
       forge,
+      secretValues: () => transcriptSecrets(env, daemonSecrets()),
       // Only the GitHub App merges (ORC-148): without it, a Done goes back to Human Review with the reason.
       // A fake run writes nothing real: its fake PR's number would be another one's on the forge.
       // The visual proof's captures shown in the PR from the repository's `factory/artifacts` branch, by the same App (ORC-407).

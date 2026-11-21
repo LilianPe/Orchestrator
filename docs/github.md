@@ -35,7 +35,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
    - **Pull requests**: read/write;
    - **Checks**: read/write (the `factory/*` checks published on the pushed commit, ORC-151; an App created earlier must add it, otherwise these checks are not published, and the log says so);
    - **Commit statuses**: read;
-   - **Actions**: read (list environments and their protection rules, for `factory doctor`);
+   - **Actions**: read (list environments and their protection rules, for `factory doctor`; read the log of a failed Actions job, for the fix of a red CI, ORC-459);
    - **Metadata**: read (mandatory for every App).
    No **administration** permission, no `Actions` write, no `Workflows`. `factory doctor` refuses an installation that holds *Administration*, *Workflows* or *Actions* at write, and warns about any other permission above the manifest (ORC-439, ORC-441, ORC-443, [below](#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)).
    For the dashboard's GitHub sign-in (ORC-399), under **Identifying and authorizing users**: *Callback URL* `<publicUrl>/auth/github/callback`, *Expire user authorization tokens* left on, *Request user authorization (OAuth) during installation* off. If `dashboard` in `factory.yml` names an `org` or a `team`, add the **Organization permission** *Members*: read, and install the App on that org: GitHub answers a membership to the App's user token only then. A list of `logins` needs neither.

@@ -1,4 +1,5 @@
 import { branchOf } from './active-work.js';
+import type { CiFailureReport } from '../../core/ci-failures.js';
 import type { FeedbackItem } from '../../core/types.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
 import { ArtifactsRefused, ReviewLinesRefused, type ArtifactHost, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type HostedFile, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
@@ -42,6 +43,23 @@ export class FakeForge implements Forge, ForgeWriter, ArtifactHost, RepoPermissi
     this.answer();
     const pr = this.prs.get(branch);
     return pr && structuredClone(pr);
+  }
+
+  /** The red CI `ciFailures` answers per PR number (ORC-459); unset, the failed checks of the PR, without log, a green base. */
+  private ciReports = new Map<number, CiFailureReport>();
+
+  setCiFailures(prNumber: number, report: CiFailureReport): void {
+    this.ciReports.set(prNumber, report);
+  }
+
+  async ciFailures(_repoPath: string, prNumber: number): Promise<CiFailureReport> {
+    this.answer();
+    const set = this.ciReports.get(prNumber);
+    if (set) return structuredClone(set);
+    const pr = [...this.prs.values()].find((p) => p.number === prNumber);
+    if (!pr) throw new Error(`no pull request #${prNumber}`);
+    const failed = pr.failedChecks.map((name) => ({ name, conclusion: 'failure', noLog: 'the fake forge keeps no log' }));
+    return { head: pr.headSha ?? '', failed, base: { branch: this.defaultBranch, checks: 'pass', failedChecks: [] } };
   }
 
   async unresolvedReviewComments(_repoPath: string, prNumber: number): Promise<FeedbackItem[]> {

@@ -35,6 +35,7 @@ import { type Blocker, type FeedbackItem, type InputKind, type InternalEvent, ty
 import { runSealedSetup } from '../core/sealed-setup.js';
 import { servicesUnavailable } from '../core/clean-verify.js';
 import { blockingFindings, contestedInput, findingsInput } from '../core/review.js';
+import { formatCiFailures } from '../core/ci-failures.js';
 import { PRODUCT_NAME } from '../product.js';
 import { agentPolicy, runTools, type EgressPolicy } from '../network/levels.js';
 import { REPO_CONFIG_REFUSED, TICKET_TOKENS_REACHED, type BlockKind } from '../core/block-cause.js';
@@ -906,6 +907,9 @@ export abstract class DaemonLaunch extends DaemonEffects {
       if (kind === 'feedback') read.push(...forAgent(t.humanInbox).filter((i) => !threadsOf || !i.thread));
       const threads: FeedbackItem[] = threadsOf ? (await forge.unresolvedReviewComments(project.repoPath, threadsOf)).map((c) => ({ ...c, taint: 'untrusted' as const })) : [];
       read.push(...threads);
+      // The fix of a red CI reads its failures on the forge, its run having no token to (ORC-459). Their logs are written by the
+      // code the CI ran and the tools it called: untrusted, as review comments are.
+      const ciRead = kind === 'ci_failures' && opts.inputText === undefined && t.prNumber ? await forge.ciFailures(project.repoPath, t.prNumber) : undefined;
       const held = ticketSession && !t.newSession ? t.claudeSessionId : undefined;
       const resume = !!held && (!opts.relaunchOf || !this.d.sessionsDir || sessionSaved(join(this.d.sessionsDir, project.id, ticketId), held));
       // The questions relayed to the agent that implements (ORC-182): any launch of its session takes them all, whatever run they
@@ -913,7 +917,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       const relayed = ticketSession && t.relayed?.length ? await state(this.relayedQuestions(t.relayed)) : [];
       // A launch that empties the inbox takes the taint of all it empties, what the agent is not given included (`runTaint`).
       const consumes = kind === 'feedback' || stepInbox.length > 0;
-      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read) ?? (relayed.some((q) => q.untrusted) ? SENSITIVE_PATHS : undefined);
+      const fedUntrusted = sensitivePathsAtLaunch(opts.sensitivePaths ?? from?.sensitivePaths, consumes ? [...read, ...t.humanInbox] : read) ?? (ciRead || relayed.some((q) => q.untrusted) ? SENSITIVE_PATHS : undefined);
       // What the run reads beyond its input takes the mark of who wrote it, not of who started the run (ORC-349): a resumed
       // session, what its earlier attempts read, which the branch's mark keeps (ORC-338). The mark read here serves below.
       const seen = !fedUntrusted && resume ? await state(this.readUntrusted(project, t)) : t;
@@ -964,7 +968,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       } else if (kind === 'verify_failures') {
         input = { kind, text: formatVerifyFailures(JSON.parse(opts.inputText ?? '[]') as VerifyFailure[]) };
       } else if (kind === 'ci_failures') {
-        input = { kind, text: opts.inputText ?? 'The PR\'s CI is failing. Run `gh pr checks` for the details.' };
+        input = { kind, text: opts.inputText ?? (ciRead ? formatCiFailures(ciRead, this.d.secretValues?.()) : "The PR's CI is failing: the factory knows no PR of the ticket to read its checks on.") };
       } else if (kind === 'thread' || kind === 'spec_check') {
         input = { kind, text: opts.inputText ?? '' };
       }

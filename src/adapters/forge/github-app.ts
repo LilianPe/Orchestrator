@@ -2,6 +2,7 @@ import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
+import { MAX_LOGS, type CiFailureReport, type FailedCheck } from '../../core/ci-failures.js';
 import { excerpt, summarizeChecks, toRepoPermission, type CheckSummary } from './checks.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
 import { mergedPullRequests } from './merged-prs.js';
@@ -41,6 +42,8 @@ export const TOKEN_SAFETY_MARGIN_MS = 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
 /** How long a repository GitHub refused the App a token for is read with the machine's credentials before asking again (ORC-442). */
 const NO_TOKEN_MS = 10 * 60_000;
+/** What `ciFailures` keeps of a log it read, at most: its end, which `formatCiFailures` cuts again. */
+const LOG_READ_TAIL = 64 * 1024;
 /** Pages of 100 read from one list, at most: a bound against a server that ignores `page`, not a GitHub limit. */
 const MAX_PAGES = 10;
 
@@ -71,8 +74,10 @@ interface CheckRunDto {
   status: string;
   conclusion: string | null;
   external_id?: string | null;
-  /** The App that created it (ORC-353): the factory's own checks are its App's. */
-  app?: { id: number } | null;
+  /** The App that created it (ORC-353): the factory's own checks are its App's; `github-actions` for an Actions job (ORC-459). */
+  app?: { id: number; slug?: string } | null;
+  /** The report its CI attached (ORC-459): what the fix of a red CI reads of a check run that is not an Actions job. */
+  output?: { title?: string | null; summary?: string | null; text?: string | null } | null;
 }
 
 interface WorkflowDto {
@@ -83,6 +88,7 @@ interface WorkflowDto {
 interface StatusDto {
   context: string;
   state: string;
+  description?: string | null;
 }
 
 export interface GitHubAppForgeOptions {
@@ -179,6 +185,16 @@ const isCheckRun = (r: unknown): r is Pick<CheckRunDto, 'name' | 'status' | 'con
   (r.conclusion === null || typeof r.conclusion === 'string') &&
   (r.app == null || (isRecord(r.app) && typeof r.app.id === 'number'));
 
+/** A text field GitHub may leave out or null: absent, null or a string. */
+const isText = (v: unknown): boolean => v == null || typeof v === 'string';
+
+/** A check run as the fix of a red CI reads it (ORC-459): its id (an Actions job's own), its App's slug, its report. */
+const isReportedRun = (r: unknown): r is CheckRunDto => isCheckRun(r) && hasReport(r as Record<string, unknown>);
+const hasReport = (r: Record<string, unknown>): boolean =>
+  typeof r.id === 'number' &&
+  (r.app == null || (isRecord(r.app) && isText(r.app.slug))) &&
+  (r.output == null || (isRecord(r.output) && isText(r.output.title) && isText(r.output.summary) && isText(r.output.text)));
+
 const isPull = (p: unknown): p is PullRequestDto =>
   isRecord(p) &&
   typeof p.number === 'number' &&
@@ -193,6 +209,12 @@ const isWorkflow = (w: unknown): w is WorkflowDto =>
   isRecord(w) && typeof w.state === 'string' && (w.path === undefined || typeof w.path === 'string');
 
 const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
+
+/** A commit status with its description, which the fix of a red CI reads as its report (ORC-459). */
+const isDescribedStatus = (s: unknown): s is StatusDto => isStatus(s) && isText((s as { description?: unknown }).description);
+
+/** A PR with its base branch, which `ciFailures` reads the CI of. */
+const isBasedPull = (p: unknown): p is PullRequestDto & { base: { ref: string; sha: string } } => isPull(p) && p.base !== undefined;
 
 const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.every(isPull);
 
@@ -469,34 +491,46 @@ export class GitHubAppAuth {
   }
 
   /**
-   * The HTTP exchange: a refusal throws a `GitHubApiError`, a 2xx body that is not JSON throws, an empty one is
-   * `undefined`. Callers never read its answer without a guard: `read` checks it, `call` drops it (ORC-273).
-   * `secret`: the answer carries a credential (an installation token), so no part of it goes in an error.
+   * The HTTP exchange: a refusal throws a `GitHubApiError`, with GitHub's message when it gives one; else the answer's text.
    */
-  async #send(method: string, path: string, auth: string, body: unknown, secret: boolean): Promise<unknown> {
+  async #exchange(method: string, path: string, auth: string, body: unknown): Promise<string> {
     const res = await this.http(`${this.apiBase}${path}`, {
       method,
       headers: { ...githubApiHeaders(auth), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const text = await res.text();
+    if (res.ok) return text;
     let data: unknown;
-    let json = true;
     try {
       data = text ? JSON.parse(text) : undefined;
     } catch {
       data = undefined;
-      json = false;
     }
-    if (!res.ok) {
-      const message =
-        typeof data === 'object' && data !== null && 'message' in data
-          ? [String((data as { message: unknown }).message), ...validationErrors(data)].join(' : ')
-          : text.slice(0, 200);
-      throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined, isRateLimit(res, message));
+    const message =
+      typeof data === 'object' && data !== null && 'message' in data
+        ? [String((data as { message: unknown }).message), ...validationErrors(data)].join(' : ')
+        : text.slice(0, 200);
+    throw new GitHubApiError(res.status, `${apiLabel(method, path)}: ${res.status}${message ? ` ${message}` : ''}`, message || undefined, isRateLimit(res, message));
+  }
+
+  /** A GET whose answer is plain text, not JSON (an Actions job's log, ORC-459). */
+  protected readText(path: string, auth: string): Promise<string> {
+    return this.#exchange('GET', path, auth, undefined);
+  }
+
+  /**
+   * The exchange read as JSON: a 2xx body that is not JSON throws, an empty one is `undefined`. Callers never read its answer
+   * without a guard: `read` checks it, `call` drops it (ORC-273). `secret`: the answer carries a credential (an installation
+   * token), so no part of it goes in an error.
+   */
+  async #send(method: string, path: string, auth: string, body: unknown, secret: boolean): Promise<unknown> {
+    const text = await this.#exchange(method, path, auth, body);
+    try {
+      return text ? JSON.parse(text) : undefined;
+    } catch {
+      throw new UnreadableAnswerError(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
     }
-    if (!json) throw new UnreadableAnswerError(`${apiLabel(method, path)}: unreadable answer, not JSON${secret ? '' : `: ${excerpt(text)}`}`);
-    return data;
   }
 
   /** A call whose answer is not read (a write that only has to succeed): it returns nothing to read. */
@@ -551,6 +585,48 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
     const checks = state === 'OPEN' ? await this.checksFor(repo, pr.head.sha, token) : summarizeChecks([]);
     const merged = state === 'MERGED' ? { ...(pr.merge_commit_sha ? { mergeSha: pr.merge_commit_sha } : {}), mergedAt: Date.parse(pr.merged_at!) } : {};
     return { number: pr.number, url: pr.html_url, state, branch: pr.head.ref, headSha: pr.head.sha, ...merged, ...checks };
+  }
+
+  /**
+   * What the fix of a red CI reads (ORC-459), its run having no token: the failed checks of the PR's head, the factory's own left
+   * out, each with the end of its log, and the CI of the base branch at its tip. An Actions job's log is read by its check run's
+   * id, which is the job's (the App's `actions: read`); another CI's check run gives the report it attached; a commit status, its
+   * description. Only the first `MAX_LOGS` logs are read. A log the forge refuses (expired, a permission) is said, not thrown: the
+   * names still go to the agent; a transient refusal throws, to be read again.
+   */
+  async ciFailures(repoPath: string, number: number): Promise<CiFailureReport> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const pr = await this.read('GET', `${repoApi(repo)}/pulls/${number}`, token, isBasedPull, 'a pull request with its base');
+    const head = `${repoApi(repo)}/commits/${encodeURIComponent(pr.head.sha)}`;
+    const [runs, statuses, base] = await Promise.all([
+      this.allPages(`${head}/check-runs`, 'check_runs', 'a list of check runs', isReportedRun, token),
+      this.allPages(`${head}/status`, 'statuses', 'a list of commit statuses', isDescribedStatus, token),
+      this.checksFor(repo, pr.base.ref, token),
+    ]);
+    const failedRuns = runs.filter((run) => !isFactoryCheck(run, this.appId) && checkRunBucket(run) === 'fail');
+    const failed: FailedCheck[] = [
+      ...(await Promise.all(failedRuns.map((run, i) => (i < MAX_LOGS ? this.#runLog(repo, run, token) : { name: run.name, conclusion: run.conclusion ?? run.status })))),
+      ...statuses
+        .filter((status) => statusBucket(status.state) === 'fail')
+        .map((status) => ({ name: status.context, conclusion: status.state, ...(status.description ? { log: status.description } : { noLog: 'a commit status without a description' }) })),
+    ];
+    return { head: pr.head.sha, failed, base: { branch: pr.base.ref, checks: base.checks, failedChecks: base.failedChecks } };
+  }
+
+  /** A failed check run with the end of its log (`ciFailures`). */
+  async #runLog(repo: GitHubRepoRef, run: CheckRunDto, token: string): Promise<FailedCheck> {
+    const check = { name: run.name, conclusion: run.conclusion ?? run.status };
+    if (run.app?.slug !== 'github-actions') {
+      const report = [run.output?.title, run.output?.summary, run.output?.text].filter((t) => !!t).join('\n\n');
+      return { ...check, ...(report ? { log: report.slice(-LOG_READ_TAIL) } : { noLog: 'its CI attached no report' }) };
+    }
+    try {
+      return { ...check, log: (await this.readText(`${repoApi(repo)}/actions/jobs/${run.id}/logs`, token)).slice(-LOG_READ_TAIL) };
+    } catch (err) {
+      if (!(err instanceof GitHubApiError) || err.retryable) throw err;
+      return { ...check, noLog: `GitHub refused its log (${err.status})` };
+    }
   }
 
   async mergePr(repoPath: string, number: number, sha: string, opts: { unchecked?: boolean } = {}): Promise<MergeResult> {
