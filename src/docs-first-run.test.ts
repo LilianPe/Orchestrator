@@ -71,7 +71,7 @@ describe('docs/first-run.md', () => {
   const quoted = quotedCommands(guide);
 
   it('quotes the commands of a first run, flags included', () => {
-    for (const cmd of ['factory init', 'factory validate', 'factory doctor', 'factory doctor --json', 'factory up', 'factory plan', 'factory status', 'factory stop <ID>']) {
+    for (const cmd of ['factory init', 'factory init --dev', 'factory validate', 'factory doctor', 'factory doctor --json', 'factory up', 'factory plan', 'factory status', 'factory stop <ID>']) {
       expect(quoted).toContain(cmd);
     }
   });

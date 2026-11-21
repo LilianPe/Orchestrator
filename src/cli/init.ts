@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
@@ -19,6 +19,8 @@ export interface InitDeps {
   io: InitIO;
   home: string;
   cwd: string;
+  /** `factory init --dev` (ORC-411): a Smee channel for Linear's webhooks when there is no public URL, on a workstation only. */
+  dev?: boolean;
   createSmee: () => Promise<string>;
   exec: Exec;
 }
@@ -103,6 +105,71 @@ function proposal({ setup, commands, preview }: Detected): string | undefined {
   return text ? PROPOSAL_HEADER + text : undefined;
 }
 
+/** The App's repository permissions, those of docs/github-app-manifest.json (checked by init.test.ts), by their name on GitHub's form. */
+export const GITHUB_APP_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'write', statuses: 'read', actions: 'read', metadata: 'read' };
+const PERMISSION_LABELS: Record<keyof typeof GITHUB_APP_PERMISSIONS, string> = {
+  contents: 'Contents',
+  pull_requests: 'Pull requests',
+  checks: 'Checks',
+  statuses: 'Commit statuses',
+  actions: 'Actions',
+  metadata: 'Metadata',
+};
+
+/**
+ * How to create and install the factory's GitHub App (ORC-124), by hand on GitHub's form: a server has no browser for the
+ * manifest flow's callback. Its webhook only with a public URL; without one, the factory polls the PRs.
+ */
+function githubAppSteps(publicUrl: string | undefined, home: string): string {
+  const permissions = Object.entries(GITHUB_APP_PERMISSIONS)
+    .map(([k, v]) => `${PERMISSION_LABELS[k as keyof typeof GITHUB_APP_PERMISSIONS]}: ${v === 'write' ? 'read and write' : 'read'}`)
+    .join(', ');
+  const webhook = publicUrl
+    ? [
+        `   - Webhook: active, URL ${publicUrl}/webhooks/github, secret: a random value you will export as GH_WEBHOOK_SECRET`,
+        '   - Events: Pull request, Pull request review, Pull request review comment, Check run, Check suite, Push, Workflow run',
+      ]
+    : ['   - Webhook: uncheck "Active" (no public URL): the factory polls the PRs every 30 s'];
+  return [
+    '',
+    `GitHub App of ${PRODUCT_NAME} (it opens and updates the PRs):`,
+    '1. On GitHub: https://github.com/settings/apps/new (for an organization: its Settings → Developer settings → GitHub Apps).',
+    '   - Name and homepage URL: your choice',
+    ...webhook,
+    `   - Repository permissions: ${permissions}; nothing else`,
+    '2. Create the App, note its App ID, then "Generate a private key":',
+    `   keep the .pem outside the repository, mode 0600 (e.g. ${join(home, 'github-app.pem')}).`,
+    '3. Install the App on the repository ("Install App").',
+    '',
+  ].join('\n');
+}
+
+/** A reference `factory.yml` holds in place of a secret (ORC-209), and what the variable is to hold. */
+interface EnvSecret {
+  name: string;
+  value: string;
+}
+
+/**
+ * The `factory.yml` `init` writes when there is none (ORC-411): every secret an `env:NAME` reference, the budgets `factory
+ * validate` accepts for a first run (docs/first-run.md), to tune afterwards.
+ */
+function factoryYml(publicUrl: string | undefined): { text: string; env: EnvSecret[] } {
+  const env: EnvSecret[] = [
+    { name: 'GH_APP_ID', value: '<App ID>' },
+    { name: 'GH_APP_KEY', value: '<path of the .pem>' },
+    ...(publicUrl ? [{ name: 'GH_WEBHOOK_SECRET', value: "<the App's webhook secret>" }] : []),
+    { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '<token of claude setup-token>' },
+  ];
+  const yml = {
+    github: { app_id: 'env:GH_APP_ID', private_key: 'env:GH_APP_KEY', ...(publicUrl ? { webhook_secret: 'env:GH_WEBHOOK_SECRET' } : {}) },
+    claude: { runtime: 'claude-code', accounts: [{ name: 'main', token: 'env:CLAUDE_CODE_OAUTH_TOKEN' }], active: 'main', default_model: 'claude-sonnet-5-5' },
+    concurrency: 1,
+    budgets: { per_step_tokens: 'off', per_ticket_tokens: 5_000_000 },
+  };
+  return { text: `# Written by factory init: every secret is a reference, read from the daemon's environment.\n${stringify(yml)}`, env };
+}
+
 export async function runInit(d: InitDeps): Promise<void> {
   const { io } = d;
   const top = await d.exec('git', ['rev-parse', '--show-toplevel'], { cwd: d.cwd });
@@ -110,18 +177,29 @@ export async function runInit(d: InitDeps): Promise<void> {
   const repoPath = resolve(top.code === 0 ? top.stdout.trim() : await io.ask(`Path of the git repository to hand to ${PRODUCT_NAME}`));
   // Read first: a secrets.json encrypted at rest (ORC-398) stops init before it asks anything.
   const secrets = loadSecrets(d.home);
-  const teamKey = (await io.ask('Linear team key (e.g. REL)')).toUpperCase();
-
   const cfg = loadInstance(d.home);
-  const id = slugify(basename(repoPath), 30);
-  cfg.projects = [...cfg.projects.filter((p) => !samePath(p.repoPath, repoPath)), { id, repoPath, linearTeamKey: teamKey }];
-  if (!cfg.publicUrl && cfg.relay.kind === 'none') cfg.relay = { kind: 'smee', url: await d.createSmee() };
-  const webhookUrl = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : '';
+  const previous = cfg.projects.find((p) => samePath(p.repoPath, repoPath));
+  // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
+  const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
+
+  const id = previous?.id ?? slugify(basename(repoPath), 30);
+  // The project's other fields (its roles, written by hand) stay.
+  cfg.projects = [...cfg.projects.filter((p) => p !== previous), { ...previous, id, repoPath, linearTeamKey: teamKey }];
+  // Smee only on demand (ORC-411): a public channel, for a workstation; a server has its public URL.
+  if (!cfg.publicUrl && cfg.relay.kind === 'none' && d.dev) cfg.relay = { kind: 'smee', url: await d.createSmee() };
+  const webhookUrl = cfg.publicUrl ? `${cfg.publicUrl}/webhooks/linear` : cfg.relay.kind === 'smee' ? cfg.relay.url : '<public URL>/webhooks/linear';
   const callbackUrl = `${cfg.publicUrl ?? `http://localhost:${cfg.port}`}/oauth/callback`;
 
   io.print(
     [
       '',
+      ...(webhookUrl.startsWith('<')
+        ? [
+            "No public URL for Linear's webhooks: set publicUrl in config.yaml (the server's HTTPS URL, or a tunnel's) and run init again,",
+            'or, on a workstation, `factory init --dev` for a smee.io relay.',
+            '',
+          ]
+        : []),
       '1. In Linear: Settings → API → OAuth applications → New application.',
       `   - Name: ${PRODUCT_NAME} (the name you will mention with @)`,
       `   - Callback URL: ${callbackUrl}`,
@@ -132,15 +210,17 @@ export async function runInit(d: InitDeps): Promise<void> {
       '',
     ].join('\n'),
   );
-  const clientId = await io.ask('Client ID');
-  const clientSecret = await io.ask('Client secret');
+  const stored = secrets.linear;
+  const keep = stored ? ' (empty: keep the current one)' : '';
+  const clientId = (await io.ask('Client ID', stored?.clientId)).trim();
+  const clientSecret = (await io.ask(`Client secret${keep}`)).trim() || stored?.clientSecret || '';
   let webhookSecret: string;
   for (;;) {
-    webhookSecret = (await io.ask('Webhook signing secret')).trim();
+    webhookSecret = (await io.ask(`Webhook signing secret${keep}`)).trim() || stored?.webhookSecret || '';
     if (isUsableWebhookSecret(webhookSecret)) break;
     io.print(`The webhook signing secret is required: without it, ${PRODUCT_NAME} refuses every webhook.`);
   }
-  const keepTokens = secrets.linear?.clientId === clientId ? secrets.linear : {};
+  const keepTokens = stored?.clientId === clientId ? stored : {};
   saveSecrets(d.home, { ...secrets, linear: { ...keepTokens, clientId, clientSecret, webhookSecret } });
 
   // The workflow is the factory/default preset (ORC-388): the repository's part is its `.factory/config.yml`, read on the
@@ -158,6 +238,20 @@ export async function runInit(d: InitDeps): Promise<void> {
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 
   saveInstance(d.home, cfg);
+  io.print(githubAppSteps(cfg.publicUrl, d.home));
+  const ymlPath = join(d.home, 'factory.yml');
+  if (existsSync(ymlPath)) {
+    io.print(`${ymlPath} kept as it is.`);
+  } else {
+    const written = factoryYml(cfg.publicUrl);
+    writeFileSync(ymlPath, written.text, { flag: 'wx' });
+    io.print(
+      [
+        `Wrote ${ymlPath}: its secrets are references; export them in the shell of \`factory up\` and \`factory doctor\`:`,
+        ...written.env.map((e) => `  export ${e.name}=${e.value}`),
+      ].join('\n'),
+    );
+  }
   io.print(
     [
       '',

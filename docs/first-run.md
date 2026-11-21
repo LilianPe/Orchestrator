@@ -13,9 +13,9 @@ Nothing below can be skipped for a real run: without a container engine nothing 
 | 1 | **The pilot repository**, cloned locally, with `origin` on GitHub and `origin/HEAD` set | ORC-137 chose two pilots: `Intersektion/intersektion-platform` (the product repository, the first 20 real tickets) and `LilianPe/Orchestrator` (dogfooding: run the factory from a pinned commit, never from the branch it changes). For a first run, the one whose tests you know. `git clone` sets `origin/HEAD`; on an older clone, `git remote set-head origin --auto`. | `config.yaml`, `projects[].repoPath` (written by `factory init`) |
 | 2 | **`.factory/config.yml` with `commands.test`**, merged on the default branch | `factory init` proposes it (step 2); commit it through a normal PR. Without `commands.test` every ticket blocks at the tests step. | the repository, default branch |
 | 3 | **Branch protection** on the default branch: a ruleset with *Require a pull request before merging* that the App cannot bypass | GitHub → repository → Settings → Rules → Rulesets ([`github.md`](github.md#branch-protection-required-by-factory-doctor)). `factory doctor` refuses without it. | GitHub |
-| 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory polls the PRs every 30 s. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. Or `github.appId` / `github.privateKey` in `config.yaml`. |
+| 4 | **A test GitHub App** with the permissions of [`github-app-manifest.json`](github-app-manifest.json) (Contents, Pull requests, Checks write; Commit statuses, Actions, Metadata read), **its private key**, and **installed on the pilot repository** | `factory init` prints the steps, with the permissions (step 2); details in [`github.md`, "Creating the App"](github.md#creating-the-app). Locally, leave its webhook disabled: the factory polls the PRs every 30 s. Keep the `.pem` outside the repository, mode `0600`. | `factory.yml`, written by `factory init`: `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, with `GH_APP_ID` (the App ID) and `GH_APP_KEY` (the `.pem` path) in the daemon's environment. |
 | 5 | **A Linear OAuth application** (not a personal API key), created by a Linear workspace admin, with webhooks on | `factory init` prints the exact callback URL, webhook URL and categories (step 2); details in [`linear.md`](linear.md#1-create-the-oauth-application). | Client ID, client secret and webhook signing secret typed into `factory init` → `secrets.json`. The OAuth tokens come later, from « Connect Linear ». |
-| 6 | **A public URL for Linear's webhooks** | Either nothing: `factory init` creates a smee.io channel when `config.yaml` has neither `publicUrl` nor a relay. Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `publicUrl`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `config.yaml`: `relay` (smee) or `publicUrl` |
+| 6 | **A public URL for Linear's webhooks** | Locally, nothing to create: run **`factory init --dev`**, which creates a smee.io channel when `config.yaml` has neither `publicUrl` nor a relay (ORC-411: without `--dev`, `init` creates none, and Linear has nowhere to send the webhooks). Or a tunnel (`cloudflared tunnel --url http://localhost:4100`) in `publicUrl` before `factory init`, needed anyway if Linear refuses the `http://localhost` callback ([`linear.md`](linear.md#3-webhooks-production-and-development)). | `config.yaml`: `relay` (smee, written by `factory init --dev`) or `publicUrl` |
 | 7 | **A Claude Code token** | `claude setup-token` on a machine logged in to the subscription account. | `factory.yml`: `claude.accounts[].token: env:CLAUDE_CODE_OAUTH_TOKEN` (any variable name), and that variable in the daemon's environment. In a sandbox the egress proxy sets it on the model calls; the agent only holds a placeholder. |
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
 | 9 | **The runner image**, built from this repository | `podman build -f docker/runner.Dockerfile -t localhost/factory-runner docker` | `FACTORY_RUNNER_IMAGE=localhost/factory-runner` |
@@ -33,12 +33,14 @@ npm ci && npm run build && npm link
 factory          # prints the help, exit code 1: normal
 ```
 
-## 2. `factory init`, in the pilot repository
+## 2. `factory init --dev`, in the pilot repository
 
 ```bash
 cd <pilot repository>
-factory init
+factory init --dev
 ```
+
+`--dev` is what a local run needs: with no `publicUrl` in `config.yaml`, it creates the smee.io channel that relays Linear's webhooks to your machine (item 6). Without it, `init` creates no channel and says `No public URL for Linear's webhooks: …`; with a `publicUrl`, `--dev` changes nothing. A channel already in `config.yaml` is kept either way.
 
 It asks the Linear team key, then prints what to create in Linear, with your instance's URLs:
 
@@ -64,7 +66,29 @@ commands:
 
 Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
-It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay) and `FACTORY_HOME/secrets.json` (mode `0600`). Now add by hand, in `config.yaml`, the roles of items 11 and 12:
+Then it prints the GitHub App's steps (item 4), and writes `FACTORY_HOME/factory.yml` when there is none:
+
+```text
+GitHub App of Orchestrator (it opens and updates the PRs):
+1. On GitHub: https://github.com/settings/apps/new (for an organization: its Settings → Developer settings → GitHub Apps).
+   - Name and homepage URL: your choice
+   - Webhook: uncheck "Active" (no public URL): the factory polls the PRs every 30 s
+   - Repository permissions: Contents: read and write, Pull requests: read and write, Checks: read and write, Commit statuses: read, Actions: read, Metadata: read; nothing else
+2. Create the App, note its App ID, then "Generate a private key":
+   keep the .pem outside the repository, mode 0600 (e.g. /home/<user>/.factory/github-app.pem).
+3. Install the App on the repository ("Install App").
+
+Wrote /home/<user>/.factory/factory.yml: its secrets are references; export them in the shell of `factory up` and `factory doctor`:
+  export GH_APP_ID=<App ID>
+  export GH_APP_KEY=<path of the .pem>
+  export CLAUDE_CODE_OAUTH_TOKEN=<token of claude setup-token>
+```
+
+It ends with `Configuration written.` and its next steps. It wrote `FACTORY_HOME/config.yaml` (the project, the relay), `FACTORY_HOME/secrets.json` (mode `0600`) and `FACTORY_HOME/factory.yml`.
+
+Run again, `factory init` erases nothing (ORC-83): an empty answer keeps the team key and the stored Linear values (and « Connect Linear »'s tokens, as long as the client ID is the same), the project's roles stay, and an existing `factory.yml` is kept as it is (`… factory.yml kept as it is.`).
+
+Now add by hand, in `config.yaml`, the roles of items 11 and 12:
 
 ```yaml
 projects:
@@ -77,19 +101,27 @@ projects:
         <linear id of the delegator>: <their github login>
 ```
 
-And create `FACTORY_HOME/factory.yml`, read by `factory up`, `factory doctor` and `factory plan` with the daemon's environment, and by `factory validate` for its budgets, `max_diff` and tools:
+`FACTORY_HOME/factory.yml` is read by `factory up`, `factory doctor` and `factory plan` with the daemon's environment, and by `factory validate` for its budgets, `max_diff` and tools. The one `init` wrote:
 
 ```yaml
-github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }
+# Written by factory init: every secret is a reference, read from the daemon's environment.
+github:
+  app_id: env:GH_APP_ID
+  private_key: env:GH_APP_KEY
 claude:
   runtime: claude-code
   accounts:
-    - { name: main, token: env:CLAUDE_CODE_OAUTH_TOKEN }
+    - name: main
+      token: env:CLAUDE_CODE_OAUTH_TOKEN
   active: main
   default_model: claude-sonnet-5-5
 concurrency: 1
-budgets: { per_step_tokens: off, per_ticket_tokens: 5000000 }   # a first cap, to calibrate (ORC-216)
+budgets:
+  per_step_tokens: off
+  per_ticket_tokens: 5000000
 ```
+
+With a `publicUrl`, its `github` also has `webhook_secret: env:GH_WEBHOOK_SECRET`, and the App's steps give its webhook URL. The ticket cap is a first one, to calibrate (ORC-216).
 
 `claude.runtime` and `claude.default_model` are required once `claude` is there. The budgets: `factory validate` refuses a step cap left unset, and the daemon warns without a ticket cap; `per_step_tokens: off` with a ticket cap is the simplest accepted choice for a first run ([`configuration.md`](configuration.md#factoryyml-orc-209)).
 

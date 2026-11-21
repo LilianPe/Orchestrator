@@ -27,7 +27,7 @@ import { runValidateCommand } from './validate.js';
 import { PRODUCT_NAME } from '../product.js';
 
 const USAGE = `Usage: factory <command>
-  init               set up ${PRODUCT_NAME} for the current repository
+  init [--dev]       set up ${PRODUCT_NAME} for the current repository (--dev: a smee.io relay for Linear's webhooks without a public URL, on a workstation)
   validate [repo]    check .factory/config.yml against the baseline (it can only add)
   doctor [repo] [--json] refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches
   up [--fake-runner] start ${PRODUCT_NAME} (interface on http://localhost:4100)
@@ -54,7 +54,7 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
+    options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' }, dev: { type: 'boolean' } },
   });
   const [cmd, arg] = positionals;
   const home = factoryHome();
@@ -71,6 +71,7 @@ async function main(): Promise<number> {
       await runInit({
         home,
         cwd: process.cwd(),
+        dev: values.dev,
         exec: execCmd,
         createSmee: () => createSmeeChannel(),
         io: {
