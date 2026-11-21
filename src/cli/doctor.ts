@@ -8,7 +8,7 @@ import {
 } from '../adapters/forge/github-app-api.js';
 import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
-import { GITHUB_APP_PERMISSIONS } from './init.js';
+import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
 import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
@@ -674,14 +674,16 @@ const FORBIDDEN: Forbidden[] = [
   },
 ];
 
+const forbiddenNames = FORBIDDEN.map(({ name }) => name);
 /** "Administration, Workflows or Actions (write)". */
-const FORBIDDEN_NAMES = FORBIDDEN.map(({ name }) => name)
-  .join(', ')
-  .replace(/, ([^,]*)$/, ' or $1');
+const FORBIDDEN_NAMES = `${forbiddenNames.slice(0, -1).join(', ')} or ${forbiddenNames.at(-1)}`;
+/** Every kind of every forbidden permission: refused apart, never also warned about. */
+const FORBIDDEN_KINDS = new Set(FORBIDDEN.flatMap(({ settings }) => Object.keys(settings)));
 
 const LEVELS = ['read', 'write', 'admin'];
-/** GitHub's label for a level, as the App's settings show it. */
 const LEVEL_LABELS: Record<string, string> = { read: 'Read-only', write: 'Read and write' };
+/** GitHub's label for a level, as the App's settings show it. */
+const levelLabel = (level: string) => LEVEL_LABELS[level] ?? level;
 
 /** Whether `level` is above `asked`; any level is above none, and an unknown level above every one. */
 function above(level: string, asked: string | undefined): boolean {
@@ -697,21 +699,16 @@ const heldForbidden = (permissions: Record<string, string>) =>
     held: Object.keys(forbidden.settings).filter((permission) => permissions[permission] !== undefined && above(permissions[permission], forbidden.allowed)),
   })).filter((forbidden) => forbidden.held.length > 0);
 
-/**
- * What an installation may hold without a warning: the manifest's permissions, and the Organization permission Members at
- * read, which docs/github.md asks for a dashboard gated on an org or a team (ORC-399).
- */
-const ACCEPTED_PERMISSIONS: Record<string, string> = { ...GITHUB_APP_PERMISSIONS, members: 'read' };
+/** What an installation may hold without a warning: the manifest's permissions, and those added by hand for the dashboard. */
+const ACCEPTED_PERMISSIONS: Record<string, string> = { ...GITHUB_APP_PERMISSIONS, ...GITHUB_APP_OPTIONAL_PERMISSIONS };
 
-/** The permissions above `ACCEPTED_PERMISSIONS`, but not forbidden (refused apart), named in one warning (ORC-443). */
+/** The permissions above `ACCEPTED_PERMISSIONS`, but not forbidden, named in one warning with the level each goes back to (ORC-443). */
 function excessWarning(permissions: Record<string, string>): string | undefined {
-  const forbidden = new Set(FORBIDDEN.flatMap(({ settings }) => Object.keys(settings)));
-  const excess = Object.entries(permissions).filter(([permission, level]) => !forbidden.has(permission) && above(level, ACCEPTED_PERMISSIONS[permission]));
-  if (excess.length === 0) return undefined;
-  const named = excess.map(([permission, level]) => {
-    const asked = ACCEPTED_PERMISSIONS[permission];
-    return `${permission} (${level}, ${asked === undefined ? 'not in the manifest: No access' : `the manifest asks ${LEVEL_LABELS[asked] ?? asked}`})`;
-  });
+  const named = Object.entries(permissions)
+    .map(([permission, level]) => ({ permission, level, asked: ACCEPTED_PERMISSIONS[permission] }))
+    .filter(({ permission, level, asked }) => !FORBIDDEN_KINDS.has(permission) && above(level, asked))
+    .map(({ permission, level, asked }) => `${permission} (${level}, ${asked === undefined ? 'not in the manifest: No access' : `the manifest asks ${levelLabel(asked)}`})`);
+  if (named.length === 0) return undefined;
   return (
     `Warning: the App is installed with permissions the manifest does not ask for: ${named.join(', ')}. ` +
     "Each widens what the daemon can do with the App's token. In the App's settings (Permissions & events), set each to the level named " +
@@ -729,14 +726,15 @@ function judgeInstallation(permissions: Record<string, string>): InstallationRep
     permissions,
     verdict: 'refused',
     reasons: held.map(({ name, settings, risk, allowed, held: kinds }, i) => {
-      const target = allowed === undefined ? 'No access' : (LEVEL_LABELS[allowed] ?? allowed);
+      // Forbidden at any level: removed; above a level: lowered to it.
+      const [verb, target, check] =
+        allowed === undefined ? ['Remove', 'No access', `${name} is no longer listed`] : ['Lower', levelLabel(allowed), `${kinds.join(' and ')} is ${levelLabel(allowed)}`];
       return (
         // Joined after one another: each after the first opens a sentence.
         `${i === 0 ? 'installed' : 'Installed'} with ${kinds.map((permission) => `${permission} (${permissions[permission]})`).join(' and ')}: ${risk}. ` +
-        `${allowed === undefined ? 'Remove' : 'Lower'} it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), ` +
+        `${verb} it: in the App's settings (Settings → Developer settings → GitHub Apps → the App → Permissions & events), ` +
         `set ${kinds.map((permission) => settings[permission]).join(' and ')} to ${target} and save, then check in the installation ` +
-        `(Settings → Applications → Installed GitHub Apps → Configure) that ${allowed === undefined ? `${name} is no longer listed` : `${kinds.join(' and ')} is ${target}`} ` +
-        '(docs/github-app-manifest.json).'
+        `(Settings → Applications → Installed GitHub Apps → Configure) that ${check} (docs/github-app-manifest.json).`
       );
     }),
     ...warnings,
