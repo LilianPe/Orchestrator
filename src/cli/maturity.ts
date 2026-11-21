@@ -53,10 +53,22 @@ interface Manifests {
   problems: { file: string; problem?: string }[];
 }
 
+/** A manifest that exists but cannot be read (a directory, no read permission) is a problem of the cards, never a failure of init (ORC-454). */
+function readManifest(repo: string, file: 'package.json' | 'pyproject.toml'): { file: string; names: string[]; problem?: string } {
+  let text: string;
+  try {
+    text = readFileSync(join(repo, file), 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return { file, names: [], problem: `cannot be read: ${code ?? (err instanceof Error ? err.message : String(err))}` };
+  }
+  return { file, ...manifestDependencies(file, text) };
+}
+
 function dependencies(repo: string): Manifests {
   const read = (['package.json', 'pyproject.toml'] as const)
     .filter((file) => existsSync(join(repo, file)))
-    .map((file) => ({ file, ...manifestDependencies(file, readFileSync(join(repo, file), 'utf8')) }));
+    .map((file) => readManifest(repo, file));
   return { deps: new Set(read.flatMap((r) => r.names)), problems: read.filter((r) => r.problem !== undefined) };
 }
 

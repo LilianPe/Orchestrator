@@ -183,6 +183,12 @@ describe('the maturity report on what it reads only in part (ORC-454)', () => {
     expect(valueOf(repoOf({ 'package.json': deep }))['stack']).toMatch(/^Node \(no lockfile\); package\.json not fully read \(.+\): Stack, Services and Visual paths may miss some of its dependencies$/);
   });
 
+  it('a package.json that cannot be read (a directory) is said on the cards, never stops the report; pyproject.toml still read', () => {
+    const v = valueOf(repoOf({ 'package.json/index.js': '', 'pyproject.toml': '[project]\ndependencies = ["psycopg>=3"]\n' }));
+    expect(v['stack']).toBe('Node (no lockfile), Python (no uv.lock); package.json not fully read (cannot be read: EISDIR): Stack, Services and Visual paths may miss some of its dependencies');
+    expect(v['services']).toBe('postgres (dependency psycopg); package.json not fully read (see Stack): a dependency may be missing');
+  });
+
   it('well-formed manifests add nothing to the cards', () => {
     const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }));
     expect([v['stack'], v['services'], v['visual_paths']]).toEqual(['Node (npm), Vue', 'none', 'none: a front end, but none of its usual directories']);
