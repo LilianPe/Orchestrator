@@ -11,7 +11,6 @@ import type { Forge, PrInfo } from "./types.js";
 /**
  * The GitHub half of the reconciliation (ORC-185): run with Linear's, every 5 minutes, by its timer in the store. It reads each
  * ticket's PR on the forge and writes what the webhooks may have lost (ORC-134), under their ids, so the inbox keeps a fact once.
- * No timer of its own since ORC-181: the 30-second poll is gone.
  */
 export class GithubReconciler {
   constructor(

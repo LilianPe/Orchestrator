@@ -7,7 +7,7 @@ import { openPullRequests, recentRepoBranches, repoBranches } from './active-wor
 import { mergedPullRequests } from './merged-prs.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { ARTIFACTS_BRANCH, ArtifactsRefused, isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type ArtifactHost, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type HostedFile, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
+import { ARTIFACTS_BRANCH, ArtifactsRefused, isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type ArtifactHost, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type HostedFile, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type PullRequestView, type ReviewRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -711,12 +711,14 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
    * A PR by its number, as `factory ghost start` compares with it (ORC-181, in place of `gh pr view`): its author, its merge
    * commit when it is merged (never the test merge GitHub names for an open one), its commits' headlines oldest first.
    */
-  async pullRequest(repoPath: string, number: number): Promise<{ number: number; url: string; author: string; mergeSha?: string; commits: string[] }> {
+  async pullRequest(repoPath: string, number: number): Promise<PullRequestView> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const path = `${repoApi(repo)}/pulls/${number}`;
-    const pr = await this.read('GET', path, token, isAuthoredPull, 'a pull request');
-    const commits = await this.allPages(`${path}/commits`, null, 'a list of commits', isPullCommit, token);
+    const [pr, commits] = await Promise.all([
+      this.read('GET', path, token, isAuthoredPull, 'a pull request'),
+      this.allPages(`${path}/commits`, null, 'a list of commits', isPullCommit, token),
+    ]);
     // GitHub lists 250 commits at most: a longer PR's list is never read as complete.
     if (pr.commits !== undefined && commits.length !== pr.commits) throw new Error(`${apiLabel('GET', `${path}/commits`)}: ${commits.length} commits of ${pr.commits}, never read as complete`);
     return {

@@ -52,6 +52,15 @@ export interface Forge {
   recentBranches(repoPath: string): Promise<ForgeBranch[]>;
 }
 
+/** A PR read by its number, as a replay compares with it (`factory ghost`): its author's login, its merge commit once merged, its commits' headlines oldest first. */
+export interface PullRequestView {
+  number: number;
+  url: string;
+  author: string;
+  mergeSha?: string;
+  commits: string[];
+}
+
 /** A PR the factory opens for its branch (ORC-162), by its Publisher (ORC-125). */
 export interface PrRequest {
   branch: string;

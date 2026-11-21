@@ -246,7 +246,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: chosenClaudeToken, proxyHasToken: () => !!claudeTokenOf(), log, ...(sandboxes ? { sandboxes } : {}) });
     const workspaces = new GitWorkspaces({ root: paths.workspaces, log });
     // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
-    const forge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : new NoForge();
+    const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
+    const forge = appForge ?? new NoForge();
     if (githubApp) {
       log(
         `GitHub forge: GitHub App ${githubApp.appId} (installation tokens limited to the run's repository` +
@@ -255,7 +256,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     } else {
       log('Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.');
     }
-    const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && forge instanceof GitHubAppForge ? new GitPublisher({ sandboxes, forge, runsDir: paths.runs, log }) : undefined;
+    const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && appForge ? new GitPublisher({ sandboxes, forge: appForge, runsDir: paths.runs, log }) : undefined;
     // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
     const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
     if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
@@ -318,7 +319,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       // Only the GitHub App merges (ORC-148): without it, a Done goes back to Human Review with the reason.
       // A fake run writes nothing real: its fake PR's number would be another one's on the forge.
       // The visual proof's captures shown in the PR from the repository's `factory/artifacts` branch, by the same App (ORC-407).
-      ...(forge instanceof GitHubAppForge && !o.fakeRunner ? { forgeWriter: forge, captureHost: forge } : {}),
+      ...(appForge && !o.fakeRunner ? { forgeWriter: appForge, captureHost: appForge } : {}),
       // Only the factory publishes (ORC-125), from its sandboxes and by the App: without them, a verified ticket is blocked and told why.
       ...(publisher ? { publisher } : {}),
       runner,
@@ -414,11 +415,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const reconciler = new Reconciler({ tracker: trackerSwitch, store, projects: fromLinear, submit: accept, clock, log, serial: labelsTurn });
     const timers = new TimerService(store, clock, () => daemon.wake(), (e) => log(`timers: ${e.message}`));
-    const githubReconciler = new GithubReconciler({ store, forge, projects, submit: accept, clock, log });
+    // Without the App, no GitHub pass: every read would fail, ticket by ticket, at each pass; the start said why once.
+    const githubReconciler = appForge && new GithubReconciler({ store, forge: appForge, projects, submit: accept, clock, log });
     reconcileProject = async (p) => {
       await reconcileOnce({ tracker: trackerSwitch, store, projects: fromLinear, only: p.id, submit: accept, clock, log, serial: labelsTurn });
-      // Without the App every read would fail, ticket by ticket, at each pass: the start said why once.
-      if (githubApp) await githubReconciler.once(p.id);
+      await githubReconciler?.once(p.id);
     };
     // GitHub webhooks (ORC-134) write to the inbox beside the reconciliation (every 5 min, ORC-185): both name a fact the
     // same way, so the inbox keeps it once.

@@ -5,18 +5,18 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { execCmd, mustExec } from '../adapters/exec.js';
-import { GitHubAppForge } from '../adapters/forge/github-app.js';
-import { NO_GITHUB_APP } from '../adapters/forge/no-forge.js';
+import type { GitHubAppForge } from '../adapters/forge/github-app.js';
+import type { PullRequestView } from '../adapters/forge/types.js';
+import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { repoRoot } from '../app/root.js';
-import { resolveGithubApp } from '../config/github-app.js';
-import { effectiveInstance, homePaths, loadInstance } from '../config/instance.js';
+import { homePaths, loadInstance } from '../config/instance.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
-import { originHeadOf } from '../adapters/workspace/git-workspaces.js';
 import { HOST_RUNS_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
 import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
 import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
 import { isFantome } from '../presets/fantome.js';
 import { openStore } from '../store/open.js';
+import { cliGithubForge } from './github.js';
 import { KEPT_PR, type Store } from '../store/types.js';
 
 export const GHOST_USAGE = `Usage: factory ghost <command>
@@ -31,14 +31,8 @@ export const GHOST_USAGE = `Usage: factory ghost <command>
   report <replay>   ticket by ticket, environment failures apart, the total cost and the verdict against both thresholds
   list              the replays, the last started first`;
 
-/** The human PR of a replayed ticket, as the forge has it: its author's login, its merge commit, its commits' headlines oldest first. */
-export interface HumanPr {
-  number: number;
-  url: string;
-  author: string;
-  mergeSha?: string;
-  commits: string[];
-}
+/** The human PR of a replayed ticket, as the forge has it. */
+export type HumanPr = PullRequestView;
 
 export interface GhostOptions {
   args: readonly string[];
@@ -303,9 +297,9 @@ async function report(o: GhostOptions, id: string): Promise<number> {
 /** The daemon's GitHub App, which alone reads the human PRs (ORC-181: no `gh`). */
 async function githubForge(home: string): Promise<GitHubAppForge> {
   const { yml } = await loadSealedFactoryYml(home, process.env, { only: GITHUB_APP_SECRETS });
-  const githubApp = resolveGithubApp(effectiveInstance(home, yml));
-  if (!githubApp) throw new Error(`factory ghost: ${NO_GITHUB_APP}: the human PRs are read by the App alone.`);
-  return new GitHubAppForge(githubApp);
+  const forge = cliGithubForge(home, yml, 'ghost');
+  if (typeof forge === 'string') throw new Error(forge);
+  return forge;
 }
 
 /** The command line, on the instance's store and projects; the PRs read by the GitHub App, the clones and diffs from each project's origin. */
@@ -337,7 +331,7 @@ export async function runGhostCommand(home: string, args: readonly string[]): Pr
       humanPr: async (repoPath, number) => (await (forge ??= githubForge(home))).pullRequest(repoPath, number),
       // The merge commit fetched from origin, with its history: the start is one of its ancestors.
       humanDiff: async (repoPath, { start, mergeSha }) => {
-        await mustExec(execCmd, 'git', ['-C', repoPath, 'fetch', '--quiet', 'origin', mergeSha]);
+        await fetchOrigin(execCmd, repoPath, { refspecs: [mergeSha] });
         // The format of the factory's side whatever the user's git config, which would tell the sides apart on a blind screen.
         return mustExec(execCmd, 'git', ['-C', repoPath, 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', start, mergeSha]);
       },
