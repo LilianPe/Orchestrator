@@ -620,6 +620,7 @@ describe('classifyBreak', () => {
 
   it('a test that timed out naming the loopback is no service: only a connection that did', () => {
     expect(classifyBreak('Error: Test timed out in 5000ms, waiting for http://localhost:3000/health', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak('Failed to connect to localhost 3 times, giving up', 'command', declared).kind).toBe('failure');
   });
 
   it('anything else is a failure, its first error line said', () => {

@@ -182,10 +182,10 @@ const NAME = /[A-Z][A-Z0-9_]{2,}/g;
 /**
  * A port on the loopback, as the tools write it: `127.0.0.1:5432`, `[::1]:3128`, curl's `127.0.0.1 port 3128`, urllib3's
  * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`, Prisma's `` `localhost`:`5432` ``.
- * The port is the first group.
+ * The port is the first group; a number after a space alone is none (`localhost 3 times`).
  */
 const LOOPBACK = String.raw`(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])`;
-const LOOPBACK_PORT = new RegExp(String.raw`${LOOPBACK}['"\`]?\)?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)\`?(\d{1,5})\b`);
+const LOOPBACK_PORT = new RegExp(String.raw`${LOOPBACK}['"\`]?\)?(?::|,\s*(?:port[ =]?\s*)?|\s+port[ =]?\s*)\`?(\d{1,5})\b`);
 /**
  * A connection refused or not answered, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's,
  * Prisma's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
