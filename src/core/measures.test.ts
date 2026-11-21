@@ -166,6 +166,30 @@ describe('ticketMeasures (ORC-235)', () => {
     }));
     expect(m.messages.map((x) => x.eventId)).toEqual(['read']);
   });
+
+  it('counts as feedback a mention that relaunched the blocked step, not one that was refused, only kept or only asked (ORC-433)', () => {
+    const mention = (id: string, at: number, kind: 'question' | 'instruction') => ev(id, 'session.mentioned', at, { linearSessionId: `s-${id}`, body: '?', author: 'h', kind });
+    const started = (eventId: string, job: string, input: string) => ({ ...row(`REL-1:${eventId}:0`, { kind: 'start_run', job, input } as never), eventId });
+    const m = ticketMeasures('p', 'REL-1', facts({
+      events: [
+        ev('d', 'ticket.delegated', 0, { linearSessionId: 'ls' }),
+        mention('question', 10, 'question'),
+        mention('instruction', 20, 'instruction'),
+        // Refused (no right to relaunch), kept behind a wait, or answered by a question run: none relaunched a step.
+        mention('refused', 30, 'question'),
+        mention('kept', 40, 'instruction'),
+        mention('asked', 50, 'question'),
+        ev('m', 'pr.merged', 60, { number: 1, url: 'u', branch: 'b' }),
+      ],
+      effects: [
+        started('question', 'dev', 'feedback'),
+        started('instruction', 'dev-feedback', 'feedback'),
+        { ...row('REL-1:refused:0', { kind: 'comment', body: 'Refusé' }), eventId: 'refused' },
+        started('asked', 'ask', 'thread'),
+      ],
+    }));
+    expect(m.reworks).toEqual([{ cause: 'feedback', id: 'question' }, { cause: 'feedback', id: 'instruction' }]);
+  });
 });
 
 const DAY = 24 * 60 * 60 * 1000;

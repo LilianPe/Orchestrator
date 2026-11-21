@@ -34,8 +34,8 @@ export interface MessageMeasure {
 /**
  * Why a merged ticket was not ready at the first try: an event of the journal before the merge,
  * never the agent's text. `feedback` is a human reply in the dev session (a requested change, or an
- * answer to the agent's own question: either way the first try needed a human); `sent_back` a human
- * moving the ticket back to dev once handed over; `changes_requested` a GitHub review asking for changes
+ * answer to the agent's own question: either way the first try needed a human), or a comment or a mention that
+ * relaunched the blocked step (ORC-196, ORC-433); `sent_back` a human moving the ticket back to dev once handed over; `changes_requested` a GitHub review asking for changes
  * (ORC-134). A review comment alone, or a conflict with the base branch (`pr.conflicted`), is not one.
  */
 export interface Rework {
@@ -294,8 +294,9 @@ function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<st
       return { cause: e.type, id: e.id };
     case 'session.prompted':
       return isQuestionSession(ticket, e.payload.linearSessionId) ? undefined : { cause: 'feedback', id: e.id };
-    // A comment is a reply only if it relaunched the ticket: the fold of the journal does not see its blocks (ORC-196).
+    // A comment or a mention is a reply only if it relaunched the ticket's work: the fold of the journal does not see its blocks (ORC-196, ORC-433).
     case 'ticket.commented':
+    case 'session.mentioned':
       return relaunched.has(e.id) ? { cause: 'feedback', id: e.id } : undefined;
     case 'pr.reviewed':
       return e.payload.kind === 'review' && e.payload.state?.toLowerCase() === 'changes_requested' ? { cause: 'changes_requested', id: e.id } : undefined;
@@ -326,7 +327,8 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let mergedAt: number | null = null;
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
-  const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run').map((r) => r.eventId));
+  // Events whose decision started a run of the ticket's work: not the answer agent's, which reads the thread (as `messageAck` tells it).
+  const relaunched = new Set(facts.effects.filter((r) => r.effect.kind === 'start_run' && r.effect.input !== 'thread').map((r) => r.eventId));
   const answered = new Set(facts.effects.map((r) => r.eventId));
   const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {
