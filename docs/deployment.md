@@ -110,6 +110,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 |---|---|---|
 | `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | one at least (or the transition below) | Tokens for the Claude Code accounts, read by `factory.yml` (`token: env:CLAUDE_TOKEN_1`); the `claude.active` account is the runs' only credential. |
 | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | yes, unless `factory.yml` gives `github.client_id` | The GitHub App's OAuth client, for the dashboard's GitHub sign-in (ORC-399): the container listens beyond loopback, and `factoryd` refuses to start without it. |
+| `FACTORY_MESSAGE_API_KEY` | no | The Messages API key of the small model of messages, read by `factory.yml` (`message_model: { api_key: env:FACTORY_MESSAGE_API_KEY }`, ORC-445). Without it, the fallback rule classifies human messages ([operations](operations.md#the-small-model-of-messages)). |
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
 | `FACTORY_RUNNER_IMAGE` | yes | The runner image, built separately. |

@@ -125,7 +125,8 @@ const ON = ['', 'on', '1', 'true'];
  * The backend the runners' credential points to (ORC-336). Runs on the host (no sandbox): as a run on the host would,
  * the chosen Claude account or a Claude Code login go through `claude -p`, an API key alone through the Messages API.
  * Runs in sandboxes: the daemon image has no `claude` (no agent runs there), so only an API key reaches a model.
- * The key is `message_model.api_key` of factory.yml (ORC-445), else `ANTHROPIC_API_KEY` in transition (`apiKeyOf`).
+ * The key is `message_model.api_key` of factory.yml (ORC-445), else `ANTHROPIC_API_KEY` in transition (`apiKeyOf`). factory.yml's
+ * key is the classifier's alone, no run's: on the host without a Claude account, it takes the Messages API over a Claude Code login.
  * `FACTORY_MESSAGE_MODEL` off, 0, false or none turns it off. Without a backend, or when it fails, the fallback rule classifies.
  */
 export function classifierBackend(
