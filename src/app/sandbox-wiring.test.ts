@@ -1,10 +1,10 @@
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Exec, ExecResult } from '../adapters/exec.js';
 import { BROWSER_REQUIREMENTS } from '../adapters/browser/types.js';
 import { defaultLimits } from '../adapters/sandbox/docker-rootless.js';
 import type { Egress } from '../network/proxy-service.js';
-import { browserImage, checkHostRuns, instanceId, makeSandboxes, sandboxLimits, sandboxRefusals } from './sandbox-wiring.js';
+import { browserImage, checkHostRuns, instanceId, makeSandboxes, sandboxConfig, sandboxLimits, sandboxRefusals } from './sandbox-wiring.js';
 
 describe('checkHostRuns (ORC-349)', () => {
   it('refuses agents on the host without a container engine, naming both ways out', () => {
@@ -36,6 +36,39 @@ describe('sandboxRefusals (ORC-449)', () => {
   });
 });
 
+// ORC-450: the limits and the daemon's uid/gid, refused by sandboxConfig before anything opens rather than by makeSandboxes.
+describe('the sandboxes the start refuses before anything opens (ORC-450)', () => {
+  const ENGINE = { FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: 'r:1' };
+  afterEach(() => vi.restoreAllMocks());
+
+  it('refuses a FACTORY_SANDBOX_* limit malformed, with its message', () => {
+    for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two']]) {
+      const env = { ...ENGINE, [k!]: v };
+      const { refused } = sandboxLimits(env) as { refused: string };
+      expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusal: refused });
+      expect(() => checkHostRuns(env)).toThrow(refused);
+    }
+  });
+
+  it('refuses a daemon without a uid or a gid, with its message', () => {
+    vi.spyOn(process, 'getgid').mockReturnValue(undefined as unknown as number);
+    expect(sandboxConfig(ENGINE)).toEqual({ cli: 'docker', refusal: 'The sandboxes require a daemon on Linux (uid and gid).' });
+    expect(() => checkHostRuns(ENGINE)).toThrow('The sandboxes require a daemon on Linux (uid and gid).');
+    // Without sandboxes, none is needed.
+    expect(() => checkHostRuns({ FACTORY_ALLOW_HOST_RUNS: '1' })).not.toThrow();
+  });
+
+  it('hands makeSandboxes the limits and the ids it checked', () => {
+    expect(sandboxConfig({ ...ENGINE, FACTORY_SANDBOX_PIDS: '128', FACTORY_SANDBOX_MEMORY: 'none' })).toEqual({
+      cli: 'docker',
+      image: 'r:1',
+      uid: process.getuid!(),
+      gid: process.getgid!(),
+      limits: { ...defaultLimits(), pids: 128, memory: undefined },
+    });
+  });
+});
+
 describe('instanceId', () => {
   it('is 12 hex chars, stable for one daemon home whatever its spelling, distinct across homes', () => {
     const home = join(process.cwd(), 'h');
@@ -58,7 +91,7 @@ describe('sandboxLimits', () => {
 
   it('refuses garbage, naming the variable', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_PIDS', '-1'], ['FACTORY_SANDBOX_MEMORY', '4 GB'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two'], ['FACTORY_SANDBOX_CPUS', '1.']]) {
-      expect(() => sandboxLimits({ [k!]: v })).toThrow(`${k}=${v}`);
+      expect(sandboxLimits({ [k!]: v })).toEqual({ refused: expect.stringMatching(`^${k}=${v}: `) });
     }
   });
 });

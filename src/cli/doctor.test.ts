@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Exec } from '../adapters/exec.js';
 import type { BranchProtection, EnvironmentProtection, WorkflowSource } from '../adapters/forge/github-app-api.js';
 import { UnreadableAnswerError, type HttpClient, type HttpRequest } from '../adapters/forge/github-app.js';
@@ -137,6 +137,7 @@ function tempHome(): string {
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 describe('factory doctor', () => {
@@ -1021,6 +1022,31 @@ describe("the daemon's environment the start refuses, doctor's host refuses", ()
     const asked = engine(DOCKER_INFO);
     expect(await checkHost(env, asked.exec)).toEqual({ verdict: 'refused', reasons: [message] });
     expect(asked.calls).toEqual([]);
+  });
+
+  // ORC-450: refused by the start before anything opens, by doctor alike, in text as in --json.
+  const refusedLikeTheStart = async (env: NodeJS.ProcessEnv, expected: string | RegExp) => {
+    const message = await started(env);
+    expect(message).toMatch(expected);
+    const asked = engine(DOCKER_INFO);
+    const host = await checkHost(env, asked.exec);
+    expect(host).toMatchObject({ engine: 'docker', cgroupV2: true, verdict: 'refused', reasons: [message] });
+    const text = await doctor([], [], { host });
+    expect(text.code).toBe(1);
+    expect(text.lines).toContain(`Host: refused — ${message}`);
+    const json = await doctor([], [], { host, json: true });
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.text)).toMatchObject({ accepted: false, host: { verdict: 'refused', reasons: [message] } });
+  };
+
+  it('refuses a FACTORY_SANDBOX_* limit malformed with the message of the start (ORC-450)', async () => {
+    // Each variable's message: sandbox-wiring.test.ts.
+    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_PIDS: 'many' }, /^FACTORY_SANDBOX_PIDS=many: a whole number of processes expected/);
+  });
+
+  it('refuses a daemon without a uid or a gid with the message of the start (ORC-450)', async () => {
+    vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number);
+    await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER }, 'The sandboxes require a daemon on Linux (uid and gid).');
   });
 });
 

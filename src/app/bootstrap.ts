@@ -101,8 +101,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398).
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
-  // Before anything opens: no agent on the host but by choice (ORC-349), sandboxes only with docker or podman and their runner image
-  // (`sandboxRefusals`, said by `factory doctor` too, ORC-449). --fake-runner launches none.
+  // Before anything opens: no agent on the host but by choice (ORC-349), sandboxes only with docker or podman and their runner image,
+  // valid limits and the daemon's uid/gid (`sandboxRefusals`, said by `factory doctor` too, ORC-449, ORC-450). --fake-runner launches none.
   if (!o.fakeRunner) checkHostRuns(env);
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
