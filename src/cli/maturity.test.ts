@@ -128,6 +128,15 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
     expect(valueOf(repoOf({ 'app.py': '', 'test_app.py': '' }))['untested']).toBe('none: every source directory has a test file');
   });
 
+  it('files of code with no directory of code are tested by a directory of tests beside them, or a root test/', () => {
+    const none = 'none: every source directory has a test file';
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/__tests__/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/test/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'test/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'app.py': '', 'tests/test_app.py': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/__tests__/helpers.ts': '' }))['untested']).toBe('src/ (its own files)');
+  });
+
   it('a Postgres image under a registry, an owner or a variant name is a Postgres; an image named after it is not', () => {
     const compose = (image: string) => repoOf({ 'compose.yaml': `services:\n  db:\n    image: ${image}\n` });
     for (const image of ['pgvector/pgvector:pg16', 'postgis/postgis:16-3.4', 'docker.io/library/postgres:16', 'bitnami/postgresql:16', 'timescale/timescaledb:latest-pg16', '"postgres"', 'postgres@sha256:abc'])
