@@ -189,6 +189,11 @@ describe('the maturity report on what it reads only in part (ORC-454)', () => {
     expect(v['services']).toBe('postgres (dependency psycopg); package.json not fully read (see Stack): a dependency may be missing');
   });
 
+  it('a compose file that cannot be read (a directory) is said on the Services card, never stops the report; the next compose file still read', () => {
+    expect(valueOf(repoOf({ 'docker-compose.yml/x': '' }))['services']).toBe('none; docker-compose.yml not read (cannot be read: EISDIR): a Postgres it runs may be missing');
+    expect(valueOf(repoOf({ 'docker-compose.yml/x': '', 'compose.yaml': 'services:\n  db:\n    image: postgres:16\n' }))['services']).toBe('postgres (compose.yaml)');
+  });
+
   it('well-formed manifests add nothing to the cards', () => {
     const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }));
     expect([v['stack'], v['services'], v['visual_paths']]).toEqual(['Node (npm), Vue', 'none', 'none: a front end, but none of its usual directories']);
