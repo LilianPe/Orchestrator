@@ -287,7 +287,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
       const { out } = await initCards(NPM, { home, storeCards: instanceCards(home) });
       expect(out).not.toContain('Cards not stored');
       // Said: a daemon on Postgres would not see them (ORC-437).
-      expect(out).toContain(`Cards stored in SQLite (${join(home, 'factory.db')}): a daemon on Postgres does not read them (set FACTORY_DATABASE_URL before factory init).`);
+      expect(out).toContain(`Cards stored in SQLite (${join(home, 'factory.db')}): a daemon started with FACTORY_DATABASE_URL reads Postgres and does not see them.`);
       const store = new SqliteStore(join(home, 'factory.db'));
       expect((await store.maturityCards()).map((c) => c.key)).toContain('main');
       await store.close();

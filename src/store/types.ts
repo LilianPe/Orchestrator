@@ -456,7 +456,7 @@ export interface MaturityPoint {
 
 /**
  * A maturity card (ORC-410): a point of the report, stored to be approved by a person on the dashboard. `detectedAt`, when
- * init last detected it; `approvedBy` and `approvedAt`, who approved this value, and when, absent until then.
+ * init last detected it, or for `main` a dry run on the default branch set it (ORC-437); `approvedBy` and `approvedAt`, who approved this value, and when, absent until then.
  */
 export interface MaturityCard extends MaturityPoint {
   projectId: string;
@@ -465,15 +465,18 @@ export interface MaturityCard extends MaturityPoint {
   approvedAt?: number;
 }
 
-/** A point detected `at`, as a card: with the approval of the card it replaces when that one had the same value (ORC-410). */
+/**
+ * A point detected `at`, as a card: with the approval of the card it replaces when that one had the same value (ORC-410),
+ * never on the `main` card not checked yet (ORC-437: one approved before the rule loses it).
+ */
 export function maturityCard(projectId: string, p: MaturityPoint, at: number, before: MaturityCard | undefined): MaturityCard {
-  const kept = before?.value === p.value && before.approvedBy !== undefined && before.approvedAt !== undefined ? { approvedBy: before.approvedBy, approvedAt: before.approvedAt } : {};
+  const kept = before?.value === p.value && !uncheckedMain(p) && before.approvedBy !== undefined && before.approvedAt !== undefined ? { approvedBy: before.approvedBy, approvedAt: before.approvedAt } : {};
   return { projectId, key: p.key, title: p.title, value: p.value, detectedAt: at, ...kept };
 }
 
 /**
  * The approval of a card of the `value` a person saw (ORC-410): `'changed'` when the card holds another; `'unchecked'` for
- * the `main` card not checked yet (ORC-437); a card already approved stands as it is.
+ * the `main` card not checked yet (ORC-437), approved or not; a card already approved stands as it is.
  */
 export function approvedCard(stored: MaturityCard, value: string, by: string, at: number): MaturityCard | 'changed' | 'unchecked' {
   if (stored.value !== value) return 'changed';

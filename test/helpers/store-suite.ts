@@ -5,7 +5,7 @@ import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
 import type { DryRun } from '../../src/core/dry-run.js';
 import { MAIN_UNCHECKED } from '../../src/core/maturity.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../../src/ghost/replay.js';
-import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type MaturityCard, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
+import { maturityCard, PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type MaturityCard, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
 function run(patch: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -405,6 +405,12 @@ export function storeContract(store: () => Store | Promise<Store>): void {
     await s.putMaturityCards('p', [{ key: 'main', title: 'main green or red', value: MAIN_UNCHECKED }], 1_000);
     expect(await s.approveMaturityCard('p', 'main', MAIN_UNCHECKED, 'armand', 2_000)).toBe('unchecked');
     expect((await s.maturityCards('p'))[0]!.approvedBy).toBeUndefined();
+  });
+
+  it('drops the approval of a main card not checked yet when it is detected again (ORC-437: one approved before the rule)', () => {
+    const approved = { projectId: 'p', key: 'main', title: 'main green or red', value: MAIN_UNCHECKED, detectedAt: 1, approvedBy: 'armand', approvedAt: 2 };
+    expect(maturityCard('p', approved, 3, approved)).toEqual({ projectId: 'p', key: 'main', title: 'main green or red', value: MAIN_UNCHECKED, detectedAt: 3 });
+    expect(maturityCard('p', { ...approved, key: 'stack' }, 3, { ...approved, key: 'stack' })).toMatchObject({ approvedBy: 'armand' });
   });
 
   it('keeps a replay of closed tickets with its threshold, written once and never changed; its tickets and judgments (ORC-231)', async () => {

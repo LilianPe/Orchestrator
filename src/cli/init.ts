@@ -154,7 +154,7 @@ export const instanceCards =
     const sqlitePath = homePaths(home).db;
     const { store, kind } = await openStore({ env: process.env, sqlitePath, migrationsFolder: join(repoRoot(), 'drizzle') });
     // SQLite said as such: a daemon started with FACTORY_DATABASE_URL reads Postgres, and its Maturity page stays empty.
-    const where = kind === 'postgres' ? `Postgres (${DATABASE_URL_ENV})` : `SQLite (${sqlitePath}): a daemon on Postgres does not read them (set ${DATABASE_URL_ENV} before factory init)`;
+    const where = kind === 'postgres' ? `Postgres (${DATABASE_URL_ENV})` : `SQLite (${sqlitePath}): a daemon started with ${DATABASE_URL_ENV} reads Postgres and does not see them`;
     try {
       return { cards: await storeReport(store, projectId, report, Date.now()), where };
     } finally {
