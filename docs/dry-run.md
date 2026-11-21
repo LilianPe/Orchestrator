@@ -21,31 +21,41 @@ result in the store:
    (`workspace.setup`, the `dev` job's `verify`) when it declares none; its `services` and its `env`.
 3. **The checkout**, in a sandbox at network `none`.
 4. **The `setup`**, sealed as an attempt's is (`runSealedSetup`): in a sandbox of its own at network `limited` (N2: the package
-   registries the egress proxy allows), with no secret, no install script, and nothing published in the last 7 days.
+   registries the egress proxy allows), with no secret, no install script, and nothing published in the last 7 days. A
+   `setup` that declares `setup_secrets` and fails without them is unverifiable, not red ([below](#unverifiable-without-its-secrets-orc-453)).
 5. **The commands**, in a new sandbox at network `none`, with the repository's services and its declared variables. A failing
    test that the runner's report names (vitest, jest, pytest) is run again once, as in `verify`.
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
 a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
-or timed out, the relay's `ECONNREFUSED 127.0.0.1:3128` among them, a 502, pip's or uv's connection or DNS error, pip's
-`ProxyError`), even when it then says a dependency is missing. A setup that exited on a variable, or on a service
-refusing (`connect ECONNREFUSED` on the loopback, `could not connect to server`), is recorded red as such, past an installer's
-retry warning. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+or timed out, curl's and git's plain `Connection timed out` among them, a 502, 503 or 504 in any of the tools' words (`502 Bad
+Gateway`, the proxy's answer to a `CONNECT` as curl and git say it, Yarn's `statusCode=502`, undici's `Proxy response (502)`,
+curl's `returned error: 502`, npm's `code E502`, wget's and Go's `Bad Gateway` alone), pip's or uv's connection or DNS error, pip's `ProxyError`), even when it then says a
+dependency is missing. The proxy's body (`egress proxy: …`) is the same for its refusal (403) and its breakdown (502, as an
+upstream that hung up or a TLS cut): beside a 5xx it is a breakdown, otherwise a registry it does not allow. The relay refusing is read by its address, whatever the tool's
+words: a line that says a connection was refused and names `127.0.0.1:3128` (or `localhost`, `[::1]`, curl's `port 3128`,
+urllib3's `port=3128`) is a breakdown, from npm, curl, git, Go, wget, apt or Maven alike; a line that only names the relay
+(`HTTPS_PROXY=http://127.0.0.1:3128`) is not. A setup that exited on a variable, or on a service refusing (a connection refused
+or timed out on another port of the loopback, by any client: Node's `connect ECONNREFUSED` or `ETIMEDOUT`, Python's `requests`,
+`psycopg`, `redis-py` or `asyncpg`, Go's `dial tcp`, Prisma's `Can't reach database server`, MySQL's `Can't connect to MySQL server` (MariaDB's `Can't connect to server on '…'`), its port on the line or not; or libpq's `could not connect to server` with the loopback in its message, as its `Is the server running on host "localhost"` line says it, or the Unix socket of a Postgres client (libpq's, Node's `connect ECONNREFUSED` or `ENOENT`, Go's `dial unix`) or of MySQL's or MariaDB's that they could not reach, local whatever the host), is recorded red as such,
+past an installer's retry warning. A connection refused by a host off the loopback is no service: a breakdown in the setup when Node's `ECONNREFUSED`
+or pip's `Failed to establish a new connection` says it, a `failure` otherwise. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
 Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
 sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
 ## What breaks
 
-A dry run is **green** when nothing breaks, **red** otherwise. Each break names its step (`config`, `setup` or `command`), the
+A dry run is **green** when nothing breaks, **unverifiable** when its setup failed without its secrets (its `unverified`, below), **red** otherwise. Each break names its step (`config`, `setup` or `command`), the
 command, an excerpt of its output, and a detail line, classified as:
 
 | Kind | Read from | Example |
 |---|---|---|
-| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (403) | `No matching version found for left-pad@9.9.9` |
-| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but a line naming the egress proxy's relay by its address, `127.0.0.1:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
+| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (a 403, to a `CONNECT` too) | `No matching version found for left-pad@9.9.9` |
+| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused or timed out on a port of the loopback, whatever the client that says it (but the egress proxy's relay, `3128`) | `connect ECONNREFUSED 127.0.0.1:5432`, `HTTPConnectionPool(host='localhost', port=8000): … Connection refused` |
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
+| `secret` | a `setup` that fails when `.factory/config.yml` declares `setup_secrets`, on anything but a `variable`, a `service`, or a `dependency` no token changes (a version too recent, a lockfile out of sync, a host the egress proxy refuses): its first error line (over its cap, what the cap says), after the secrets it lacks. Kept apart, as the dry run's `unverified`, never among its breaks | `failed without its secrets (NPM_TOKEN), which a dry run's setup does not get: npm error code E404` |
 
 The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
 command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only
@@ -56,6 +66,25 @@ security log.
 
 A flaky test makes the dry run red: the same flake would fail a ticket's `verify`. Put it on the repository's known flaky list
 (`factory flaky`) to make it indicative.
+
+## Unverifiable without its secrets (ORC-453)
+
+A dry run's `setup` gets no secret, as `verify`'s does not. A repository whose `setup` needs one (a private registry's token,
+declared under `setup_secrets`) fails there on what the secret's absence causes: a 404 or a 401 of its registry, an unset
+token. The dry run cannot tell that apart from the repository's own state, so it does not say it red:
+
+- what the setup broke on is kept as the dry run's `unverified`, of kind `secret`: its detail the secrets declared and the
+  setup's first error line. It is not among the breaks, so `ok` stays true: the gate lets the repository's tickets start, and
+  the dry run holds as a green one does;
+- the `main` maturity card says `unverifiable: …` with the setup's command, never `green`;
+- `factory dry-run` prints it `unverifiable without its secrets`, with the break, and exits 0.
+
+What the setup's failure names of the repository's own stays red: a variable it does not get (`variable`), a service of its own
+refusing (`service`), a dependency no token changes (a version younger than the setup allows, a lockfile out of sync with its
+manifest, a host the egress proxy refuses: `dependency`). A registry or the egress proxy not answering still rejects, as for any setup. The build and the tests do
+not run after a failed setup: an unverifiable dry run says nothing of them. It holds as a green one does, so while the setup
+keeps failing without its secrets and its inputs do not change, no dry run runs the repository's build and tests: a test broken
+on the default branch is not seen by the gate, only by each ticket's `verify`.
 
 ## The fingerprint
 
@@ -85,7 +114,7 @@ the config's blob.
 - **Otherwise it runs now**, and the launch waits for it: a project's first delegation runs its first dry run, so a first ticket
   never waits for a dry run nobody started. Two tickets delegated together wait for the same one; red on another commit than the
   one the second ticket's launch read (a fix pushed while it ran), the second runs a new one.
-- **Green**, the ticket goes on. **Red**, it is refused before any run (unless another launch took the ticket while it ran): blocked as the repository's to fix (the Flow's `repo_config`
+- **Green** or **unverifiable** without its secrets, the ticket goes on. **Red**, it is refused before any run (unless another launch took the ticket while it ran): blocked as the repository's to fix (the Flow's `repo_config`
   cause), with a comment that says what breaks, each break with its step, its command and the line that names its cause, and how
   it runs again. A reply resumes the ticket, which goes through the gate again.
 - **It cannot run** (the engine, the forge or a registry not answering): the launch fails, as any launch error, and nothing is

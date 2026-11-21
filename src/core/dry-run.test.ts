@@ -8,7 +8,7 @@ import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import type { CommandRun } from '../checks/flaky.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
-import { breaksOfRuns, classifyBreak, dryRunFingerprint, dryRunHolds, dryRunRefusal, runDryRun, unreachable, type DryRun, type DryRunRequest } from './dry-run.js';
+import { breaksOfRuns, classifyBreak, dryRunFingerprint, dryRunHolds, dryRunRefusal, dryRunVerdict, mainCardValue, runDryRun, unreachable, type DryRun, type DryRunRequest } from './dry-run.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -188,6 +188,9 @@ describe('runDryRun (ORC-408)', () => {
     ['the proxy\'s 502 on a host it could not resolve', 'curl: (22) The requested URL returned error: 502\negress proxy: getaddrinfo ENOTFOUND get.pnpm.io\n'],
     ['the proxy\'s 502 on a request it could not send', 'egress proxy: not sent on: Invalid character in header content\n'],
     ['the proxy down, as npm and git say it', 'npm error connect ECONNREFUSED 127.0.0.1:3128\nfatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
+    ['the relay down, as Go says it', 'go: downloading github.com/acme/x v1.2.0\ngo: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/github.com/acme/x/@v/v1.2.0.zip": proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused\n'],
+    ['the proxy\'s 502 to a CONNECT, as curl says it', 'curl: (56) CONNECT tunnel failed, response 502\n'],
+    ['the proxy\'s 502 to a CONNECT, as Yarn says it', 'error An unexpected error occurred: "https://registry.yarnpkg.com/zod: tunneling socket could not be established, statusCode=502".\n'],
   ])('a breakdown the installer reports as something else still rejects: %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
@@ -205,10 +208,17 @@ describe('runDryRun (ORC-408)', () => {
     ['a host the proxy refuses a CONNECT to, as curl says it', 'curl: (56) CONNECT tunnel failed, response 403\n'],
     ['a host the proxy refuses a CONNECT to, as git says it', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 403 from proxy after CONNECT\n'],
     ['the relay\'s address printed by a setup that then fails', 'HTTPS_PROXY=http://127.0.0.1:3128\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad\n'],
-  ])('what names the proxy without a breakdown is the repository\'s: recorded red, %s', async (_, stderr) => {
+  ])('what names the proxy without a breakdown is the repository\'s: recorded red as a dependency, %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
-    expect((await runDryRun(req)).ok).toBe(false);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup' })]);
+  });
+
+  it('a Python client of its own refused on the loopback in the setup is the repository\'s: recorded red, as a service', async () => {
+    const { req, sandboxes } = forge();
+    const stderr = "Traceback (most recent call last):\nrequests.exceptions.ConnectionError: HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /migrate (Caused by NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))\n";
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'setup', detail: expect.stringContaining('8000') })]);
   });
 
   it('a setup over its cap on a registry that no longer answers rejects too', async () => {
@@ -235,6 +245,71 @@ describe('runDryRun (ORC-408)', () => {
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error 403 Forbidden - GET https://npm.acme.internal/left-pad\n', code: 1 } : undefined);
     const run = await runDryRun(req);
     expect(run.breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup', detail: expect.stringContaining('egress proxy does not allow') })]);
+  });
+
+  describe('a setup that declares its setup_secrets (ORC-453)', () => {
+    const SECRET_CONFIG = 'setup: npm ci\nsetup_secrets: [NPM_TOKEN]\ncommands:\n  test: grep green state.txt\n';
+    const failing = (stderr: string, code = 1) => {
+      const f = forge({}, { '.factory/config.yml': SECRET_CONFIG });
+      f.sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code } : undefined);
+      return f;
+    };
+
+    it('failing as a private registry does without its token, is not red: unverifiable without its secrets, the tickets go on', async () => {
+      const { req, sandboxes } = failing('npm error code E404\nnpm error 404 Not Found - GET https://npm.acme.internal/@acme%2fui - Not found\n');
+      const run = await runDryRun(req);
+      expect(run).toMatchObject({ ok: true, breaks: [], unverified: { kind: 'secret', step: 'setup', command: 'npm ci', detail: expect.stringContaining('NPM_TOKEN') } });
+      expect(run.unverified!.detail).toContain('npm error code E404');
+      expect(run.unverified!.detail).not.toContain('dependency');
+      expect(run.commands).toEqual([]);
+      expect(dryRunVerdict(run)).toBe('unverifiable');
+      // No secret reaches the dry run's setup.
+      expect(sandboxes.ran.find((r) => r.command === 'npm ci')!.env).not.toHaveProperty('NPM_TOKEN');
+    });
+
+    it('failing on anything else than a variable or a service is unverifiable too: a failure, an over-cap setup', async () => {
+      expect((await runDryRun(failing('npm error code E401\nnpm error Unable to authenticate, need: Basic realm="acme"\n').req)).unverified?.kind).toBe('secret');
+      expect((await runDryRun(failing('Error: NPM_TOKEN is not set\n').req)).unverified?.kind).toBe('secret');
+      const now = Date.now();
+      const { req, sandboxes } = failing('');
+      sandboxes.answer = (command) => {
+        if (command !== 'npm ci') return undefined;
+        // Past the cap on the factory's clock: the exit is the cap's (`cappedExit`).
+        vi.spyOn(Date, 'now').mockReturnValue(now + 2 * VERIFY_TIMEOUT_MS);
+        return { stdout: '', stderr: 'npm http fetch GET https://npm.acme.internal/@acme%2fui\n', code: 124 };
+      };
+      const capped = await runDryRun(req);
+      expect(capped).toMatchObject({ ok: true, breaks: [], unverified: { kind: 'secret', detail: expect.stringContaining('NPM_TOKEN') } });
+    });
+
+    it.each([
+      ['a variable the repository does not declare', 'Error: STRIPE_KEY is not set\n', 'variable'],
+      ['a service of its own refusing', 'Error: connect ECONNREFUSED 127.0.0.1:5432\n', 'service'],
+      ['a lockfile out of sync', 'npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.\n', 'dependency'],
+      ['a version too recent', 'ERR_PNPM_NO_MATURE_MATCHING_VERSION  Version 4.1.0 of vite does not meet the minimumReleaseAge constraint\n', 'dependency'],
+      ['a host the egress proxy refuses a CONNECT to', 'curl: (56) CONNECT tunnel failed, response 403\n', 'dependency'],
+    ])('failing on %s stays red as such: its own cause, whatever the secrets', async (_, stderr, kind) => {
+      const run = await runDryRun(failing(stderr).req);
+      expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind, step: 'setup' })] });
+      expect(run.unverified).toBeUndefined();
+    });
+
+    it('a registry or the egress proxy not answering still rejects: a breakdown says nothing of the secrets', async () => {
+      await expect(runDryRun(failing('npm error connect ECONNREFUSED 127.0.0.1:3128\n').req)).rejects.toThrow('no dry run recorded');
+    });
+
+    it('a setup that passes is green: the secrets are needed only when it fails', async () => {
+      const { req } = forge({}, { '.factory/config.yml': SECRET_CONFIG });
+      expect(await runDryRun(req)).toMatchObject({ ok: true, breaks: [], commands: ['grep green state.txt'] });
+    });
+  });
+
+  it('without setup_secrets, a setup that fails is red as before: a dependency', async () => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error 404 Not Found - GET https://registry.npmjs.org/left-pad\n', code: 1 } : undefined);
+    const run = await runDryRun(req);
+    expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind: 'dependency' })] });
+    expect(dryRunVerdict(run)).toBe('red');
   });
 
   it('a forge that no longer answers rejects at the dry run\'s deadline, not at git\'s', async () => {
@@ -319,10 +394,13 @@ describe('the fingerprint of a dry run (ORC-409)', () => {
   });
 });
 
+const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
+const runOf = (over: Partial<DryRun> = {}): DryRun => ({ id: 'd', projectId: 'acme', sha: 'a'.repeat(40), target: 'main', ok: true, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: Date.UTC(2026, 10, 20, 14, 3), ...over });
+const unverified: DryRun['unverified'] = { kind: 'secret', step: 'setup', command: 'npm ci', detail: 'failed without its secrets (NPM_TOKEN), which a dry run\'s setup does not get: npm error code E404', output: '' };
+
 describe('dryRunHolds (ORC-409)', () => {
-  const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
   const other = dryRunFingerprint({ setup: [], image: 'img', lockfiles: { 'uv.lock': 'u' }, config: null });
-  const run = (ok: boolean, sha = 'a'.repeat(40)): DryRun => ({ id: 'd', projectId: 'p', sha, target: 'main', ok, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: 0 });
+  const run = (ok: boolean, sha = 'a'.repeat(40)) => runOf({ ok, sha });
   it('a green one holds on the same inputs, wherever the branch went; a red one on the same commit only', () => {
     expect(dryRunHolds(run(true), { sha: 'b'.repeat(40), fingerprint })).toBe(true);
     expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint })).toBe(true);
@@ -331,6 +409,21 @@ describe('dryRunHolds (ORC-409)', () => {
   it('none holds once an input changed', () => {
     expect(dryRunHolds(run(true), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
     expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
+  });
+  it('an unverifiable one (ORC-453) holds as a green one does', () => {
+    expect(dryRunHolds(runOf({ unverified }), { sha: 'f'.repeat(40), fingerprint })).toBe(true);
+  });
+});
+
+describe('a dry run unverifiable without its secrets (ORC-453)', () => {
+  it('its verdict: green, red, or unverifiable when its setup failed without its secrets', () => {
+    expect(dryRunVerdict(runOf({ commands: ['npm test'] }))).toBe('green');
+    expect(dryRunVerdict(runOf({ ok: false, breaks: [{ ...unverified!, kind: 'failure' }] }))).toBe('red');
+    expect(dryRunVerdict(runOf({ unverified }))).toBe('unverifiable');
+  });
+
+  it('the main maturity card says it unverifiable, with the secrets its setup needs, never green', () => {
+    expect(mainCardValue(runOf({ unverified }))).toBe(`unverifiable: the dry run of aaaaaaaaaaaa on 2026-11-20 14:03 UTC: its setup \`npm ci\` ${unverified!.detail}`);
   });
 });
 
@@ -425,6 +518,125 @@ describe('classifyBreak', () => {
     expect(unreachable('error: Request failed after 3 retries\n  Caused by: dns error: failed to lookup address information')).toContain('dns error');
     expect(unreachable('AssertionError: expected 1 to be 2')).toBeUndefined();
     expect(unreachable("Error: connect ECONNREFUSED 127.0.0.1:5432\n  code: 'ECONNREFUSED',")).toBeUndefined();
+  });
+
+  it.each([
+    ['curl', 'curl: (7) Failed to connect to 127.0.0.1 port 3128 after 0 ms: Couldn\'t connect to server'],
+    ['git', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to localhost port 3128 after 1 ms: Connection refused'],
+    ['Go', 'go: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/...": proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused'],
+    ['wget', 'Connecting to 127.0.0.1:3128... failed: Connection refused.'],
+    ['apt', 'E: Failed to fetch http://deb.debian.org/debian/x.deb  Could not connect to 127.0.0.1:3128 (127.0.0.1). - connect (111: Connection refused)'],
+    ['Maven', '[ERROR] Connect to 127.0.0.1:3128 [/127.0.0.1] failed: Connection refused'],
+    ['urllib3', "HTTPSConnectionPool(host='127.0.0.1', port=3128): Max retries exceeded (Caused by NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))"],
+    ['IPv6', 'dial tcp [::1]:3128: connect: connection refused'],
+    ['curl, timed out', 'curl: (28) Failed to connect to 127.0.0.1 port 3128 after 130001 ms: Connection timed out'],
+  ])('the relay refusing is a breakdown, whatever the tool that says it: %s', (_, line) => {
+    expect(unreachable(line)).toContain('3128');
+    expect(classifyBreak(line, 'setup', declared).kind).not.toBe('service');
+  });
+
+  it.each([
+    ['curl', 'curl: (56) CONNECT tunnel failed, response 502'],
+    ['git', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 502 from proxy after CONNECT'],
+    ['a gateway timeout', 'curl: (56) CONNECT tunnel failed, response 504'],
+    ['Yarn', 'error An unexpected error occurred: "https://registry.yarnpkg.com/zod: tunneling socket could not be established, statusCode=502".'],
+    ['undici', 'TypeError: fetch failed\n  [cause]: Error: Proxy response (502) !== 200 when HTTP Tunneling'],
+    ['wget, by its reason alone', 'Proxy tunneling failed: Bad GatewayUnable to establish SSL connection.'],
+    ['Go, by its reason alone', 'go: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/github.com/acme/x/@v/v1.2.0.zip": Bad Gateway'],
+  ])('the proxy\'s 5xx to a CONNECT is a breakdown, whatever its wording: %s', (_, output) => {
+    expect(unreachable(output)).toMatch(/50[24]|Bad Gateway/);
+  });
+
+  it('npm\'s code E502 is a breakdown; a linter\'s rule E502 is not', () => {
+    expect(unreachable('npm error code E502')).toContain('E502');
+    expect(unreachable('npm ERR! code E503')).toContain('E503');
+    expect(unreachable('src/x.py:3:80: E502 the backslash is redundant between brackets')).toBeUndefined();
+  });
+
+  it.each([
+    ['curl', 'curl: (28) Failed to connect to registry.npmjs.org port 443 after 130001 ms: Connection timed out'],
+    ['git', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to github.com port 443: Connection timed out'],
+  ])('a connection timed out, in plain words, is a breakdown: %s', (_, line) => {
+    expect(unreachable(line)).toContain('timed out');
+  });
+
+  it.each([
+    ['curl', 'curl: (22) The requested URL returned error: 502\negress proxy: socket hang up\n'],
+    ['npm', 'npm error code E502\nnpm error egress proxy: Client network socket disconnected before secure TLS connection was established\n'],
+  ])('the proxy\'s 502 for another cause than a refusal is a breakdown, not a registry it does not allow: %s', (_, output) => {
+    expect(classifyBreak(output, 'setup', declared).kind).toBe('dependency');
+    expect(unreachable(output)).toMatch(/502/);
+  });
+
+  it('a line that only names the relay, or a relay port that is no port, is no breakdown', () => {
+    expect(unreachable('HTTPS_PROXY=http://127.0.0.1:3128')).toBeUndefined();
+    expect(unreachable('npm verb config proxy http://localhost:3128 set, then the install failed')).toBeUndefined();
+    expect(unreachable('Error: connection refused after 3128 ms')).toBeUndefined();
+  });
+
+  it.each([
+    ['curl', 'curl: (56) CONNECT tunnel failed, response 403'],
+    ['git', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 403 from proxy after CONNECT'],
+  ])('a host the egress proxy refuses a CONNECT to is a registry it does not allow: %s', (_, line) => {
+    expect(classifyBreak(line, 'setup', declared)).toMatchObject({ kind: 'dependency', detail: expect.stringContaining('egress proxy does not allow') });
+    expect(classifyBreak(line, 'command', declared).kind).toBe('failure');
+  });
+
+  it.each([
+    ['requests', "requests.exceptions.ConnectionError: HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /health (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7f>: Failed to establish a new connection: [Errno 111] Connection refused'))", '8000'],
+    ['psycopg', 'psycopg.OperationalError: connection failed: connection to server at "127.0.0.1", port 5432 failed: Connection refused', '5432'],
+    ['redis-py', 'redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.', '6379'],
+    ['asyncpg', 'ConnectionRefusedError: [Errno 111] Connect call failed (\'127.0.0.1\', 5432)', '5432'],
+    ['Go', 'dial tcp 127.0.0.1:6379: connect: connection refused', '6379'],
+    ['libpq', 'psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused', '5432'],
+  ])('a Python or Go client refused by a service on the loopback is a service, not a breakdown: %s', (_, line, port) => {
+    for (const step of ['setup', 'command'] as const) expect(classifyBreak(line, step, declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining(port) });
+    expect(unreachable(line)).toBeUndefined();
+  });
+
+  it.each([
+    ['libpq 14+', 'psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory\n\tIs the server running locally and accepting connections on that socket?'],
+    ['libpq before 14', 'psql: error: could not connect to server: No such file or directory\n\tIs the server running locally and accepting\n\tconnections on Unix domain socket "/var/run/postgresql/.s.PGSQL.5432"?'],
+    ['MySQL, its socket', "ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)"],
+    ['MySQL 5.7, the loopback without its port', "ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1' (111)"],
+    ['Node\'s pg, its socket refusing', 'Error: connect ECONNREFUSED /var/run/postgresql/.s.PGSQL.5432\n    at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)'],
+    ['Node\'s pg, its socket missing', 'Error: connect ENOENT /var/run/postgresql/.s.PGSQL.5432\n    at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)'],
+    ['Go\'s lib/pq, its socket missing', 'dial unix /var/run/postgresql/.s.PGSQL.5432: connect: no such file or directory'],
+    ['Go\'s pgx, its socket refusing', 'failed to connect to `host=/var/run/postgresql user=app database=app`: dial error (dial unix /var/run/postgresql/.s.PGSQL.5432: connect: connection refused)'],
+    ['MariaDB, its socket', "ERROR 2002 (HY000): Can't connect to local server through socket '/run/mysqld/mysqld.sock' (2)"],
+    ['MariaDB, the loopback without its port', "ERROR 2003 (HY000): Can't connect to server on '127.0.0.1' (115)"],
+  ])('a database client that cannot reach its server on the Unix socket or the loopback is a service: %s', (_, output) => {
+    for (const step of ['setup', 'command'] as const) expect(classifyBreak(output, step, declared).kind).toBe('service');
+    expect(unreachable(output)).toBeUndefined();
+  });
+
+  it('a database server that answered on its socket is no service down, and a remote MySQL is no service', () => {
+    expect(classifyBreak('psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  password authentication failed for user "app"', 'setup', declared).kind).toBe('failure');
+    expect(classifyBreak("ERROR 2003 (HY000): Can't connect to MySQL server on 'db.acme.com' (111)", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("ERROR 2003 (HY000): Can't connect to server on 'db.acme.com' (115)", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("FAIL test/api.test.ts > shows a banner when it can't connect to server localhost", 'command', declared).kind).toBe('failure');
+  });
+
+  it('a client refused by a host off the loopback is no service of the repository\'s', () => {
+    expect(classifyBreak("HTTPSConnectionPool(host='pypi.org', port=443): Failed to establish a new connection: [Errno 111] Connection refused", 'setup', declared).kind).toBe('failure');
+    expect(classifyBreak('psql: error: could not connect to server: Connection timed out\n\tIs the server running on host "db.acme.com" (10.0.0.5) and accepting\n\tTCP/IP connections on port 5432?', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak('could not connect to server: No route to host', 'command', declared).kind).toBe('failure');
+  });
+
+  it.each([
+    ['libpq', 'psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection timed out', '5432'],
+    ['Node', 'Error: connect ETIMEDOUT 127.0.0.1:6379', '6379'],
+    ['Go', 'dial tcp 127.0.0.1:5432: i/o timeout', '5432'],
+    ['Prisma', "Error: P1001: Can't reach database server at `localhost`:`5432`", '5432'],
+    ['MySQL', "ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1:3306' (111)", '3306'],
+  ])('a service of the loopback that does not answer, timed out or unreachable, is a service, never a breakdown: %s', (_, line, port) => {
+    expect(classifyBreak(line, 'setup', declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining(port) });
+    expect(unreachable(line)).toBeUndefined();
+  });
+
+  it('a test that timed out naming the loopback is no service: only a connection that did', () => {
+    expect(classifyBreak('Error: Test timed out in 5000ms, waiting for http://localhost:3000/health', 'command', declared).kind).toBe('failure');
+    expect(classifyBreak('Failed to connect to localhost 3 times, giving up', 'command', declared).kind).toBe('failure');
   });
 
   it('anything else is a failure, its first error line said', () => {

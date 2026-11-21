@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Exec } from '../adapters/exec.js';
-import { DEFAULT_REQUIREMENTS, type SandboxProvider } from '../adapters/sandbox/types.js';
+import { DEFAULT_REQUIREMENTS, EGRESS_RELAY_PORT, type SandboxProvider } from '../adapters/sandbox/types.js';
 import { SHA } from '../adapters/workspace/git-workspaces.js';
 import { runAndRerun, settle, type CommandRun, type KnownFlaky, type Standing } from '../checks/flaky.js';
 import { isLockfile } from '../checks/diff-size.js';
@@ -15,8 +15,11 @@ import { utc } from './prompt.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
-/** What breaks a dry run, as its report classifies it (ORC-408). */
-export type DryRunBreakKind = 'dependency' | 'service' | 'variable' | 'flaky' | 'failure';
+/**
+ * What breaks a dry run, as its report classifies it (ORC-408). `secret`: what a setup that declares `setup_secrets` failed on
+ * without them (ORC-453), never among the breaks: the dry run's `unverified`.
+ */
+export type DryRunBreakKind = 'dependency' | 'service' | 'variable' | 'flaky' | 'failure' | 'secret';
 
 export interface DryRunBreak {
   kind: DryRunBreakKind;
@@ -59,6 +62,11 @@ export interface DryRun {
   ok: boolean;
   fingerprint: DryRunFingerprint;
   breaks: DryRunBreak[];
+  /**
+   * A setup that declares `setup_secrets` and failed without them, on no variable or service of its own (ORC-453): the dry run
+   * is unverifiable, neither green nor red. `ok`, its tickets go on; its commands did not run.
+   */
+  unverified?: DryRunBreak;
   /** What ran after the setup. */
   commands: string[];
   startedAt: number;
@@ -127,9 +135,13 @@ const DEPENDENCY = `a dependency is missing, or younger than the ${RELEASE_AGE_D
  * (`zod`, `@acme/ui/x`: npm's names, lower case) or by a path into `node_modules`; a path starting with `.` or `/` elsewhere, or an
  * alias (`@/lib/db`, `~/x`), is the repository's own. A bare path resolved through `baseUrl` (`src/x`) reads as a package name.
  */
+/** A version younger than the setup allows: what its registry holds, a token or not. */
+const TOO_RECENT = /ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge/;
+/** A lockfile out of sync with its manifest: the repository's files, read before any registry. */
+const LOCKFILE_OUT_OF_SYNC = /can only install packages when your package\.json and package-lock\.json|ERR_PNPM_OUTDATED_LOCKFILE/;
 const DEPENDENCY_LINES = [
   /No matching version found for \S+/,
-  /ERR_PNPM_NO_MATURE_MATCHING_VERSION|minimumReleaseAge/,
+  TOO_RECENT,
   /Because there (?:is|are) no versions? of \S+|was not found in the package registry/,
   /No matching distribution found for \S+|Could not find a version that satisfies the requirement/,
   /Couldn't find any versions for|Couldn't find package/,
@@ -139,12 +151,22 @@ const DEPENDENCY_LINES = [
 ];
 /** In the setup only: what an installer prints; in a test's output, a 404 is the application's. */
 const INSTALL_LINES = [
-  /can only install packages when your package\.json and package-lock\.json|ERR_PNPM_OUTDATED_LOCKFILE|ERR_PNPM_FETCH_404/,
+  LOCKFILE_OUT_OF_SYNC,
+  /ERR_PNPM_FETCH_404/,
   /\b404\b.*Not Found|\bE404\b/,
   /\b(?:ETARGET|notarget|ERESOLVE)\b/,
 ];
-/** The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. */
-const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden/];
+/**
+ * The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. A
+ * 403 to a CONNECT is the proxy's, as curl (`CONNECT tunnel failed, response 403`) and git (`… 403 from proxy after CONNECT`) say it.
+ */
+const PROXY_REFUSED = /egress proxy:|(?=.*\bCONNECT\b).*\b403\b/;
+const REFUSED_LINES = [PROXY_REFUSED, /\b403\b.*Forbidden/];
+/**
+ * What a setup breaks on whatever its secrets (ORC-453): a version too recent, a lockfile out of sync, a host the egress proxy
+ * refuses. A registry's own 403 is not one of them: a private registry says it to a client without its token.
+ */
+const SECRET_FREE_LINES = [TOO_RECENT, LOCKFILE_OUT_OF_SYNC, PROXY_REFUSED];
 /**
  * Each with the variable's names as its first group, upper case: a lower-case word is not one; the first, a list of them
  * (`Missing environment variables: API_URL, STRIPE_KEY`). Where nothing says it is a variable, its name must hold a `_`:
@@ -157,17 +179,54 @@ const VARIABLE_LINES = [
   /KeyError: '([A-Z][A-Z0-9]*_[A-Z0-9_]+)'/g,
 ];
 const NAME = /[A-Z][A-Z0-9_]{2,}/g;
-/** On the loopback, where the services listen. */
-const SERVICE_LINES = [/ECONNREFUSED (?:127\.0\.0\.1|localhost|::1|\[::1\])(?::\d+)?/, /could not connect to (?:server|database)/i, /Is the server running/];
-/** A line about the egress proxy's relay, by its address, whatever the tool's words (`127.0.0.1 port 3128 …: Could not connect to server`, curl's and git's). */
-const PROXY_RELAY = /(?:127\.0\.0\.1|localhost|::1|\[::1\])(?::| port )3128\b/;
-const serviceLine = (line: string) => !PROXY_RELAY.test(line) && SERVICE_LINES.some((p) => p.test(line));
+/**
+ * A port on the loopback, as the tools write it: `127.0.0.1:5432`, `[::1]:3128`, curl's `127.0.0.1 port 3128`, urllib3's
+ * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`, Prisma's `` `localhost`:`5432` ``.
+ * The port is the first group; a number after a space alone is none (`localhost 3 times`).
+ */
+const LOOPBACK = String.raw`(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])`;
+const LOOPBACK_PORT = new RegExp(String.raw`${LOOPBACK}['"\`]?\)?(?::|,\s*(?:port[ =]?\s*)?|\s+port[ =]?\s*)\`?(\d{1,5})\b`);
+/**
+ * A connection refused or not answered, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's,
+ * Prisma's, MySQL's, MariaDB's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
+ */
+const REFUSAL = /ECONNREFUSED|ETIMEDOUT|connection refused|connection timed out|i\/o timeout|failed to connect|could(?:n't| not) connect|can't connect to|connect call failed|can't reach database server/i;
+/** The egress proxy's relay, where the setup's tools reach the registries. */
+const RELAY_PORT = String(EGRESS_RELAY_PORT);
+const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(line)?.[1] : undefined);
+/** The relay refusing, by its address, whatever the tool's words: a line that only names it (`HTTPS_PROXY=…`) is not that. */
+const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
+/**
+ * On the loopback, where the services listen: a port refusing there that is not the relay's, or what a database client says
+ * of a server it cannot reach there, the host on the line (libpq's `Is the server running on host "localhost"`, MySQL's
+ * `Can't connect to MySQL server on '127.0.0.1'`, MariaDB's `Can't connect to server on '127.0.0.1'`): of a remote one, a
+ * breakdown of the network. Its Unix socket is local whatever the line names (libpq's, Node's `connect ECONNREFUSED` or
+ * `ENOENT`, Go's `dial unix`), but only where the client said it could not reach it: a server that answered on its socket
+ * (`… .s.PGSQL.5432" failed: FATAL: password authentication failed`) is no service down.
+ */
+const LOOPBACK_HOST = new RegExp(String.raw`${LOOPBACK}\b`);
+const DB_SERVER = /could not connect to (?:server|database)|Is the server running|Can't connect to MySQL server|Can't connect to server on '/i;
+const DB_SOCKET = /Is the server running locally|connections on Unix domain socket "|on socket "[^"]*\.s\.PGSQL\.\d+" failed: (?:No such file or directory|Connection refused)|Can't connect to local (?:MySQL )?server through socket|connect (?:ECONNREFUSED|ENOENT) \S*\.s\.PGSQL\.\d+|dial unix \S*\.s\.PGSQL\.\d+: connect: (?:no such file or directory|connection refused)/i;
+const serviceLine = (line: string) => {
+  const port = refusedOn(line);
+  return port ? port !== RELAY_PORT : (LOOPBACK_HOST.test(line) && DB_SERVER.test(line)) || DB_SOCKET.test(line);
+};
+/** The reasons of a 502, 503 and 504, as HTTP says them. */
+const GATEWAY = 'Bad Gateway|Service Unavailable|Gateway Time-?out';
 /**
  * A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. The
- * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`.
+ * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`;
+ * to a CONNECT, the tools say only its status, each in its words. A 5xx said is the proxy's or the registry's, whatever the
+ * `egress proxy: …` body beside it (`socket hang up`, a TLS cut), which a 403 has too. The relay refusing is read by its address
+ * (`relayRefused`).
  */
 const UNREACHABLE_LINES = [
-  /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
+  new RegExp(String.raw`\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:${GATEWAY})`),
+  // A status alone is no breakdown (`added 502 packages`): curl's and git's to a CONNECT, Yarn's, undici's, curl's `--fail`,
+  // npm's code; wget's and Go's, by the reason alone.
+  /(?=.*\bCONNECT\b).*\b50[234]\b|statusCode=50[234]\b|Proxy response \(50[234]\)|returned error: 50[234]\b|npm (?:ERR!|error) code E50[234]\b/,
+  new RegExp(String.raw`Proxy tunneling failed: (?:${GATEWAY})|: (?:${GATEWAY})\s*$`),
+  /\bConnection timed out\b/i,
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
   /egress proxy: not sent on|\bProxyError\b|Cannot connect to proxy/,
@@ -175,6 +234,11 @@ const UNREACHABLE_LINES = [
 const ERROR_LINE = /\b(?:error|fail(?:ed|ure)?|assert\w*|exception|traceback|panic)\b/i;
 
 const brief = (line: string) => line.trim().slice(0, DETAIL_MAX);
+/** The first error line, or the last one; what names a failure. */
+const errorLine = (lines: readonly string[]) => {
+  const error = lines.find((l) => ERROR_LINE.test(l)) ?? lines.at(-1);
+  return error ? brief(error) : 'it printed nothing';
+};
 const linesOf = (output: string) => output.replace(ANSI, '').split('\n').filter((l) => l.trim());
 
 function firstLine(lines: readonly string[], patterns: readonly RegExp[]): string | undefined {
@@ -229,8 +293,7 @@ export function classifyBreak(output: string, step: DryRunBreak['step'], vars: D
   if (variable) return { kind: 'variable', detail: variable };
   const service = lines.find(serviceLine);
   if (service) return { kind: 'service', detail: `a service does not answer: ${brief(service)}` };
-  const error = lines.find((l) => ERROR_LINE.test(l)) ?? lines.at(-1);
-  return { kind: 'failure', detail: error ? brief(error) : 'it printed nothing' };
+  return { kind: 'failure', detail: errorLine(lines) };
 }
 
 /**
@@ -241,13 +304,22 @@ export function classifyBreak(output: string, step: DryRunBreak['step'], vars: D
 export function unreachable(output: string): string | undefined {
   const lines = linesOf(output);
   if (lines.some(serviceLine)) return undefined;
-  const line = firstLine(lines, UNREACHABLE_LINES);
+  const line = lines.find(relayRefused) ?? firstLine(lines, UNREACHABLE_LINES);
   return line && brief(line);
 }
 
 const breakOf = (step: DryRunBreak['step'], command: string, output: string, vars: DryRunVariables): DryRunBreak => ({
   ...classifyBreak(output, step, vars), step, command, output: logExcerpt(output, OUTPUT_MAX),
 });
+
+/**
+ * A setup's break that its secrets, withheld from a dry run, may cause (ORC-453): its first error line said after them, not what
+ * the break was read as (a private registry's 404 is no missing dependency); over its cap, what the cap says.
+ */
+const unverifiable = (broke: DryRunBreak, secrets: readonly string[]): DryRunBreak => {
+  const cause = broke.kind === 'failure' ? broke.detail : errorLine(linesOf(broke.output));
+  return { ...broke, kind: 'secret', detail: `failed without its secrets (${secrets.join(', ')}), which a dry run's setup does not get: ${cause}` };
+};
 
 /**
  * The breaks of the failed commands: a failing test that passed on its rerun is flaky; a command that failed on its flaky tests
@@ -312,8 +384,8 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   await initHardenedClone(git);
   const sha = await fetchCommit(req, git, cloneDir);
   const files = await fingerprintFiles((...args) => git.raw('ls-tree', ...args), sha);
-  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
-    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length,
+  const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[], unverified?: DryRunBreak): DryRun => ({
+    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length, ...(unverified ? { unverified } : {}),
     fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, ...files }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
   });
   let config: RepoConfig;
@@ -354,6 +426,10 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       // service of the repository's own is its own, past an installer's retry warning (pip's `Retrying … ProxyError`).
       const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
       if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
+      // Its secrets withheld (ORC-453): what the setup broke on may be their absence, but a variable or a service of its own, or
+      // a dependency no token changes.
+      const own = broke.kind === 'variable' || broke.kind === 'service' || (broke.kind === 'dependency' && firstLine(linesOf(err.output), SECRET_FREE_LINES) !== undefined);
+      if (config.setupSecrets.length && !own) return dryRun([], setup, [], unverifiable(broke, config.setupSecrets));
       return dryRun([broke], setup, []);
     }
   }
@@ -380,13 +456,19 @@ export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRu
 /** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
 export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
 
+/** Green, red, or unverifiable: green but for a setup that failed without its secrets (ORC-453), whose commands did not run. */
+export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
+  !run.ok ? 'red' : run.unverified ? 'unverifiable' : 'green';
+
 /**
- * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green or red with what breaks,
- * its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run on main sets it (ORC-437).
+ * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green, unverifiable without its
+ * secrets or red with what breaks, its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run
+ * on main sets it (ORC-437).
  */
 export function mainCardValue(run: DryRun | undefined): string {
   if (!run) return MAIN_UNCHECKED;
   const of = `the dry run of ${run.sha.slice(0, 12)} on ${utc(run.endedAt)}`;
+  if (run.unverified) return `unverifiable: ${of}: its setup \`${run.unverified.command}\` ${run.unverified.detail}`;
   if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
   const broke = dryRunBroke(run) || 'no break recorded';
   return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
