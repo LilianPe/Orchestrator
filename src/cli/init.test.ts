@@ -297,6 +297,18 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(out).toContain('export GH_WEBHOOK_SECRET=');
   });
 
+  it('leaves the GitHub App of config.yaml in place: no github in the factory.yml it writes, which would replace it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {}, github: { appId: '7', privateKey: '/k.pem' } });
+    const { out } = await initOnce({ home });
+    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
+    expect(yml.github).toBeUndefined();
+    expect(yml.claude?.active).toBe('main');
+    expect(out).not.toContain('GH_APP_ID');
+    expect(out).not.toContain('https://github.com/settings/apps/new');
+    expect(loadInstance(home).github).toEqual({ appId: '7', privateKey: '/k.pem' });
+  });
+
   it('the permissions it prints are the manifest\'s', () => {
     const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '../../docs/github-app-manifest.json'), 'utf8')) as { default_permissions: unknown };
     expect(GITHUB_APP_PERMISSIONS).toEqual(manifest.default_permissions);

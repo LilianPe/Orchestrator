@@ -152,17 +152,23 @@ interface EnvSecret {
 
 /**
  * The `factory.yml` `init` writes when there is none (ORC-411): every secret an `env:NAME` reference, the budgets `factory
- * validate` accepts for a first run (docs/first-run.md), to tune afterwards.
+ * validate` accepts for a first run (docs/first-run.md), to tune afterwards. No `github` when config.yaml has its App: the
+ * file's would replace it, field by field (`effectiveInstance`).
  */
-function factoryYml(publicUrl: string | undefined): { text: string; env: EnvSecret[] } {
+function factoryYml(publicUrl: string | undefined, withGithub: boolean): { text: string; env: EnvSecret[] } {
   const env: EnvSecret[] = [
-    { name: 'GH_APP_ID', value: '<App ID>' },
-    { name: 'GH_APP_KEY', value: '<path of the .pem>' },
-    ...(publicUrl ? [{ name: 'GH_WEBHOOK_SECRET', value: "<the App's webhook secret>" }] : []),
+    ...(withGithub
+      ? [
+          { name: 'GH_APP_ID', value: '<App ID>' },
+          { name: 'GH_APP_KEY', value: '<path of the .pem>' },
+          ...(publicUrl ? [{ name: 'GH_WEBHOOK_SECRET', value: "<the App's webhook secret>" }] : []),
+        ]
+      : []),
     { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '<token of claude setup-token>' },
   ];
+  const github = { app_id: 'env:GH_APP_ID', private_key: 'env:GH_APP_KEY', ...(publicUrl ? { webhook_secret: 'env:GH_WEBHOOK_SECRET' } : {}) };
   const yml = {
-    github: { app_id: 'env:GH_APP_ID', private_key: 'env:GH_APP_KEY', ...(publicUrl ? { webhook_secret: 'env:GH_WEBHOOK_SECRET' } : {}) },
+    ...(withGithub ? { github } : {}),
     claude: { runtime: 'claude-code', accounts: [{ name: 'main', token: 'env:CLAUDE_CODE_OAUTH_TOKEN' }], active: 'main', default_model: 'claude-sonnet-5-5' },
     concurrency: 1,
     budgets: { per_step_tokens: 'off', per_ticket_tokens: 5_000_000 },
@@ -238,12 +244,13 @@ export async function runInit(d: InitDeps): Promise<void> {
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 
   saveInstance(d.home, cfg);
-  io.print(githubAppSteps(cfg.publicUrl, d.home));
+  // An App config.yaml already has is set up: its steps would only add noise.
+  if (!cfg.github) io.print(githubAppSteps(cfg.publicUrl, d.home));
   const ymlPath = join(d.home, 'factory.yml');
   if (existsSync(ymlPath)) {
     io.print(`${ymlPath} kept as it is.`);
   } else {
-    const written = factoryYml(cfg.publicUrl);
+    const written = factoryYml(cfg.publicUrl, !cfg.github);
     writeFileSync(ymlPath, written.text, { flag: 'wx' });
     io.print(
       [
