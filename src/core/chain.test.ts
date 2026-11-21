@@ -8,6 +8,7 @@ import { blockingFix, humanRoundJob, nextOf, startMove } from './chain.js';
 import { decide } from './engine.js';
 import { newTicketState, type FactoryEvent, type TicketState } from './types.js';
 import type { Workflow } from './workflow.js';
+import { frozenWorkflow } from '../runtime/workflow-version.js';
 
 /** What the end of each job of `wf` starts, moves and posts, the step it stops at by its id. */
 function ends(wf: Workflow) {
@@ -93,5 +94,18 @@ describe('the preset drives where the review ends (ORC-391, criterion 2)', () =>
     const published = { kind: 'review', runId: 'r2', lens: 'security', sha: 'abc123', findings: [], publish: true };
     expect(decide(reviewing, finished, defaultWorkflow()).effects).toEqual([published, { kind: 'move', to: 'human_review' }]);
     expect(decide(reviewing, finished, presetWorkflow(elsewhere, {}, 'build')).effects).toEqual([published]);
+  });
+});
+
+describe('a version frozen before ORC-382', () => {
+  it('is read back with the former step → status and step → post tables, its preset having neither', () => {
+    const now = defaultWorkflow();
+    const { statuses: _s, posts: _p, ...before } = now.preset;
+    const frozen = frozenWorkflow({ hash: 'h', definition: { ...now, preset: before } });
+    for (const job of ['intake', 'spec', 'tests', 'dev', 'review', 'review-security', 'fix-review']) {
+      expect(nextOf(frozen, frozen.jobs[job]!), job).toEqual(nextOf(now, now.jobs[job]!));
+    }
+    expect(nextOf(frozen, frozen.jobs['dev']!)).toMatchObject({ post: 'summary' });
+    expect(nextOf(frozen, frozen.jobs['review-security']!)).toMatchObject({ move: 'human_review', post: 'review' });
   });
 });

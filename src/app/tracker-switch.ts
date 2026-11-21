@@ -23,6 +23,8 @@ export class TrackerSwitch implements Tracker {
   setLabels(id: string, a: string[], r: string[]): Promise<LabelsWritten> { return Promise.resolve().then(() => this.t().setLabels(id, a, r)); }
   comment(id: string, b: string, e?: string): Promise<void> { return Promise.resolve().then(() => this.t().comment(id, b, e)); }
   findComment(id: string, e: string): Promise<string | undefined> { return Promise.resolve().then(() => this.t().findComment(id, e)); }
+  document(id: string, t: string, b: string, e?: string): Promise<string | undefined> { return Promise.resolve().then(() => this.t().document(id, t, b, e)); }
+  findDocument(id: string, e: string): Promise<string | undefined> { return Promise.resolve().then(() => this.t().findDocument(id, e)); }
   react(c: string, emoji: string, e?: string): Promise<void> { return Promise.resolve().then(() => this.t().react(c, emoji, e)); }
   findReaction(c: string, e: string): Promise<string | undefined> { return Promise.resolve().then(() => this.t().findReaction(c, e)); }
   activity(s: string, a: ActivityInput, e?: string): Promise<void> { return Promise.resolve().then(() => this.t().activity(s, a, e)); }

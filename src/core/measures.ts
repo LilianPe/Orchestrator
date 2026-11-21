@@ -212,8 +212,9 @@ function outputs(facts: MeasureFacts, events: FactoryEvent[], devSession: string
     const at = doneAt.get(row.id);
     if (row.status !== 'done' || at === undefined) continue;
     const c = row.effect;
-    // A block's comment is written on the ticket, and answers in the dev session as its elicitation did (ORC-196).
-    if (c.kind === 'block_comment') {
+    // A block's comment is written on the ticket, and answers in the dev session as its elicitation did (ORC-196); a spec's
+    // publication answers there too, as its activity did before ORC-382.
+    if (c.kind === 'block_comment' || c.kind === 'publish_spec') {
       out.push({ session: devSession, at, answer: true });
       continue;
     }

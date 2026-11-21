@@ -27,6 +27,8 @@ import { mdCode } from '../checks/markdown.js';
 import { captureArtifactId, captureLabel, captureName, VISUAL_PROOF_CHECK, type VisualProof } from '../checks/visual-proof.js';
 import { changelogEntry, deliveredBody, lastPushed, mergedWork, type MergedPr } from '../core/changelog.js';
 import { isTakenOver } from '../core/block-cause.js';
+import { formatSpec, publishedSpec, specComment, specSummary, specTitle } from '../core/spec.js';
+import { SPEC_PUBLICATION } from '../config/factory-yml.js';
 import { type EffectKey, type StateIo, takeOverKey } from './daemon-base.js';
 import { DaemonChecks } from './checks.js';
 import type { ProjectRuntime, TakeOverDesk } from './daemon.js';
@@ -329,6 +331,8 @@ export abstract class DaemonEffects extends DaemonChecks {
         const session = c.linearSessionId ?? fromRun ?? (await this.sessionFor(t));
         return this.activityOnce(session, c.type === 'elicitation' && c.options ? { type: c.type, body: c.body, options: c.options } : { type: c.type, body: c.body }, key);
       }
+      case 'publish_spec':
+        return this.publishSpec(t, c, key);
       case 'post_output': {
         const run = await store.getRun(c.runId);
         if (!run) return;
@@ -411,6 +415,35 @@ export abstract class DaemonEffects extends DaemonChecks {
     } catch (err) {
       this.log('warn', `the requester of ${t.ticketId} not told of PR #${c.number}: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * A version of the spec (ORC-382): in a comment of the ticket, or in a document linked to it, as factory.yml's `spec` says, the
+   * comment then giving its summary and its link; a tracker that keeps no document gets the whole spec in the comment. Then the
+   * session, where the validator replies, says where to read it. One key on every write: a replay finds what its first
+   * execution wrote of each, the document first, whose link the comment and the session carry.
+   */
+  private async publishSpec(t: TicketState, c: Extract<Effect, { kind: 'publish_spec' }>, key: EffectKey): Promise<EffectOutcome | void> {
+    const { mode, threshold } = this.d.specPublication ?? SPEC_PUBLICATION;
+    const whole = specComment(c.spec, c);
+    const inDocument = mode === 'doc' || (mode === 'comment+doc' && whole.length > threshold);
+    const title = specTitle(t.ticketId, c.version);
+    const doc = inDocument ? await this.documentOnce(t.ticketId, title, formatSpec(c.spec), key) : undefined;
+    if (doc && !doc.ref) this.log('info', `the spec of ${t.ticketId} in a comment alone: the tracker keeps no document beside a ticket`);
+    const url = doc?.ref;
+    const comment = await this.commentOnce(t.ticketId, url ? specSummary(c.spec, c, { title, url }) : whole, key);
+    const told = await this.activityOnce(await this.sessionFor(t), { type: 'response', body: publishedSpec(c.spec, c, url) }, key);
+    // Already made only if nothing was written here: the document (when there is one), the comment and the session's message.
+    const docMade = !doc?.ref || doc.deduplicated;
+    return docMade && comment?.deduplicated && told?.deduplicated ? comment : undefined;
+  }
+
+  /** A document linked to the ticket (ORC-382), written unless its first execution already wrote it; `ref`: its link, none for a tracker without documents. */
+  private async documentOnce(ticketId: string, title: string, body: string, key: EffectKey): Promise<EffectOutcome> {
+    const found = key.replay ? await this.d.tracker.findDocument(ticketId, key.id) : undefined;
+    if (found !== undefined) return { deduplicated: true, ref: found };
+    const url = await this.d.tracker.document(ticketId, title, body, key.id);
+    return url ? { ref: url } : {};
   }
 
   /** The ack's reaction on a message (ORC-380): 👀, by its name, put unless its first execution already put it (ORC-162). */

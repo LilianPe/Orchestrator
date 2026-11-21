@@ -18,6 +18,7 @@ const EFFECTS: OutboxEffect[] = [
   { kind: 'block_comment', block: { kind: 'failed', reason: 'r' } as never },
   { kind: 'ack', body: 'ok', linearSessionId: 's1' },
   { kind: 'activity', type: 'thought', body: 'hm' },
+  { kind: 'publish_spec', version: 1, spec: { goal: 'g' } },
   { kind: 'post_output', style: 'summary', runId: 'r1' },
   { kind: 'review', runId: 'r1', lens: 'standard' as never, sha: 'abc', findings: [] },
   { kind: 'link_pr', url: 'https://github.test/pr/1' },
@@ -52,7 +53,7 @@ describe('the no-effect mode of the outbox (ORC-231)', () => {
   it('classifies every effect kind: what writes to Linear or GitHub is never left to a default', () => {
     expect(new Set(EFFECTS.map((e) => e.kind))).toEqual(new Set(Object.keys(EFFECT_REACH)));
     const writes = EFFECTS.filter((e) => EFFECT_REACH[e.kind] === 'outside').map((e) => e.kind);
-    expect(writes).toEqual(expect.arrayContaining(['publish', 'move', 'labels', 'comment', 'block_comment', 'ack', 'activity', 'post_output', 'review', 'link_pr', 'merge', 'publish_bundle', 'after_merge', 'reconcile']));
+    expect(writes).toEqual(expect.arrayContaining(['publish', 'move', 'labels', 'comment', 'block_comment', 'ack', 'activity', 'publish_spec', 'post_output', 'review', 'link_pr', 'merge', 'publish_bundle', 'after_merge', 'reconcile']));
     expect(EFFECTS.filter((e) => EFFECT_REACH[e.kind] === 'inside').map((e) => e.kind)).toEqual(['start_run', 'stop_run', 'run_verify', 'take_over', 'close_take_over', 'cleanup', 'set_paused', 'settle']);
   });
 

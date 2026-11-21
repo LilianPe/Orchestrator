@@ -11,7 +11,8 @@ import type { EventPayloads } from '../../src/core/types.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import type { EffectOutcome } from '../../src/store/types.js';
 import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
-import { createHarness } from '../helpers/harness.js';
+import { assessment, drafted, SPEC } from '../helpers/chain.js';
+import { createHarness, withTestCommand } from '../helpers/harness.js';
 import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 
 /**
@@ -42,7 +43,7 @@ class LosingStore extends SqliteStore {
 }
 
 /** A harness whose rows of `kind` are each executed twice, the second time once the first lease expired. */
-function replaying(kind: string, opts: { workflow?: WorkflowOverrides; acknowledge?: AckMode } = {}) {
+function replaying(kind: string, opts: { workflow?: WorkflowOverrides; acknowledge?: AckMode } & Omit<NonNullable<Parameters<typeof createHarness>[0]>, 'store'> = {}) {
   const store = new LosingStore(kind);
   const h = createHarness({ store, effectLeaseMs: LEASE_MS, ...opts });
   h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -114,6 +115,17 @@ describe('idempotency table (ORC-162, docs/idempotency.md)', () => {
     expect(h.tracker.comments('REL-1')).toEqual([]);
     expect(h.tracker.activities('ls-q').filter((a) => a.type === 'thought' && !a.ephemeral)).toEqual([{ type: 'thought', body: 'Got it.' }]);
     expect(await result()).toMatchObject({ kind: 'ack', deduplicated: true });
+  });
+
+  it('Spec (ORC-382): a replayed publication finds its document, its comment and its activity, and writes none twice', async () => {
+    const { h, settled, result } = replaying('publish_spec', { fullChain: true, repoConfig: withTestCommand(), specPublication: { mode: 'doc', threshold: 5_000 } });
+    h.runner.enqueue(assessment(), drafted(SPEC));
+    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
+    await settled();
+    expect(h.tracker.documents('REL-1')).toHaveLength(1);
+    expect(h.tracker.comments('REL-1').filter((b) => b.startsWith('**Spec, version 1**'))).toHaveLength(1);
+    expect(h.tracker.activities('ls-1').filter((a) => a.type === 'response' && a.body.startsWith('Spec published'))).toHaveLength(1);
+    expect(await result()).toMatchObject({ kind: 'publish_spec', deduplicated: true, ref: 'comment-REL-1-1' });
   });
 
   it('Labels: a replayed label change finds the final state already there and writes nothing', async () => {

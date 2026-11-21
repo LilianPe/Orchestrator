@@ -11,7 +11,7 @@ import type { WorkspaceManager } from '../adapters/workspace/types.js';
 import type { RepoVariables } from '../config/repo-variables.js';
 import type { RepoConfig, RepoConfigRead } from '../config/repo-config.js';
 import type { Workflow } from '../core/workflow.js';
-import type { AckMode } from '../config/factory-yml.js';
+import type { AckMode, SpecPublication } from '../config/factory-yml.js';
 import type { EffectRetry } from './outbox.js';
 import { backoff, isTransient, type RetryPolicy } from './transient.js';
 import { RUN_LEASE_MS, type DecisionOutcome, type DecisionRequest, type EffectOutcome, type OutboxRow, type RunRecord, type Store } from '../store/types.js';
@@ -173,6 +173,8 @@ export interface DaemonDeps {
   onUsageLimit?: 'wait';
   /** `acknowledge` of factory.yml (ORC-380): `reaction` reacts on the message in place of the ack's comment. Absent: `comment`. */
   acknowledge?: AckMode;
+  /** `spec` of factory.yml (ORC-382): where a version of the spec is published. Absent: `SPEC_PUBLICATION`. */
+  specPublication?: SpecPublication;
   /** Why the configuration lets no ticket reach its end (ORC-350): while any, nothing is launched; events and effects go on. */
   configProblems?: readonly string[];
   /** The Claude account runs use (`claude.active`, ORC-211), asked at each launch (ORC-215): a usage limit holds the launches of that account only. Absent: `default`. */

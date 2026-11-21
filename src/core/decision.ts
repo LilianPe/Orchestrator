@@ -3,6 +3,7 @@ import type { AgentOutput, Finding } from './agent-output.js';
 import type { BlockFacts } from './block-comment.js';
 import type { DecidedEvent, InputKind, LogicalState, TimerFired } from './types.js';
 import type { VisualProof } from '../checks/visual-proof.js';
+import type { Spec } from './spec.js';
 
 export type ActivityType = 'thought' | 'response' | 'elicitation' | 'error';
 
@@ -38,6 +39,11 @@ export type Effect =
   | { kind: 'ack'; body: string; linearSessionId: string; comment?: true; plan?: true; commentId?: string }
   /** `options`: an elicitation answered by picking one (`select`, ORC-210). */
   | { kind: 'activity'; type: ActivityType; body: string; linearSessionId?: string; runId?: string; options?: readonly string[] }
+  /**
+   * A version of the spec (ORC-382), out to the ticket: in a comment, or in a document linked to it past the threshold of
+   * `factory.yml`'s `spec`, then the session told where to read it. Composed when it is written, as `block_comment`.
+   */
+  | { kind: 'publish_spec'; version: number; spec: Spec; risk?: string }
   | { kind: 'post_output'; style: 'summary' | 'reply'; runId: string; output?: AgentOutput }
   /**
    * An AI review lens's findings on the published commit `sha`, kept (ORC-183); `publish`: then every lens's findings on it go

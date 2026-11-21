@@ -54,6 +54,10 @@ export const Q = {
   /** The session's activity of an effect (ORC-162): an activity has no body filter, only its id. */
   effectActivity: `query EffectActivity($sessionId: String!, $id: ID!) {
     agentSession(id: $sessionId) { activities(first: 1, filter: { id: { eq: $id } }) { nodes { id } } } }`,
+  /** A document linked to the ticket (ORC-382), written under the effect's id. */
+  documentCreate: `mutation DocumentCreate($input: DocumentCreateInput!) { documentCreate(input: $input) { success document { id url } } }`,
+  /** The ticket's document of an effect (ORC-382), by the id it was created with. */
+  effectDocument: `query EffectDocument($id: ID!) { documents(first: 1, filter: { id: { eq: $id } }) { nodes { id url } } }`,
   reactionCreate: `mutation ReactionCreate($input: ReactionCreateInput!) { reactionCreate(input: $input) { success } }`,
   /** The comment's reactions (ORC-380): the effect's is found by the id it was created with. */
   effectReaction: `query EffectReaction($commentId: String!) { comment(id: $commentId) { reactions { id } } }`,

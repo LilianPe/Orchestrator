@@ -198,3 +198,19 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     expect(starts(waiting(), again)).toEqual([]);
   });
 });
+
+describe('the status of the step a wait or an intake starts (ORC-382)', () => {
+  const spec = defaultWorkflow({ statuses: { spec_draft: 'Spec' } });
+  const moves = (t: TicketState, e: FactoryEvent) => decide(t, e, spec).effects.filter((x) => x.kind === 'move');
+
+  it('the blockers done, the spec it waited for starts in its status, which intake\'s end left to that start', () => {
+    const t = ticket({ waitingOn: { blockers: ['REL-2'], start: { job: 'spec' } } });
+    expect(moves(t, event('blockers.done', { blockers: ['REL-2'] }))).toEqual([{ kind: 'move', to: 'spec' }]);
+    expect(moves(ticket({ activeRunId: 'r1', activeJob: 'intake' }), intakeEnd({ blockedBy: [{ identifier: 'REL-2', stateName: 'Todo' }] }))).toEqual([]);
+  });
+
+  it('intake\'s end moves a ticket in Todo to Spec, never one delegated again In Progress back to it (ORC-422)', () => {
+    expect(moves(ticket({ activeRunId: 'r1', activeJob: 'intake' }), intakeEnd())).toEqual([{ kind: 'move', to: 'spec' }]);
+    expect(moves(ticket({ activeRunId: 'r1', activeJob: 'intake', logical: 'dev' }), intakeEnd())).toEqual([]);
+  });
+});
