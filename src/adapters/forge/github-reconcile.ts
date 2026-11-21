@@ -1,5 +1,5 @@
 import type { Clock } from "../../core/clock.js";
-import { lastPushed, pushedHeads } from "../../core/changelog.js";
+import { lastPush, pushedHeads } from "../../core/changelog.js";
 import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import { isTakenOver } from "../../core/block-cause.js";
@@ -114,7 +114,7 @@ export class GithubReconciler {
     if (isTakenOver(t)) return;
     if (head === t.verifiedSha || head === t.humanHead) return;
     const events = (await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event));
-    const last = lastPushed(events);
+    const last = lastPush(events);
     const published = last?.sha;
     // The last push and the head it went over, which the forge may still read just after it (ORC-438). A branch put back on
     // any other is a human's push, as the webhook reports it.
@@ -136,8 +136,9 @@ export class GithubReconciler {
   }
 
   /**
-   * A last push journaled with no head it went over (before ORC-438, or nothing pushed): the factory's heads are then its last two
-   * commits pushed, and, before the second, the head read with no publication, which the forge may still read just after the first.
+   * A last push journaled with no head it went over (before ORC-438, a push that made the branch, or one whose publisher failed
+   * before it said the head): the factory's heads are then its last two commits pushed, and, before the second, the head read
+   * with no publication, which the forge may still read just after the first.
    */
   private async inWindow(t: TicketState, head: string, heads: string[]): Promise<boolean> {
     if (heads.length <= 1) {

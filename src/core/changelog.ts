@@ -13,6 +13,17 @@ export function lastPushed(events: readonly FactoryEvent[]): EventPayloads['publ
   return events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty)?.payload;
 }
 
+/**
+ * The factory's last push and the head it went over (ORC-438): a publication of the same commit since, which pushed nothing, names
+ * none, so the last that does is read. No `before`: the push made the branch, or was journaled before ORC-438.
+ */
+export function lastPush(events: readonly FactoryEvent[]): { sha: string; before?: string } | undefined {
+  const sha = lastPushed(events)?.sha;
+  if (!sha) return undefined;
+  const before = events.findLast((e): e is FactoryEvent<'publish.done'> => e.type === 'publish.done' && !e.payload.empty && e.payload.sha === sha && !!e.payload.before)?.payload.before;
+  return { sha, ...(before ? { before } : {}) };
+}
+
 /** The commits the factory pushed, oldest first: one per `publish.done` that reached the forge, a commit published twice in a row once. */
 export function pushedHeads(events: readonly FactoryEvent[]): string[] {
   return events

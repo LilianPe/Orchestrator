@@ -332,6 +332,12 @@ describe('GithubReconciler', () => {
         expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
       });
 
+      it('keeps the head a push went over through a publication of the same commit since, which pushed nothing', async () => {
+        const again = published(PUBLISHED, 3);
+        expect(await headAfter(HUMAN, [published(OTHER, 1), replaced(PUBLISHED, HUMAN, 2), again])).toEqual([]);
+        expect(await headAfter(OTHER, [published(OTHER, 1), replaced(PUBLISHED, HUMAN, 2), again])).toEqual([expect.objectContaining({ sha: OTHER })]);
+      });
+
       it('falls back on the window when the last push names none, as an older journal\'s', async () => {
         // A publication journaled before ORC-438, after one that named its head replaced.
         expect(await headAfter(OTHER, [replaced(OTHER, HUMAN, 1), published(PUBLISHED, 2)])).toEqual([]);
