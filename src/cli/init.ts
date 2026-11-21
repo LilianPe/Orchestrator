@@ -11,7 +11,7 @@ import { repoRoot } from '../app/root.js';
 import { slugify } from '../core/naming.js';
 import { SONNET } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
-import { openStore } from '../store/open.js';
+import { DATABASE_URL_ENV, openStore } from '../store/open.js';
 import type { MaturityCard, MaturityPoint, Store } from '../store/types.js';
 import { maturityReport, type DetectedChecks, type MaturityReport } from './maturity.js';
 
@@ -30,9 +30,9 @@ export interface InitDeps {
   exec: Exec;
   /**
    * Stores the maturity cards of a detection (ORC-410), `main` from the project's last dry run, and gives them back as stored,
-   * approvals kept: absent, none is stored.
+   * approvals kept, with the store they went to (ORC-437): absent, none is stored.
    */
-  storeCards?: (projectId: string, report: MaturityReport) => Promise<MaturityCard[]>;
+  storeCards?: (projectId: string, report: MaturityReport) => Promise<StoredCards>;
 }
 
 /**
@@ -108,6 +108,12 @@ function proposal({ setup, commands, preview }: DetectedChecks): string | undefi
   return text ? PROPOSAL_HEADER + text : undefined;
 }
 
+/** The maturity cards as stored, and `where`: the store `init` wrote them to, as it says it (ORC-437). */
+export interface StoredCards {
+  cards: MaturityCard[];
+  where: string;
+}
+
 /** What `init` prints before the maturity cards (ORC-410), followed by the dashboard page where a person approves them. */
 export const MATURITY_HEADER = 'Maturity report, one card per point to approve on the dashboard: ';
 
@@ -122,18 +128,19 @@ function cardLine(c: PrintedCard): string {
 
 /** The maturity report of the repository, stored as cards when it can be: a store that fails leaves init to finish, and says so. */
 async function printMaturity(d: InitDeps, projectId: string, report: MaturityReport, dashboard: string): Promise<void> {
-  let cards: PrintedCard[] | undefined;
+  let stored: StoredCards | undefined;
   let failure: string | undefined;
   if (d.storeCards) {
     try {
-      cards = await d.storeCards(projectId, report);
+      stored = await d.storeCards(projectId, report);
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
     }
   }
   // Read once: the report walks the repository.
-  cards ??= report();
+  const cards: PrintedCard[] = stored?.cards ?? report();
   d.io.print(['', `${MATURITY_HEADER}${dashboard}/#maturity`, ...cards.map(cardLine)].join('\n'));
+  if (stored) d.io.print(`Cards stored in ${stored.where}.`);
   if (failure !== undefined) d.io.print(`Cards not stored (${failure}): run factory init again once the database is reachable.`);
 }
 
@@ -143,10 +150,13 @@ async function printMaturity(d: InitDeps, projectId: string, report: MaturityRep
  */
 export const instanceCards =
   (home: string) =>
-  async (projectId: string, report: MaturityReport): Promise<MaturityCard[]> => {
-    const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle') });
+  async (projectId: string, report: MaturityReport): Promise<StoredCards> => {
+    const sqlitePath = homePaths(home).db;
+    const { store, kind } = await openStore({ env: process.env, sqlitePath, migrationsFolder: join(repoRoot(), 'drizzle') });
+    // SQLite said as such: a daemon started with FACTORY_DATABASE_URL reads Postgres, and its Maturity page stays empty.
+    const where = kind === 'postgres' ? `Postgres (${DATABASE_URL_ENV})` : `SQLite (${sqlitePath}): a daemon on Postgres does not read them (set ${DATABASE_URL_ENV} before factory init)`;
     try {
-      return await storeReport(store, projectId, report, Date.now());
+      return { cards: await storeReport(store, projectId, report, Date.now()), where };
     } finally {
       await store.close();
     }

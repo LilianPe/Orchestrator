@@ -1036,14 +1036,26 @@ export class PgStore implements AsyncStore {
     });
   }
 
-  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
+  async setMaturityCardValue(projectId: string, key: string, value: string, at: number): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      // The detection's lock: an init or an approval meanwhile is waited for.
+      await tx.execute(maturityLock(projectId));
+      const stored = (await this.readMaturityCards(tx, projectId)).find((c) => c.key === key);
+      if (!stored) return false;
+      const c = maturityCard(projectId, { ...stored, value }, at, stored);
+      await tx.execute(sql`update maturity_cards set value = ${c.value}, detected_at = ${new Date(c.detectedAt)}, approved_by = ${c.approvedBy ?? null}, approved_at = ${c.approvedAt === undefined ? null : new Date(c.approvedAt)} where project_id = ${projectId} and key = ${key}`);
+      return true;
+    });
+  }
+
+  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | 'unchecked' | undefined> {
     return this.db.transaction(async (tx) => {
       // The detection's lock: an init replacing the cards meanwhile is waited for, never approved over.
       await tx.execute(maturityLock(projectId));
       const stored = (await this.readMaturityCards(tx, projectId)).find((c) => c.key === key);
       if (!stored) return undefined;
       const card = approvedCard(stored, value, by, at);
-      if (card !== stored && card !== 'changed') await tx.execute(sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key}`);
+      if (typeof card !== 'string' && card !== stored) await tx.execute(sql`update maturity_cards set approved_by = ${by}, approved_at = ${new Date(at)} where project_id = ${projectId} and key = ${key}`);
       return card;
     });
   }

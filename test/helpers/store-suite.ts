@@ -3,6 +3,7 @@ import type { AttemptLabels } from '../../src/core/attempt-labels.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../../src/core/types.js';
 import type { Baseline, BaselineValue } from '../../src/core/baseline.js';
 import type { DryRun } from '../../src/core/dry-run.js';
+import { MAIN_UNCHECKED } from '../../src/core/maturity.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../../src/ghost/replay.js';
 import { PAUSE_ACCEPTED, TicketHeldError, timerEvent, type Artifact, type ChangelogEntry,type DecisionPlan, type KnownFlakyTest, type MaturityCard, type DecisionRequest, type QueueItem, type RunRecord, type SecurityLog, type Store, type TimerRecord, type WorkflowVersion } from '../../src/store/types.js';
 
@@ -383,6 +384,27 @@ export function storeContract(store: () => Store | Promise<Store>): void {
       card(changed, 1_700_000_000_009),
     ]);
     expect((await s.maturityCards()).map((c) => `${c.projectId}/${c.key}`)).toEqual(['other/stack', 'p/services', 'p/stack', 'p/commands']);
+  });
+
+  it('sets the value of one card in place, its approval kept only on a value unchanged; no card, nothing written (ORC-437)', async () => {
+    const s = await store();
+    const stack = { key: 'stack', title: 'Stack', value: 'Node (npm)' };
+    const main = { key: 'main', title: 'main green or red', value: 'green: one' };
+    await s.putMaturityCards('p', [stack, main], 1_000);
+    await s.approveMaturityCard('p', 'main', main.value, 'armand', 2_000);
+    expect(await s.setMaturityCardValue('p', 'main', main.value, 3_000)).toBe(true);
+    expect((await s.maturityCards('p'))[1]).toEqual({ projectId: 'p', ...main, detectedAt: 3_000, approvedBy: 'armand', approvedAt: 2_000 });
+    expect(await s.setMaturityCardValue('p', 'main', 'red: two', 4_000)).toBe(true);
+    expect(await s.maturityCards('p')).toEqual([{ projectId: 'p', ...stack, detectedAt: 1_000 }, { projectId: 'p', ...main, value: 'red: two', detectedAt: 4_000 }]);
+    expect(await s.setMaturityCardValue('q', 'main', 'red: two', 4_000)).toBe(false);
+    expect(await s.maturityCards('q')).toEqual([]);
+  });
+
+  it('refuses to approve the main card while it says not checked yet (ORC-437)', async () => {
+    const s = await store();
+    await s.putMaturityCards('p', [{ key: 'main', title: 'main green or red', value: MAIN_UNCHECKED }], 1_000);
+    expect(await s.approveMaturityCard('p', 'main', MAIN_UNCHECKED, 'armand', 2_000)).toBe('unchecked');
+    expect((await s.maturityCards('p'))[0]!.approvedBy).toBeUndefined();
   });
 
   it('keeps a replay of closed tickets with its threshold, written once and never changed; its tickets and judgments (ORC-231)', async () => {

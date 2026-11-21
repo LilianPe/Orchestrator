@@ -6,6 +6,7 @@ import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline } from '../core/baseline.js';
 import type { DryRun } from '../core/dry-run.js';
+import { uncheckedMain } from '../core/maturity.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
@@ -471,11 +472,12 @@ export function maturityCard(projectId: string, p: MaturityPoint, at: number, be
 }
 
 /**
- * The approval of a card of the `value` a person saw (ORC-410): `'changed'` when the card holds another; a card already
- * approved stands as it is.
+ * The approval of a card of the `value` a person saw (ORC-410): `'changed'` when the card holds another; `'unchecked'` for
+ * the `main` card not checked yet (ORC-437); a card already approved stands as it is.
  */
-export function approvedCard(stored: MaturityCard, value: string, by: string, at: number): MaturityCard | 'changed' {
+export function approvedCard(stored: MaturityCard, value: string, by: string, at: number): MaturityCard | 'changed' | 'unchecked' {
   if (stored.value !== value) return 'changed';
+  if (uncheckedMain(stored)) return 'unchecked';
   return stored.approvedBy === undefined ? { ...stored, approvedBy: by, approvedAt: at } : stored;
 }
 
@@ -782,10 +784,16 @@ export interface Store {
    */
   putMaturityCards(projectId: string, points: readonly MaturityPoint[], at: number): Promise<void>;
   /**
-   * Approves a card of the `value` the person saw (ORC-410): `'changed'`, nothing approved, when the card now holds another;
-   * a card already approved keeps its first approval; undefined when the project has no such card.
+   * Sets the value of one card of a project, detected `at` (ORC-437: `main` after a dry run on the default branch): its
+   * approval kept only when the value is unchanged; false, nothing written, when the project has no such card.
    */
-  approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined>;
+  setMaturityCardValue(projectId: string, key: string, value: string, at: number): Promise<boolean>;
+  /**
+   * Approves a card of the `value` the person saw (ORC-410): `'changed'`, nothing approved, when the card now holds another;
+   * `'unchecked'`, nothing approved, for the `main` card not checked yet (ORC-437); a card already approved keeps its first
+   * approval; undefined when the project has no such card.
+   */
+  approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | 'unchecked' | undefined>;
   /**
    * Freezes a baseline (ORC-230), one row per measure, all or none: false, nothing written, when that period of the project
    * already has one and `replace` is not set; with it, the new one takes the place of the stored one.

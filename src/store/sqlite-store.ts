@@ -849,13 +849,27 @@ export class SqliteStore implements Store {
     });
   }
 
-  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | undefined> {
+  private readMaturityCard(projectId: string, key: string): MaturityCard | undefined {
+    const row = this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ? AND key = ?').get(projectId, key) as { data: string } | undefined;
+    return row && (JSON.parse(row.data) as MaturityCard);
+  }
+
+  async setMaturityCardValue(projectId: string, key: string, value: string, at: number): Promise<boolean> {
     return this.atomically(() => {
-      const row = this.db.prepare('SELECT data FROM maturity_cards WHERE project_id = ? AND key = ?').get(projectId, key) as { data: string } | undefined;
-      if (!row) return undefined;
-      const stored = JSON.parse(row.data) as MaturityCard;
+      const stored = this.readMaturityCard(projectId, key);
+      if (!stored) return false;
+      const card = maturityCard(projectId, { ...stored, value }, at, stored);
+      this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
+      return true;
+    });
+  }
+
+  async approveMaturityCard(projectId: string, key: string, value: string, by: string, at: number): Promise<MaturityCard | 'changed' | 'unchecked' | undefined> {
+    return this.atomically(() => {
+      const stored = this.readMaturityCard(projectId, key);
+      if (!stored) return undefined;
       const card = approvedCard(stored, value, by, at);
-      if (card !== stored && card !== 'changed') this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
+      if (typeof card !== 'string' && card !== stored) this.db.prepare('UPDATE maturity_cards SET data = ? WHERE project_id = ? AND key = ?').run(JSON.stringify(card), projectId, key);
       return card;
     });
   }

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Maturity } from './Maturity.js';
 import type { MaturityCardView } from './types.js';
+import { MAIN_UNCHECKED } from '../../src/core/maturity.js';
 
 const card = (patch: Partial<MaturityCardView> = {}): MaturityCardView => ({ projectId: 'p', key: 'stack', title: 'Stack', value: 'TypeScript (package.json)', detectedAt: 1_000, ...patch });
 const render = (cards: MaturityCardView[], notice?: string) => renderToStaticMarkup(createElement(Maturity, { cards, onApprove: async () => undefined, notice }));
@@ -26,5 +27,11 @@ describe('the maturity cards page (ORC-410)', () => {
   it('points to factory init when no project has cards, and shows the notice of the last approval', () => {
     expect(render([])).toContain('factory init');
     expect(render([card()], 'Card approved.')).toContain('Card approved.');
+  });
+
+  it('offers no approval of the main card while it says not checked yet, and says how to check it (ORC-437)', () => {
+    const html = render([card({ key: 'main', title: 'main green or red', value: MAIN_UNCHECKED })]);
+    expect(html).not.toContain('>Approve<');
+    expect(html).toContain('factory dry-run p');
   });
 });
