@@ -36,7 +36,7 @@ describe('FakePublisher', () => {
     const p = new FakePublisher();
     const first = await p.publish(req());
     expect(first).toEqual({ prNumber: 1, url: 'https://github.test/pr/1', sha: 'aaa' });
-    expect(await p.publish(req({ sha: 'bbb' }))).toEqual({ ...first, sha: 'bbb' });
+    expect(await p.publish(req({ sha: 'bbb' }))).toEqual({ ...first, sha: 'bbb', before: 'aaa' });
     expect((await p.publish(req({ branch: 'factory/rel-2-y' }))).prNumber).toBe(2);
     expect(p.published.map((r) => r.sha)).toEqual(['aaa', 'bbb', 'aaa']);
   });

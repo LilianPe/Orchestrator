@@ -23,7 +23,7 @@ export function lastPushed(events: readonly FactoryEvent[]): EventPayloads['publ
 export function lastPush(events: readonly FactoryEvent[]): { sha: string; before?: string } | undefined {
   const sha = lastPushed(events)?.sha;
   if (!sha) return undefined;
-  const before = events.findLast((e) => isPush(e) && e.payload.sha === sha && !!e.payload.before)?.payload.before;
+  const before = events.filter(isPush).findLast((e) => e.payload.sha === sha && e.payload.before)?.payload.before;
   return { sha, ...(before ? { before } : {}) };
 }
 
