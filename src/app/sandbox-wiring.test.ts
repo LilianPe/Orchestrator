@@ -98,6 +98,18 @@ describe('sandboxLimits', () => {
     }
   });
 
+  it('says every refused limit together, not only the first (ORC-455)', () => {
+    expect(sandboxLimits({ FACTORY_SANDBOX_PIDS: 'many', FACTORY_SANDBOX_MEMORY: '4m', FACTORY_SANDBOX_CPUS: 'two' })).toEqual({
+      refused:
+        'FACTORY_SANDBOX_PIDS=many: a whole number of processes expected, or 0 / none for no limit. ' +
+        'FACTORY_SANDBOX_MEMORY=4m: at least 6m expected, or 0 / none for no limit. ' +
+        'FACTORY_SANDBOX_CPUS=two: a number of CPUs such as 2 or 0.5 expected, or 0 / none for no limit.',
+    });
+    expect(sandboxLimits({ FACTORY_SANDBOX_PIDS: '128', FACTORY_SANDBOX_MEMORY: 'lots', FACTORY_SANDBOX_CPUS: 'two' })).toEqual({
+      refused: expect.stringMatching(/^FACTORY_SANDBOX_MEMORY=lots: .* FACTORY_SANDBOX_CPUS=two: /),
+    });
+  });
+
   it('refuses a FACTORY_SANDBOX_MEMORY under 6m, the engines\' minimum, giving it (ORC-452)', () => {
     for (const size of ['5m', '6143k', '6143K', '6291455', '6291455b', '512', '1k', '1']) {
       expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual({ refused: `FACTORY_SANDBOX_MEMORY=${size}: at least 6m expected, or 0 / none for no limit.` });
