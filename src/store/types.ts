@@ -5,6 +5,7 @@ import type { Finding } from '../core/agent-output.js';
 import type { AttemptLabels } from '../core/attempt-labels.js';
 import type { KeptFinding, ReviewDefect } from '../core/audit.js';
 import type { Baseline } from '../core/baseline.js';
+import type { DryRun } from '../core/dry-run.js';
 import type { GhostJudgment, GhostReplay, GhostTicket } from '../ghost/replay.js';
 import type { BlockKind } from '../core/block-cause.js';
 import type { DeadLetter, RepairAction } from '../core/dead-letter.js';
@@ -747,6 +748,13 @@ export interface Store {
   putBaseline(b: Baseline, replace: boolean): Promise<boolean>;
   /** The baseline computed last, whichever project and period (ORC-230); null without one. */
   latestBaseline(): Promise<Baseline | null>;
+  /** Keeps a dry run (ORC-408), in place of one with its id. */
+  putDryRun(d: DryRun): Promise<void>;
+  /**
+   * A project's last dry run, by its end: on the forge's default branch, or with `sha` on that commit, whichever way it was asked;
+   * undefined without one.
+   */
+  lastDryRun(projectId: string, sha?: string): Promise<DryRun | undefined>;
   /**
    * Writes a replay of closed tickets (ORC-231), its thresholds with it, once: false, nothing written, when its id is kept already.
    * There is no other write of it: a threshold written before the replay is never changed after (criterion 4, ORC-385).

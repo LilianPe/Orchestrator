@@ -13,6 +13,7 @@ import { goesThroughFreeze } from '../core/engine.js';
 import { isNote, noSearchReason, repoNameOf, searchAsked, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { type QueueName, type FactoryEvent, type TicketState, type VerifyFailure, TRUSTED } from '../core/types.js';
 import { checkBranchPaths, classOfBranch, runCleanVerify, untrustedCheck, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from '../core/clean-verify.js';
+import { runDryRun, type DryRun } from '../core/dry-run.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, cappedExit, type VerifyResult } from '../core/verify.js';
 import { needsRefreeze, type ClassifiedDiff } from '../core/diff-class.js';
@@ -177,6 +178,46 @@ export abstract class DaemonChecks extends DaemonBase {
       declared: !!config?.preview,
       services: !!config?.services.length,
     };
+  }
+
+  /**
+   * The dry run of a project (ORC-408), on the forge's default branch or on the commit `sha`: its `setup` and commands in the
+   * sandboxes (`runDryRun`), in a place of its own under `runsDir/<id>`, then recorded, red or green. It rejects when it cannot run
+   * (no sandboxes, an engine or a forge down): nothing is recorded then.
+   */
+  async dryRun(projectId: string, o: { sha?: string } = {}): Promise<DryRun> {
+    const project = this.d.projects.find((p) => p.id === projectId);
+    if (!project) throw new Error(`no project ${projectId}`);
+    const { sandboxes, runsDir, originUrl, runnerImage } = this.d;
+    if (!sandboxes || !runsDir || !originUrl || !runnerImage) throw new Error('a dry run runs in the sandboxes: FACTORY_CONTAINER_CLI and FACTORY_RUNNER_IMAGE are required');
+    const id = `dry-${randomUUID()}`;
+    const runDir = join(runsDir, id);
+    const workDir = join(runDir, 'dry-run');
+    mkdirSync(workDir, { recursive: true });
+    try {
+      const run = await (this.d.dryRunner ?? runDryRun)({
+        sandboxes,
+        runId: id,
+        projectId,
+        originUrl: await originUrl(project),
+        ...(o.sha ? { sha: o.sha } : {}),
+        workDir,
+        setup: project.workflow.workspace.setup,
+        // The commands `verify` runs on a ticket's code when `.factory/config.yml` declares none: the `dev` job's.
+        commands: project.workflow.jobs['dev']?.verify ?? [],
+        image: runnerImage,
+        // Unreadable, it rejects (not `repoVariablesOf`): a dry run without the repository's variables would record the factory's breakdown as red.
+        env: async (config) => (this.d.repoVariables ? (await this.d.repoVariables(project, config)).env : {}),
+        knownFlaky: await this.d.store.knownFlakyTests(projectId),
+        now: () => this.d.clock.now(),
+        log: (message) => this.log('warn', `dry run of ${projectId}: ${message}`),
+      });
+      await this.d.store.putDryRun(run);
+      this.log('info', `dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : `red (${run.breaks.map((b) => b.kind).join(', ')})`}`);
+      return run;
+    } finally {
+      await rm(runDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `dry run of ${projectId}: ${runDir} not removed: ${err.message}`));
+    }
   }
 
   /**

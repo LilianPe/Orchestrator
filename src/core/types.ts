@@ -455,7 +455,7 @@ export type DecidedEvent =
   | { type: 'ticket.unblocked' }
   | {
       type: 'ticket.patched';
-      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'assumed'>>;
+      patch: Partial<Pick<TicketState, 'verifyAttempts' | 'redAttempts' | 'repeatedFailure' | 'ciFixAttempts' | 'prNumber' | 'prUrl' | 'prChecks' | 'prState' | 'linearSessionId' | 'initiatorId' | 'leaseRelaunches' | 'cutRelaunches' | 'frozenTests' | 'verifiedSha' | 'diffClass' | 'awaitingRepo' | 'owedMove' | 'usageRelaunches' | 'usageAsks' | 'size' | 'risk' | 'visualProof' | 'clarify' | 'decisions' | 'waitingOn' | 'spec' | 'specCheckReturns' | 'specChanges' | 'reviewSha' | 'reviewBlocking' | 'contested' | 'humanReviewRounds' | 'reuse' | 'assumed' | 'nextJob'>>;
     }
   | { type: 'feedback.appended'; item: FeedbackItem }
   /** A question the answer agent relays to the agent that implements, into the run inbox (ORC-182). */
@@ -562,6 +562,11 @@ export interface TicketState {
   blockedEvent?: string;
   /** The job a reply resumes while the ticket is blocked (ORC-196). Absent on a block of no job. */
   blockedJob?: string;
+  /**
+   * The next step a run's end asked for while the ticket was blocked (ORC-416): the launch refuses it, so the lift of the block
+   * starts it. Kept by a new block (a failed effect's), cleared with the block and when the work stops (`work.cancelled`).
+   */
+  nextJob?: string;
   claudeSessionId?: string;
   linearSessionId?: string;
   branch?: string;
@@ -732,7 +737,7 @@ export interface TicketState {
 }
 
 /** What lifting a block clears, the whole block with it: its reason, its kind and their data. */
-export const UNBLOCKED = { blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined, blockedJob: undefined } as const satisfies Partial<TicketState>;
+export const UNBLOCKED = { blocked: false, blockReason: undefined, blockKind: undefined, blockedEvent: undefined, blockedJob: undefined, nextJob: undefined } as const satisfies Partial<TicketState>;
 
 export function newTicketState(
   projectId: string,

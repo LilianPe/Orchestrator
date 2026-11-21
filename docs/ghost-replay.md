@@ -127,7 +127,8 @@ from GitHub when judged.
 
 ## Not yet
 
-- **The dry run on each start commit** (criterion 3) needs ORC-208, which waits on ORC-209. Every ticket's environment is
+- **The dry run on each start commit** (criterion 3): the dry run exists and runs on a given commit
+  ([dry-run.md](dry-run.md), ORC-408), but `factory ghost start` does not call it yet. Every ticket's environment is
   `unchecked` until then, and the report says how many: the hook is `GhostTicket.env` (`ok`, `failed`, `unchecked`), which the
   report already keeps out of the comparison when `failed`.
 - The pilot repository (ORC-137) is a decision still to take.

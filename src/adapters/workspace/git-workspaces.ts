@@ -25,7 +25,8 @@ function assertSafe(id: string): void {
 const INHERITED = /^(user\.(name|email)|core\.(autocrlf|eol)|filter\.lfs\.(clean|smudge|process|required)|remote\..+\.(url|fetch))$/i;
 /** What the checkout that makes it (`agentRepository`) never takes of that config either: the layout of that repository, or a host's path for its hooks. */
 const LAYOUT = /^(core\.(bare|repositoryformatversion|worktree|hookspath|fsmonitor|sparsecheckout|sparsecheckoutcone)$|extensions\.)/i;
-const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+/** A commit's full id, SHA-1 or SHA-256. */
+export const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 const MAX_REFS_BYTES = 16 * 1024 * 1024;
 
 /**

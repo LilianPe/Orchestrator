@@ -36,7 +36,7 @@ import { claudeAccountReader, disabledControls, readCapsOf, stepSettings, ticket
 import { loadSealedFactoryYml, SECRETS_KEY_REQUIRED } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
-import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, type InstanceConfig } from '../config/instance.js';
+import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings, type InstanceConfig } from '../config/instance.js';
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
@@ -147,6 +147,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   }));
   // Said at each start, not only by `factory doctor`.
   for (const p of projects) for (const file of ignoredWorkflowFiles(p.repoPath)) log(`${p.id}: ${ignoredWorkflowWarning(file)}`);
+  for (const line of validatorWarnings(instance.projects)) log(line);
   // The projects that replay closed tickets (ORC-376): only the daemon's own delegations reach them, nothing of Linear, whose tickets
   // of the same team stay the other projects'.
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
@@ -345,6 +346,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
             runsDir: paths.runs,
             egressJournal: (runId: string) => egress.journalPath(runId),
             registries: registriesViaEgress(egress),
+            // Required with sandboxes (`makeSandboxes`): the dry run's fingerprint (ORC-408).
+            runnerImage: env['FACTORY_RUNNER_IMAGE']!,
           }
         : {}),
       // In a sandbox, no host path: the agent reaches the factory through its MCP alone (ORC-192).

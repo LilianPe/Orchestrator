@@ -756,6 +756,59 @@ jobs:
       expect(JSON.parse((await doctor([], [], { commands: { test: 'npm test' }, json: true })).text)).not.toHaveProperty('warnings');
     });
   });
+
+  describe('a project whose spec gate no validator can pass (ORC-421)', () => {
+    const homeWith = ({ validators, preset }: { validators?: string[]; preset?: string } = {}) => {
+      const home = tempHome();
+      const authz = validators ? `\n    authz:\n      validators: ${JSON.stringify(validators)}` : '';
+      const ghost = preset ? `\n    preset: ${preset}` : '';
+      writeFileSync(join(home, 'config.yaml'), `projects:\n  - id: app\n    repoPath: /repo\n    linearTeamKey: APP${authz}${ghost}\n`);
+      return home;
+    };
+    const cli = async (home: string, repoPath = '/repo') => {
+      const lines: string[] = [];
+      await runDoctorCommand({ repoPath, home, env: {}, out: (line) => lines.push(line) });
+      return lines;
+    };
+    const warned = async (home: string, repoPath?: string) => (await cli(home, repoPath)).filter((l) => l.includes('authz.validators'));
+
+    it('warns, naming authz.validators, of the instance before it needs the GitHub App, without validators', async () => {
+      const lines = await cli(homeWith());
+      const none = lines.filter((l) => l.includes('authz.validators'));
+      expect(none).toHaveLength(1);
+      expect(none[0]).toMatch(/^Warning: app: no spec validator \(authz\.validators in config\.yaml\)/);
+      expect(lines.indexOf(none[0]!)).toBeLessThan(lines.findIndex((l) => l.includes('GitHub App not configured')));
+      expect(await warned(homeWith({ validators: [] }))).toEqual(none);
+    });
+
+    it('warns of a lone validator, who cannot approve the tickets they delegate, one id twice counting once', async () => {
+      const lone = await warned(homeWith({ validators: ['u-1'] }));
+      expect(lone).toHaveLength(1);
+      expect(lone[0]).toMatch(/^Warning: app: one spec validator \(authz\.validators in config\.yaml\)/);
+      expect(await warned(homeWith({ validators: ['u-1', 'u-1'] }))).toEqual(lone);
+    });
+
+    it("says nothing of another repository's project", async () => {
+      expect(await warned(homeWith(), '/other')).toEqual([]);
+    });
+
+    it('says nothing with two validators, nor of the replay of closed tickets, which approves its own specs', async () => {
+      expect(await warned(homeWith({ validators: ['u-1', 'u-2'] }))).toEqual([]);
+      expect(await warned(homeWith({ preset: 'factory/fantome' }))).toEqual([]);
+    });
+
+    it('lists them in the JSON report, whatever the verdict, and only when there is one', async () => {
+      const report = async (api: FakeApi, validatorWarnings?: string[]) => {
+        const json: string[] = [];
+        await runDoctor({ repoPath: '/repo', api, host: goodHost, json: true, out: (line) => json.push(line), ...(validatorWarnings ? { validatorWarnings } : {}) });
+        return JSON.parse(json.join('\n')) as unknown;
+      };
+      expect(await report(new FakeApi([]), ['Warning: app: x'])).toMatchObject({ accepted: true, validatorWarnings: ['Warning: app: x'] });
+      expect(await report(new FakeApi([], [], { failWorkflows: true }), ['Warning: app: x'])).toMatchObject({ accepted: false, validatorWarnings: ['Warning: app: x'] });
+      expect(await report(new FakeApi([]), [])).not.toHaveProperty('validatorWarnings');
+      expect(await report(new FakeApi([]))).not.toHaveProperty('validatorWarnings');
+    });
+  });
 });
 
 describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, criterion 1)', () => {

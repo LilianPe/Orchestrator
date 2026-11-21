@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
-import { POSTGRES_DUMP, RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
+import { POSTGRES_DUMP, RELEASE_AGE_DAYS, runSealedSetup, sealSecrets, SetupFailure, setupEnv, YARN1_NO_SCRIPTS } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
 const SECRET = 's3cr3t-value/with+chars';
@@ -180,6 +180,14 @@ describe('runSealedSetup', () => {
     expect(sandboxes.execs.map((e) => e.argv.at(-1))).not.toContain('never');
     expect(sandboxes.active()).toEqual([]);
     expect(existsSync(join(root, '.env'))).toBe(false);
+  });
+
+  it('a failed command carries its command and its output, for the dry run to read (ORC-408)', async () => {
+    const sandboxes = new FakeSandboxProvider();
+    sandboxes.execResult = (argv) => ({ stdout: argv[0] === 'timeout' ? 'npm error code ETARGET\n' : '', stderr: argv[0] === 'timeout' ? 'boom' : '', code: argv[0] === 'timeout' ? 1 : 0 });
+    const err = await runSealedSetup(sandboxes, request(tree({}))).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SetupFailure);
+    expect(err).toMatchObject({ message: 'The worktree setup failed: npm ci', command: 'npm ci', exitCode: 1, output: 'npm error code ETARGET\nboom' });
   });
 
   it('a command over its cap fails as a timeout', async () => {
