@@ -2,7 +2,7 @@ import { REFREEZE, type FrozenTests } from '../checks/freeze.js';
 import { mdCode } from '../checks/markdown.js';
 import type { JobSpec, ReviewLens, Workflow } from './workflow.js';
 import { allowed, DEFAULT_MATRIX, refusalMessage, type AuthzAction, type AuthzMatrix, type Channel } from './authz.js';
-import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, stepStatus, type ReactionLink } from './chain.js';
+import { beforeInProgress, blockingFix, delegatedJob, hasHumanRounds, hasReviewLoop, humanRoundJob, jobEntering, nextOf, publishesReview, reactionJob, specStep, statusReached, type ReactionLink } from './chain.js';
 import { deadLetterReason, deadLetterTried, heldMessage, isRefusedNotice, liftDeadLetterBlock, REPAIR_LABELS, repairedEvent } from './dead-letter.js';
 import type { AgentOutput, ConflictCase } from './agent-output.js';
 import { blockFacts } from './block-comment.js';
@@ -877,14 +877,14 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const wait = ticket?.waitingOn;
   const job = wait && workflow.jobs[wait.start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
-  const startable = ticket?.logical === 'todo' || ticket?.logical === 'spec' || ticket?.logical === 'dev';
+  const startable = !!ticket && STARTABLE.has(ticket.logical);
   if (!ticket || !wait || !job || !startable || refusesDevWork(ticket, job) || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
   // The status of the step it starts, which the end of intake left to this start (ORC-382).
-  const to = job.step !== undefined && job.step !== workflow.entry ? stepStatus(workflow, job.step) : undefined;
+  const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
   if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
   startAs(out, event, ticket, job, wait.start);
   return out;
@@ -1046,10 +1046,12 @@ function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: Tick
   return { index, job, debounceMs };
 }
 
-/** The delegation, on a ticket not blocked, in Todo, Spec or In Progress (any status at the Rapide level): the chain's entry job. */
+/** The statuses a delegation starts from, the end of a wait too: Todo, Spec and In Progress. */
+const STARTABLE: ReadonlySet<LogicalState> = new Set(['todo', 'spec', 'dev']);
+
+/** The delegation, on a ticket not blocked, in a status it starts from (any status at the Rapide level): the chain's entry job. */
 function onDelegated(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
-  const state = ticket?.logical ?? 'todo';
-  if (ticket?.blocked || (!rapide(workflow) && state !== 'todo' && state !== 'spec' && state !== 'dev')) return undefined;
+  if (ticket?.blocked || (!rapide(workflow) && !STARTABLE.has(ticket?.logical ?? 'todo'))) return undefined;
   const job = delegatedJob(workflow);
   return job ? reaction(0, job, event, ticket) : undefined;
 }

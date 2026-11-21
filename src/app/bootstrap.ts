@@ -187,7 +187,8 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       for (const p of projects) await linearTracker.warm(p.teamKey).catch((e: Error) => log(`warm ${p.teamKey}: ${e.message}`));
       // The team's statuses are known from here on (ORC-382): one factory.yml names that the team lacks is said, as `doctor` says it.
       for (const p of fromLinear) {
-        const team = await linearTracker.teamStatuses(p.teamKey).catch(() => undefined);
+        // As `warm` just read them.
+        const team = await linearTracker.teamStatuses(p.teamKey, false).catch(() => undefined);
         const warning = team && missingStatusWarning(p, p.workflow.states, team);
         if (warning) log(warning);
       }

@@ -235,9 +235,9 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return map;
   }
 
-  /** The names of the team's statuses, read again (ORC-382): what `doctor` checks factory.yml's `statuses` against. */
-  async teamStatuses(teamKey: string): Promise<string[]> {
-    return (await this.teamStates(teamKey, true)).map((s) => s.name);
+  /** The names of the team's statuses (ORC-382), read again unless `refresh` is false: what factory.yml's `statuses` are checked against. */
+  async teamStatuses(teamKey: string, refresh = true): Promise<string[]> {
+    return (await this.teamStates(teamKey, refresh)).map((s) => s.name);
   }
 
   async warm(teamKey: string): Promise<void> {

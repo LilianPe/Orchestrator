@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { WORKFLOW_FORMAT, type Workflow } from '../core/workflow.js';
+import type { Preset } from '../presets/preset.js';
 import type { WorkflowVersion } from '../store/types.js';
 
 /** JSON with sorted keys: the same workflow always gives the same text, whatever its key order. */
@@ -37,5 +38,11 @@ export function frozenWorkflow(version: WorkflowVersion): Workflow {
   if (format !== WORKFLOW_FORMAT) {
     throw new FrozenFormatError(`workflow version ${version.hash.slice(0, 12)} is of format ${String(format)}, not ${WORKFLOW_FORMAT}: its ticket is refused (format 1: frozen before ORC-393)`);
   }
-  return version.definition as Workflow;
+  const wf = version.definition as Workflow;
+  // A version frozen before ORC-382 has neither step table in its preset: the constants the chain read then.
+  return (wf.preset as Partial<Preset>).statuses ? wf : { ...wf, preset: { ...wf.preset, statuses: FORMER_STATUSES, posts: FORMER_POSTS } };
 }
+
+/** The step → status and step → post tables of the chain before ORC-382 moved them into the preset. */
+const FORMER_STATUSES: Preset['statuses'] = { build: 'dev', review: 'ai_review', human_review: 'human_review' };
+const FORMER_POSTS: Preset['posts'] = { build: 'summary', fix: 'reply', review: 'review' };

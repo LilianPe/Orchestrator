@@ -1,5 +1,5 @@
 import { WORKFLOW_FORMAT, type JobSpec, type Limits, type RunLimits, type Workflow } from '../core/workflow.js';
-import { blockingFix, nextOf, REACTION_LINKS, reactionJob, startingJob } from '../core/chain.js';
+import { blockingFix, entry, nextOf, REACTION_LINKS, reactionJob, startingJob } from '../core/chain.js';
 import { UNLINKED_REACTION_JOBS } from '../core/engine.js';
 import { factoryDefault } from './factory-default.js';
 import { compilePreset, isAgentStep, mergeGate, type AgentStep, type Effort, type Preset } from './preset.js';
@@ -69,7 +69,7 @@ export function statesOf(statuses: Readonly<Record<string, string>> = {}): Workf
   const states: Workflow['states'] = { ...DEFAULT_STATES };
   const namedBy = new Map<string, string>();
   for (const [step, name] of Object.entries(statuses)) {
-    const status = Object.hasOwn(preset.statuses, step) ? preset.statuses[step] : undefined;
+    const status = entry(preset.statuses, step);
     if (!status) {
       const withOne = Object.keys(preset.statuses).join(', ');
       const what = preset.steps.some((s) => s.id === step) ? 'shows no status of its own' : 'is not a step';

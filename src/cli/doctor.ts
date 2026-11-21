@@ -759,7 +759,7 @@ async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'lin
     let tracker;
     try {
       // Linear's secrets read apart from the GitHub App's: one that cannot be read leaves the other checks as they were.
-      tracker = cliLinearTracker(o.home, (await loadSealedFactoryYml(o.home, o.env, { only: [...LINEAR_SECRETS, ...GITHUB_APP_SECRETS] })).yml);
+      tracker = cliLinearTracker(o.home, (await loadSealedFactoryYml(o.home, o.env, { only: LINEAR_SECRETS })).yml);
     } catch (error) {
       return [`Linear statuses not checked: ${errorMessage(error)}`];
     }

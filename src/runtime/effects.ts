@@ -428,13 +428,22 @@ export abstract class DaemonEffects extends DaemonChecks {
     const whole = specComment(c.spec, c);
     const inDocument = mode === 'doc' || (mode === 'comment+doc' && whole.length > threshold);
     const title = specTitle(t.ticketId, c.version);
-    const found = inDocument && key.replay ? await this.d.tracker.findDocument(t.ticketId, key.id) : undefined;
-    const url = inDocument ? (found ?? (await this.d.tracker.document(t.ticketId, title, formatSpec(c.spec), key.id))) : undefined;
-    if (inDocument && !url) this.log('info', `the spec of ${t.ticketId} in a comment alone: the tracker keeps no document beside a ticket`);
+    const doc = inDocument ? await this.documentOnce(t.ticketId, title, formatSpec(c.spec), key) : undefined;
+    if (doc && !doc.ref) this.log('info', `the spec of ${t.ticketId} in a comment alone: the tracker keeps no document beside a ticket`);
+    const url = doc?.ref;
     const comment = await this.commentOnce(t.ticketId, url ? specSummary(c.spec, c, { title, url }) : whole, key);
     const told = await this.activityOnce(await this.sessionFor(t), { type: 'response', body: publishedSpec(c.spec, c, url) }, key);
-    // Already made only if nothing was written here.
-    return comment?.deduplicated && told?.deduplicated && (!url || found) ? comment : undefined;
+    // Already made only if nothing was written here: the document (when there is one), the comment and the session's message.
+    const docMade = !doc?.ref || doc.deduplicated;
+    return docMade && comment?.deduplicated && told?.deduplicated ? comment : undefined;
+  }
+
+  /** A document linked to the ticket (ORC-382), written unless its first execution already wrote it; `ref`: its link, none for a tracker without documents. */
+  private async documentOnce(ticketId: string, title: string, body: string, key: EffectKey): Promise<EffectOutcome> {
+    const found = key.replay ? await this.d.tracker.findDocument(ticketId, key.id) : undefined;
+    if (found !== undefined) return { deduplicated: true, ref: found };
+    const url = await this.d.tracker.document(ticketId, title, body, key.id);
+    return url ? { ref: url } : {};
   }
 
   /** The ack's reaction on a message (ORC-380): 👀, by its name, put unless its first execution already put it (ORC-162). */
