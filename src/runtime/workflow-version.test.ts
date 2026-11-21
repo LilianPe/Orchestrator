@@ -20,8 +20,7 @@ describe('frozenWorkflow (ORC-393)', () => {
     const current = defaultWorkflow();
     const old = JSON.parse(JSON.stringify(current).replaceAll('"factory:build"', '"factory:dev"').replaceAll('"factory:spec_draft"', '"factory:spec"')) as typeof current;
     old.jobs['fix-ci']!.skill = 'factory:fix-ci';
-    (old.preset.steps.find((s) => s.type === 'fix') as { skills: Record<string, string> }).skills.ci = 'factory:fix-ci';
-    expect(JSON.stringify(old)).toMatch(/factory:dev"[\s\S]*factory:fix-ci"/);
-    expect(frozenWorkflow(workflowVersion(old))).toEqual(current);
+    expect(JSON.stringify(old.jobs)).toMatch(/factory:dev"[\s\S]*factory:fix-ci"/);
+    expect(frozenWorkflow(workflowVersion(old)).jobs).toEqual(current.jobs);
   });
 });

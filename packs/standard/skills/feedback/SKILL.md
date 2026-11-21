@@ -50,22 +50,20 @@ Is the failure already on the base? Only when the block says the base branch's C
 
 ### Act
 
-- **Regression**: minimal fix at the cause, with a test that covers the bug if none exists (`factory:tdd`). Rerun the failing command and the relevant tests until green (`factory:verification`), commit (`<ID>: fix CI — <cause>`), one commit per cause. Then section 3.
-- **Flaky or infrastructure**: do not blindly "fix" anything, and do not rerun anything yourself: you do not write to the forge. What needs a human (rerunning a job, a secret, a runner, a service, a flaky test to repair): ONE precise question (what you observed, what must be done): `submit_result` with `status: "blocked"` and the `question`, which ends your turn.
+- **Regression**: minimal fix at the cause, with a test that covers the bug if none exists (`factory:tdd`), committed as `<ID>: fix CI — <cause>`. Then section 3.
+- **Flaky or infrastructure**: do not blindly "fix" anything, and do not rerun anything yourself: you do not write to the forge. What needs a human (rerunning a job, a secret, a runner, a service, a flaky test to repair): ONE precise question (what you observed, what must be done).
 - **Third attempt**: if `git log --oneline` already shows two `<ID>: fix CI` commits for the same check without it passing, do not try a third fix: describe what was tried and ask the question.
-
-Do not modify the CI workflows to make the build pass: nothing under `.github/` goes out, nor the other forbidden paths of the `build` skill; if the fix needs one, a question (`status: "blocked"`). Do not increase a timeout without justifying, with a measurement (the command's duration, run locally), that the slowness is legitimate.
 
 ## 3. Verify and hand back
 
-1. `factory:verification`: the tests of what you changed, the repository's type check and lint if they exist; for failed checks, rerun exactly the command that failed.
+1. `factory:verification`: the tests of what you changed, the repository's type check and lint if they exist; for failed checks or CI failures, rerun exactly the command that failed until it passes.
 2. A conflict with the PR's base is not yours: do not merge or rebase the base, even when the PR shows it conflicting. Hand back as usual; the factory starts its own `factory:rebase` step on the conflict, after your run.
 3. A human may have pushed to the branch (the factory paused you for it, then a human resumed you): `git fetch origin`, and if `origin/<branch>` has commits you do not have, `git rebase origin/<branch>`. Your commits not yet published go on top of theirs; the published ones are already under them. Resolve each conflicting hunk you have read with Edit, keeping the intent of both sides, then `git add` and continue the rebase; when the two sides contradict, two migrations change the same tables, or the resolution goes beyond the scope, `git rebase --abort` and a question. Without it, the factory refuses your commit (`factory/commits-humains`) and never publishes over theirs.
 4. Commit, then end your turn: **the factory publishes**, after verifying your last commit. You do not push.
 
 ## Forbidden
 
-Never merge the PR. Never push, to any branch: the factory publishes. Do not rewrite history, do not rebase a published branch. Do not switch branches. Never disable, skip (`skip`, `only`), delete or weaken a test, an assertion or a CI step.
+Never merge the PR. Never push, to any branch: the factory publishes. Do not rewrite history, do not rebase a published branch. Do not switch branches. Never disable, skip (`skip`, `only`), delete or weaken a test, an assertion or a CI step. Do not modify the CI workflows to make the build pass: nothing under `.github/` goes out, nor the other forbidden paths of the `build` skill; if the fix needs one, a question. Do not increase a timeout without justifying, with a measurement (the command's duration, run locally), that the slowness is legitimate.
 
 ## `submit_result` summary (published in Linear)
 
