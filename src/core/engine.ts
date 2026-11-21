@@ -879,6 +879,8 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
   if (!ticket || !start || !job || !startable || refusesDevWork(ticket, job) || (ticket.blocked && !wait.lift) || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
+    // The ack of the relaunch said it would resume: the human hears it will not.
+    if (wait?.lift && ticket?.blocked) out.effects.push({ kind: 'activity', type: 'thought', body: LIFT_DROPPED });
     return out;
   }
   out.effects.push({ kind: 'activity', type: 'thought', body: `Nothing blocks this ticket any more (${event.payload.blockers.join(', ')} done or no longer linked): starting.` });
@@ -887,6 +889,8 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   startAs(out, event, ticket, job, start);
   return out;
 }
+
+const LIFT_DROPPED = 'The tickets this one waited for are done, but it moved on meanwhile: it stays blocked, and nothing resumes. Reply here to resume it.';
 
 /** A run, its check or a job waiting to start: the work whose end is the ticket's next step boundary. */
 const workInFlight = (t: TicketState): boolean => !!(t.activeRunId || t.verifyingRunId || t.pendingJob);

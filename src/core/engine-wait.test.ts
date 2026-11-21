@@ -116,6 +116,14 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
       expect(decide(blocked({ leaseRelaunches: 1 }), reply, workflow).events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
     });
 
+    it('moved on meanwhile, the blockers done start nothing and the human hears the resume will not come', () => {
+      const answered = { ...after(blocked(), reply), logical: 'human_review' as const };
+      const out = decide(answered, done, workflow);
+      expect(starts(answered, done)).toEqual([]);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+      expect(out.effects).toContainEqual({ kind: 'activity', type: 'thought', body: expect.stringContaining('stays blocked') });
+    });
+
     it('with no reply, the blockers done leave the block and start nothing', () => {
       expect(starts(blocked(), done)).toEqual([]);
     });
