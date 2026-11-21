@@ -85,7 +85,7 @@ describe('factory/default', () => {
 
   it('carries what the chain needs (ORC-391): skills, lenses, the red mode, the attempt duration, the guard, the fix causes, after_merge with no agent', () => {
     expect(['intake', 'spec_draft', 'tests', 'build', 'rebase'].map((id) => (step(factoryDefault, id) as { skill?: string }).skill)).toEqual([
-      'factory:intake', 'factory:spec_draft', 'factory:tests', 'factory:build', 'factory:rebase',
+      'factory:intake', 'factory:spec-draft', 'factory:tests', 'factory:build', 'factory:rebase',
     ]);
     expect(step(factoryDefault, 'review')).toMatchObject({ lenses: ['correctness', 'security'] });
     expect(step(factoryDefault, 'red')).toMatchObject({ mode: 'red', red: 'measure' });
