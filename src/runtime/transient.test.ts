@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
-import { execFailure, type Exec } from '../adapters/exec.js';
+import type { Exec } from '../adapters/exec.js';
 import { GitHubApiError } from '../adapters/forge/github-app.js';
 import { LinearApi, type FetchLike } from '../adapters/tracker/linear/api.js';
 import { fetchOrigin } from '../adapters/workspace/git-workspaces.js';
@@ -122,8 +122,6 @@ describe('isTransient (ORC-343)', () => {
     expect(isTransient(await fetchThrows("fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 502"))).toBe(true);
     expect(isTransient(await fetchThrows("fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403"))).toBe(false);
     expect(isTransient(await fetchThrows('remote: Repository not found.\nfatal: repository not found'))).toBe(false);
-    expect(isTransient(execFailure('gh', ['pr', 'checks', '1'], { code: 1, stdout: '', stderr: 'error connecting to api.github.com' }))).toBe(true);
-    expect(isTransient(execFailure('gh', ['pr', 'checks', '1'], { code: 1, stdout: '', stderr: 'no pull requests found' }))).toBe(false);
   });
 
   it('reads through a wrapper, and calls anything else permanent', () => {

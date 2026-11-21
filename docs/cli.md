@@ -18,7 +18,7 @@ All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`
 | `factory dry-run <project>` | Run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks. | yes (with sandboxes) |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
-| `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, `gh`) |
+| `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, the GitHub App for `start`, git) |
 
 The commands that require the daemon go through its Unix socket, `cli/factory.sock` in `FACTORY_HOME`, when it is there (ORC-405): on the daemon's server, as the factory's user (mode 0600), with no GitHub sign-in, and their actions are journaled as `cli:<host>`. Otherwise they call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`, with no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. From another machine: SSH to the server. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
@@ -40,7 +40,7 @@ Run it **in the repository** to entrust to Relais (otherwise it asks for the rep
 
 ### `relais up`
 
-Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), smee relay, timers, Linear and GitHub reconciliation every 5 minutes through a database timer (PR polling every 30 s if GitHub webhooks are refused), queue re-evaluation every minute. Prints `Relais is running: <url>`.
+Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), smee relay, timers, Linear and GitHub reconciliation every 5 minutes through a database timer, queue re-evaluation every minute. Prints `Relais is running: <url>`.
 
 - Writes `<RELAIS_HOME>/run-settings.json` (see [`configuration.md`](configuration.md#what-does-not-leave-the-daemon)).
 - Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs)).
@@ -67,7 +67,7 @@ A control `factory.yml` disables (ORC-381) is named right after the repository's
 
 Check before entrusting a repository, run where the daemon runs (`docker compose exec factoryd …` under compose, [`github.md`](github.md#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)): refuses (exit code `1`) a host whose engine (`FACTORY_CONTAINER_CLI`, asked with `info`) cannot limit the sandbox (no cgroup v2, or no limit through the `cpu`, `memory` and `pids` controllers), a default branch with neither a classic protection nor a ruleset requiring a pull request that the App cannot bypass ([branch protection](github.md#branch-protection-required-by-factory-doctor)), and a CI that can expose secrets to the factory's branches (the repository's naming, `feat/*` and `fix/*` by default, and the legacy `factory/*`) without human approval, and accepts (code `0`) a CI without secrets or whose jobs with secrets are each under a protected environment with required reviewers (the only approval it credits, ORC-283).
 
-- Reads `.github/workflows`, `GET /repos/{owner}/{repo}/environments` and the default branch's protection with the GitHub App: no `gh` fallback.
+- Reads `.github/workflows`, `GET /repos/{owner}/{repo}/environments` and the default branch's protection with the GitHub App.
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
 - `--json`: machine report (`host`, `branchProtection`, workflows with their triggers, secrets yes/no, environments and verdict; `accepted` false on any refusal).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FREEZE_CHECK } from '../../src/checks/freeze.js';
 import { HUMAN_COMMITS_CHECK, type CleanVerifyRequest } from '../../src/core/clean-verify.js';
 import type { VerifyFailure } from '../../src/core/types.js';
-import { PrPoller } from '../../src/adapters/forge/pr-poller.js';
+import { GithubReconciler } from '../../src/adapters/forge/github-reconcile.js';
 import { createHarness } from '../helpers/harness.js';
 import { BRANCH, githubDelivery, githubIngest, pushBody, sha } from '../helpers/github-webhook.js';
 
@@ -142,7 +142,7 @@ describe('a human push on the agent branch (ORC-159)', () => {
  */
 describe('a human push caught up by the GitHub reconciliation (ORC-281)', () => {
   const reconcile = async (h: Harness) => {
-    await new PrPoller({ store: h.store, forge: h.forge, projects: [h.project], submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} }).pollOnce('p');
+    await new GithubReconciler({ store: h.store, forge: h.forge, projects: [h.project], submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} }).once('p');
     await h.orch.drained();
   };
   const humanPushEvents = async (h: Harness) => (await h.store.recentEvents(100, 'REL-1')).filter((e) => e.type === 'push.human');

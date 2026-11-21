@@ -1,15 +1,13 @@
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { GhCliForge } from '../adapters/forge/gh-cli.js';
-import { GitHubAppForge } from '../adapters/forge/github-app.js';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError } from '../config/factory-yml.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
-import { resolveGithubApp } from '../config/github-app.js';
 import { effectiveInstance, homePaths } from '../config/instance.js';
 import { BASELINE_DAYS, BASELINE_MEASURES, DAY_MS, baselinePeriod, computeBaseline, type BaselineMeasure, type BaselineValue, type CompletedIssue, type MergedPr } from '../core/baseline.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
+import { cliGithubForge } from './github.js';
 import { cliLinearTracker } from './linear.js';
 
 export const BASELINE_USAGE = `Usage: factory baseline <project> --since <YYYY-MM-DD> [--replace]
@@ -110,15 +108,12 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     console.log(tracker);
     return 1;
   }
-  // The forge the daemon would use: the GitHub App when configured, otherwise the gh CLI.
-  let githubApp;
-  try {
-    githubApp = resolveGithubApp(instance);
-  } catch (err) {
-    console.log((err as Error).message);
+  // The forge the daemon uses: the GitHub App, without which nothing is read on GitHub (ORC-181).
+  const forge = cliGithubForge(home, yml, 'baseline');
+  if (typeof forge === 'string') {
+    console.log(forge);
     return 1;
   }
-  const forge = githubApp ? new GitHubAppForge(githubApp) : new GhCliForge();
   // The daemon migrates the schema; this only writes rows.
   const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {

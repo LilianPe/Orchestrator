@@ -49,7 +49,7 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'flaky') return runFlakyCommand(factoryHome(), process.argv.slice(3));
   // Its own options; Linear, GitHub and the store, no running instance needed.
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
-  // Its own options, on the store and the projects; GitHub through gh, no running instance needed (ORC-231).
+  // Its own options, on the store and the projects; GitHub through the App, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
   // Its own option, `--dev` (ORC-411): a Smee channel without a public URL.
   if (process.argv[2] === 'init') return runInitCommand(process.argv.slice(3));

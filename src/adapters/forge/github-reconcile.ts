@@ -8,16 +8,17 @@ import type { Store } from "../../store/types.js";
 import { checksEventId, prEventId, pushEventId, UNKNOWN_PUSHER } from "./github-webhook.js";
 import type { Forge, PrInfo } from "./types.js";
 
-export class PrPoller {
-  private handle: NodeJS.Timeout | undefined;
-  private polling: Promise<void> | undefined;
-
+/**
+ * The GitHub half of the reconciliation (ORC-185): run with Linear's, every 5 minutes, by its timer in the store. It reads each
+ * ticket's PR on the forge and writes what the webhooks may have lost (ORC-134), under their ids, so the inbox keeps a fact once.
+ */
+export class GithubReconciler {
   constructor(
     private d: {
       store: Store;
       forge: Forge;
       projects: ProjectRuntime[];
-      /** Writes the event to the inbox; awaited, so a failed write is reported and retried at the next poll. */
+      /** Writes the event to the inbox; awaited, so a failed write is reported and retried at the next pass. */
       submit: (e: FactoryEvent) => unknown;
       clock: Clock;
       log: (m: string) => void;
@@ -25,21 +26,21 @@ export class PrPoller {
   ) {}
 
   /** One pass, over every project's tickets, or `projectId`'s only (its reconciliation, ORC-185). */
-  async pollOnce(projectId?: string): Promise<void> {
+  async once(projectId?: string): Promise<void> {
     for (const t of await this.d.store.listTickets()) {
       if (projectId !== undefined && t.projectId !== projectId) continue;
       try {
-        await this.pollTicket(t);
+        await this.ticket(t);
       } catch (err) {
-        this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`);
+        this.d.log(`github reconcile ${t.ticketId}: ${(err as Error).message}`);
       }
     }
   }
 
-  private async pollTicket(t: TicketState): Promise<void> {
+  private async ticket(t: TicketState): Promise<void> {
     {
       if (!t.branch) return;
-      // Done in Linear is not merged: Linear may move the ticket before a poll sees the merge, and only
+      // Done in Linear is not merged: Linear may move the ticket before a pass sees the merge, and only
       // pr.merged marks it delivered (I8 b). A done ticket with a known PR is watched until that PR is seen
       // merged or closed (its number kept in `finalKey`, so a new PR is watched again).
       const finalKey = `pr-final:${t.projectId}:${t.ticketId}`;
@@ -51,7 +52,7 @@ export class PrPoller {
       try {
         pr = await this.d.forge.findPr(project.repoPath, t.branch);
       } catch (err) {
-        this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`);
+        this.d.log(`github reconcile ${t.ticketId}: ${(err as Error).message}`);
         return;
       }
       if (!pr) return;
@@ -79,12 +80,12 @@ export class PrPoller {
       }
       if (done) return;
       // A failed judgement of the head holds back no CI verdict: it is tried again at the next pass.
-      await this.lostPush(t, pr, at).catch((err) => this.d.log(`pr poll ${t.ticketId}: ${(err as Error).message}`));
+      await this.lostPush(t, pr, at).catch((err) => this.d.log(`github reconcile ${t.ticketId}: ${(err as Error).message}`));
       const metaKey = `checks:${t.projectId}:${t.ticketId}`;
       if (pr.checks === "none") return;
       const last = await this.d.store.getMeta(metaKey);
       if (pr.checks !== last) {
-        // Per head SHA, as the GitHub webhook names it (ORC-134): the poll and the webhook report the same verdict once.
+        // Per head SHA, as the GitHub webhook names it (ORC-134): the reconciliation and the webhook report the same verdict once.
         const id = checksEventId(t.ticketId, pr.number, pr.checks, pr.headSha ?? String(at));
         if (pr.checks === "fail")
           await this.d.submit({
@@ -140,21 +141,5 @@ export class PrPoller {
       // The PR names no pusher; `before`, the head last known, so that only the commits since are the human's (ORC-338).
       payload: { branch: pr.branch, sha: head, author: UNKNOWN_PUSHER, before: t.humanHead ?? published },
     });
-  }
-
-  start(intervalMs = 30_000): void {
-    if (this.handle) clearInterval(this.handle);
-    this.handle = setInterval(() => {
-      this.polling ??= this.pollOnce()
-        .catch((e: Error) => this.d.log(`pr poll: ${e.message}`))
-        .finally(() => (this.polling = undefined));
-    }, intervalMs);
-  }
-
-  /** No poll starts after it; resolves once the poll under way, if any, has finished. */
-  async stop(): Promise<void> {
-    if (this.handle) clearInterval(this.handle);
-    this.handle = undefined;
-    await this.polling;
   }
 }

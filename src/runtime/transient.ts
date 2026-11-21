@@ -14,7 +14,7 @@ import { LinearApiError } from '../adapters/tracker/linear/api.js';
  *   `08` (connection), `53` (resources), `57P01`–`57P03` (server shutting down or starting), a serialization failure or
  *   a deadlock (`40001`, `40P01`); and `pg`'s own messages for a connection lost or not obtained in time.
  * - **SQLite** (`node:sqlite`): a busy or locked database (`errcode` 5 or 6).
- * - **git and gh** (`execFailure`, exec.ts, and `fetchOrigin`'s `cause`): stderr naming the network or a 5xx.
+ * - **git** (`execFailure`, exec.ts, and `fetchOrigin`'s `cause`): stderr naming the network or a 5xx.
  *
  * Everything else is permanent: a 4xx, a refusal, a bug, a closed pool (this process shutting down). The causes are
  * read down the chain (`cause`), so a wrapper (`RetryableStart`, drizzle) keeps what it wraps.
@@ -34,9 +34,9 @@ const UNDICI_TRANSIENT = new Set(['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TI
 const PG_TRANSIENT = /^(08|53)|^57P0[123]$|^40001$|^40P01$/;
 /** `pg` and `pg-pool`: a connection lost, or none obtained in time. "Client was closed" and "Cannot use a pool after calling end" are this process's own shutdown: not transient. */
 const PG_MESSAGES = /^(Connection terminated unexpectedly|Connection terminated due to connection timeout|timeout exceeded when trying to connect|Client has encountered a connection error and is not queryable)$/;
-/** git's and gh's stderr when the forge cannot be reached, or answers a 5xx. */
+/** git's stderr when the forge cannot be reached, or answers a 5xx. */
 const EXEC_NETWORK =
-  /^(git|gh) .*(Could not resolve host|Failed to connect to|Connection (refused|reset|timed out)|Operation timed out|ssh: connect to host|early EOF|RPC failed|The requested URL returned error: 5\d\d|HTTP 5\d\d|unexpected disconnect|error connecting to)/s;
+  /^git .*(Could not resolve host|Failed to connect to|Connection (refused|reset|timed out)|Operation timed out|ssh: connect to host|early EOF|RPC failed|The requested URL returned error: 5\d\d|HTTP 5\d\d|unexpected disconnect)/s;
 
 function transientHere(e: unknown): boolean {
   if (e instanceof GitHubApiError) return e.rateLimited || retryableStatus(e.status);

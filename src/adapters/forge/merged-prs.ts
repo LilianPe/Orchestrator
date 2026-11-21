@@ -2,7 +2,7 @@ import type { MergedPr } from '../../core/baseline.js';
 import { allNodes, isConnection, isRecord, PAGE_INFO, type Connection } from '../graphql-pages.js';
 import type { GraphQl } from './review-threads.js';
 
-/** The PRs a search finds, a page at a time, each with how many reviews asked changes of it (named `q`: `gh api graphql` takes `query` for the document). */
+/** The PRs a search finds, a page at a time, each with how many reviews asked changes of it. */
 export const MERGED_PRS_QUERY = `query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) { issueCount ${PAGE_INFO} nodes {
     ... on PullRequest { url title headRefName mergedAt reviews(states: CHANGES_REQUESTED) { totalCount } } } } }`;

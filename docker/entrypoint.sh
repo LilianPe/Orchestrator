@@ -1,5 +1,5 @@
 #!/bin/sh
-# Container entrypoint: lets the daemon's git read over HTTPS with GH_TOKEN, then runs the command (factory up by default).
+# Container entrypoint: checks the engine is rootless, puts the install where the engine sees it, then runs the command (factory up by default).
 set -e
 # Whoever holds this engine's socket holds what the engine holds: on a rootful engine, root on the host.
 if [ -n "$FACTORY_CONTAINER_CLI" ] && [ "$FACTORY_ALLOW_ROOTFUL_ENGINE" != "1" ]; then
@@ -25,9 +25,6 @@ if [ -n "$FACTORY_INSTALL_DIR" ]; then
     mv "$target.tmp" "$target"
   fi
   cd "$target"
-fi
-if [ -n "$GH_TOKEN" ]; then
-  gh auth setup-git
 fi
 if [ -z "$ANTHROPIC_API_KEY$CLAUDE_CODE_OAUTH_TOKEN$CLAUDE_TOKEN_1$CLAUDE_TOKEN_2" ]; then
   echo "Attention : aucune authentification de Claude Code (ANTHROPIC_API_KEY, CLAUDE_TOKEN_1...) : les runs échoueront." >&2

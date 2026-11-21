@@ -14,21 +14,21 @@ export function verifyGithubSignature(raw: string, header: string | undefined, s
 }
 
 /**
- * Id of a fact on a ticket's PR: the webhook and `PrPoller` name the same fact the same way, so the
+ * Id of a fact on a ticket's PR: the webhook and `GithubReconciler` name the same fact the same way, so the
  * inbox keeps it once whichever reports it first (ORC-134).
  */
 export function prEventId(ticketId: string, prNumber: number, fact: 'opened' | 'merged' | 'closed'): string {
   return `pr:${ticketId}:${prNumber}:${fact}`;
 }
 
-/** Id of a checks verdict on a PR's head, shared by the webhook and `PrPoller` as `prEventId` is. */
+/** Id of a checks verdict on a PR's head, shared by the webhook and `GithubReconciler` as `prEventId` is. */
 export function checksEventId(ticketId: string, prNumber: number, verdict: PrInfo['checks'], head: string): string {
   return `pr:${ticketId}:${prNumber}:checks:${verdict}:${head}`;
 }
 
 export interface GithubMapContext {
   /**
-   * The ticket the factory tracks on `branch` of repository `repo` (`owner/name`): matched as `PrPoller`
+   * The ticket the factory tracks on `branch` of repository `repo` (`owner/name`): matched as `GithubReconciler`
    * matches it (the ticket's branch), within the project whose repository sent the webhook.
    */
   ticketForBranch(repo: string, branch: string): Promise<TicketState | undefined>;
@@ -56,7 +56,7 @@ function prPayload(pr: any): PrPayload {
   return { number: pr.number, url: pr.html_url, branch: pr.head.ref };
 }
 
-/** `pr.opened` first when the ticket does not know this PR yet, as `PrPoller` does. */
+/** `pr.opened` first when the ticket does not know this PR yet, as `GithubReconciler` does. */
 function opened(t: TicketState, payload: PrPayload): Draft[] {
   return t.prNumber === payload.number ? [] : [{ id: prEventId(t.ticketId, payload.number, 'opened'), type: 'pr.opened', payload }];
 }
@@ -73,7 +73,7 @@ function pullRequest(body: any, t: TicketState): Draft[] {
   }
   const out = opened(t, payload);
   if (body.action === 'closed') {
-    // Per closing, so that a PR reopened then closed again is cancelled again; `PrPoller` keeps `:closed`.
+    // Per closing, so that a PR reopened then closed again is cancelled again; `GithubReconciler` keeps `:closed`.
     // The merge commit and the head merged, what a revert on the default branch names, and when GitHub merged it (ORC-278).
     const mergedAt = Date.parse(pr.merged_at);
     const shas = {
@@ -111,7 +111,7 @@ async function checkedPr(repo: string, check: any, ctx: GithubMapContext): Promi
 
 /**
  * A completed check run or suite. Its verdict is the PR's as the forge reads all its checks on that head
- * (as `PrPoller` reads it): one green suite is not a green PR, and a cancelled run may have a newer
+ * (as `GithubReconciler` reads it): one green suite is not a green PR, and a cancelled run may have a newer
  * attempt. Red does not wait on GitHub, though: when the forge does not answer, the failed check is
  * reported alone.
  */
@@ -377,7 +377,7 @@ async function partials(name: string, body: any, ctx: GithubMapContext): Promise
 /**
  * Events of a GitHub webhook, named by `X-GitHub-Event` (ORC-134). Ids come from the signed body (PR
  * number, head SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does
- * not cover: a replayed body, or the same fact reported by `PrPoller`, has the id the inbox already holds.
+ * not cover: a replayed body, or the same fact reported by `GithubReconciler`, has the id the inbox already holds.
  * Only branches of tickets the factory tracks, in their project's repository, are read; anything else,
  * a body of another shape included, maps to nothing.
  */

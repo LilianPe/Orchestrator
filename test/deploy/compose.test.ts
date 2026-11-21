@@ -113,8 +113,9 @@ describe('compose.yaml (ORC-203)', () => {
     expect(proxy.networks ?? ['default']).not.toContain('back');
   });
 
-  it('keeps GH_TOKEN for factoryd until ORC-181', () => {
-    expect(factoryd.environment!['GH_TOKEN']).toMatch(/^\$\{GH_TOKEN:\?/);
+  it('asks no GH_TOKEN: the daemon reads and publishes by its GitHub App alone (ORC-181)', () => {
+    expect(read('compose.yaml')).not.toContain('GH_TOKEN');
+    expect(read('docker/entrypoint.sh')).not.toMatch(/\bgh\b|GH_TOKEN/);
   });
 
   // ORC-399: factoryd listens beyond its loopback, so its dashboard is reached through a GitHub sign-in; no shared password.
@@ -145,9 +146,9 @@ describe('the images (ORC-203)', () => {
     expect(read('.dockerignore').split(/\r?\n/)).toEqual(expect.arrayContaining(['.env', '.env.*', 'install', 'egress-ca']));
   });
 
-  it('runs no agent in the daemon image, which keeps gh until ORC-181 and gains the engine CLI', () => {
+  it('runs no agent in the daemon image, which has no gh (ORC-181) and gains the engine CLI', () => {
     expect(daemon).not.toContain('claude-code');
-    expect(daemon).toMatch(/install -y[^\n]* gh\b/);
+    expect(daemon).not.toMatch(/\bgh\b|cli\.github\.com/);
     expect(daemon).toMatch(/docker-\$\{?DOCKER_CLI_VERSION\}?\.tgz/);
   });
 

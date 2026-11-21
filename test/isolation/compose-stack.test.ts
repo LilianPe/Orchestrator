@@ -41,7 +41,6 @@ const env = {
   FACTORY_SECRETS_KEY: 'recette-secrets-key-recette-secrets-key-0123',
   POSTGRES_PASSWORD: 'recettepostgres',
   ANTHROPIC_API_KEY: 'sk-recette-unused',
-  GH_TOKEN: 'recette-unused',
 };
 
 const compose = (...args: string[]) =>

@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PrPoller } from '../../src/adapters/forge/pr-poller.js';
+import { GithubReconciler } from '../../src/adapters/forge/github-reconcile.js';
 import { measureTicket } from '../../src/core/measures.js';
 import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { createHarness } from '../helpers/harness.js';
@@ -122,13 +122,13 @@ describe('GitHub webhooks', () => {
     expect((await h.ticket()).prState).toBeUndefined();
   });
 
-  it('reports a verdict once whether the webhook or the poll sees it first', async () => {
+  it('reports a verdict once whether the webhook or the reconciliation sees it first', async () => {
     const h = createHarness();
     await delegated(h);
     await post(h, 'check_run', checkRunBody('failure'));
     h.forge.setPr(BRANCH, { number: 3, url: 'https://github.com/acme/app/pull/3', state: 'OPEN', headSha: 'head1', checks: 'fail', failedChecks: ['test', 'lint'] });
-    const poller = new PrPoller({ store: h.store, forge: h.forge, projects: [h.project], submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} });
-    await poller.pollOnce();
+    const reconciler = new GithubReconciler({ store: h.store, forge: h.forge, projects: [h.project], submit: (e) => h.orch.accept(e), clock: h.clock, log: () => {} });
+    await reconciler.once();
     await h.orch.drained();
     expect(await events(h, 'pr.checks_failed')).toHaveLength(1);
     expect(h.runner.requests).toHaveLength(2);
@@ -139,7 +139,7 @@ describe('GitHub webhooks', () => {
     expect(await events(h, 'pr.checks_passed')).toEqual([]);
     h.forge.setPr(BRANCH, { number: 3, url: 'https://github.com/acme/app/pull/3', state: 'OPEN', headSha: 'head2', checks: 'pass', failedChecks: [] });
     await post(h, 'check_run', checkRunBody('success', { head: 'head2', name: 'lint' }));
-    await poller.pollOnce();
+    await reconciler.once();
     await h.orch.drained();
     expect((await events(h, 'pr.checks_passed')).map((e) => e.id)).toEqual(['pr:REL-1:3:checks:pass:head2']);
   });

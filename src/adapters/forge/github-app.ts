@@ -2,12 +2,12 @@ import { createPrivateKey, createSign } from 'node:crypto';
 import { execCmd, mustExec, type Exec } from '../exec.js';
 import type { MergedPr } from '../../core/baseline.js';
 import type { FeedbackItem } from '../../core/types.js';
-import { excerpt, summarizeChecks, toRepoPermission, type CheckSummary } from './gh-cli.js';
+import { excerpt, summarizeChecks, toRepoPermission, type CheckSummary } from './checks.js';
 import { openPullRequests, recentRepoBranches, repoBranches } from './active-work.js';
 import { mergedPullRequests } from './merged-prs.js';
 import { unresolvedReviewFeedback, type GraphQl } from './review-threads.js';
 import type { RepoPermission, RepoPermissions } from '../roles/types.js';
-import { ARTIFACTS_BRANCH, ArtifactsRefused, isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type ArtifactHost, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type HostedFile, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type ReviewRequest } from './types.js';
+import { ARTIFACTS_BRANCH, ArtifactsRefused, isFactoryCheck, NoCommitsBetween, ReviewLinesRefused, type ArtifactHost, type CheckRunRequest, type Forge, type ForgeBranch, type ForgeWriter, type GitAccess, type HostedFile, type MergeResult, type OpenPr, type PrInfo, type PrRequest, type PullRequestView, type ReviewRequest } from './types.js';
 
 export interface GitHubRepoRef {
   owner: string;
@@ -55,6 +55,10 @@ interface PullRequestDto {
   state: 'open' | 'closed';
   merged_at: string | null;
   merge_commit_sha?: string | null;
+  /** Its author; null when GitHub no longer has the account. */
+  user?: { login: string } | null;
+  /** How many commits it has, as `GET /pulls/{n}` counts them. */
+  commits?: number;
   head: { ref: string; sha: string };
   base?: { ref: string; sha: string };
 }
@@ -107,7 +111,7 @@ export function createAppJwt(appId: string | number, privateKey: string, nowMs =
   return `${header}.${payload}.${signature}`;
 }
 
-/** Parses HTTPS and SSH GitHub remotes into owner/name, without calling gh. */
+/** Parses HTTPS and SSH GitHub remotes into owner/name. */
 export function parseGitHubRemote(remote: string): GitHubRepoRef | undefined {
   const value = remote.trim();
   let path: string | undefined;
@@ -184,6 +188,17 @@ const isWorkflow = (w: unknown): w is WorkflowDto =>
 const isStatus = (s: unknown): s is StatusDto => isRecord(s) && typeof s.context === 'string' && typeof s.state === 'string';
 
 const isPulls = (v: unknown): v is PullRequestDto[] => Array.isArray(v) && v.every(isPull);
+
+/** A PR as `pullRequest` reads it: its author's login too, when GitHub still has the account. */
+const isAuthoredPull = (p: unknown): p is PullRequestDto =>
+  isPull(p) && (p.user == null || (isRecord(p.user) && typeof p.user.login === 'string')) && (p.commits === undefined || typeof p.commits === 'number');
+
+/** A commit message's subject as git's `%s` gives it, which `cloneAtStart` compares with: its first paragraph, on one line. */
+const gitSubject = (message: string): string =>
+  message.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/)[0]!.split('\n').map((l) => l.trim()).join(' ');
+
+/** A commit of a PR's list: its message. */
+const isPullCommit = (c: unknown): c is { commit: { message: string } } => isRecord(c) && isRecord(c.commit) && typeof c.commit.message === 'string';
 
 /** A PR as `markPrReady` reads it: its draft state, and the node id the mutation needs when it is a draft. */
 const isDraftState = (p: unknown): p is PullRequestDto & { draft: boolean } =>
@@ -700,6 +715,29 @@ export class GitHubAppForge extends GitHubAppAuth implements Forge, ForgeWriter,
   async mergedPrs(repoPath: string, since: number, until: number): Promise<MergedPr[]> {
     const { owner, name, gql } = await this.graphQl(repoPath);
     return mergedPullRequests(gql, owner, name, since, until);
+  }
+
+  /**
+   * A PR by its number, as `factory ghost start` compares with it (ORC-181, in place of `gh pr view`): its author, its merge
+   * commit when it is merged (never the test merge GitHub names for an open one), its commits' headlines oldest first.
+   */
+  async pullRequest(repoPath: string, number: number): Promise<PullRequestView> {
+    const repo = await this.repo(repoPath);
+    const token = await this.installationToken(repo);
+    const path = `${repoApi(repo)}/pulls/${number}`;
+    const [pr, commits] = await Promise.all([
+      this.read('GET', path, token, isAuthoredPull, 'a pull request'),
+      this.allPages(`${path}/commits`, null, 'a list of commits', isPullCommit, token),
+    ]);
+    // GitHub lists 250 commits at most: a longer PR's list is never read as complete.
+    if (pr.commits !== undefined && commits.length !== pr.commits) throw new Error(`${apiLabel('GET', `${path}/commits`)}: ${commits.length} commits of ${pr.commits}, never read as complete`);
+    return {
+      number: pr.number,
+      url: pr.html_url,
+      author: pr.user?.login ?? '',
+      ...(pr.merged_at && pr.merge_commit_sha ? { mergeSha: pr.merge_commit_sha } : {}),
+      commits: commits.map((c) => gitSubject(c.commit.message)),
+    };
   }
 
   /** GraphQL with the installation token, each answer checked before it is read (ORC-273). */
