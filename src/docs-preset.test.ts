@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -25,5 +25,11 @@ describe('docs/preset.md', () => {
 
   it('documents no `when` grammar any more: the rules are gone (ORC-392)', () => {
     expect(doc).not.toMatch(/`when` grammar|whenSrc/);
+  });
+
+  it('names no key of the removed workflow.yml limits in any doc but the decisions and the transition log: the bounds are in the preset (ORC-177)', () => {
+    const docs = join(import.meta.dirname, '../docs');
+    const stale = readdirSync(docs).filter((f) => f.endsWith('.md') && f !== 'transition.md' && /`(limits\.(per_run|verify_attempts|ci_fix_attempts|human_review_rounds)|jobs\.\*\.limits)/.test(readFileSync(join(docs, f), 'utf8')));
+    expect(stale).toEqual([]);
   });
 });
