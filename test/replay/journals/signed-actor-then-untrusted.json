@@ -6333,6 +6333,7 @@
             "input": "thread",
             "inputText": "pourquoi trier par date ?",
             "linearSessionId": "as-bot",
+            "relaunches": false,
             "sensitivePaths": [
               ".github/**",
               ".factory/**",
