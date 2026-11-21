@@ -10,7 +10,7 @@ import { UnreadableAnswerError, type HttpClient } from '../adapters/forge/github
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_OPTIONAL_PERMISSIONS, GITHUB_APP_PERMISSIONS } from './init.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import { effectiveInstance, relayWarnings, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
 import type { Workflow } from '../core/workflow.js';
 import { isFantome } from '../presets/fantome.js';
 import { missingStatusWarning, statesOf } from '../presets/workflow.js';
@@ -226,15 +226,18 @@ export interface DoctorOptions {
   serverSecrets?: SecretReport[];
   /** The projects whose spec gate no validator can pass (ORC-421), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says them first. */
   validatorWarnings?: string[];
+  /** The Smee relay of a config.yaml without the development mode's marker (ORC-446), for the JSON report; never part of the verdict (its refusals stop doctor first, exit 1). In text, `runDoctorCommand` says it first. */
+  relayWarnings?: string[];
 }
 
-type InstanceReport = Pick<DoctorOptions, 'visualProof' | 'serverSecrets' | 'validatorWarnings'>;
+type InstanceReport = Pick<DoctorOptions, 'visualProof' | 'serverSecrets' | 'validatorWarnings' | 'relayWarnings'>;
 
-/** The visual proof (ORC-404), the server secrets (ORC-398) and the validators (ORC-421) in the JSON report. */
+/** The visual proof (ORC-404), the server secrets (ORC-398), the validators (ORC-421) and the Smee relay (ORC-446) in the JSON report. */
 const instanceReportOf = (o: InstanceReport) => ({
   ...(o.visualProof ? { visualProof: { available: !!o.visualProof.image, detail: o.visualProof.detail } } : {}),
   ...(o.serverSecrets ? { serverSecrets: o.serverSecrets } : {}),
   ...(o.validatorWarnings?.length ? { validatorWarnings: o.validatorWarnings } : {}),
+  ...(o.relayWarnings?.length ? { relayWarnings: o.relayWarnings } : {}),
 });
 
 export interface WorkflowReport {
@@ -962,11 +965,15 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
   let validators: string[];
+  let relay: string[];
   let projects;
   let states;
   try {
     const { yml } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
     const instance = effectiveInstance(options.home, yml);
+    // The Smee relay as the daemon's start checks it (ORC-446): refused, as `factory up` refuses it, or a warning.
+    relay = relayWarnings(instance);
+    if (!options.json) for (const line of relay) out(line);
     projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
@@ -993,7 +1000,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
-  const report = { repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
+  const report = { repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, relayWarnings: relay, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
   let config: RepoConfig;
   try {
     config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });

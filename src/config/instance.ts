@@ -210,6 +210,25 @@ export function validatorWarnings(projects: readonly Pick<ProjectConfig, 'id' | 
 }
 
 /**
+ * The Smee relay in the development mode alone (ORC-444), the `dev: true` that `factory init --dev` writes, for `factory doctor` and
+ * the daemon's start (ORC-446): a public channel, for a workstation, never a server. `dev: false` is refused, as is `dev: true` beside a
+ * `publicUrl`, a server's or a tunnel's, which brings Linear's webhooks already; a config.yaml written before the marker, with none, is
+ * a warning.
+ */
+export function relayWarnings(instance: Pick<InstanceConfig, 'relay' | 'dev' | 'publicUrl'>): string[] {
+  if (instance.relay.kind !== 'smee') return [];
+  const fix = instance.publicUrl
+    ? `publicUrl: ${instance.publicUrl} brings Linear's webhooks already, set relay: { kind: none }`
+    : 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev (it writes dev: true)';
+  if (instance.dev) {
+    if (instance.publicUrl) throw new Error(`relay: { kind: smee } in config.yaml beside ${fix}, or remove publicUrl on a workstation.`);
+    return [];
+  }
+  if (instance.dev === false) throw new Error(`relay: { kind: smee } in config.yaml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
+  return [`Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: the daemon starts it as before that marker; ${fix}.`];
+}
+
+/**
  * Linear as the daemon uses it: the OAuth tokens of `secrets.json`, its static values (client id and secret,
  * webhook secret) taken from `factory.yml` when declared there (ORC-209). Read only: tokens go through `saveLinearTokens`.
  */
