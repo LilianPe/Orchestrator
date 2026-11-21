@@ -293,10 +293,11 @@ export async function runInit(d: InitDeps): Promise<void> {
     : await makeRepoConfig({ exec: d.exec })({ repoPath }, { fetch: false }).then((c) => c.commands, () => undefined);
   for (const warning of testCommandWarnings(commands)) io.print(warning);
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
-  // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
-  if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
 
   saveInstance(d.home, cfg);
+  // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
+  // After config.yaml: the home where SQLite keeps its file is made, and a database that fails loses none of the answers.
+  if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
   if (existsSync(ymlPath)) {
     io.print(`${ymlPath} kept as it is.`);
   } else if (firstSetup) {

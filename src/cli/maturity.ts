@@ -24,8 +24,8 @@ const FRONT_ENDS: readonly [string, string][] = [
 /** Where a front end keeps what it renders, checked in this order: `visual_paths` names those the repository has. */
 const VISUAL_DIRS = ['src/components', 'components', 'app', 'src/app', 'pages', 'src/pages', 'web/src'];
 
-/** The packages that mean a Postgres, in Node's dependencies and Python's. */
-const POSTGRES_PACKAGES = ['pg', 'postgres', '@prisma/client', 'drizzle-orm', 'psycopg', 'psycopg2', 'psycopg2-binary', 'asyncpg'];
+/** The drivers that mean a Postgres, in Node's dependencies and Python's: not an ORM, which speaks SQLite or MySQL as well. */
+const POSTGRES_PACKAGES = ['pg', 'postgres', 'psycopg', 'psycopg2', 'psycopg2-binary', 'asyncpg'];
 
 const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 
@@ -33,7 +33,7 @@ const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml
 const SKIPPED = new Set(['node_modules', 'dist', 'build', 'coverage', '__pycache__', 'venv']);
 
 const SOURCE = /\.(?:[cm]?[jt]sx?|py)$/;
-const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py)$/;
+const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py|^tests\.py)$/;
 /** A walk stops past this many entries: init stays quick on a large repository, and says so. */
 const WALK_LIMIT = 20_000;
 
@@ -48,7 +48,7 @@ function main(run: DryRun | undefined): string {
   const ended = `${new Date(run.endedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
   const of = `the dry run of ${run.sha.slice(0, 12)} on ${ended}`;
   if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
-  const broke = [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
+  const broke = [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ') || 'no break recorded';
   return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
 }
 

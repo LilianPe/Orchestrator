@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
@@ -10,7 +10,7 @@ import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConf
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
 import { SqliteStore } from '../store/sqlite-store.js';
-import { GITHUB_APP_PERMISSIONS, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitIO } from './init.js';
+import { GITHUB_APP_PERMISSIONS, instanceCards, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitIO } from './init.js';
 import type { MaturityReport } from './maturity.js';
 import { runValidateCommand } from './validate.js';
 
@@ -268,6 +268,25 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     const { out } = await initCards(NPM, { store, repo });
     expect(out).toContain(`  [to approve] main green or red:\n    red: the dry run of aaaaaaaaaaaa on 2026-11-20 14:03 UTC: failure in \`npm test\`\n    fix it on main, then factory dry-run ${projectId}`);
     expect((await store.maturityCards(projectId)).find((c) => c.key === 'main')?.value).toMatch(/^red: /);
+  });
+
+  it("a first init, FACTORY_HOME not made yet, stores the cards in the instance's SQLite", async () => {
+    vi.stubEnv('FACTORY_DATABASE_URL', '');
+    vi.stubEnv('NODE_ENV', 'test');
+    try {
+      const home = join(mkdtempSync(join(tmpdir(), 'factory-init-')), 'home');
+      const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+      for (const [path, content] of Object.entries(NPM)) writeFileSync(join(repo, path), content);
+      const io = scriptedIO(['REL']);
+      await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo), storeCards: instanceCards(home) });
+      const out = io.printed.join('\n');
+      expect(out).not.toContain('Cards not stored');
+      const store = new SqliteStore(join(home, 'factory.db'));
+      expect((await store.maturityCards()).map((c) => c.key)).toContain('main');
+      await store.close();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('a store that cannot be written does not fail init: the cards are printed, and said not stored', async () => {

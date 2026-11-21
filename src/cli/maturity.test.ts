@@ -104,6 +104,19 @@ describe('the maturity report (ORC-410)', () => {
   });
 });
 
+describe('the maturity report: what it must not mistake (ORC-410)', () => {
+  it('an ORM that also speaks SQLite or MySQL is no Postgres alone; its driver is', () => {
+    const pkg = (deps: Record<string, string>) => repoOf({ 'package.json': JSON.stringify({ dependencies: deps }) });
+    expect(valueOf(pkg({ 'drizzle-orm': '1', 'better-sqlite3': '1' }))['services']).toBe('none');
+    expect(valueOf(pkg({ '@prisma/client': '1' }))['services']).toBe('none');
+    expect(valueOf(pkg({ 'drizzle-orm': '1', postgres: '3' }))['services']).toBe('postgres (dependency postgres)');
+  });
+
+  it("Django's tests.py tests its area", () => {
+    expect(valueOf(repoOf({ 'shop/models.py': '', 'shop/tests.py': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
+});
+
 describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
   const run = (o: Partial<DryRun>): DryRun => ({
     id: 'dry-1',
@@ -122,6 +135,10 @@ describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
 
   it('green: the commit and when it ended', () => {
     expect(mainOf(run({}))).toBe('green: the dry run of 0123456789ab on 2026-11-20 14:03 UTC (npm test)');
+  });
+
+  it('red with no break recorded says so', () => {
+    expect(mainOf(run({ ok: false }))).toBe('red: the dry run of 0123456789ab on 2026-11-20 14:03 UTC: no break recorded\nfix it on main, then factory dry-run acme');
   });
 
   it('red: what breaks, each kind and command once, and how to run it again', () => {
