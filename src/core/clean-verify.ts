@@ -19,7 +19,7 @@ import { addedLines, isRepoRuleFile, REPO_RULES_DIR, REPO_RULES_TARGET, semgrepA
 import { isTestSpec } from '../checks/test-files.js';
 import { probeStart } from '../checks/preview-probe.js';
 import { brief, decideVisualProof, judgeShots, type CaptureGate, type Judged, type VisualProof } from '../checks/visual-proof.js';
-import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig } from '../config/repo-config.js';
+import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
 import { BUNDLE_TARGET, extractWork, HARDENING, hostGitEnv, IN_SANDBOX, IN_SANDBOX_ENV } from '../publish/extract.js';
 import { recipeStart, type PreviewRecipe } from './agent-output.js';
 import { classifyBranch, type ClassifiedDiff } from './diff-class.js';
@@ -211,7 +211,7 @@ export const runCleanVerify: CleanVerifier = async (req) => {
     const config = await baseConfig(git);
     const declared = Object.values(config.commands);
     const commands = declared.length ? declared : req.commands;
-    const setup = config.setup ? [config.setup] : req.setup;
+    const setup = setupOf(config, req.setup);
     const env = await req.env(config);
     const from = await forkPoint(git, sha);
     const failures = await checkClone(git, from, sha, req.frozen, req.untrusted && untrustedCheck(req.untrusted, config));

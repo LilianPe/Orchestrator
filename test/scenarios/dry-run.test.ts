@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { DryRun, DryRunRequest } from '../../src/core/dry-run.js';
 import { parseRepoConfig } from '../../src/config/repo-config.js';
 import { createHarness } from '../helpers/harness.js';
@@ -40,6 +40,34 @@ describe('the dry run of a project', () => {
     expect(asked[0]!.sha).toBe('d'.repeat(40));
     expect(await h.store.lastDryRun('p', 'd'.repeat(40))).toMatchObject({ ok: true, target: 'commit' });
     expect(await h.store.lastDryRun('p')).toBeUndefined();
+  });
+
+  it('on the default branch, one at a time: who asks meanwhile gets its result, or with `fresh` a new one once it ended (ORC-409)', async () => {
+    const ends: (() => void)[] = [];
+    let running = 0;
+    const h = createHarness({
+      sandboxed: true,
+      dryRunner: (req) => {
+        running++;
+        expect(running).toBe(1);
+        return new Promise((resolve) => ends.push(() => {
+          running--;
+          resolve({ id: req.runId, projectId: req.projectId, sha: 'c'.repeat(40), target: 'main', ok: true, fingerprint: FINGERPRINT, breaks: [], commands: [], startedAt: 0, endedAt: 0 });
+        }));
+      },
+    });
+    const first = h.orch.dryRun('p');
+    const joined = h.orch.dryRun('p');
+    const fresh = h.orch.dryRun('p', { fresh: true });
+    // Asked before it starts: the same new one.
+    const freshToo = h.orch.dryRun('p', { fresh: true });
+    await vi.waitFor(() => expect(ends).toHaveLength(1));
+    ends[0]!();
+    expect(await joined).toEqual(await first);
+    await vi.waitFor(() => expect(ends).toHaveLength(2));
+    ends[1]!();
+    expect((await fresh).id).not.toBe((await first).id);
+    expect(await freshToo).toEqual(await fresh);
   });
 
   it('without sandboxes, it refuses and records nothing', async () => {

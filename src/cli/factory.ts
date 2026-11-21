@@ -14,7 +14,7 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import { openStore } from '../store/open.js';
 import { join } from 'node:path';
 import { runBaselineCommand } from './baseline.js';
-import { runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
+import { runDryRunCommand, runQueueCommand, runStatusCommand, runStopCommand } from './control.js';
 import { runInit } from './init.js';
 import { cliLinearTracker } from './linear.js';
 import { runDoctorCommand } from './doctor.js';
@@ -35,6 +35,7 @@ const USAGE = `Usage: factory <command>
   status             state of the running instance
   pause | resume     suspend or resume the queue
   stop <ID>          stop a ticket's run
+  dry-run <project>  run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks
   replay <journal>... replay exported journals (bit-for-bit regression, --what-if <preset>, --export <ID>)
   run repair <ID> [replay|skip|force] [<event>]  repair an event set aside (dead letter)
   flaky <project> [add <test> --reason <why> [--frozen] | remove <test>]  the known flaky tests verify marks indicative
@@ -125,6 +126,9 @@ async function main(): Promise<number> {
     case 'stop':
       if (!arg) break;
       return runStopCommand(control, arg);
+    case 'dry-run':
+      if (!arg) break;
+      return runDryRunCommand(control, arg);
     case 'run':
       if (arg === 'repair') return runRepairCommand(home, positionals.slice(2));
       break;
