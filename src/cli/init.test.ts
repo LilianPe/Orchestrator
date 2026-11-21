@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
-import { loadInstance, loadSecrets, saveInstance, saveSecrets } from '../config/instance.js';
+import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConfig } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
 import { GITHUB_APP_PERMISSIONS, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
 import { runValidateCommand } from './validate.js';
@@ -221,11 +221,12 @@ describe('factory init: the command that starts the application, in the same pro
 });
 
 /** A fresh home and repository, and what one `init` run with `answers` printed. */
-async function initOnce(o: { home?: string; repo?: string; answers?: string[]; dev?: boolean; smee?: () => Promise<string> } = {}) {
+async function initOnce(o: { home?: string; repo?: string; answers?: string[]; dev?: boolean; smee?: () => Promise<string>; config?: Partial<InstanceConfig> } = {}) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+  if (o.config) saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {}, ...o.config });
   const repo = o.repo ?? mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   const io = scriptedIO(o.answers ?? ['REL', 'cid', 'csecret', 'whsecret']);
-  await runInit({ io, home, cwd: repo, ...(o.dev ? { dev: true } : {}), createSmee: o.smee ?? (async () => 'https://smee.io/abc'), exec: gitTop(repo) });
+  await runInit({ io, home, cwd: repo, dev: o.dev, createSmee: o.smee ?? (async () => 'https://smee.io/abc'), exec: gitTop(repo) });
   return { home, repo, out: io.printed.join('\n') };
 }
 
@@ -250,10 +251,8 @@ describe('factory init: Smee only for development (ORC-411)', () => {
   });
 
   it('with a public URL, gives its webhook URLs and creates no channel, even with --dev', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    saveInstance(home, { port: 4100, host: '127.0.0.1', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [], limits: {} });
     let created = 0;
-    const { out } = await initOnce({ home, dev: true, smee: async () => (created++, 'https://smee.io/abc') });
+    const { home, out } = await initOnce({ config: { publicUrl: 'https://factory.example.com' }, dev: true, smee: async () => (created++, 'https://smee.io/abc') });
     expect(created).toBe(0);
     expect(out).toContain('https://factory.example.com/webhooks/linear');
     expect(out).toContain('https://factory.example.com/webhooks/github');
@@ -261,9 +260,7 @@ describe('factory init: Smee only for development (ORC-411)', () => {
   });
 
   it('keeps a channel config.yaml already has, without --dev', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'smee', url: 'https://smee.io/old' }, projects: [], limits: {} });
-    const { out } = await initOnce({ home });
+    const { home, out } = await initOnce({ config: { relay: { kind: 'smee', url: 'https://smee.io/old' } } });
     expect(loadInstance(home).relay).toEqual({ kind: 'smee', url: 'https://smee.io/old' });
     expect(out).toContain('https://smee.io/old');
   });
@@ -293,9 +290,7 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
   });
 
   it('with a public URL, the App\'s webhook is optional: its secret is said to add, never written, as an unset variable would stop the daemon', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    saveInstance(home, { port: 4100, host: '127.0.0.1', publicUrl: 'https://factory.example.com', relay: { kind: 'none' }, projects: [], limits: {} });
-    const { out } = await initOnce({ home });
+    const { home, out } = await initOnce({ config: { publicUrl: 'https://factory.example.com' } });
     expect(parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), { GH_APP_ID: '1', GH_APP_KEY: '/k', CLAUDE_CODE_OAUTH_TOKEN: 't' }).github?.webhookSecret).toBeUndefined();
     expect(out).toContain('webhook_secret: env:GH_WEBHOOK_SECRET');
   });
@@ -318,9 +313,7 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
   });
 
   it('leaves the GitHub App of config.yaml in place: no github in the factory.yml it writes, which would replace it', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {}, github: { appId: '7', privateKey: '/k.pem' } });
-    const { out } = await initOnce({ home });
+    const { home, out } = await initOnce({ config: { github: { appId: '7', privateKey: '/k.pem' } } });
     const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
     expect(yml.github).toBeUndefined();
     expect(yml.claude?.active).toBe('main');

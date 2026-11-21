@@ -8,6 +8,7 @@ import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
+import { SONNET } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
 
 export interface InitIO {
@@ -153,31 +154,19 @@ function githubAppSteps(publicUrl: string | undefined, home: string): string {
   ].join('\n');
 }
 
-/** A reference `factory.yml` holds in place of a secret (ORC-209), and what the variable is to hold. */
-interface EnvSecret {
-  name: string;
-  value: string;
-}
-
 /**
  * The `factory.yml` `init` writes on a first setup (ORC-411): every secret an `env:NAME` reference, the budgets `factory
  * validate` accepts for a first run (docs/first-run.md), to tune afterwards. No `github` when config.yaml has its App: the
  * file's would replace it, field by field (`effectiveInstance`). No GitHub webhook secret: the App's webhook is optional, and
  * an unset variable would stop the daemon.
  */
-function factoryYml(withGithub: boolean): { text: string; env: EnvSecret[] } {
-  const env: EnvSecret[] = [
-    ...(withGithub
-      ? [
-          { name: 'GH_APP_ID', value: '<App ID>' },
-          { name: 'GH_APP_KEY', value: '<path of the .pem>' },
-        ]
-      : []),
-    { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: '<token of claude setup-token>' },
-  ];
+function factoryYml(withGithub: boolean): { text: string; env: Record<string, string> } {
+  // Each variable the file references, with what it is to hold: the references and the `export` lines from one list.
+  const env: Record<string, string> = {};
+  const ref = (name: string, holds: string) => ((env[name] = holds), `env:${name}`);
   const yml = {
-    ...(withGithub ? { github: { app_id: 'env:GH_APP_ID', private_key: 'env:GH_APP_KEY' } } : {}),
-    claude: { runtime: 'claude-code', accounts: [{ name: 'main', token: 'env:CLAUDE_CODE_OAUTH_TOKEN' }], active: 'main', default_model: 'claude-sonnet-5-5' },
+    ...(withGithub ? { github: { app_id: ref('GH_APP_ID', '<App ID>'), private_key: ref('GH_APP_KEY', '<path of the .pem>') } } : {}),
+    claude: { runtime: 'claude-code', accounts: [{ name: 'main', token: ref('CLAUDE_CODE_OAUTH_TOKEN', '<token of claude setup-token>') }], active: 'main', default_model: SONNET },
     budgets: { per_step_tokens: 'off', per_ticket_tokens: 5_000_000 },
   };
   return { text: `# Written by factory init: every secret is a reference, read from the daemon's environment.\n${stringify(yml)}`, env };
@@ -224,8 +213,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   const secrets = loadSecrets(d.home);
   const cfg = loadInstance(d.home);
   const ymlPath = join(d.home, 'factory.yml');
-  // A first setup gets its factory.yml; an instance that runs without one keeps running as it does (ORC-411).
-  const firstSetup = cfg.projects.length === 0 && !secrets.linear && !existsSync(ymlPath);
+  // A first setup gets its factory.yml; an instance that runs without one keeps running as it does (ORC-411). Without Linear's
+  // application it never ran.
+  const firstSetup = !secrets.linear;
   const previous = cfg.projects.find((p) => samePath(p.repoPath, repoPath));
   // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
@@ -267,7 +257,7 @@ export async function runInit(d: InitDeps): Promise<void> {
     io.print(
       [
         `Wrote ${ymlPath}: its secrets are references; export them in the shell of \`factory up\` and \`factory doctor\`, which refuse to start without them:`,
-        ...written.env.map((e) => `  export ${e.name}=${e.value}`),
+        ...Object.entries(written.env).map(([name, holds]) => `  export ${name}=${holds}`),
       ].join('\n'),
     );
   }

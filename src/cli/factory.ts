@@ -50,18 +50,15 @@ async function main(): Promise<number> {
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // Its own options, on the store and the projects; GitHub through gh, no running instance needed (ORC-231).
   if (process.argv[2] === 'ghost') return runGhostCommand(factoryHome(), process.argv.slice(3));
+  // Its own option, `--dev` (ORC-411): a Smee channel without a public URL.
+  if (process.argv[2] === 'init') return runInitCommand(process.argv.slice(3));
   // The repository's file, the budgets, max_diff and tools of factory.yml (ORC-216, ORC-381, ORC-383), its secrets left unresolved: no running instance needed.
   if (process.argv[2] === 'validate') return runValidateCommand({ repoPath: process.argv[3] ?? process.cwd(), out: (l) => console.log(l), factoryYml: () => loadFactoryLimits(factoryHome()) });
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' }, dev: { type: 'boolean' } },
+    options: { 'fake-runner': { type: 'boolean' }, json: { type: 'boolean' } },
   });
   const [cmd, arg] = positionals;
-  // `--dev` is init's alone: elsewhere it would be ignored without a word.
-  if (values.dev && cmd !== 'init') {
-    console.log(USAGE);
-    return 1;
-  }
   const home = factoryHome();
   // config.yaml only: factory.yml and its env: secrets are the daemon's, a plain shell may lack them.
   const cfg = loadInstance(home);
@@ -71,22 +68,6 @@ async function main(): Promise<number> {
   const control = { api, ...(process.platform === 'win32' ? {} : { socket: homePaths(home).socket }), out: (l: string) => console.log(l) };
 
   switch (cmd) {
-    case 'init': {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      await runInit({
-        home,
-        cwd: process.cwd(),
-        dev: values.dev,
-        exec: execCmd,
-        createSmee: () => createSmeeChannel(),
-        io: {
-          ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
-          print: (s) => console.log(s),
-        },
-      });
-      rl.close();
-      return 0;
-    }
     case 'doctor':
       return runDoctorCommand({ repoPath: arg ?? process.cwd(), home, json: values.json });
     case 'up': {
@@ -139,6 +120,24 @@ async function main(): Promise<number> {
   }
   console.log(USAGE);
   return 1;
+}
+
+async function runInitCommand(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { dev: { type: 'boolean' } } });
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  await runInit({
+    home: factoryHome(),
+    cwd: process.cwd(),
+    dev: values.dev,
+    exec: execCmd,
+    createSmee: () => createSmeeChannel(),
+    io: {
+      ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
+      print: (s) => console.log(s),
+    },
+  });
+  rl.close();
+  return 0;
 }
 
 main().then(

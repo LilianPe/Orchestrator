@@ -66,7 +66,7 @@ commands:
 
 Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
-On a first setup (no project in `config.yaml`, no Linear values, no `factory.yml`), it then prints the GitHub App's steps (item 4) and writes `FACTORY_HOME/factory.yml`:
+On a first setup (no Linear values yet, no `factory.yml`), it then prints the GitHub App's steps (item 4) and writes `FACTORY_HOME/factory.yml`:
 
 ```text
 GitHub App of Orchestrator (it opens and updates the PRs):
