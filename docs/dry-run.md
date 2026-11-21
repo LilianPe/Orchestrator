@@ -38,8 +38,8 @@ urllib3's `port=3128`) is a breakdown, from npm, curl, git, Go, wget, apt or Mav
 (`HTTPS_PROXY=http://127.0.0.1:3128`) is not. A setup that exited on a variable, or on a service refusing (a connection refused
 or timed out on another port of the loopback, by any client: Node's `connect ECONNREFUSED` or `ETIMEDOUT`, Python's `requests`,
 `psycopg`, `redis-py` or `asyncpg`, Go's `dial tcp`, Prisma's `Can't reach database server`, MySQL's `Can't connect to MySQL server`, its port on the line or not; or libpq's `could not connect to server` with the loopback in its message, as its `Is the server running on host "localhost"` line says it, or libpq's and MySQL's Unix socket that they could not reach, local whatever the host), is recorded red as such,
-past an installer's retry warning. A connection refused by a host off the loopback is no service: a breakdown in the setup when said in the words above
-(Node's `ECONNREFUSED`, pip's), a `failure` otherwise. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+past an installer's retry warning. A connection refused by a host off the loopback is no service: a breakdown in the setup when Node's `ECONNREFUSED`
+or pip's `Failed to establish a new connection` says it, a `failure` otherwise. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
 Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
 sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
