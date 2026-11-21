@@ -41,7 +41,7 @@ describe('the sandboxes the start refuses before anything opens (ORC-450)', () =
   const ENGINE = { FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: 'r:1' };
   afterEach(() => vi.restoreAllMocks());
 
-  it('refuses a FACTORY_SANDBOX_* limit makeSandboxes cannot set, with its message', () => {
+  it('refuses a FACTORY_SANDBOX_* limit malformed, with its message', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two']]) {
       const env = { ...ENGINE, [k!]: v };
       let message = '';

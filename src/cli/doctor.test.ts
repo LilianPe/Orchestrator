@@ -1038,7 +1038,7 @@ describe("the daemon's environment the start refuses, doctor's host refuses", ()
     expect(JSON.parse(json.text)).toMatchObject({ accepted: false, host: { verdict: 'refused', reasons: [message] } });
   };
 
-  it('refuses a FACTORY_SANDBOX_* limit the sandboxes cannot set with the message of the start (ORC-450)', async () => {
+  it('refuses a FACTORY_SANDBOX_* limit malformed with the message of the start (ORC-450)', async () => {
     await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_PIDS: 'many' }, /^FACTORY_SANDBOX_PIDS=many: a whole number of processes expected/);
     await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_MEMORY: '4 GB' }, /^FACTORY_SANDBOX_MEMORY=4 GB: /);
     await refusedLikeTheStart({ FACTORY_CONTAINER_CLI: 'docker', ...RUNNER, FACTORY_SANDBOX_CPUS: 'two' }, /^FACTORY_SANDBOX_CPUS=two: /);
