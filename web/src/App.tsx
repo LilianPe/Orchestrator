@@ -205,7 +205,7 @@ function MaturityPage() {
   const approve = (card: MaturityCardView) =>
     postApproval(card).then(
       async (res) => {
-        setNotice(res.ok ? approvalNotice(((await res.json().catch(() => ({}))) as { card?: MaturityCardView }).card ?? card) : await refusal(res, 'approval'));
+        setNotice(res.ok ? approvalNotice(((await res.json().catch(() => undefined)) ?? {}) as { already?: boolean; card?: MaturityCardView }, card) : await refusal(res, 'approval'));
         reload();
       },
       () => setNotice('Approval not sent: the server did not answer.'),
