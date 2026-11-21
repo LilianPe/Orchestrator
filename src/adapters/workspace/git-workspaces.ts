@@ -134,9 +134,7 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   const expired = () => o.log?.(`git ${args.join(' ')}: killed at ${deadlineMs / 1000} s, its output still held ${FETCH_GRACE_MS / 1000} s later by a process out of its group`);
   // A forge silent past the deadline, whichever of git or `within` gives up first: a timeout (`isTransient`, ORC-343).
   const timedOut = () => Object.assign(new Error(silent), { code: 'ETIMEDOUT' });
-  const env = { GIT_TERMINAL_PROMPT: '0', ...STALLED, ...(await authEnv(o.auth, repo, deadlineMs).catch((err: Error) => {
-    throw err.message === AUTH_SILENT ? timedOut() : err;
-  })) };
+  const env = await remoteGitEnv(o.auth, repo, deadlineMs);
   const r = await within(exec('git', args, { env, timeoutMs: deadlineMs }), deadlineMs + FETCH_GRACE_MS, silent, expired).catch((err: Error) => {
     throw err.message === silent ? timedOut() : err;
   });
@@ -148,17 +146,19 @@ export async function fetchOrigin(exec: Exec, repo: string, o: { deadlineMs?: nu
   throw new Error(`the forge could not be read (git fetch, code ${r.code})`, { cause: failure });
 }
 
-const AUTH_SILENT = 'GitHub gave no installation token in time';
-
 /**
- * `auth`'s env for `repo` (ORC-442), never longer than `deadlineMs`: the token is asked of GitHub's API, which can stall as the
- * forge can. Past it, it rejects with `AUTH_SILENT`; any other failure as `auth` rejected, its cause kept for `isTransient`.
+ * The env of a git that reaches `repo`'s remote: never a prompt, a stalled transfer aborted, and `auth`'s token (ORC-442),
+ * asked of GitHub's API within `deadlineMs`, which can stall as the forge can: past it, a timeout (`isTransient`); any other
+ * failure as `auth` rejected, its cause kept for `isTransient`.
  */
-export async function authEnv(auth: GitAuth | undefined, repo: string, deadlineMs: number): Promise<Record<string, string>> {
-  if (!auth) return {};
-  return within(auth(repo), deadlineMs, AUTH_SILENT).catch((err: Error) => {
-    throw err.message === AUTH_SILENT ? err : new Error('the forge could not be read (no installation token)', { cause: err });
-  });
+export async function remoteGitEnv(auth: GitAuth | undefined, repo: string, deadlineMs: number): Promise<Record<string, string>> {
+  const silent = `GitHub gave no installation token after ${deadlineMs / 1000} s`;
+  const token = auth
+    ? await within(auth(repo), deadlineMs, silent).catch((err: Error) => {
+        throw err.message === silent ? Object.assign(new Error(silent), { code: 'ETIMEDOUT' }) : new Error('the forge could not be read (no installation token)', { cause: err });
+      })
+    : {};
+  return { GIT_TERMINAL_PROMPT: '0', ...STALLED, ...token };
 }
 
 /**

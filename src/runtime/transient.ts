@@ -1,4 +1,4 @@
-import { GitHubApiError } from '../adapters/forge/github-app.js';
+import { GitHubApiError, retryableStatus } from '../adapters/forge/github-app.js';
 import { LinearApiError } from '../adapters/tracker/linear/api.js';
 
 /**
@@ -39,7 +39,7 @@ const EXEC_NETWORK =
   /^git .*(Could not resolve host|Failed to connect to|Connection (refused|reset|timed out)|Operation timed out|ssh: connect to host|early EOF|RPC failed|The requested URL returned error: 5\d\d|HTTP 5\d\d|unexpected disconnect)/s;
 
 function transientHere(e: unknown): boolean {
-  if (e instanceof GitHubApiError) return e.rateLimited || retryableStatus(e.status);
+  if (e instanceof GitHubApiError) return e.retryable;
   if (e instanceof LinearApiError) return e.rateLimited || (e.status !== undefined && retryableStatus(e.status));
   if (!(e instanceof Error)) return false;
   // undici's `TypeError: fetch failed` says nothing by itself: its cause tells a socket error from a certificate refused (read on the next turn).
@@ -50,7 +50,6 @@ function transientHere(e: unknown): boolean {
   return PG_MESSAGES.test(e.message) || EXEC_NETWORK.test(e.message);
 }
 
-const retryableStatus = (status: number): boolean => status >= 500 || status === 408 || status === 429;
 
 /** How long a transient outage is waited out before its row or effect is given up (ORC-343): GitHub, Linear or the database back within it, nothing is blocked. */
 export const TRANSIENT_WINDOW_MS = 30 * 60_000;

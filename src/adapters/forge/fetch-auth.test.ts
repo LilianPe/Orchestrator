@@ -157,7 +157,7 @@ const READS: Record<string, (f: Fixture, auth?: GitAuth) => Promise<unknown>> = 
   },
   "the knowledge base's pull, its default branch asked, and its note's push": async (f, auth) => {
     git(f.repo, 'remote', 'set-head', 'origin', '-d');
-    const kb = new KnowledgeBase(f.repo, f.exec, 0, auth);
+    const kb = new KnowledgeBase(f.repo, { exec: f.exec, freshMs: 0, auth });
     const pulled = await kb.pull().catch((err: Error) => err.message);
     if (pulled !== undefined) throw new Error(pulled);
     const pushed = await kb.commitNote('notes/preview/app.md', 'start\n', 'notes: app');

@@ -108,13 +108,13 @@ describe('KnowledgeBase', () => {
       if (args.includes('fetch')) fetches++;
       return execCmd(cmd, args, opts);
     };
-    const kb = new KnowledgeBase(repo, counting, 0);
+    const kb = new KnowledgeBase(repo, { exec: counting, freshMs: 0 });
     const [a, b] = await Promise.all([kb.refresh(), kb.refresh()]);
     expect(a).toBe(b);
     expect(fetches).toBe(1);
     await kb.refresh();
     expect(fetches).toBe(2);
-    const fresh = new KnowledgeBase(repo, counting);
+    const fresh = new KnowledgeBase(repo, { exec: counting });
     await fresh.refresh();
     await fresh.refresh();
     expect(fetches).toBe(3);
