@@ -96,10 +96,19 @@ describe('sandboxLimits', () => {
     }
   });
 
-  it("takes FACTORY_SANDBOX_MEMORY as docs/configuration.md writes it, each example as the row says (ORC-451)", () => {
+  it('refuses a FACTORY_SANDBOX_MEMORY under 6m, the engines\' minimum, giving it (ORC-452)', () => {
+    for (const size of ['5m', '6143k', '6143K', '6291455', '6291455b', '1k', '1']) {
+      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual({ refused: `FACTORY_SANDBOX_MEMORY=${size}: at least 6m expected (the engines refuse less), or 0 / none for no limit.` });
+    }
+    for (const size of ['6m', '6M', '6144k', '6291456', '6291456b', '1g']) {
+      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual(expect.objectContaining({ memory: size }));
+    }
+  });
+
+  it("takes FACTORY_SANDBOX_MEMORY as docs/configuration.md writes it, each example as the row says (ORC-451, ORC-452)", () => {
     const row = readFileSync(join(import.meta.dirname, '../../docs/configuration.md'), 'utf8').split('\n').find((line) => line.startsWith('| `FACTORY_SANDBOX_MEMORY`'));
     expect(row).toContain('`^[1-9][0-9]*[bkmg]?$`');
-    for (const [size, taken] of [['512m', true], ['4g', true], ['4G', true], ['1.5g', false], ['4gb', false], ['512 m', false]] as const) {
+    for (const [size, taken] of [['512m', true], ['4g', true], ['4G', true], ['1.5g', false], ['4gb', false], ['512 m', false], ['6m', true], ['6144k', true], ['5m', false]] as const) {
       expect(row).toContain(`\`${size}\``);
       expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual(taken ? expect.objectContaining({ memory: size }) : { refused: expect.any(String) });
     }
