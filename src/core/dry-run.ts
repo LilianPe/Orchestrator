@@ -197,16 +197,18 @@ const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(lin
 /** The relay refusing, by its address, whatever the tool's words: a line that only names it (`HTTPS_PROXY=…`) is not that. */
 const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
 /**
- * On the loopback, where the services listen: a port refusing there that is not the relay's, or what libpq says of a server
- * there, the host on the line (`Is the server running on host "localhost"`): of a remote one, a breakdown of the network. Its
- * Unix socket is local whatever the line names (`Is the server running locally`, `connection to server on socket "….s.PGSQL.5432"`).
+ * On the loopback, where the services listen: a port refusing there that is not the relay's, or what a database client says
+ * of a server it cannot reach there, the host on the line (libpq's `Is the server running on host "localhost"`, MySQL's
+ * `Can't connect to MySQL server on '127.0.0.1'`): of a remote one, a breakdown of the network. Its Unix socket is local
+ * whatever the line names, but only where the client said it could not reach it: a server that answered on its socket
+ * (`… .s.PGSQL.5432" failed: FATAL: password authentication failed`) is no service down.
  */
 const LOOPBACK_HOST = new RegExp(String.raw`${LOOPBACK}\b`);
-const LIBPQ_SERVER = /could not connect to (?:server|database)|Is the server running/i;
-const LIBPQ_SOCKET = /Is the server running locally|on (?:Unix domain )?socket "[^"]*\.s\.PGSQL\./i;
+const DB_SERVER = /could not connect to (?:server|database)|Is the server running|Can't connect to MySQL server/i;
+const DB_SOCKET = /Is the server running locally|connections on Unix domain socket "|on socket "[^"]*\.s\.PGSQL\.\d+" failed: (?:No such file or directory|Connection refused)|Can't connect to local MySQL server through socket/i;
 const serviceLine = (line: string) => {
   const port = refusedOn(line);
-  return port ? port !== RELAY_PORT : (LOOPBACK_HOST.test(line) && LIBPQ_SERVER.test(line)) || LIBPQ_SOCKET.test(line);
+  return port ? port !== RELAY_PORT : (LOOPBACK_HOST.test(line) && DB_SERVER.test(line)) || DB_SOCKET.test(line);
 };
 /** The reasons of a 502, 503 and 504, as HTTP says them. */
 const GATEWAY = 'Bad Gateway|Service Unavailable|Gateway Time-?out';

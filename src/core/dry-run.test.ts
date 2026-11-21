@@ -597,9 +597,16 @@ describe('classifyBreak', () => {
   it.each([
     ['libpq 14+', 'psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory\n\tIs the server running locally and accepting connections on that socket?'],
     ['libpq before 14', 'psql: error: could not connect to server: No such file or directory\n\tIs the server running locally and accepting\n\tconnections on Unix domain socket "/var/run/postgresql/.s.PGSQL.5432"?'],
-  ])('libpq refused on its Unix socket is a service: the socket is local: %s', (_, output) => {
+    ['MySQL, its socket', "ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)"],
+    ['MySQL 5.7, the loopback without its port', "ERROR 2003 (HY000): Can't connect to MySQL server on '127.0.0.1' (111)"],
+  ])('a database client that cannot reach its server on the Unix socket or the loopback is a service: %s', (_, output) => {
     for (const step of ['setup', 'command'] as const) expect(classifyBreak(output, step, declared).kind).toBe('service');
     expect(unreachable(output)).toBeUndefined();
+  });
+
+  it('a database server that answered on its socket is no service down, and a remote MySQL is no service', () => {
+    expect(classifyBreak('psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  password authentication failed for user "app"', 'setup', declared).kind).toBe('failure');
+    expect(classifyBreak("ERROR 2003 (HY000): Can't connect to MySQL server on 'db.acme.com' (111)", 'command', declared).kind).toBe('failure');
   });
 
   it('a client refused by a host off the loopback is no service of the repository\'s', () => {
