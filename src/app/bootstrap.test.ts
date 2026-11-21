@@ -16,7 +16,7 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import { createMissingStatuses, startFactory, type BootOptions } from './bootstrap.js';
 import { runQueueCommand, runStatusCommand } from '../cli/control.js';
 import { MemoryStore } from '../store/memory-store.js';
-import { oldDatabaseWarnings } from '../store/open.js';
+import { oldDatabaseWarnings } from '../store/old-databases.js';
 import { TrackerSwitch } from './tracker-switch.js';
 
 /** A start on a MemoryStore of its own, Postgres being the instance's only store (ORC-178): test/integration/open-store.test.ts starts on it. */
