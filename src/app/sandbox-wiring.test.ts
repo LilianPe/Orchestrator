@@ -39,6 +39,13 @@ describe('sandboxRefusals (ORC-449)', () => {
   it('is what checkSandboxes throws, at the start before anything opens', () => {
     expect(() => checkSandboxes({ FACTORY_CONTAINER_CLI: 'podman' })).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   });
+
+  it('throws every refusal at once, as makeSandboxes does: one start says them all (ORC-455)', () => {
+    const env = { FACTORY_CONTAINER_CLI: 'lxc', FACTORY_SANDBOX_PIDS: '1.5' };
+    const refusals = sandboxRefusals(env);
+    expect(refusals).toHaveLength(3);
+    expect(() => checkSandboxes(env)).toThrow(refusals.join(' '));
+  });
 });
 
 // ORC-450: the limits and the daemon's uid/gid, refused by sandboxConfig before anything opens rather than by makeSandboxes.

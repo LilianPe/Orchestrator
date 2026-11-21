@@ -59,10 +59,10 @@ export function sandboxRefusals(env: NodeJS.ProcessEnv): string[] {
   ];
 }
 
-/** The start's `sandboxRefusals`, before anything opens: the first one throws. */
+/** The start's `sandboxRefusals`, before anything opens: all of them in one throw, as `makeSandboxes` says them. */
 export function checkSandboxes(env: NodeJS.ProcessEnv): void {
-  const [refusal] = sandboxRefusals(env);
-  if (refusal) throw new Error(refusal);
+  const refusals = sandboxRefusals(env);
+  if (refusals.length) throw new Error(refusals.join(' '));
 }
 
 /**
