@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
-import { defaultWorkflow } from '../presets/workflow.js';
+import { defaultWorkflow, preset, presetWorkflow } from '../presets/workflow.js';
+import { fantome } from '../presets/fantome.js';
 import type { Workflow } from '../core/workflow.js';
+import type { Tracker } from '../adapters/tracker/types.js';
+import { workflowWith } from '../../test/helpers/workflow-with.js';
 import { newTicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import { formatPlan, planRows } from './plan.js';
+
+/** The preview of one project, `p` on `/r`, of team REL. */
+const planOf = (tracker: Pick<Tracker, 'listDelegated'>, workflow: Workflow, workspaces = new FakeWorkspaces()) =>
+  planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
 
 describe('plan', () => {
   it('lists a ticket of a team with several repos once, under its repo, or as not taken when it names none (ORC-291)', async () => {
@@ -51,7 +58,7 @@ describe('plan', () => {
     tracker.addIssue({ identifier: 'REL-1', delegateId: 'a' });
     const workspaces = new FakeWorkspaces();
     workspaces.remoteBranches.add('factory/rel-1-old');
-    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces });
+    const rows = await planOf(tracker, workflow, workspaces);
     expect(rows.map((r) => [r.status, r.reasons])).toEqual([['clarify', ['A branch of REL-1 already exists on origin.']]]);
   });
 
@@ -80,28 +87,19 @@ describe('plan', () => {
   });
 
   it("shows a ticket whose pickup checks fail as going to intake's clarify, which asks to complete it, not as not taken (ORC-423)", async () => {
-    const workflow = defaultWorkflow();
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', title: 'Flou', delegateId: 'a', description: 'court' });
-    const rows = await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() });
+    const rows = await planOf(tracker, defaultWorkflow());
     expect(rows.map((r) => [r.status, r.reasons])).toEqual([['clarify', ['The description is shorter than 30 characters.']]]);
-    expect(formatPlan(rows)).toBe(
-      'REL-1  clarify  Flou — intake, then clarify asks to complete the ticket: The description is shorter than 30 characters.',
-    );
+    expect(formatPlan(rows)).toBe('REL-1  clarify  Flou — intake, then clarify asks to complete the ticket: The description is shorter than 30 characters.');
   });
 
   it('previews the launch of another entry: a job with pickup refuses the ticket, one without takes it; the Rapide level assumes the checks (ORC-423)', async () => {
     const tracker = new FakeTracker();
     tracker.addIssue({ identifier: 'REL-1', title: 'Flou', delegateId: 'a', description: 'court' });
-    const preview = async (workflow: Workflow) =>
-      (await planRows({ tracker, store: new SqliteStore(':memory:'), projects: [{ id: 'p', repoPath: '/r', teamKey: 'REL', workflow }], workspaces: new FakeWorkspaces() }))[0]!;
-    const entered = (entry: string, pickup: boolean): Workflow => {
-      const wf = defaultWorkflow();
-      return { ...wf, entry, jobs: Object.fromEntries(Object.entries(wf.jobs).map(([name, j]) => [name, j.step === entry ? { ...j, pickup } : j])) };
-    };
-    expect((await preview(entered('build', true))).status).toBe('not taken');
-    expect((await preview(entered('build', false))).status).toBe('taken');
-    const rapide = await preview({ ...defaultWorkflow(), level: 'rapide' });
-    expect([rapide.status, formatPlan([rapide])]).toEqual(['taken', 'REL-1  taken  Flou — assumed: The description is shorter than 30 characters.']);
+    const atBuild = presetWorkflow(preset, {}, 'build');
+    expect((await planOf(tracker, atBuild))[0]!.status).toBe('not taken');
+    expect((await planOf(tracker, workflowWith({ jobs: { dev: { pickup: false } } }, atBuild)))[0]!.status).toBe('taken');
+    expect(formatPlan(await planOf(tracker, presetWorkflow(fantome)))).toBe('REL-1  taken  Flou — assumed: The description is shorter than 30 characters.');
   });
 });

@@ -70,8 +70,8 @@ export async function planRows(d: {
       const own = naming && (await d.workspaces.remoteBranchExists(p.repoPath, ownBranchMatcher(issue.identifier, naming))) ? `A branch of ${issue.identifier} already exists on origin.` : undefined;
       const reasons = pickupFailures(checks, issue, own);
       // After `intake`, `clarify` asks for the failed checks (ORC-395), the Rapide level assumes them (ORC-231); another job's launch refuses the ticket.
-      const failed = !intake ? 'not taken' : p.workflow.level === 'rapide' ? 'taken' : 'clarify';
-      rows.push({ ...row, status: reasons.length ? failed : 'taken', reasons });
+      const status = !reasons.length || (intake && p.workflow.level === 'rapide') ? 'taken' : intake ? 'clarify' : 'not taken';
+      rows.push({ ...row, status, reasons });
     }
   }
   return rows.sort((a, b) => rank(a.priority) - rank(b.priority));
