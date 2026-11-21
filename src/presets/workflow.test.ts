@@ -126,6 +126,13 @@ describe("factory.yml's statuses (ORC-382)", () => {
     expect(() => defaultWorkflow({ statuses: { intake: 'off' } })).toThrow(/statuses\.intake: `off` turns off only the status of spec_draft/);
   });
 
+  it('ORC-457: `Off` and `OFF` turn the Spec status off too, never name a Linear status « Off »', () => {
+    for (const off of ['Off', 'OFF']) {
+      expect(defaultWorkflow({ statuses: { spec_draft: off } }).states).not.toHaveProperty('spec');
+      expect(() => defaultWorkflow({ statuses: { build: off } })).toThrow(/statuses\.build: `off` turns off only the status of spec_draft/);
+    }
+  });
+
   it('criterion 1: a step named in the table moves the ticket to its status when the chain reaches it', () => {
     const wf = defaultWorkflow({ statuses: { intake: 'Todo', spec_draft: 'Drafting', build: 'Doing', review: 'AI Review', human_review: 'Human Review' } });
     expect(wf.states).toEqual({ ...DEFAULT_STATES, spec: 'Drafting', dev: 'Doing' });

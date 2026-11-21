@@ -82,7 +82,9 @@ function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['st
       throw new WorkflowError(`factory.yml: statuses.${step}: ${what} of ${preset.name} (the steps with one: ${withOne})`);
     }
     // The only status the factory can go without is the spec's: the ticket stays in Todo until `build` (ORC-212).
-    if (name === STATUS_OFF && status !== 'spec') {
+    // In any case: `Off` names no Linear status either.
+    const off = name.toLowerCase() === STATUS_OFF;
+    if (off && status !== 'spec') {
       throw new WorkflowError(`factory.yml: statuses.${step}: \`${STATUS_OFF}\` turns off only the status of spec_draft: the factory moves tickets to the others`);
     }
     const before = namedBy.get(status);
@@ -90,7 +92,7 @@ function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['st
       throw new WorkflowError(`factory.yml: statuses.${step}: « ${name} », where ${before}, which shows the same status, names « ${states[status]} »`);
     }
     namedBy.set(status, step);
-    if (name === STATUS_OFF) delete states.spec;
+    if (off) delete states.spec;
     else states[status] = name;
   }
   const seen = new Map<string, string>();
