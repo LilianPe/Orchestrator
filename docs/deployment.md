@@ -90,7 +90,7 @@ The engine reads a mount's paths **on the host**, not in the `factoryd` containe
 
 ## The images
 
-- **`Dockerfile`** (`factoryd` and `proxy`): Node 24, `git`, the `docker` CLI and `gh`. `gh` stays until ORC-181. Claude Code is no longer in it: the agent runs in the runner. User `node` (uid 1000).
+- **`Dockerfile`** (`factoryd` and `proxy`): Node 24, `git` and the `docker` CLI; not the GitHub CLI, since the daemon reads and publishes by its GitHub App alone (ORC-181). Claude Code is no longer in it: the agent runs in the runner. User `node` (uid 1000).
 - **`docker/runner.Dockerfile`** (the runners): Node 24 with pnpm, Python 3 with uv and pip, `git`, Claude Code. Pinned versions. No `gh`, no engine CLI, no daemon code.
 - **`docker/browser.Dockerfile`** (the visual proof's captures, ORC-404, optional): the runner image plus Playwright (pinned) and its headless Chromium, built `FROM` the runner image so that the application starts with the same tools as its commands. Only the sandboxes that shoot run it, at network `none`, with nothing mounted but the checkout; every other sandbox stays on the runner image, which carries no browser. It weighs about 630 MB more than the runner image, uncompressed (measured on Docker Desktop: the Playwright layer is 626 MB, of which 278 MB of headless Chromium, the rest its system libraries and fonts); a capture at three widths takes about 3 s, the container's start included, for a page served by `node`. Without it, `FACTORY_BROWSER_IMAGE` unset, a required visual proof is unavailable and its check neutral: the daemon says so at its start, and `factory doctor` on every run.
 
@@ -99,7 +99,7 @@ No image receives a secret at build time. Isolation test no. 7 looks for tokens 
 ## Current limits
 
 - **Publishing**: the factory pushes and opens the PR, with the GitHub App (ORC-125, [`github.md`](github.md#publishing)). Without it, a verified ticket is blocked: configure `github.*` or `GH_APP_*`. An agent in a runner has neither `gh` nor a token, and the proxy refuses `git push`. `factoryd` has neither either since ORC-181: the App reads the PRs.
-- **`factoryd`'s own `git fetch`** (ORC-442): the image gives git no credential of its own (`gh auth setup-git` with `GH_TOKEN` went with ORC-181). A private repository's clone under `repos/`, and the knowledge base's, are read with the App's installation token, as the push is, when their `origin` is an `https://github.com/` URL the App is installed on: no SSH key nor credential helper is needed in the container. An `origin` over SSH, or a repository the App is not installed on, is still read with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read` ([`github.md`](github.md#the-daemons-own-git)).
+- **`factoryd`'s own `git fetch`** (ORC-442): the image gives git no credential of its own (the GitHub CLI's credential helper went with ORC-181). A private repository's clone under `repos/`, and the knowledge base's, are read with the App's installation token, as the push is, when their `origin` is an `https://github.com/` URL the App is installed on: no SSH key nor credential helper is needed in the container. An `origin` over SSH, or a repository the App is not installed on, is still read with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read` ([`github.md`](github.md#the-daemons-own-git)).
 - **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` is not passed through, and would have no effect. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repoPath` is never mounted.
 
 ## Variables
@@ -108,8 +108,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 
 | Variable | Required | Role |
 |---|---|---|
-| `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | one of these means | Tokens for the Claude Code accounts, read by `factory.yml` (`token: env:CLAUDE_TOKEN_1`); the `claude.active` account is the runs' only credential. |
-| `ANTHROPIC_API_KEY` | one of these means | Claude Code authentication without an active account, for the runs of this container, which still run next to the daemon (until ORC-179). Compose no longer requires it: without either, runs fail at authentication. |
+| `CLAUDE_TOKEN_1`, `CLAUDE_TOKEN_2` | one at least (or the transition below) | Tokens for the Claude Code accounts, read by `factory.yml` (`token: env:CLAUDE_TOKEN_1`); the `claude.active` account is the runs' only credential. |
 | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | yes, unless `factory.yml` gives `github.client_id` | The GitHub App's OAuth client, for the dashboard's GitHub sign-in (ORC-399): the container listens beyond loopback, and `factoryd` refuses to start without it. |
 | `FACTORY_DIR` | yes | Absolute path on the server (see above). |
 | `FACTORY_ENGINE_SOCKET` | yes | Rootless engine socket, for example `/run/user/1000/docker.sock`. |
@@ -122,6 +121,8 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `FACTORY_HTTP_PORT`, `FACTORY_HTTPS_PORT` | no | Ports published by `caddy`, under the `tls` profile (80 and 443 by default). |
 | `FACTORY_ALLOW_ROOTFUL_ENGINE` | no | `1`: allows starting on an engine that is not rootless. For a development workstation, never for the server. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | no | Commit identity (the product name and `factory@localhost` by default); compose copies them into `GIT_COMMITTER_*`. |
+
+> **Transition note**: compose still passes `ANTHROPIC_API_KEY` through: Claude Code authentication without an active account, for the runs of this container that still run next to the daemon (until ORC-179). Compose does not require it, nor the tokens above: without any, runs fail at authentication.
 
 GitHub webhooks read `github.webhookSecret` in `config.yaml` or `factory.yml` ([`github.md`](github.md#github-webhooks)): `compose.yaml` does not pass `GH_WEBHOOK_SECRET` through.
 
@@ -218,7 +219,7 @@ The stack ran once under Docker Desktop, which is not rootless. These points rem
 
 `SIGTERM` (`docker compose stop`) triggers a clean shutdown: timers and reconciliation are stopped; the runs in progress are **left running** (ORC-344): the daemon stops reading them, without stopping their agent, destroying their container or writing anything of them, then waits for what it still has to write (the inbox, a run that ended just before), closes the SSE connections and the database. `compose.yaml` gives it 30 s (`stop_grace_period`), which it no longer spends waiting for agents.
 
-On the next start, Relais resumes on its own whatever was cut off (by a shutdown or a crash), the same way for both: it reattaches to a run still alive (or ended meanwhile with its result line), whose real result comes back, and starts again the step of one that vanished. No ticket is blocked because of it; details in [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs). Queued requests, timers (grouped feedback) and the pause state are kept in `relais.db`.
+On the next start, the factory resumes on its own whatever was cut off (by a shutdown or a crash), the same way for both: it reattaches to a run still alive (or ended meanwhile with its result line), whose real result comes back, and starts again the step of one that vanished. No ticket is blocked because of it; details in [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs). Queued requests, timers (grouped feedback) and the pause state are kept in the database (`factory.db` outside compose).
 
 Under compose, this state is in Postgres, not in a file.
 
