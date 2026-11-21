@@ -51,7 +51,7 @@ export async function runFlaky(o: FlakyOptions): Promise<number> {
 }
 
 /** The command line: `factory flaky <project> [add|remove] [<test>] [--reason <why>] [--frozen]`, on the instance's store. */
-export async function runFlakyCommand(home: string, args: readonly string[]): Promise<number> {
+export async function runFlakyCommand(args: readonly string[]): Promise<number> {
   const { positionals, values } = parseArgs({ args: [...args], allowPositionals: true, options: { reason: { type: 'string' }, frozen: { type: 'boolean' } } });
   const [project, action, test] = positionals;
   if (!project) {

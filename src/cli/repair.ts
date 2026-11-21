@@ -85,7 +85,7 @@ export async function runRepair(o: RepairOptions): Promise<number> {
 }
 
 /** The command line: `factory run repair <target> [action] [event]`, on the instance's store. */
-export async function runRepairCommand(home: string, args: readonly string[]): Promise<number> {
+export async function runRepairCommand(args: readonly string[]): Promise<number> {
   const [target, action, eventId] = args;
   if (!target) {
     console.log(REPAIR_USAGE);

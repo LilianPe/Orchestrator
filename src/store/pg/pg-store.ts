@@ -115,7 +115,7 @@ const QUEUE_ORDER = sql.raw(
   `case when (payload->>'priority')::int = 0 then 5 else coalesce((payload->>'priority')::int, 5) end, available_at, created_at, id`,
 );
 
-/** Key/value metadata kept in `workflow_versions` under a reserved id prefix, until ORC-178 removes it. */
+/** Key/value metadata kept in `workflow_versions` under a reserved id prefix, until a table of its own takes it. */
 const metaId = (key: string) => `meta:${key}`;
 
 /** A workflow version a ticket is frozen on (ORC-149), in `workflow_versions` beside the meta rows. */

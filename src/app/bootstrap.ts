@@ -72,8 +72,8 @@ export interface BootOptions {
   /** Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
   /**
-   * A store opened by the caller instead of the instance's Postgres (the tests' MemoryStore): the factory owns it from then
-   * on, and closes it when it stops or fails to start.
+   * A store opened by the caller instead of the instance's Postgres (the tests' MemoryStore): the factory takes it where it
+   * would open its own, and closes it when it stops or fails to start from there on.
    */
   store?: Store;
 }

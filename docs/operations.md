@@ -79,14 +79,14 @@ Examples of reading the database (with `psql`, read-only queries):
 
 ```bash
 psql "$FACTORY_DATABASE_URL" -c '\dt'      # inbox, journal, tickets, attempts, outbox, timers, decision_trace…
-psql "$FACTORY_DATABASE_URL" -c "select id, status, to_timestamp(started_at/1000) from attempts order by started_at desc limit 10"
+psql "$FACTORY_DATABASE_URL" -c "select id, status, started_at from attempts order by started_at desc limit 10"
 ```
 
 The Postgres schema is in `src/store/pg/schema.ts` and its migrations in `drizzle/`. Rejected webhooks (signature, freshness) are **not** recorded in the database: they only leave a log line in smee mode (the development relay).
 
 ## Archiving the SQLite data (ORC-178)
 
-Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds at its start).
+Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds in `FACTORY_HOME` at its start; a `relais.db` still in Relais's old home, `~/.relais` by default, is found by hand).
 
 On the server, the daemon stopped (`systemctl stop factory` or `docker compose stop`), with `SQLITE_HOME` the folder holding the files (`FACTORY_HOME`, `~/.factory` by default, or Relais's old home for `relais.db`):
 
@@ -111,7 +111,7 @@ scp '<server>:~/relais-sqlite-<STAMP>.tar.gz*' .
 sha256sum -c relais-sqlite-<STAMP>.tar.gz.sha256
 ```
 
-Only once that check passes off the server, back on the server, in `SQLITE_HOME`, the daemon still stopped:
+Only once that check passes off the server, back on the server, in `SQLITE_HOME`, the daemon still stopped. Delete `transcripts/` and `workspaces/` only where they are SQLite's time (Relais's home, or a factory that never ran on Postgres): on a server already on `FACTORY_DATABASE_URL` before ORC-178, they hold the current runs' transcripts and worktrees, so delete the `.db` files alone there:
 
 ```bash
 rm -f relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm
