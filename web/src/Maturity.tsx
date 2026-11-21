@@ -4,6 +4,10 @@ import { uncheckedMain } from '../../src/core/maturity.js';
 
 const time = (at: number) => new Date(at).toLocaleString('en-US');
 
+/** What the page says once the server answered an approval (ORC-454): who holds it and since when, an earlier approval by someone else included. */
+export const approvalNotice = (card: MaturityCardView) =>
+  card.approvedBy === undefined ? `${card.title} approved.` : `${card.title} approved by ${card.approvedBy}${card.approvedAt === undefined ? '' : ` on ${time(card.approvedAt)}`}.`;
+
 /**
  * A card: its title and value, approved by whom and when, or a button to approve the value as it stands; none for the `main`
  * card not checked yet (ORC-437), which the server refuses too.
