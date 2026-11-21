@@ -1119,6 +1119,29 @@ describe('the host: the engine on cgroup v2, able to set the limits (ORC-208, cr
     expect(noPids.reasons.join(' ')).toContain('pids');
   });
 
+  it('requires only the controllers of the limits set: one at none no longer needs its own (ORC-451)', async () => {
+    const asked = (env: NodeJS.ProcessEnv, controllers: string[]) =>
+      checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER, ...env }, engine({ host: { ...PODMAN_INFO.host, cgroupControllers: controllers } }).exec);
+    // Rootless Podman without `cpu` delegated, the documented way out: FACTORY_SANDBOX_CPUS=none.
+    const noCpu = await asked({ FACTORY_SANDBOX_CPUS: 'none' }, ['memory', 'pids']);
+    expect(noCpu).toMatchObject({ verdict: 'accepted', controllers: ['memory', 'pids'] });
+    expect(noCpu.reasons).toEqual(['rootless podman on cgroup v2, limits through memory, pids']);
+    // The limits still set keep requiring theirs.
+    const noCpuNoPids = await asked({ FACTORY_SANDBOX_CPUS: '0' }, ['memory']);
+    expect(noCpuNoPids.verdict).toBe('refused');
+    expect(noCpuNoPids.reasons.join(' ')).toContain('cannot limit through the pids controller(s)');
+    expect(noCpuNoPids.reasons.join(' ')).not.toContain('cpu');
+    expect((await asked({ FACTORY_SANDBOX_MEMORY: 'none', FACTORY_SANDBOX_PIDS: 'none' }, ['cpu'])).verdict).toBe('accepted');
+    // No limit at all: no controller required, the other host checks stay.
+    const unlimited = { FACTORY_SANDBOX_PIDS: 'none', FACTORY_SANDBOX_MEMORY: 'none', FACTORY_SANDBOX_CPUS: 'none' };
+    expect(await asked(unlimited, [])).toMatchObject({ verdict: 'accepted', reasons: ['rootless podman on cgroup v2, no limit set (FACTORY_SANDBOX_*)'] });
+    expect((await checkHost({ FACTORY_CONTAINER_CLI: 'podman', ...RUNNER, ...unlimited }, engine({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs' } }).exec)).verdict).toBe('refused');
+    // A limit the start refuses: its controller stays required beside the refusal.
+    const malformed = await asked({ FACTORY_SANDBOX_CPUS: 'lots' }, ['memory', 'pids']);
+    expect(malformed.reasons).toHaveLength(2);
+    expect(malformed.reasons[1]).toContain('cannot limit through the cpu controller(s)');
+  });
+
   it('refuses a rootless Podman on cgroupfs, which ignores the limits, even with every controller listed', async () => {
     const host = await podman({ host: { ...PODMAN_INFO.host, cgroupManager: 'cgroupfs' } });
     expect(host.verdict).toBe('refused');
