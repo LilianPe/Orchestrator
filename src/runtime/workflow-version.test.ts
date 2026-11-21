@@ -15,4 +15,13 @@ describe('frozenWorkflow (ORC-393)', () => {
     }
     expect(() => frozenWorkflow({ hash, definition: null })).toThrow(/of format undefined/);
   });
+
+  it('launches the skills a version frozen before ORC-460 named by their new names: the pack no longer has the old ones', () => {
+    const current = defaultWorkflow();
+    const old = JSON.parse(JSON.stringify(current).replaceAll('"factory:build"', '"factory:dev"').replaceAll('"factory:spec_draft"', '"factory:spec"')) as typeof current;
+    old.jobs['fix-ci']!.skill = 'factory:fix-ci';
+    (old.preset.steps.find((s) => s.type === 'fix') as { skills: Record<string, string> }).skills.ci = 'factory:fix-ci';
+    expect(JSON.stringify(old)).toMatch(/factory:dev"[\s\S]*factory:fix-ci"/);
+    expect(frozenWorkflow(workflowVersion(old))).toEqual(current);
+  });
 });

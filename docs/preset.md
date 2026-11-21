@@ -111,7 +111,7 @@ ends the run; at that level nothing moves nor is posted. Code: `src/presets/fant
 
 ## `rebase` step (ORC-146)
 
-A conflict of the ticket's PR with its base branch arrives in the inbox as `pr.conflicted` (GitHub webhook, ORC-134). It is the engine that starts the step that handles it; an agent at work on another step never resolves it: the `dev`, `feedback`, `fix-ci` and `review` skills leave the base alone and hand back.
+A conflict of the ticket's PR with its base branch arrives in the inbox as `pr.conflicted` (GitHub webhook, ORC-134). It is the engine that starts the step that handles it; an agent at work on another step never resolves it: the `build`, `feedback` and `review` skills leave the base alone and hand back.
 
 **Start.** The reaction to `pr.conflicted` (`prFailed`): `rebase`, on a ticket In Progress, in AI Review or in Human Review, not blocked, for the ticket's open PR only (another PR's conflict, a merged or closed one's, is only journaled). Each start counts on `review_ci` (`ciFixAttempts`), the counter of red CI (I5): the conflict's id carries the head and the base, so GitHub repeating it on the same pair starts nothing more. A rebase already running or waiting starts no second one either, whatever the head: it takes the branch onto the base as it is then. Past the bound, the conflict starts nothing and blocks the ticket, kind `conflict` (a green CI does not lift it, unlike the red-CI bound). On a ticket waiting on its blockers in review, the rebase waits for them, counted or blocked then ([above](#waiting-on-a-blocked-by-ticket-orc-363), ORC-464). A conflict during another step leaves that run alone: the start waits behind it, pending, and runs once that work is out (verified and published).
 

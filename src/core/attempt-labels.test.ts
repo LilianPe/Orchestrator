@@ -138,7 +138,7 @@ describe('attempt labels', () => {
     expect(skills).toBe(pack.skills);
     expect(config).toBe(pack.config);
 
-    writeFileSync(join(dir, 'skills', 'dev', 'extra.md'), 'one more line\n');
+    writeFileSync(join(dir, 'skills', 'build', 'extra.md'), 'one more line\n');
     expect(await skillsFingerprint(dir)).not.toBe(skills);
     expect(await configFingerprint(dir)).toBe(config);
 
@@ -168,7 +168,7 @@ describe('attempt labels', () => {
 
   it('gives a text file the same fingerprint with CRLF and LF line ends, and leaves binary files as they are', async () => {
     const dir = tempPack();
-    const skill = join(dir, 'skills', 'dev', 'SKILL.md');
+    const skill = join(dir, 'skills', 'build', 'SKILL.md');
     const hook = join(dir, 'hooks', 'session-start.mjs');
     const lf = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
     writeFileSync(skill, lf(skill));
@@ -184,9 +184,9 @@ describe('attempt labels', () => {
     expect(await skillsFingerprint(dir)).toBe(skills);
     expect(await configFingerprint(dir)).toBe(config);
 
-    writeFileSync(join(dir, 'skills', 'dev', 'blob.bin'), Buffer.from([0, 13, 10]));
+    writeFileSync(join(dir, 'skills', 'build', 'blob.bin'), Buffer.from([0, 13, 10]));
     const binary = await skillsFingerprint(dir);
-    writeFileSync(join(dir, 'skills', 'dev', 'blob.bin'), Buffer.from([0, 10]));
+    writeFileSync(join(dir, 'skills', 'build', 'blob.bin'), Buffer.from([0, 10]));
     expect(await skillsFingerprint(dir)).not.toBe(binary);
   });
 
@@ -197,7 +197,7 @@ describe('attempt labels', () => {
     writeFileSync(join(outside, 'secret.md'), 'outside the pack\n');
     try {
       symlinkSync(outside, join(dir, 'skills', 'linked'), 'junction');
-      symlinkSync(join(outside, 'secret.md'), join(dir, 'skills', 'dev', 'linked.md'));
+      symlinkSync(join(outside, 'secret.md'), join(dir, 'skills', 'build', 'linked.md'));
     } catch (err) {
       // Windows refuses file symlinks without Developer Mode or admin rights.
       if (['EPERM', 'EACCES'].includes((err as NodeJS.ErrnoException).code ?? '')) return ctx.skip();
