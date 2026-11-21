@@ -45,7 +45,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     await h.send('ticket.commented', { body: 'Prends le point-virgule.', author: 'Lilian', kind: 'instruction' }, 'REL-1', { actor: MEMBER });
     expect(h.runner.requests).toHaveLength(2);
     const relaunch = h.runner.requests[1]!;
-    expect(relaunch.prompt.split('\n')[0]).toBe('/factory:dev');
+    expect(relaunch.prompt.split('\n')[0]).toBe('/factory:build');
     expect(relaunch.prompt).toContain('Prends le point-virgule.');
     expect(relaunch.resume).toBe(true);
     expect(await h.ticket()).toMatchObject({ blocked: false, activeJob: 'dev', humanInbox: [] });
@@ -67,7 +67,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     const h = await blocked();
     h.runner.enqueue({ hold: true });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Corrige le séparateur', author: 'Lilian', ack: true, kind: 'instruction' }, 'REL-1', { actor: MEMBER });
-    expect(h.runner.requests[1]!.prompt.split('\n')[0]).toBe('/factory:dev');
+    expect(h.runner.requests[1]!.prompt.split('\n')[0]).toBe('/factory:build');
     expect(h.runner.requests[1]!.prompt).toContain('Corrige le séparateur');
     expect(await h.ticket()).toMatchObject({ blocked: false, activeJob: 'dev', humanInbox: [] });
   });
@@ -77,7 +77,7 @@ describe('the standard blocking comment and the reply that resumes (ORC-196)', (
     h.runner.enqueue({ hold: true });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Quel séparateur tu proposes ?', author: 'Lilian', ack: true, kind: 'question' }, 'REL-1', { actor: MEMBER });
     expect(h.runner.requests).toHaveLength(2);
-    expect(h.runner.requests[1]!.prompt.split('\n')[0]).toBe('/factory:dev');
+    expect(h.runner.requests[1]!.prompt.split('\n')[0]).toBe('/factory:build');
   });
 
   it('`/status` as a comment answers on the ticket: nothing resumes, the step is kept, the agent never reads it', async () => {

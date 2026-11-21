@@ -63,7 +63,7 @@ describe('the statuses of the MVP (ORC-170)', () => {
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Go on, and rename the export button.', author: 'L' }, 'REL-1', { actor: 'user-lilian' });
 
     // Its commit went through the AI review on its own, and Human Review shows it: the next Done merges it.
-    expect(skills(h)).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback', '/factory:review', '/factory:review']);
+    expect(skills(h)).toEqual(['/factory:build', '/factory:review', '/factory:review', '/factory:feedback', '/factory:review', '/factory:review']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: fixed, blocked: false });
     expect(moves(h)).toEqual(['In Progress', 'AI Review', 'Human Review', 'AI Review', 'Human Review']);
   });
@@ -73,7 +73,7 @@ describe('the statuses of the MVP (ORC-170)', () => {
     h.publisher.refuseNext('empty');
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' }, 'REL-1', { actor: 'user-lilian' });
 
-    expect(skills(h)).toEqual(['/factory:dev']);
+    expect(skills(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ logical: 'dev', blocked: true, blockKind: 'question' });
     expect((await h.ticket()).prNumber).toBeUndefined();
     expect(h.tracker.issues.get('REL-1')!.labels).toContain('Bloqué');
@@ -89,7 +89,7 @@ describe('the statuses of the MVP (ORC-170)', () => {
     h.runner.enqueue({ events: [{ kind: 'text', text: 'I was building the export; nothing to change.' }] });
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'What were you doing?', author: 'L' }, 'REL-1', { actor: 'user-lilian' });
 
-    expect(skills(h)).toEqual(['/factory:dev', '/factory:review', '/factory:review', '/factory:feedback']);
+    expect(skills(h)).toEqual(['/factory:build', '/factory:review', '/factory:review', '/factory:feedback']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', reviewSha: SHA, blocked: false });
     expect(moves(h)).toEqual(['In Progress', 'AI Review', 'Human Review']);
   });

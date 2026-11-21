@@ -13,7 +13,7 @@ new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fake], sandbo
   runId,
   sandboxId: ON_HOST,
   cwd: process.cwd(),
-  prompt: '/factory:dev',
+  prompt: '/factory:build',
   claudeSessionId: 'uuid-1',
   resume: false,
   model: 'sonnet',

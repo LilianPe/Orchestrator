@@ -24,7 +24,7 @@ const SHA = /^sha256:[0-9a-f]{64}$/;
 
 /** A dev prompt's input for a ticket. */
 const promptFor = (identifier: string, title = 'Export CSV') => ({
-  skill: 'factory:dev',
+  skill: 'factory:build',
   issue: { identifier, title, description: `Description de ${identifier}`, url: `https://linear.app/t/${identifier}` },
   branch: `factory/${identifier.toLowerCase()}`,
 });

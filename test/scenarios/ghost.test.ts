@@ -149,7 +149,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     await h.delegateReplays();
 
     // The fantome's pipeline, step by step, each on the clone at the start.
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
     const worktrees = h.workspaces.prepared.filter((w) => w.kind === 'worktree');
     expect(worktrees.length).toBeGreaterThan(0);
     expect(new Set(worktrees.map((w) => w.repoPath))).toEqual(new Set([CLONE]));
@@ -203,7 +203,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     h.checks.failNext('AssertionError: expected 1 to be 2');
     h.runner.enqueue(out({ intake: { size: 's', risk: 'low', complete: true, missing: [], screen: true } }), out({ spec: SPEC }), {}, out({ summary: 'Done.', preview: { command: 'make serve', setup: [] } }));
     await h.delegateReplays();
-    const dev = h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!;
+    const dev = h.runner.requests.find((r) => r.prompt.startsWith('/factory:build'))!;
     expect(dev.prompt).not.toContain('## Find how to start the application');
     const visual = asked.map((r) => r.visual).filter(Boolean);
     expect(visual.length).toBeGreaterThan(0);
@@ -240,7 +240,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     h.checks.failNext('AssertionError: expected 1 to be 2');
     h.runner.enqueue(out({ intake: { size: 's', risk: 'low', complete: true, missing: [], screen: true } }), out({ spec: SPEC }), {}, out({ summary: 'Done.' }));
     await h.delegateReplays();
-    const dev = h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!;
+    const dev = h.runner.requests.find((r) => r.prompt.startsWith('/factory:build'))!;
     expect(dev.prompt).not.toContain('## Find how to start the application');
     expect(recipes.read('p')).toBeUndefined();
     expect(git('log', '--format=%s')).toBe('init');

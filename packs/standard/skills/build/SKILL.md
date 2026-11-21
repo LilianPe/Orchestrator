@@ -1,9 +1,9 @@
 ---
-name: dev
+name: build
 description: Build a Linear ticket end to end in the current worktree, up to the commit the factory publishes (launched by the factory).
 ---
 
-# factory:dev
+# factory:build
 
 You receive a Linear ticket ("Ticket" block) and you work in a git worktree already created on the given branch ("Branch"), started from the trunk. You are alone: nobody answers during your turn. Your only channel to a human is a question that ends your turn: `submit_result` with `status: "blocked"` and the `question`.
 

@@ -1,6 +1,6 @@
 ---
 name: receiving-review
-description: Handle feedback (human or AI review, PR comments, failing checks or CI) rigorously: understand, verify in the code, fix what is right, refuse with a reason what is not. Used by factory:feedback and factory:fix-ci.
+description: Handle feedback (human or AI review, PR comments, failing checks or CI) rigorously: understand, verify in the code, fix what is right, refuse with a reason what is not. Used by factory:feedback.
 ---
 
 # factory:receiving-review

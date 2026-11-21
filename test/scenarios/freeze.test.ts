@@ -59,7 +59,7 @@ async function commitThenFinish(h: Harness, files: Record<string, string>): Prom
   const head = { ...AT_FREEZE, ...files };
   h.workspaces.steps.set(`${WORKTREE}@sha-freeze`, { changed: Object.keys(files).map((path) => ({ path, deleted: false })), head });
   h.workspaces.steps.set(`${WORKTREE}@sha-dev`, { changed: [], head });
-  h.runner.release(h.runner.requests.find((r) => r.prompt.startsWith('/factory:dev'))!.runId);
+  h.runner.release(h.runner.requests.find((r) => r.prompt.startsWith('/factory:build'))!.runId);
   await h.orch.drained();
 }
 

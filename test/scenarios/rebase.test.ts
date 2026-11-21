@@ -40,7 +40,7 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     h.workspaces.heads.set(WORKTREE, 'rebased1');
     await conflict(h);
 
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:rebase']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:rebase']);
     // In the ticket's sandbox and worktree, as every dev-queue step.
     expect(h.runner.requests[1]).toMatchObject({ cwd: WORKTREE });
     const types = await journal(h);
@@ -82,7 +82,7 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     await inReview(h);
     h.runner.enqueue({ output: DONE }, { output: DONE });
     await conflict(h);
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:rebase', '/factory:rebase']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:rebase', '/factory:rebase']);
     expect(h.runner.requests[2]!.prompt).toContain('## Failed checks');
     expect(h.publisher.published.map((p) => p.sha)).toEqual(['built1', 'rebased2']);
   });
@@ -109,16 +109,16 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'Rename the column.', author: 'L', kind: 'instruction' });
     await h.advance(180_000);
     const feedback = (await h.ticket()).activeRunId!;
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
 
     await conflict(h);
     // The running agent gets nothing of the conflict, and nothing starts beside it.
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect(await h.ticket()).toMatchObject({ activeRunId: feedback, pendingJob: { job: 'rebase' } });
 
     h.runner.release(feedback);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback', '/factory:rebase']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback', '/factory:rebase']);
   });
 
   it('the rebases share the bound of the review and CI loop: past it, a conflict blocks the ticket and starts nothing', async () => {
@@ -126,7 +126,7 @@ describe('a conflict with the default branch: the rebase step (ORC-146)', () => 
     await inReview(h);
     h.runner.enqueue({ output: DONE }, { output: DONE });
     for (const head of ['h1', 'h2', 'h3']) await conflict(h, head);
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:rebase', '/factory:rebase']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:rebase', '/factory:rebase']);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'conflict', ciFixAttempts: 2 });
   });
 });

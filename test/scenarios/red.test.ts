@@ -35,7 +35,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     h.checks.failNext('AssertionError: expected 1 to be 2');
     await delegated(h);
     expect(h.checks.calls.map((c) => c.commands)).toEqual([["npm test -- 'src/export.test.ts'"]]);
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
   });
@@ -44,7 +44,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     const h = harness();
     h.checks.failNext(SYNTAX);
     await delegated(h);
-    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:build']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect(await traces(h)).toContain('red: would have blocked (compile), measure mode: the run goes on');
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: false, cause: 'compile' }]);
@@ -72,7 +72,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     const h = harness();
     h.workspaces.steps.set(WORKTREE, { changed: [{ path: 'src/export.test.ts', deleted: false }, { path: 'src/export.ts', deleted: false }] });
     await delegated(h);
-    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:build']);
     expect(await traces(h)).toContain('red: would have blocked (scope), measure mode: the run goes on');
   });
 
@@ -98,7 +98,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     await delegated(h);
     expect(h.sandboxes.execs.map((e) => e.argv.at(-1))).toContain("npm test -- 'src/export.test.ts'");
     expect(h.checks.calls).toEqual([]);
-    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:build']);
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
   });
 
@@ -135,7 +135,7 @@ ERROR tests/test_audit.py
     h.checks.failNext(collectionError('app.audit'));
     await delegated(h);
     expect(h.checks.calls[0]!.commands[0]).toContain(`uv run --frozen pytest 'tests/test_audit.py' --junitxml=`);
-    expect(skills(h)).toEqual(['/factory:tests', '/factory:dev']);
+    expect(skills(h)).toEqual(['/factory:tests', '/factory:build']);
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'missing_module' }]);
   });
 

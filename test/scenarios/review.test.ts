@@ -89,7 +89,7 @@ describe('the AI review (ORC-183)', () => {
     await published(h);
     const levels = h.runner.requests.map((r) => [r.prompt.split('\n')[0], h.sandboxes.created.find((c) => c.runId === r.runId)?.network]);
     expect(levels).toEqual([
-      ['/factory:dev', 'limited'],
+      ['/factory:build', 'limited'],
       ['/factory:review', 'claude-api'],
       ['/factory:review', 'claude-api'],
     ]);
