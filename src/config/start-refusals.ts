@@ -27,13 +27,22 @@ const NO_FACTORY_YML = 'no factory.yml in FACTORY_HOME: the daemon reads its con
  * the instance from before factory.yml (ORC-199), looked at by their presence alone, never opened.
  * `signIn`: what the dashboard's sign-in is built from, off the loopback alone.
  */
+/**
+ * Why `secrets_key` is required, undefined when it is set or not needed (ORC-398, ORC-470): off the loopback, or beside Linear (a
+ * `linear` section, or a secrets.json, looked at by its presence alone). Its reference counts too: doctor reads no secret but the
+ * App's, a key of another source than env stays unread there; at the start, a reference is a value read, or the start already stopped.
+ */
+export function secretsKeyNeeded(home: string, instance: Pick<InstanceConfig, 'host'>, yml: FactoryYml | undefined): 'exposed' | 'linear' | undefined {
+  if (yml?.secretsKey || yml?.secretRefs?.['secrets_key']) return undefined;
+  if (!isLoopbackHost(instance.host)) return 'exposed';
+  return yml?.linear || existsSync(homePaths(home).secrets) ? 'linear' : undefined;
+}
+
 export function startRefusals(home: string, instance: InstanceConfig, yml: FactoryYml | undefined, env: NodeJS.ProcessEnv): StartChecks {
   if (!yml) throw new Error(NO_FACTORY_YML);
   const client = githubOAuthClient(instance, env);
   let signIn: StartChecks['signIn'];
-  // Its reference counts too: doctor reads no secret but the App's, a key of another source than env stays unread there. At the
-  // start, a reference is a value read, or the start already stopped.
-  const keyed = !!yml.secretsKey || !!yml.secretRefs?.['secrets_key'];
+  const keyNeeded = secretsKeyNeeded(home, instance, yml);
   if (!isLoopbackHost(instance.host)) {
     const exposed = `host: ${instance.host} exposes the interface and the API of ${PRODUCT_NAME} outside this machine, behind a GitHub sign-in through the factory's App`;
     if (!client) {
@@ -41,10 +50,9 @@ export function startRefusals(home: string, instance: InstanceConfig, yml: Facto
     }
     if (!yml.dashboard) throw new Error(`${exposed}: name who may sign in, dashboard: { logins, org, team } in factory.yml.`);
     if (!instance.publicUrl?.startsWith('https://')) throw new Error(`${exposed}: set public_url to its https:// address, where GitHub calls the sign-in back and the session cookie is sent.`);
-    if (!keyed) throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: ${SECRETS_KEY_REQUIRED}.`);
+    if (keyNeeded) throw new Error(`host: ${instance.host} exposes ${PRODUCT_NAME} outside this machine: ${SECRETS_KEY_REQUIRED}.`);
     signIn = { client, access: yml.dashboard, publicUrl: instance.publicUrl };
   }
-  // Only its presence: a sealed file is not opened here.
-  if (!keyed && (yml.linear || existsSync(homePaths(home).secrets))) throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);
+  if (keyNeeded === 'linear') throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);
   return { warnings: [...relayWarnings(instance), ...oldDatabaseWarnings(home), ...oldInstanceFileWarnings(home)], ...(client ? { oauthClient: client } : {}), ...(signIn ? { signIn } : {}) };
 }

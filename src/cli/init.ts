@@ -255,7 +255,8 @@ const DEV_KEY: Omit<SecretsKeyFile, 'dir'> = { source: 'factory_home', name: 'se
 async function drawDevSecretsKey(home: string, yml: Record<string, unknown> | null | undefined): Promise<{ key: string; file: SecretsKeyFile }> {
   const file = { ...DEV_KEY, dir: resolve(home) };
   const sources = yml?.['secret_sources'];
-  if (sources != null && typeof sources === 'object' && file.source in sources) {
+  // Its declaration would replace that one, whose references would be lost.
+  if (isRecord(sources) && file.source in sources) {
     throw new Error(`secret_sources.${file.source} in factory.yml: factory init --dev declares its secrets_key under that name: ${SECRETS_KEY_REQUIRED}.`);
   }
   const path = join(file.dir, file.name);

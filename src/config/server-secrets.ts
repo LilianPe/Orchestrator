@@ -4,7 +4,8 @@ import { openSecretSources, SECRET_SOURCE_KINDS } from '../adapters/secrets/regi
 import { refText, type SecretRef, type SecretSource, type SecretSourceKind } from '../adapters/secrets/types.js';
 import { DAY_MS } from '../core/baseline.js';
 import { FactoryYmlError, factoryYmlText, parseFactoryYml, type FactoryYml } from './factory-yml.js';
-import { effectiveInstance, isLoopbackHost, secretsText } from './instance.js';
+import { effectiveInstance, secretsText } from './instance.js';
+import { secretsKeyNeeded } from './start-refusals.js';
 import { isSealed, SECRETS_KEY_REQUIRED } from './secrets-file.js';
 
 /** Past this, `doctor` says a secret's rotation is too old (ORC-398, ORC-222 criterion 4). */
@@ -109,11 +110,10 @@ export async function serverSecretReport(
   const instance = effectiveInstance(yml);
   const stored = secretsText(home);
   // The daemon does not start without it off the loopback, said whether or not secrets.json exists yet, nor beside Linear (ORC-470).
-  // Checked on `secretRefs`: values are deferred here, so `secretsKey` is unset for a key read from a source.
-  const exposed = !isLoopbackHost(instance.host);
-  const keyMissing = !yml?.secretRefs?.['secrets_key'] && (exposed || !!yml?.linear || stored !== undefined);
-  if (keyMissing) {
-    const why = exposed ? `host: ${instance.host}` : 'Linear is set up';
+  const needed = secretsKeyNeeded(home, instance, yml);
+  const keyMissing = needed !== undefined;
+  if (needed) {
+    const why = needed === 'exposed' ? `host: ${instance.host}` : 'Linear is set up';
     reports.push({ key: 'secrets_key', inClear: false, warnings: [`missing, the daemon refuses to start (${why}): ${SECRETS_KEY_REQUIRED}`] });
   }
   if (!yml?.secretRefs?.['github.private_key'] && env['GH_APP_KEY']) {

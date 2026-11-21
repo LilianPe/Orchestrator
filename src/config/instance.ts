@@ -141,8 +141,6 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
     else doc.set(yml, doc.createNode(value));
   }
   if (keyFile) {
-    // Another declaration of that name would lose its references.
-    if (doc.hasIn(['secret_sources', keyFile.source])) throw new FactoryYmlError([`secret_sources.${keyFile.source}: already declared: write secrets_key in factory.yml by hand`]);
     // A bare `secret_sources:` holds no map to add to.
     if (doc.get('secret_sources') == null) doc.set('secret_sources', doc.createNode({}));
     doc.setIn(['secret_sources', keyFile.source], doc.createNode({ kind: 'file', dir: keyFile.dir }));
@@ -270,7 +268,7 @@ export function linearSettings(home: string, yml: FactoryYml | undefined): Linea
 }
 
 /** Writes Linear's OAuth tokens and identifiers to `secrets.json`, leaving its static values as they are there; encrypted with `secrets_key` (ORC-398), refused without it (ORC-470). */
-export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>, yml?: Pick<FactoryYml, 'secretsKey'>): void {
+export function saveLinearTokens(home: string, patch: Partial<Omit<LinearSecrets, 'clientId' | 'clientSecret' | 'webhookSecret'>>, yml: Pick<FactoryYml, 'secretsKey'> | undefined): void {
   const key = yml?.secretsKey;
   // Never in clear, on the loopback too (ORC-470): Connect Linear and a refresh stop here without it.
   if (!key) throw new Error(`${LINEAR_NEEDS_SECRETS_KEY}.`);

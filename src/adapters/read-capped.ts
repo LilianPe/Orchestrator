@@ -1,5 +1,8 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 
+/** Read only, no symbolic link followed, no FIFO waited on; Windows has neither flag. */
+export const NO_FOLLOW_READ = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
 /**
  * The first `cap` bytes of a plain file; undefined when there is none. Not following a link nor
  * waiting on a FIFO: for a file an agent could have replaced by either. `cut`: the file goes on past the cap.
@@ -7,7 +10,7 @@ import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 export function readCapped(path: string, cap: number): { text: string; cut: boolean } | 'not a file' | undefined {
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    fd = openSync(path, NO_FOLLOW_READ);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     return 'not a file';

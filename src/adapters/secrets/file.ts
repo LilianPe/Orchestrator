@@ -1,13 +1,10 @@
-import { constants } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { NO_FOLLOW_READ } from '../read-capped.js';
 import type { SecretSourceKind } from './types.js';
 
 /** A file's name in its folder: letters, digits, `_`, `.`, `-`, never a dot name nor a path. */
 const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
-
-/** No symbolic link followed, no FIFO waited on; Windows has neither flag. */
-const OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
 const errnoCode = (err: unknown): string | undefined => (err as NodeJS.ErrnoException | undefined)?.code;
 
@@ -32,7 +29,7 @@ export const fileSecretKind: SecretSourceKind = {
         let handle: FileHandle;
         try {
           // A symbolic link is refused at the open: what is checked is what is read.
-          handle = await open(join(dir, name), OPEN_FLAGS);
+          handle = await open(join(dir, name), NO_FOLLOW_READ);
         } catch (err) {
           if (errnoCode(err) === 'ELOOP') throw notRegular;
           // The cause carries a path, never a content.
