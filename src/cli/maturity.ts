@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
-import { packageJsonDependencies, pyprojectDependencies } from '../checks/deps.js';
+import { manifestDependencies } from '../checks/deps.js';
 import { mainCardValue, type DryRun } from '../core/dry-run.js';
 import { MAIN_CARD } from '../core/maturity.js';
 import type { MaturityPoint } from '../store/types.js';
@@ -50,16 +50,14 @@ const WALK_LIMIT = 20_000;
 /** The names of every dependency of the repository's package.json and pyproject.toml, and the manifests not read in full, with why (ORC-454). */
 interface Manifests {
   deps: Set<string>;
-  problems: { file: string; why: string }[];
+  problems: { file: string; problem?: string }[];
 }
 
 function dependencies(repo: string): Manifests {
-  const readers = [['package.json', packageJsonDependencies], ['pyproject.toml', pyprojectDependencies]] as const;
-  const read = readers.filter(([file]) => existsSync(join(repo, file))).map(([file, names]) => ({ file, ...names(readFileSync(join(repo, file), 'utf8')) }));
-  return {
-    deps: new Set(read.flatMap((r) => r.names)),
-    problems: read.flatMap(({ file, problem }) => (problem === undefined ? [] : [{ file, why: problem }])),
-  };
+  const read = (['package.json', 'pyproject.toml'] as const)
+    .filter((file) => existsSync(join(repo, file)))
+    .map((file) => ({ file, ...manifestDependencies(file, readFileSync(join(repo, file), 'utf8')) }));
+  return { deps: new Set(read.flatMap((r) => r.names)), problems: read.filter((r) => r.problem !== undefined) };
 }
 
 function stack(repo: string, { deps, problems }: Manifests): string {
@@ -72,7 +70,7 @@ function stack(repo: string, { deps, problems }: Manifests): string {
   if (!parts.length) return 'none detected (no package.json, no pyproject.toml)';
   const front = FRONT_ENDS.find(([pkg]) => deps.has(pkg));
   const found = [...parts, ...(front ? [front[1]] : [])].join(', ');
-  return problems.length ? `${found}; ${problems.map((p) => `${p.file} not fully read (${p.why})`).join('; ')}: Stack, Services and Visual paths may miss some of ${problems.length > 1 ? 'their' : 'its'} dependencies` : found;
+  return problems.length ? `${found}; ${problems.map((p) => `${p.file} not fully read (${p.problem})`).join('; ')}: Stack, Services and Visual paths may miss some of ${problems.length > 1 ? 'their' : 'its'} dependencies` : found;
 }
 
 function commands({ setup, commands, preview }: DetectedChecks): string {
@@ -80,20 +78,24 @@ function commands({ setup, commands, preview }: DetectedChecks): string {
   return lines.length ? lines.join('\n') : 'none found: verify would have no check to run';
 }
 
-/** What a card read from the dependencies adds when a manifest was not read in full (ORC-454). */
-const unreadNote = ({ problems }: Manifests) => (problems.length ? `; ${problems.map((p) => p.file).join(' and ')} not fully read (see Stack): a dependency may be missing` : '');
+/** A card read from the dependencies, with the manifests not read in full named (ORC-454). */
+const withUnread = (value: string, { problems }: Manifests) =>
+  problems.length ? `${value}; ${problems.map((p) => p.file).join(' and ')} not fully read (see Stack): a dependency may be missing` : value;
 
 function services(repo: string, manifests: Manifests): string {
   const compose = COMPOSE_FILES.find((f) => existsSync(join(repo, f)) && runsPostgres(readFileSync(join(repo, f), 'utf8')));
   if (compose) return `postgres (${compose})`;
   const pkg = POSTGRES_PACKAGES.find((p) => manifests.deps.has(p));
-  return (pkg ? `postgres (dependency ${pkg})` : 'none') + unreadNote(manifests);
+  return withUnread(pkg ? `postgres (dependency ${pkg})` : 'none', manifests);
 }
 
 function visualPaths(repo: string, manifests: Manifests): string {
-  if (!FRONT_ENDS.some(([pkg]) => manifests.deps.has(pkg))) return 'none: no front-end framework detected' + unreadNote(manifests);
-  const dirs = VISUAL_DIRS.filter((d) => existsSync(join(repo, d)));
-  return (dirs.length ? dirs.map((d) => `${d}/**`).join(', ') : 'none: a front end, but none of its usual directories') + unreadNote(manifests);
+  const front = FRONT_ENDS.some(([pkg]) => manifests.deps.has(pkg));
+  const dirs = front ? VISUAL_DIRS.filter((d) => existsSync(join(repo, d))) : [];
+  const value = !front
+    ? 'none: no front-end framework detected'
+    : dirs.length ? dirs.map((d) => `${d}/**`).join(', ') : 'none: a front end, but none of its usual directories';
+  return withUnread(value, manifests);
 }
 
 /** The entries of `dir` the walk enters: none when it cannot be read; neither dot entries nor `SKIPPED`. */

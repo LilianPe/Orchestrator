@@ -531,7 +531,7 @@ export function createApp(d: ServerDeps): Hono {
     if (card === 'changed') return c.json({ error: 'the card changed since it was shown: read it again' }, 409);
     if (card === 'unchecked') return c.json({ error: `main is not checked yet: run factory dry-run ${c.req.param('projectId')}, then approve its result` }, 409);
     // A card approved already keeps its first approval (ORC-454): `already` lets the page say whose it is.
-    return card ? c.json({ ok: true, ...(card.approvedAt === at ? {} : { already: true }), card }) : c.json({ error: 'no such card' }, 404);
+    return card ? c.json({ ok: true, ...(card.approvedAt === at && card.approvedBy === operator(c).actor ? {} : { already: true }), card }) : c.json({ error: 'no such card' }, 404);
   });
 
   // The security log (ORC-300), read-only, from the logs the factory read off the proxy and the hook (ORC-296): hosts,

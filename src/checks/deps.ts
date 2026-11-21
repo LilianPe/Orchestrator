@@ -415,28 +415,24 @@ export interface ManifestNames {
   problem?: string;
 }
 
-function namesOf(m: Manifest, read: (m: Manifest, text: string) => void, text: string, name: (d: Declared) => string): ManifestNames {
-  try {
-    read(m, text);
-  } catch (err) {
-    return { names: m.deps.map(name), problem: (err as Error).message };
-  }
-  return { names: m.deps.map(name) };
-}
-
-/** The names a pyproject.toml declares as dependencies, normalized. */
-export const pyprojectDependencies = (text: string): ManifestNames =>
-  namesOf({ path: 'pyproject.toml', deps: [], directives: [] }, readPyproject, text, (d) => d.name);
-
-/** The names a package.json declares as dependencies, in every npm section. */
-export const packageJsonDependencies = (text: string): ManifestNames =>
-  namesOf({ path: 'package.json', deps: [], directives: [] }, readPackageJson, text, (d) => d.declared);
-
 const READERS: Record<Exclude<ManifestKind, 'unsupported'>, (m: Manifest, text: string) => void> = {
   'package.json': readPackageJson,
   'pyproject.toml': readPyproject,
   requirements: readRequirements,
 };
+
+/** The names `file`, a package.json (as declared, in every npm section) or a pyproject.toml (normalized), declares as dependencies. */
+export function manifestDependencies(file: 'package.json' | 'pyproject.toml', text: string): ManifestNames {
+  const m: Manifest = { path: file, deps: [], directives: [] };
+  const names = () => m.deps.map((d) => (file === 'package.json' ? d.declared : d.name));
+  try {
+    READERS[file](m, text);
+  } catch (err) {
+    if (err instanceof ManifestError) return { names: names(), problem: err.message };
+    throw err;
+  }
+  return { names: names() };
+}
 
 // ---------------------------------------------------------------- additions
 
