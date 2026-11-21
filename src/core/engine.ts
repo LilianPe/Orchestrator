@@ -1160,10 +1160,7 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
   return r && { ...r, input: 'ci_failures' };
 }
 
-/**
- * The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. `/stop` and the undelegation
- * stop from Linear too; the `agent:stop` label no longer (ORC-201), its addition only says so (`RETIRED_STOP_LABEL`).
- */
+/** The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. The `agent:stop` label no longer (ORC-201). */
 function stopped(out: Decision, event: FactoryEvent<'session.stopped'>): Decision {
   reacted(out, event.type);
   return stop(out);
@@ -1466,8 +1463,6 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && (event.payload.noRepo || event.payload.replay))) return false;
   // A review that asks nothing (an approval, no words) is decided without the matrix: no read of Linear or GitHub for it (ORC-190).
   if (event.type === 'pr.reviewed') return asksForFix(event.payload);
-  // No label starts nor stops a run (ORC-201).
-  if (event.type === 'label.changed') return false;
   if (event.type !== 'status.changed') return true;
   // A move to Done may merge (ORC-148): its actor is always checked. A move to AI Review reviews again (`reviewAgain`).
   return event.payload.to === 'done' || reviewsAgain(event, workflow);
@@ -1475,7 +1470,7 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
 
 /** The events a human sends that the matrix may check (`mayCheck`): a cheap filter before any read. */
 export const HUMAN_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
-  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'pr.reviewed',
+  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'status.changed', 'pr.reviewed',
 ]);
 
 /** A human acting on a run by a move (`reviewAgain`): relaunching it when the ticket is blocked, triggering it otherwise. */
@@ -2073,11 +2068,6 @@ export const BLOCKED_LABEL = 'Bloqué';
 /** The labels the connection to Linear creates in a team: `Bloqué` alone, no `agent:*` label any longer (ORC-201). */
 export const FACTORY_LABELS: readonly string[] = [BLOCKED_LABEL];
 
-/** The stop label of Relais, created until ORC-201: it stops nothing any longer, its addition is answered (`RETIRED_STOP_ANSWER`). */
-const RETIRED_STOP_LABEL = 'agent:stop';
-const RETIRED_STOP_ANSWER =
-  'The `agent:stop` label stops nothing any longer: to stop the work, press Stop in the agent session, write `/stop` there, or remove the delegation.';
-
 /**
  * The label follows the ticket's blocked flag from before the event to after the decision, however it
  * changed: a block or unblock decided here, or a lift made by `reduce` itself (a repair, a cancellation).
@@ -2586,10 +2576,10 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
-      const { change, otherRepo } = event.payload;
-      // The label the connection created before ORC-201 may still be in the team: whoever adds it is told how to stop.
-      if (change === 'added' && event.payload.label === RETIRED_STOP_LABEL && ticket?.delegated) {
-        out.effects.push({ kind: 'comment', body: RETIRED_STOP_ANSWER });
+      const { change, label, otherRepo } = event.payload;
+      // The stop label the connection created before ORC-201 may still be in the team: whoever adds it is told how to stop.
+      if (change === 'added' && label === 'agent:stop' && ticket?.delegated) {
+        out.effects.push({ kind: 'comment', body: `The \`agent:stop\` label stops nothing any longer: to stop the work, press Stop in the agent session, write \`${STOP_COMMAND}\` there, or remove the delegation.` });
       }
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
         out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
