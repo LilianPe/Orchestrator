@@ -15,8 +15,11 @@ import { utc } from './prompt.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
-/** What breaks a dry run, as its report classifies it (ORC-408). */
-export type DryRunBreakKind = 'dependency' | 'service' | 'variable' | 'flaky' | 'failure';
+/**
+ * What breaks a dry run, as its report classifies it (ORC-408). `secret`: a setup that declares `setup_secrets` failed without
+ * them, the dry run unverifiable rather than red (ORC-453): it is not counted in `ok`.
+ */
+export type DryRunBreakKind = 'dependency' | 'service' | 'variable' | 'flaky' | 'failure' | 'secret';
 
 export interface DryRunBreak {
   kind: DryRunBreakKind;
@@ -201,6 +204,11 @@ const UNREACHABLE_LINES = [
 const ERROR_LINE = /\b(?:error|fail(?:ed|ure)?|assert\w*|exception|traceback|panic)\b/i;
 
 const brief = (line: string) => line.trim().slice(0, DETAIL_MAX);
+/** The first error line, or the last one; what names a failure. */
+const errorLine = (lines: readonly string[]) => {
+  const error = lines.find((l) => ERROR_LINE.test(l)) ?? lines.at(-1);
+  return error ? brief(error) : 'it printed nothing';
+};
 const linesOf = (output: string) => output.replace(ANSI, '').split('\n').filter((l) => l.trim());
 
 function firstLine(lines: readonly string[], patterns: readonly RegExp[]): string | undefined {
@@ -255,8 +263,7 @@ export function classifyBreak(output: string, step: DryRunBreak['step'], vars: D
   if (variable) return { kind: 'variable', detail: variable };
   const service = lines.find(serviceLine);
   if (service) return { kind: 'service', detail: `a service does not answer: ${brief(service)}` };
-  const error = lines.find((l) => ERROR_LINE.test(l)) ?? lines.at(-1);
-  return { kind: 'failure', detail: error ? brief(error) : 'it printed nothing' };
+  return { kind: 'failure', detail: errorLine(lines) };
 }
 
 /**
@@ -274,6 +281,16 @@ export function unreachable(output: string): string | undefined {
 const breakOf = (step: DryRunBreak['step'], command: string, output: string, vars: DryRunVariables): DryRunBreak => ({
   ...classifyBreak(output, step, vars), step, command, output: logExcerpt(output, OUTPUT_MAX),
 });
+
+/**
+ * A setup's break that its secrets, withheld from a dry run, may cause (ORC-453): its first error line said after them, not what
+ * the break was read as (a private registry's 404 is no missing dependency); over its cap, what the cap says.
+ */
+const unverifiable = (broke: DryRunBreak, secrets: readonly string[]): DryRunBreak => {
+  const lines = linesOf(broke.output);
+  const cause = broke.kind === 'failure' || !lines.length ? broke.detail : errorLine(lines);
+  return { ...broke, kind: 'secret', detail: `unverifiable without its secrets (${secrets.join(', ')}), which a dry run's setup does not get: ${cause}` };
+};
 
 /**
  * The breaks of the failed commands: a failing test that passed on its rerun is flaky; a command that failed on its flaky tests
@@ -339,7 +356,7 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
   const sha = await fetchCommit(req, git, cloneDir);
   const files = await fingerprintFiles((...args) => git.raw('ls-tree', ...args), sha);
   const dryRun = (breaks: DryRunBreak[], ranSetup: readonly string[], ran: readonly string[]): DryRun => ({
-    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: !breaks.length,
+    id: req.runId, projectId: req.projectId, sha, target: req.sha ? 'commit' : 'main', ok: breaks.every((b) => b.kind === 'secret'),
     fingerprint: dryRunFingerprint({ setup: ranSetup, image: req.image, ...files }), breaks, commands: [...ran], startedAt, endedAt: req.now(),
   });
   let config: RepoConfig;
@@ -380,6 +397,9 @@ export async function runDryRun(req: DryRunRequest): Promise<DryRun> {
       // service of the repository's own is its own, past an installer's retry warning (pip's `Retrying … ProxyError`).
       const down = broke.kind === 'failure' || broke.kind === 'dependency' ? unreachable(err.output) : undefined;
       if (down) throw new Error(`${err.command}: a registry or the egress proxy did not answer, no dry run recorded: ${down}`, { cause: err });
+      // Its secrets withheld (ORC-453): what the setup broke on, but a variable or a service of its own, may be their absence.
+      const own = broke.kind === 'variable' || broke.kind === 'service';
+      if (config.setupSecrets.length && !own) return dryRun([unverifiable(broke, config.setupSecrets)], setup, []);
       return dryRun([broke], setup, []);
     }
   }
@@ -406,14 +426,21 @@ export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRu
 /** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
 export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
 
+/** Green, red, or unverifiable: green but for a setup that failed without its secrets (ORC-453), whose commands did not run. */
+export const dryRunVerdict = (run: DryRun): 'green' | 'red' | 'unverifiable' =>
+  !run.ok ? 'red' : run.breaks.length ? 'unverifiable' : 'green';
+
 /**
- * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green or red with what breaks,
- * its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run on main sets it (ORC-437).
+ * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green, unverifiable without its
+ * secrets or red with what breaks, its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run
+ * on main sets it (ORC-437).
  */
 export function mainCardValue(run: DryRun | undefined): string {
   if (!run) return MAIN_UNCHECKED;
   const of = `the dry run of ${run.sha.slice(0, 12)} on ${utc(run.endedAt)}`;
-  if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
+  const verdict = dryRunVerdict(run);
+  if (verdict === 'unverifiable') return `unverifiable: ${of}: its setup \`${run.breaks[0]!.command}\` failed without the secrets it declares under setup_secrets, which a dry run does not get`;
+  if (verdict === 'green') return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
   const broke = dryRunBroke(run) || 'no break recorded';
   return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
 }

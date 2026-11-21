@@ -13,7 +13,7 @@ import { goesThroughFreeze } from '../core/engine.js';
 import { isNote, noSearchReason, repoNameOf, searchAsked, type ReadNote, type SearchContext } from '../knowledge/preview-recipe.js';
 import { type QueueName, type FactoryEvent, type TicketState, type VerifyFailure, TRUSTED } from '../core/types.js';
 import { checkBranchPaths, classOfBranch, runCleanVerify, untrustedCheck, type CleanVerifyRequest, type CleanVerifyResult, type UntrustedMark, type VisualRequest } from '../core/clean-verify.js';
-import { dryRunFingerprint, dryRunHolds, mainCardValue, runDryRun, type DryRun } from '../core/dry-run.js';
+import { dryRunFingerprint, dryRunHolds, dryRunVerdict, mainCardValue, runDryRun, type DryRun } from '../core/dry-run.js';
 import { MAIN_CARD } from '../core/maturity.js';
 import { logExcerpt } from '../checks/log-excerpt.js';
 import { cappedCommand, cappedExit, type VerifyResult } from '../core/verify.js';
@@ -274,7 +274,7 @@ export abstract class DaemonChecks extends DaemonBase {
       if (run.target === 'main') {
         await this.d.store.setMaturityCardValue(projectId, MAIN_CARD, mainCardValue(run), this.d.clock.now()).catch((err: Error) => this.log('warn', `dry run of ${projectId}: main maturity card not set: ${err.message}`));
       }
-      this.log('info', `dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : `red (${run.breaks.map((b) => b.kind).join(', ')})`}`);
+      this.log('info', `dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? dryRunVerdict(run) : `red (${run.breaks.map((b) => b.kind).join(', ')})`}`);
       return run;
     } finally {
       await rm(runDir, { recursive: true, force: true }).catch((err: Error) => this.log('warn', `dry run of ${projectId}: ${runDir} not removed: ${err.message}`));

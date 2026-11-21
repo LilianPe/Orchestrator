@@ -1,6 +1,6 @@
 import { request, type RequestOptions } from 'node:http';
 import { PRODUCT_NAME } from '../product.js';
-import type { DryRun } from '../core/dry-run.js';
+import { dryRunVerdict, type DryRun } from '../core/dry-run.js';
 import type { RunRecord } from '../store/types.js';
 import { holds } from '../core/routing.js';
 import type { TicketState } from '../core/types.js';
@@ -194,8 +194,8 @@ export async function runStopCommand(d: ControlDeps, ticketId: string): Promise<
 
 /**
  * `factory dry-run <project>` (ORC-409): the daemon runs the dry run of the project's default branch and records it, as a delegated
- * ticket's launch does, and the CLI prints it once recorded: green, or red with each break, its step, command, cause and an excerpt
- * of what the command printed. 0 when green.
+ * ticket's launch does, and the CLI prints it once recorded: green, unverifiable without its secrets (ORC-453), or red, with each
+ * break, its step, command, cause and an excerpt of what the command printed. 0 unless red: the tickets go on.
  */
 export async function runDryRunCommand(d: ControlDeps, projectId: string): Promise<number> {
   d.out(`Dry run of ${projectId} under way: its setup and commands in the sandbox, as verify runs them (minutes)…`);
@@ -207,11 +207,13 @@ export async function runDryRunCommand(d: ControlDeps, projectId: string): Promi
     return 1;
   }
   const run = (await res.json()) as DryRun;
-  d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${run.ok ? 'green' : 'red'}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
+  const verdict = dryRunVerdict(run);
+  d.out(`Dry run of ${projectId} on ${run.sha.slice(0, 12)}: ${verdict === 'unverifiable' ? 'unverifiable without its secrets' : verdict}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}.`);
   for (const b of run.breaks) {
     d.out(`  ${b.kind}, ${b.step} \`${b.command}\`: ${b.detail}`);
     for (const line of b.output.split('\n').filter((l) => l.trim())) d.out(`    | ${line}`);
   }
   if (!run.ok) d.out(`The tickets of ${projectId} are refused while its dry run is red: fix what breaks, then run this again. A ticket it refused starts on a reply once it is green.`);
+  else if (verdict === 'unverifiable') d.out(`The tickets of ${projectId} are not refused: its setup failed without the secrets it declares under setup_secrets, which a dry run does not get, so its build and tests were not run.`);
   return run.ok ? 0 : 1;
 }

@@ -8,7 +8,7 @@ import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import type { CommandRun } from '../checks/flaky.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
-import { breaksOfRuns, classifyBreak, dryRunFingerprint, dryRunHolds, dryRunRefusal, runDryRun, unreachable, type DryRun, type DryRunRequest } from './dry-run.js';
+import { breaksOfRuns, classifyBreak, dryRunFingerprint, dryRunHolds, dryRunRefusal, dryRunVerdict, mainCardValue, runDryRun, unreachable, type DryRun, type DryRunRequest } from './dry-run.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -250,6 +250,59 @@ describe('runDryRun (ORC-408)', () => {
     expect(run.breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup', detail: expect.stringContaining('egress proxy does not allow') })]);
   });
 
+  describe('a setup that declares its setup_secrets (ORC-453)', () => {
+    const SECRET_CONFIG = 'setup: npm ci\nsetup_secrets: [NPM_TOKEN]\ncommands:\n  test: grep green state.txt\n';
+    const failing = (stderr: string, code = 1) => {
+      const f = forge({}, { '.factory/config.yml': SECRET_CONFIG });
+      f.sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code } : undefined);
+      return f;
+    };
+
+    it('failing as a private registry does without its token, is not red: unverifiable without its secrets, the tickets go on', async () => {
+      const { req, sandboxes } = failing('npm error code E404\nnpm error 404 Not Found - GET https://npm.acme.internal/@acme%2fui - Not found\n');
+      const run = await runDryRun(req);
+      expect(run.ok).toBe(true);
+      expect(run.breaks).toEqual([expect.objectContaining({ kind: 'secret', step: 'setup', command: 'npm ci', detail: expect.stringContaining('NPM_TOKEN') })]);
+      expect(run.breaks[0]!.detail).toContain('npm error code E404');
+      expect(run.breaks[0]!.detail).not.toContain('dependency');
+      expect(run.commands).toEqual([]);
+      expect(dryRunVerdict(run)).toBe('unverifiable');
+      // No secret reaches the dry run's setup.
+      expect(sandboxes.ran.find((r) => r.command === 'npm ci')!.env).not.toHaveProperty('NPM_TOKEN');
+    });
+
+    it('failing on anything else than a variable or a service is unverifiable too: a failure, an over-cap setup', async () => {
+      expect((await runDryRun(failing('npm error code E401\nnpm error Unable to authenticate, need: Basic realm="acme"\n').req)).breaks.map((b) => b.kind)).toEqual(['secret']);
+      expect((await runDryRun(failing('Error: NPM_TOKEN is not set\n').req)).breaks.map((b) => b.kind)).toEqual(['secret']);
+    });
+
+    it.each([
+      ['a variable the repository does not declare', 'Error: STRIPE_KEY is not set\n', 'variable'],
+      ['a service of its own refusing', 'Error: connect ECONNREFUSED 127.0.0.1:5432\n', 'service'],
+    ])('failing on %s stays red as such: its own cause, whatever the secrets', async (_, stderr, kind) => {
+      const run = await runDryRun(failing(stderr).req);
+      expect(run.ok).toBe(false);
+      expect(run.breaks).toEqual([expect.objectContaining({ kind, step: 'setup' })]);
+    });
+
+    it('a registry or the egress proxy not answering still rejects: a breakdown says nothing of the secrets', async () => {
+      await expect(runDryRun(failing('npm error connect ECONNREFUSED 127.0.0.1:3128\n').req)).rejects.toThrow('no dry run recorded');
+    });
+
+    it('a setup that passes is green: the secrets are needed only when it fails', async () => {
+      const { req } = forge({}, { '.factory/config.yml': SECRET_CONFIG });
+      expect(await runDryRun(req)).toMatchObject({ ok: true, breaks: [], commands: ['grep green state.txt'] });
+    });
+  });
+
+  it('without setup_secrets, a setup that fails is red as before: a dependency', async () => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr: 'npm error 404 Not Found - GET https://registry.npmjs.org/left-pad\n', code: 1 } : undefined);
+    const run = await runDryRun(req);
+    expect(run).toMatchObject({ ok: false, breaks: [expect.objectContaining({ kind: 'dependency' })] });
+    expect(dryRunVerdict(run)).toBe('red');
+  });
+
   it('a forge that no longer answers rejects at the dry run\'s deadline, not at git\'s', async () => {
     const { req } = forge();
     const exec: Exec = (cmd, args, opts) => (args.includes('fetch') ? new Promise(() => {}) : execCmd(cmd, args, opts));
@@ -344,6 +397,27 @@ describe('dryRunHolds (ORC-409)', () => {
   it('none holds once an input changed', () => {
     expect(dryRunHolds(run(true), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
     expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
+  });
+});
+
+describe('a dry run unverifiable without its secrets (ORC-453)', () => {
+  const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
+  const secret = { kind: 'secret' as const, step: 'setup' as const, command: 'npm ci', detail: 'unverifiable without its secrets (NPM_TOKEN): …', output: '' };
+  const run = (over: Partial<DryRun>): DryRun => ({ id: 'd', projectId: 'acme', sha: '0123456789abcdef', target: 'main', ok: true, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: Date.UTC(2026, 10, 20, 14, 3), ...over });
+
+  it('its verdict: green, red, or unverifiable when its only break is a secret', () => {
+    expect(dryRunVerdict(run({ commands: ['npm test'] }))).toBe('green');
+    expect(dryRunVerdict(run({ ok: false, breaks: [{ ...secret, kind: 'failure' }] }))).toBe('red');
+    expect(dryRunVerdict(run({ breaks: [secret] }))).toBe('unverifiable');
+  });
+
+  it('the main maturity card says it unverifiable, with the secrets its setup needs, never green', () => {
+    const value = mainCardValue(run({ breaks: [secret] }));
+    expect(value).toBe('unverifiable: the dry run of 0123456789ab on 2026-11-20 14:03 UTC: its setup `npm ci` failed without the secrets it declares under setup_secrets, which a dry run does not get');
+  });
+
+  it('holds as a green one does: same inputs, the branch moved or not', () => {
+    expect(dryRunHolds(run({ breaks: [secret] }), { sha: 'f'.repeat(40), fingerprint })).toBe(true);
   });
 });
 

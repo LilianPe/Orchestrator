@@ -21,7 +21,8 @@ result in the store:
    (`workspace.setup`, the `dev` job's `verify`) when it declares none; its `services` and its `env`.
 3. **The checkout**, in a sandbox at network `none`.
 4. **The `setup`**, sealed as an attempt's is (`runSealedSetup`): in a sandbox of its own at network `limited` (N2: the package
-   registries the egress proxy allows), with no secret, no install script, and nothing published in the last 7 days.
+   registries the egress proxy allows), with no secret, no install script, and nothing published in the last 7 days. A
+   `setup` that declares `setup_secrets` and fails without them is unverifiable, not red ([below](#unverifiable-without-its-secrets-orc-453)).
 5. **The commands**, in a new sandbox at network `none`, with the repository's services and its declared variables. A failing
    test that the runner's report names (vitest, jest, pytest) is run again once, as in `verify`.
 
@@ -44,7 +45,7 @@ sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sh
 
 ## What breaks
 
-A dry run is **green** when nothing breaks, **red** otherwise. Each break names its step (`config`, `setup` or `command`), the
+A dry run is **green** when nothing breaks, **unverifiable** when its only break is a `secret`, **red** otherwise. Each break names its step (`config`, `setup` or `command`), the
 command, an excerpt of its output, and a detail line, classified as:
 
 | Kind | Read from | Example |
@@ -54,6 +55,7 @@ command, an excerpt of its output, and a detail line, classified as:
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
+| `secret` | a `setup` that fails when `.factory/config.yml` declares `setup_secrets`, on anything but a `variable` or a `service`: its first error line, after the secrets it lacks. Not counted in `ok` | `unverifiable without its secrets (NPM_TOKEN), which a dry run's setup does not get: npm error code E404` |
 
 The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
 command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only
@@ -64,6 +66,21 @@ security log.
 
 A flaky test makes the dry run red: the same flake would fail a ticket's `verify`. Put it on the repository's known flaky list
 (`factory flaky`) to make it indicative.
+
+## Unverifiable without its secrets (ORC-453)
+
+A dry run's `setup` gets no secret, as `verify`'s does not. A repository whose `setup` needs one (a private registry's token,
+declared under `setup_secrets`) fails there on what the secret's absence causes: a 404 or a 401 of its registry, an unset
+token. The dry run cannot tell that apart from the repository's own state, so it does not say it red:
+
+- the break is a `secret`, its detail the secrets declared and the setup's first error line;
+- `ok` stays true: the gate lets the repository's tickets start, and the dry run holds as a green one does;
+- the `main` maturity card says `unverifiable: …` with the setup's command, never `green`;
+- `factory dry-run` prints it `unverifiable without its secrets`, with the break, and exits 0.
+
+What the setup's failure names of the repository's own stays red: a variable it does not get (`variable`), a service of its own
+refusing (`service`). A registry or the egress proxy not answering still rejects, as for any setup. The build and the tests do
+not run after a failed setup: an unverifiable dry run says nothing of them.
 
 ## The fingerprint
 
@@ -93,7 +110,7 @@ the config's blob.
 - **Otherwise it runs now**, and the launch waits for it: a project's first delegation runs its first dry run, so a first ticket
   never waits for a dry run nobody started. Two tickets delegated together wait for the same one; red on another commit than the
   one the second ticket's launch read (a fix pushed while it ran), the second runs a new one.
-- **Green**, the ticket goes on. **Red**, it is refused before any run (unless another launch took the ticket while it ran): blocked as the repository's to fix (the Flow's `repo_config`
+- **Green** or **unverifiable** without its secrets, the ticket goes on. **Red**, it is refused before any run (unless another launch took the ticket while it ran): blocked as the repository's to fix (the Flow's `repo_config`
   cause), with a comment that says what breaks, each break with its step, its command and the line that names its cause, and how
   it runs again. A reply resumes the ticket, which goes through the gate again.
 - **It cannot run** (the engine, the forge or a registry not answering): the launch fails, as any launch error, and nothing is
