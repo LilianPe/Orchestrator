@@ -86,3 +86,71 @@ describe.skipIf(skip)(title, () => {
     }
   }, 420_000);
 });
+
+/**
+ * What `current_user_can_bypass` means for the App's token on the real GitHub (ORC-427): `doctor` credits a ruleset that
+ * requires a pull request only when it reads `never` there. The test repository holds two active rulesets, each with the
+ * rule "Require a pull request before merging" alone:
+ * - `iso-guarded`, on the branch `iso-protection/guarded`, with no bypass actor;
+ * - `iso-bypassed`, on the branch `iso-protection/bypassed`, with the test App as a bypass actor, "Always allow".
+ * The App cannot create them (no Administration permission): a human does, once (docs/tests.md). The test creates either
+ * branch when absent. For each, the oracle is GitHub itself: the App's token moves the branch without a pull request, and
+ * `doctor`'s verdict must be the one that push gives: accepted where GitHub refuses it, refused where it lands.
+ */
+const PROTECTION = [
+  { branch: 'iso-protection/guarded', ruleset: 'iso-guarded', bypassable: false },
+  { branch: 'iso-protection/bypassed', ruleset: 'iso-bypassed', bypassable: true },
+];
+
+const protectionGate = gate("isolation 12: doctor reads the branch protection the App's token really has", GITHUB_ENV);
+
+describe.skipIf(protectionGate.skip)(protectionGate.title, () => {
+  let token = '';
+
+  beforeAll(async () => {
+    token = await new LiveForge(appOptions()).token(REPO);
+  }, 120_000);
+
+  it.each(PROTECTION)('$branch ($ruleset): what doctor reads and judges matches a direct push of the App', async ({ branch, ruleset, bypassable }) => {
+    const live = new GitHubAppApi(appOptions());
+    let ref = await gh(`/repos/${REPO}/git/ref/heads/${branch}`, token);
+    if (ref.status === 404) {
+      const { body: repo } = await gh(`/repos/${REPO}`, token);
+      const { body: base } = await gh(`/repos/${REPO}/commits/${repo.default_branch as string}`, token);
+      const created = await gh(`/repos/${REPO}/git/refs`, token, { method: 'POST', body: { ref: `refs/heads/${branch}`, sha: base.sha } });
+      expect(created.status, `cannot create ${branch}: create it by hand from the default branch (docs/tests.md)`).toBe(201);
+      ref = await gh(`/repos/${REPO}/git/ref/heads/${branch}`, token);
+    }
+    expect(ref.status).toBe(200);
+    const head = ref.body.object.sha as string;
+
+    // What doctor reads: the ruleset is there, and GitHub says whether the App may bypass it.
+    const protection = await live.branchProtection(REPO, branch);
+    expect(protection.pullRequestRulesets, `no active ruleset requires a pull request on ${branch}: create ${ruleset} (docs/tests.md)`).not.toEqual([]);
+    expect(protection.pullRequestRulesets.map((r) => r.bypass)).toEqual(protection.pullRequestRulesets.map(() => (bypassable ? 'always' : 'never')));
+
+    // What doctor judges, the other verdicts held accepted.
+    const host: HostReport = { verdict: 'accepted', reasons: ['held accepted'] };
+    const api = { listWorkflows: async () => [], listEnvironments: async () => [], branchProtection: () => live.branchProtection(REPO, branch), installationPermissions: async () => ({}) };
+    const lines: string[] = [];
+    const code = await runDoctor({ repoPath: REPO, api, host, out: (l) => lines.push(l), json: true });
+    const report = JSON.parse(lines.join('\n')) as { branchProtection: { branch: string; verdict: string } };
+    expect(report.branchProtection, lines.join('\n')).toMatchObject({ branch, verdict: bypassable ? 'refused' : 'accepted' });
+    expect(code).toBe(bypassable ? 1 : 0);
+
+    // The oracle: the App's token moves the branch without a pull request, to a commit of the same tree.
+    const { body: commit } = await gh(`/repos/${REPO}/git/commits/${head}`, token);
+    const next = await gh(`/repos/${REPO}/git/commits`, token, { method: 'POST', body: { message: 'iso-12: a direct push (ORC-427)', tree: commit.tree.sha, parents: [head] } });
+    expect(next.status).toBe(201);
+    const push = await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: next.body.sha, force: false } });
+    if (bypassable) {
+      expect(push.status, JSON.stringify(push.body)).toBe(200);
+      // Back where it was, so the branch does not grow with each run; the App bypasses the ruleset for this too.
+      expect((await gh(`/repos/${REPO}/git/refs/heads/${branch}`, token, { method: 'PATCH', body: { sha: head, force: true } })).status).toBe(200);
+    } else {
+      // Refused by the ruleset, not for a missing permission: the bypassed branch shows the token may push.
+      expect(push.status, JSON.stringify(push.body)).toBe(422);
+      expect(String(push.body?.message)).toMatch(/rule/i);
+    }
+  }, 120_000);
+});

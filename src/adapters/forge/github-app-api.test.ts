@@ -267,6 +267,19 @@ describe('GitHubAppApi.branchProtection (ORC-208)', () => {
     expect(protection.pullRequestRulesets).toEqual([{ id: 6, bypass: 'never' }]);
   });
 
+  it('reads a named branch instead of the default one, without asking the repository for it (ORC-427)', async () => {
+    const calls: Call[] = [];
+    const routes: Route[] = [
+      tokenRoute(),
+      (url) => (url.pathname === '/repos/acme/app/rulesets/4' ? { body: { id: 4, current_user_can_bypass: 'always' } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/branches/iso%2Fguarded' ? { body: { protection: { enabled: false } } } : undefined),
+      (url) => (url.pathname === '/repos/acme/app/rules/branches/iso%2Fguarded' ? { body: [{ type: 'pull_request', ruleset_id: 4 }] } : undefined),
+    ];
+    const protection = await makeApi(routes, calls).branchProtection('/repo', 'iso/guarded');
+    expect(protection).toEqual({ branch: 'iso/guarded', classic: false, rules: ['pull_request'], pullRequestRulesets: [{ id: 4, bypass: 'always' }] });
+    expect(calls.some((call) => new URL(call.url).pathname === '/repos/acme/app')).toBe(false);
+  });
+
   it("rejects a ruleset that does not say whether the App can bypass it", async () => {
     const routes = protectionRoutes({ protected: true, protection: { enabled: false } }, [{ type: 'pull_request', ruleset_id: 7 }], undefined, { '7': { id: 7 } });
     await expect(makeApi(routes).branchProtection('/repo')).rejects.toThrow(/unreadable answer, not a ruleset/);

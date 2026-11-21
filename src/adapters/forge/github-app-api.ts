@@ -141,11 +141,12 @@ export class GitHubAppApi extends GitHubAppAuth {
     return environments.map((environment) => ({ name: environment.name, requiredReviewers: hasRequiredReviewers(environment.protection_rules) }));
   }
 
-  async branchProtection(repoPath: string): Promise<BranchProtection> {
+  /** The default branch's, as `doctor` judges it; `named`, another branch's (the real GitHub's test, ORC-427). */
+  async branchProtection(repoPath: string, named?: string): Promise<BranchProtection> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
     const base = repoApi(repo);
-    const { default_branch: branch } = await this.read('GET', base, token, isRepository, 'a repository with its default branch');
+    const branch = named ?? (await this.read('GET', base, token, isRepository, 'a repository with its default branch')).default_branch;
     const [{ protection: { enabled: classic } }, rules] = await Promise.all([
       this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its classic protection flag'),
       this.allPages(`${base}/rules/branches/${segment(branch)}`, null, 'a list of branch rules', isRule, token),
