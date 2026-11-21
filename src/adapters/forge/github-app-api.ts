@@ -1,4 +1,4 @@
-import { GitHubApiError, GitHubAppAuth, isRecord, repoApi } from './github-app.js';
+import { GitHubApiError, GitHubAppAuth, isRecord, repoApi, type GitHubRepoRef } from './github-app.js';
 
 /** One workflow file, decoded from the Contents API. */
 export interface WorkflowSource {
@@ -144,8 +144,18 @@ export class GitHubAppApi extends GitHubAppAuth {
   async branchProtection(repoPath: string): Promise<BranchProtection> {
     const repo = await this.repo(repoPath);
     const token = await this.installationToken(repo);
+    const { default_branch: branch } = await this.read('GET', repoApi(repo), token, isRepository, 'a repository with its default branch');
+    return this.#protection(repo, token, branch);
+  }
+
+  /** Any branch's protection, read as `branchProtection` reads the default one's (the real GitHub's test, ORC-427). */
+  async protectionOf(repoPath: string, branch: string): Promise<BranchProtection> {
+    const repo = await this.repo(repoPath);
+    return this.#protection(repo, await this.installationToken(repo), branch);
+  }
+
+  async #protection(repo: GitHubRepoRef, token: string, branch: string): Promise<BranchProtection> {
     const base = repoApi(repo);
-    const { default_branch: branch } = await this.read('GET', base, token, isRepository, 'a repository with its default branch');
     const [{ protection: { enabled: classic } }, rules] = await Promise.all([
       this.read('GET', `${base}/branches/${segment(branch)}`, token, isBranch, 'a branch with its classic protection flag'),
       this.allPages(`${base}/rules/branches/${segment(branch)}`, null, 'a list of branch rules', isRule, token),
