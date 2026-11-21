@@ -8,8 +8,8 @@ import { cli, enabled, useSandboxes } from './helpers.js';
 
 /**
  * ORC-447: a Yarn 4 repository, `packageManager: yarn@4.x`, installs its dependencies in the sandbox through the egress
- * proxy, Yarn fetched by Corepack with its own HTTP client. The Yarn 4 test of network.test.ts installs Yarn with npm, so it
- * stays green whether Corepack trusts the factory authority or not.
+ * proxy, Yarn fetched by Corepack with its own HTTP client. network.test.ts installs Yarn 4 with npm, and has Corepack print
+ * Yarn's version only, passing when the image has no Corepack: here the whole install, and no Corepack is a failure.
  *
  * The real `EgressProxy` in this process at `limited`, the real registries upstream: Corepack must trust the authority the
  * proxy decrypts with (`NODE_EXTRA_CA_CERTS`) and fetch Yarn from the npm registry (`COREPACK_NPM_REGISTRY`, ORC-219), its
@@ -35,9 +35,17 @@ describe.skipIf(!enabled || process.platform !== 'linux')(`Corepack fetches Yarn
     const r = await sh(sbx.id, script);
     return { code: r.code, out: `${r.stdout}${r.stderr}`.trim() };
   };
-  const journal = (): EgressEntry[] => {
+  /** Read once it stops growing, as useEgress's: a line is written when its response ends, through an async stream. */
+  const journal = async (): Promise<EgressEntry[]> => {
     const path = proxy.journalPath(runId);
-    const text = existsSync(path) ? readFileSync(path, 'utf8').trim() : '';
+    const read = () => (existsSync(path) ? readFileSync(path, 'utf8') : '');
+    for (let last = read(), same = 0, i = 0; i < 30 && same < 3; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const now = read();
+      same = now === last ? same + 1 : 0;
+      last = now;
+    }
+    const text = read().trim();
     return text ? text.split('\n').map((l) => JSON.parse(l) as EgressEntry) : [];
   };
 
@@ -67,13 +75,13 @@ describe.skipIf(!enabled || process.platform !== 'linux')(`Corepack fetches Yarn
     expect(r).toMatchObject({ code: 0, out: expect.stringMatching(/^4\.5\.0$/m) as string });
     expect(r.out).toContain('is-number@7.0.0');
 
-    const entries = journal();
+    const entries = await journal();
     // Yarn itself, by Corepack, from the npm registry; the dependency's tarball, by Yarn, from its registry.
     expect(entries).toContainEqual(expect.objectContaining({ method: 'GET', host: 'registry.npmjs.org', path: '/@yarnpkg/cli-dist/-/cli-dist-4.5.0.tgz', ok: true }));
     expect(entries).toContainEqual(expect.objectContaining({ method: 'GET', host: 'registry.yarnpkg.com', path: '/is-number/-/is-number-7.0.0.tgz', ok: true }));
     // Corepack's default host was never needed: the list was not widened for it.
     expect(entries.filter((e) => e.host === 'repo.yarnpkg.com')).toEqual([]);
-    // The proxy stays the only way out: no name resolves in the sandbox.
-    expect((await run('getent hosts registry.npmjs.org')).code).not.toBe(0);
+    // The proxy stays the only way out: no name resolves in the sandbox (2, getent's "not found"; 127 would be no getent).
+    expect((await run('getent hosts registry.npmjs.org')).code).toBe(2);
   });
 });
