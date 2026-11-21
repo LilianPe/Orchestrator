@@ -274,6 +274,16 @@ describe('runDryRun (ORC-408)', () => {
     it('failing on anything else than a variable or a service is unverifiable too: a failure, an over-cap setup', async () => {
       expect((await runDryRun(failing('npm error code E401\nnpm error Unable to authenticate, need: Basic realm="acme"\n').req)).breaks.map((b) => b.kind)).toEqual(['secret']);
       expect((await runDryRun(failing('Error: NPM_TOKEN is not set\n').req)).breaks.map((b) => b.kind)).toEqual(['secret']);
+      const now = Date.now();
+      const { req, sandboxes } = failing('');
+      sandboxes.answer = (command) => {
+        if (command !== 'npm ci') return undefined;
+        // Past the cap on the factory's clock: the exit is the cap's (`cappedExit`).
+        vi.spyOn(Date, 'now').mockReturnValue(now + 2 * VERIFY_TIMEOUT_MS);
+        return { stdout: '', stderr: 'npm http fetch GET https://npm.acme.internal/@acme%2fui\n', code: 124 };
+      };
+      const capped = await runDryRun(req);
+      expect(capped).toMatchObject({ ok: true, breaks: [expect.objectContaining({ kind: 'secret', detail: expect.stringContaining('NPM_TOKEN') })] });
     });
 
     it.each([
@@ -534,8 +544,16 @@ describe('classifyBreak', () => {
     ['a gateway timeout', 'curl: (56) CONNECT tunnel failed, response 504'],
     ['Yarn', 'error An unexpected error occurred: "https://registry.yarnpkg.com/zod: tunneling socket could not be established, statusCode=502".'],
     ['undici', 'TypeError: fetch failed\n  [cause]: Error: Proxy response (502) !== 200 when HTTP Tunneling'],
+    ['wget, by its reason alone', 'Proxy tunneling failed: Bad GatewayUnable to establish SSL connection.'],
+    ['Go, by its reason alone', 'go: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/github.com/acme/x/@v/v1.2.0.zip": Bad Gateway'],
   ])('the proxy\'s 5xx to a CONNECT is a breakdown, whatever its wording: %s', (_, output) => {
-    expect(unreachable(output)).toMatch(/50[24]/);
+    expect(unreachable(output)).toMatch(/50[24]|Bad Gateway/);
+  });
+
+  it('npm\'s code E502 is a breakdown; a linter\'s rule E502 is not', () => {
+    expect(unreachable('npm error code E502')).toContain('E502');
+    expect(unreachable('npm ERR! code E503')).toContain('E503');
+    expect(unreachable('src/x.py:3:80: E502 the backslash is redundant between brackets')).toBeUndefined();
   });
 
   it.each([
@@ -582,6 +600,24 @@ describe('classifyBreak', () => {
     expect(classifyBreak("HTTPSConnectionPool(host='pypi.org', port=443): Failed to establish a new connection: [Errno 111] Connection refused", 'setup', declared).kind).toBe('failure');
     expect(classifyBreak('psql: error: could not connect to server: Connection timed out\n\tIs the server running on host "db.acme.com" (10.0.0.5) and accepting\n\tTCP/IP connections on port 5432?', 'command', declared).kind).toBe('failure');
     expect(classifyBreak('could not connect to server: No route to host', 'command', declared).kind).toBe('failure');
+  });
+
+  it.each([
+    ['libpq', 'psql: error: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection timed out', '5432'],
+    ['Node', 'Error: connect ETIMEDOUT 127.0.0.1:6379', '6379'],
+    ['Go', 'dial tcp 127.0.0.1:5432: i/o timeout', '5432'],
+    ['Prisma', "Error: P1001: Can't reach database server at `localhost`:`5432`", '5432'],
+  ])('a service of the loopback that does not answer, timed out or unreachable, is a service, never a breakdown: %s', (_, line, port) => {
+    expect(classifyBreak(line, 'setup', declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining(port) });
+    expect(unreachable(line)).toBeUndefined();
+  });
+
+  it('a test that timed out naming the loopback is no service: only a connection that did', () => {
+    expect(classifyBreak('Error: Test timed out in 5000ms, waiting for http://localhost:3000/health', 'command', declared).kind).toBe('failure');
+  });
+
+  it('the relay timed out is a breakdown', () => {
+    expect(unreachable('curl: (28) Failed to connect to 127.0.0.1 port 3128 after 130001 ms: Connection timed out')).toContain('3128');
   });
 
   it('libpq refused on the loopback is a service, in its old and its new words', () => {

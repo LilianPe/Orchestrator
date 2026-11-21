@@ -165,11 +165,15 @@ const VARIABLE_LINES = [
 const NAME = /[A-Z][A-Z0-9_]{2,}/g;
 /**
  * A port on the loopback, as the tools write it: `127.0.0.1:5432`, `[::1]:3128`, curl's `127.0.0.1 port 3128`, urllib3's
- * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`. The port is the first group.
+ * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`, Prisma's `` `localhost`:`5432` ``.
+ * The port is the first group.
  */
-const LOOPBACK_PORT = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])['"]?\)?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)(\d{1,5})\b/;
-/** A connection refused, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's. */
-const REFUSAL = /ECONNREFUSED|connection refused|failed to connect|could(?:n't| not) connect|connect call failed/i;
+const LOOPBACK_PORT = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])['"`]?\)?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)`?(\d{1,5})\b/;
+/**
+ * A connection refused or not answered, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's,
+ * Prisma's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
+ */
+const REFUSAL = /ECONNREFUSED|ETIMEDOUT|connection refused|connection timed out|i\/o timeout|failed to connect|could(?:n't| not) connect|connect call failed|can't reach database server/i;
 /** The egress proxy's relay, where the setup's tools reach the registries. */
 const RELAY_PORT = '3128';
 const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(line)?.[1] : undefined);
@@ -194,8 +198,9 @@ const serviceLine = (line: string) => {
  */
 const UNREACHABLE_LINES = [
   /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
-  // curl's and git's to a CONNECT, Yarn's, undici's; curl's `--fail`, npm's code.
-  /\bCONNECT\b.*\b50[234]\b|\b50[234]\b.*\bCONNECT\b|statusCode=50[234]\b|Proxy response \(50[234]\)|returned error: 50[234]\b|\bE50[234]\b/,
+  // curl's and git's to a CONNECT, Yarn's, undici's; curl's `--fail`, npm's code; wget's and Go's, by the reason alone.
+  /\bCONNECT\b.*\b50[234]\b|\b50[234]\b.*\bCONNECT\b|statusCode=50[234]\b|Proxy response \(50[234]\)|returned error: 50[234]\b|npm (?:ERR!|error) code E50[234]\b/,
+  /Proxy tunneling failed: (?:Bad Gateway|Service Unavailable|Gateway Time-?out)|: (?:Bad Gateway|Service Unavailable|Gateway Time-?out)\s*$/,
   /\bConnection timed out\b/i,
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,

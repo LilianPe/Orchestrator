@@ -30,14 +30,14 @@ What the factory cannot tell anything about rejects, and nothing is recorded: th
 a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
 or timed out, curl's and git's plain `Connection timed out` among them, a 502, 503 or 504 in any of the tools' words (`502 Bad
 Gateway`, the proxy's answer to a `CONNECT` as curl and git say it, Yarn's `statusCode=502`, undici's `Proxy response (502)`,
-curl's `returned error: 502`, npm's `E502`), pip's or uv's connection or DNS error, pip's `ProxyError`), even when it then says a
+curl's `returned error: 502`, npm's `code E502`, wget's and Go's `Bad Gateway` alone), pip's or uv's connection or DNS error, pip's `ProxyError`), even when it then says a
 dependency is missing. The proxy's body (`egress proxy: …`) is the same for its refusal (403) and its breakdown (502, as an
 upstream that hung up or a TLS cut): beside a 5xx it is a breakdown, otherwise a registry it does not allow. The relay refusing is read by its address, whatever the tool's
 words: a line that says a connection was refused and names `127.0.0.1:3128` (or `localhost`, `[::1]`, curl's `port 3128`,
 urllib3's `port=3128`) is a breakdown, from npm, curl, git, Go, wget, apt or Maven alike; a line that only names the relay
 (`HTTPS_PROXY=http://127.0.0.1:3128`) is not. A setup that exited on a variable, or on a service refusing (a connection refused
-on another port of the loopback, by any client: Node's `connect ECONNREFUSED`, Python's `requests`, `psycopg`, `redis-py` or
-`asyncpg`, Go's `dial tcp`; or libpq's `could not connect to server` with the loopback on its line), is recorded red as such,
+or timed out on another port of the loopback, by any client: Node's `connect ECONNREFUSED` or `ETIMEDOUT`, Python's `requests`,
+`psycopg`, `redis-py` or `asyncpg`, Go's `dial tcp`, Prisma's `Can't reach database server`; or libpq's `could not connect to server` with the loopback on its line), is recorded red as such,
 past an installer's retry warning. A connection refused by a host off the loopback is no service: a `failure`, or in the setup a
 breakdown. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
 Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
@@ -51,7 +51,7 @@ command, an excerpt of its output, and a detail line, classified as:
 | Kind | Read from | Example |
 |---|---|---|
 | `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (a 403, to a `CONNECT` too) | `No matching version found for left-pad@9.9.9` |
-| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on a port of the loopback, whatever the client that says it (but the egress proxy's relay, `3128`) | `connect ECONNREFUSED 127.0.0.1:5432`, `HTTPConnectionPool(host='localhost', port=8000): … Connection refused` |
+| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused or timed out on a port of the loopback, whatever the client that says it (but the egress proxy's relay, `3128`) | `connect ECONNREFUSED 127.0.0.1:5432`, `HTTPConnectionPool(host='localhost', port=8000): … Connection refused` |
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
@@ -80,7 +80,9 @@ token. The dry run cannot tell that apart from the repository's own state, so it
 
 What the setup's failure names of the repository's own stays red: a variable it does not get (`variable`), a service of its own
 refusing (`service`). A registry or the egress proxy not answering still rejects, as for any setup. The build and the tests do
-not run after a failed setup: an unverifiable dry run says nothing of them.
+not run after a failed setup: an unverifiable dry run says nothing of them. It holds as a green one does, so while the setup
+keeps failing without its secrets and its inputs do not change, no dry run runs the repository's build and tests: a test broken
+on the default branch is not seen by the gate, only by each ticket's `verify`.
 
 ## The fingerprint
 
