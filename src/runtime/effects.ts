@@ -596,6 +596,8 @@ export abstract class DaemonEffects extends DaemonChecks {
       return;
     }
     const mark = `effect:${key.id}:refused`;
+    // The head the push went over (ORC-438), kept by the effect's key: a replay finds its commit pushed, and nothing under it.
+    const beforeMark = `effect:${key.id}:before`;
     const payload = { runId: c.runId, job: c.job, sha: c.sha };
     const base = { ...TRUSTED, projectId: project.id, ticketId: t.ticketId };
     const refuse = async (reason: string) => void (await this.accept({ ...base, id: `publish-refused:${key.id}`, type: 'publish.refused', at: this.d.clock.now(), payload: { ...payload, reason } }));
@@ -618,10 +620,8 @@ export abstract class DaemonEffects extends DaemonChecks {
         const described = describePr(c.output, { ...publishFacts(t, c), ...(open ? {} : await this.hostCaptures(project, t, c)) });
         const text = await this.policy.pr(open ? { title: described.title, body: `Ticket: ${t.ticketId}` } : described);
         const pr = await publisher.publish({ projectId: project.id, repoPath: project.repoPath, ticketId: t.ticketId, runId: c.runId, worktree: t.worktreePath, branch: t.branch, sha: c.sha, ...untrusted, ...(rewrites ? { rewrites } : {}), ...text });
-        // The head the push went over (ORC-438), kept by the effect's key: a replay finds its commit pushed, and nothing under it.
-        const beforeMark = `effect:${key.id}:before`;
         if (pr.before) await this.d.store.setMeta(beforeMark, pr.before);
-        const before = pr.before ?? (await this.d.store.getMeta(beforeMark));
+        const before = pr.before ?? (key.replay ? await this.d.store.getMeta(beforeMark) : undefined);
         await this.accept({ ...base, id: prEventId(t.ticketId, pr.prNumber, 'opened'), type: 'pr.opened', at: this.d.clock.now(), payload: { number: pr.prNumber, url: pr.url, branch: t.branch } });
         await this.publishChecks(project, t, c);
         return published(false, before);

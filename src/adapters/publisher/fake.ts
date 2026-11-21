@@ -61,11 +61,11 @@ export class FakePublisher implements Publisher {
     const refusal = this.refusals.shift();
     if (refusal) throw new PublishRefused(refusal.code, refusal.message);
     // The branch's head before the push, as the publisher reads it on the forge: an open PR's (a merged one's branch is taken as deleted).
-    const open = await this.forge.findPr(req.repoPath, req.branch);
-    const before = open?.state === 'OPEN' ? open.headSha : undefined;
+    const found = await this.forge.findPr(req.repoPath, req.branch);
+    const before = found?.state === 'OPEN' ? found.headSha : undefined;
     const { number, url } = await this.forge.ensurePr(req.repoPath, { branch: req.branch, base: 'main', title: req.title, body: req.body, draft: true });
     this.published.push(req);
-    const pr = (await this.forge.findPr(req.repoPath, req.branch))!;
+    const pr = found?.state === 'OPEN' ? found : (await this.forge.findPr(req.repoPath, req.branch))!;
     this.forge.setPr(req.branch, { ...pr, headSha: req.sha });
     return { prNumber: number, url, sha: req.sha, ...(before && before !== req.sha ? { before } : {}) };
   }

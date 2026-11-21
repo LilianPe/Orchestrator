@@ -298,9 +298,11 @@ describe('GithubReconciler', () => {
     });
 
     describe('a last push that names the head it replaced (ORC-438)', () => {
-      const replaced = (sha: string, before: string, n = 1): FactoryEvent<'publish.done'> => ({ ...published(sha, n), payload: { ...published(sha, n).payload, before } });
-      async function headAfter(head: string, events: FactoryEvent<'publish.done'>[], ticket: Partial<TicketState> = {}) {
-        const s = setup();
+      const replaced = (sha: string, before: string, n = 1): FactoryEvent<'publish.done'> => {
+        const e = published(sha, n);
+        return { ...e, payload: { ...e.payload, before } };
+      };
+      async function headAfter(head: string, events: FactoryEvent<'publish.done'>[], ticket: Partial<TicketState> = {}, s = setup()) {
         await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7, ...ticket });
         for (const e of events) await s.store.recordEvent(e);
         s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: head, checks: 'none', failedChecks: [] });
@@ -323,13 +325,9 @@ describe('GithubReconciler', () => {
 
       it('reads no head kept before the first publication', async () => {
         const s = setup();
-        await s.store.putTicket({ ...newTicketState('p', 'REL-1', 'T', 'human_review', 1), branch: 'b', prNumber: 7 });
-        await s.store.recordEvent(replaced(PUBLISHED, OTHER));
-        s.forge.setPr('b', { number: 7, url: 'u', state: 'OPEN', headSha: HUMAN, checks: 'none', failedChecks: [] });
         const getMeta = vi.spyOn(s.store, 'getMeta');
-        await s.reconciler.once('p');
+        expect(await headAfter(HUMAN, [replaced(PUBLISHED, OTHER)], {}, s)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
         expect(getMeta.mock.calls.filter(([key]) => key.startsWith('lost-push:'))).toEqual([]);
-        expect(s.events.filter((e) => e.type === 'push.human').map((e) => e.payload)).toEqual([expect.objectContaining({ sha: HUMAN, before: PUBLISHED })]);
       });
 
       it('keeps the head a push went over through a publication of the same commit since, which pushed nothing', async () => {

@@ -118,9 +118,7 @@ export class GithubReconciler {
     const published = last?.sha;
     // The last push and the head it went over, which the forge may still read just after it (ORC-438). A branch put back on
     // any other is a human's push, as the webhook reports it.
-    if (last?.before) {
-      if (head === published || head === last.before) return;
-    } else if (await this.inWindow(t, head, pushedHeads(events))) return;
+    if (last?.before ? head === published || head === last.before : await this.inWindow(t, head, pushedHeads(events))) return;
     await this.d.submit({
       ...TRUSTED,
       // What the push brought was verified by no one in the factory (I12).
