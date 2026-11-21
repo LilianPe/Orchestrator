@@ -15,7 +15,7 @@ describe('intake, the first step (ORC-206)', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: DESCRIPTION });
     h.runner.enqueue(assessment({ risk: 'medium', screen: true }), drafted());
     await delegate(h);
-    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec_draft']);
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec-draft']);
     expect(h.runner.requests[0]!.effort).toBe('low');
     const t = await h.ticket();
     expect(t).toMatchObject({ size: 's', risk: 'medium', visualProof: 'required', blocked: false, logical: 'spec' });
@@ -23,7 +23,7 @@ describe('intake, the first step (ORC-206)', () => {
     // Spec while the spec is drafted and reviewed (ORC-457).
     expect(moves()).toEqual(['Spec']);
     await toBuild(h, { build: [DEV] });
-    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec-draft', '/factory:tests', '/factory:build']);
     expect(moves()[1]).toBe('In Progress');
     // The dev attempt carries the risk intake assessed (ORC-226 labels).
     const dev = await h.store.getRun(h.runner.requests[3]!.runId);
@@ -73,7 +73,7 @@ describe('intake, the first step (ORC-206)', () => {
     // The spec carries the answer as a decision, or spec_check sends it back (ORC-212).
     h.runner.enqueue(assessment(), drafted({ ...SPEC, decisions: [{ question: 'CSV or XLSX?', answer: 'CSV' }] }));
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'CSV', author: 'Lilian', ack: true, kind: 'instruction' }, 'REL-1', { actor: 'user-lilian' });
-    expect(skills(h)).toEqual(['/factory:intake', '/factory:intake', '/factory:spec_draft']);
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:intake', '/factory:spec-draft']);
     expect(h.runner.requests[1]!.prompt).toContain('CSV');
   });
 

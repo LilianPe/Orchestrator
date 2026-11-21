@@ -40,15 +40,16 @@ describe('standard pack', () => {
   it("names each step's skill after its step, the fix's after `feedback` whatever the cause, and has no fix-ci (ORC-460)", () => {
     for (const step of factoryDefault.steps) {
       if (step.type === 'fix') expect(new Set(Object.values(step.skills)), step.id).toEqual(new Set(['factory:feedback']));
-      else if ('skill' in step && step.skill) expect(step.skill, step.id).toBe(`factory:${step.id}`);
+      else if ('skill' in step && step.skill) expect(step.skill, step.id).toBe(`factory:${step.id.replaceAll('_', '-')}`);
     }
     expect(readdirSync(join(pack, 'skills'))).not.toContain('fix-ci');
   });
 
-  it('ships the method skills, and every skill has frontmatter named after its folder', () => {
+  it('ships the method skills, and every skill has frontmatter named after its folder, a name Agent Skills accepts (ORC-468)', () => {
     const names = readdirSync(join(pack, 'skills'));
     expect(names).toEqual(expect.arrayContaining(['tdd', 'debugging', 'verification', 'code-review', 'receiving-review']));
     for (const name of names) {
+      expect(name).toMatch(/^[a-z0-9-]+$/);
       const text = readFileSync(join(pack, 'skills', name, 'SKILL.md'), 'utf8');
       expect(text, name).toMatch(new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n---\\n`));
     }

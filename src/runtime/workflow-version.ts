@@ -43,10 +43,13 @@ export function frozenWorkflow(version: WorkflowVersion): Workflow {
   return (wf.preset as Partial<Preset>).statuses ? wf : { ...wf, preset: { ...wf.preset, statuses: FORMER_STATUSES, posts: FORMER_POSTS } };
 }
 
-/** The skills ORC-460 renamed after their step, `fix-ci` folded into `feedback`: the pack no longer ships the old names. */
-const FORMER_SKILLS: Readonly<Record<string, string>> = { 'factory:dev': 'factory:build', 'factory:spec': 'factory:spec_draft', 'factory:fix-ci': 'factory:feedback' };
+/**
+ * The skills ORC-460 renamed after their step, `fix-ci` folded into `feedback`, and `spec_draft` ORC-468 renamed to a name Agent
+ * Skills accepts: the pack no longer ships the old names.
+ */
+const FORMER_SKILLS: Readonly<Record<string, string>> = { 'factory:dev': 'factory:build', 'factory:spec': 'factory:spec-draft', 'factory:spec_draft': 'factory:spec-draft', 'factory:fix-ci': 'factory:feedback' };
 
-/** A version frozen before ORC-460, its jobs on the skills of today's pack: the launch reads `job.skill`, never the preset's steps. */
+/** A version frozen before ORC-460 or ORC-468, its jobs on the skills of today's pack: the launch reads `job.skill`, never the preset's steps. */
 function renamedSkills(wf: Workflow): Workflow {
   const jobs = Object.fromEntries(Object.entries(wf.jobs).map(([name, job]) => [name, { ...job, skill: FORMER_SKILLS[job.skill] ?? job.skill }]));
   return { ...wf, jobs };
