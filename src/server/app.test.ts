@@ -8,6 +8,7 @@ import { FakeClock } from '../core/clock.js';
 import { newTicketState, TRUSTED, type FactoryEvent, type TicketState } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
 import type { ChangelogEntry, SecurityLog } from '../store/types.js';
+import { MAIN_UNCHECKED } from '../core/maturity.js';
 import { LABELS } from '../../test/helpers/store-suite.js';
 import { pendingLabels } from '../core/attempt-labels.js';
 import { AGENT_MCP_PATH, agentOnly, cliOnly, createApp, isAgentPath, type ServerDeps, type TakeOverDesk } from './app.js';
@@ -429,6 +430,15 @@ describe('server', () => {
       const { headers } = await signIn(app);
       const res = await approve(app, '/api/maturity/p/main/approve', headers);
       expect((await res.json()).card.approvedBy).toBe('github:armand');
+    });
+
+    it('refuses the main card while it says not checked yet: 409, nothing approved (ORC-437)', async () => {
+      const { app, store } = await setup();
+      await store.putMaturityCards('p', [{ key: 'main', title: 'main green or red', value: MAIN_UNCHECKED }], 4);
+      const res = await approve(app, '/api/maturity/p/main/approve', {}, MAIN_UNCHECKED);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toContain('factory dry-run p');
+      expect((await store.maturityCards('p'))[0]!.approvedBy).toBeUndefined();
     });
   });
 

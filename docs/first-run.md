@@ -77,7 +77,7 @@ Maturity report, one card per point to approve on the dashboard: http://localhos
   …
 ```
 
-The **main** card says the project's last dry run when the database holds one; on a first setup it has none yet, and the card stays « not checked yet »: `factory dry-run` (step 4) runs it and prints its result.
+The **main** card says the project's last dry run when the database holds one; on a first setup it has none yet, and the card says « not checked yet », which cannot be approved, until `factory dry-run` (step 4) sets it green or red (ORC-437).
 
 Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
