@@ -194,7 +194,6 @@ export class GitWorkspaces implements WorkspaceManager {
     if (req.kind === 'trunk-readonly') return this.trunkWorkspace(req);
     if (req.kind === 'published') return this.publishedWorkspace(req);
     const path = join(this.o.root, req.projectId, req.ticketId);
-    const port = req.portBase + req.slot;
     if (existsSync(path)) {
       const branch = agentHead(path)?.branch;
       if (!branch) {
@@ -202,7 +201,7 @@ export class GitWorkspaces implements WorkspaceManager {
         this.o.log?.(`${path}: not the git repository the factory created, or no longer readable`);
         throw new Error(`The git repository of the worktree ${req.projectId}/${req.ticketId} is not the one the factory created, or is no longer readable: this worktree must be deleted.`);
       }
-      return { path, port, branch };
+      return { path, branch };
     }
     if (!req.fetched) await this.fetch(req.repoPath);
     const has = async (ref: string) =>
@@ -228,7 +227,7 @@ export class GitWorkspaces implements WorkspaceManager {
     // On a branch that already existed: only its commits beyond the default branch count.
     const ahead = !!existing && (await this.git(req.repoPath, 'rev-list', '--count', `${trunk}..${existing}`)).trim() !== '0';
     await this.agentRepository(req.repoPath, path, trunk, checkout, local);
-    return { path, port, branch, fresh: true, ...(ahead ? { ahead } : {}) };
+    return { path, branch, fresh: true, ...(ahead ? { ahead } : {}) };
   }
 
   /**
@@ -406,7 +405,7 @@ export class GitWorkspaces implements WorkspaceManager {
     }
   }
 
-  /** Git in the agent's directory, on the host: only without sandboxes (`FACTORY_ALLOW_HOST_VERIFY`), where the agent runs on the host anyway. */
+  /** Git in the worktree, on the host: only without sandboxes, the fake runner's or a test's daemon, where no agent wrote it (ORC-179). */
   async uncommitted(path: string): Promise<string[]> {
     return parseStatus(await this.git(path, 'status', '--porcelain', '-z', '--untracked-files=all'));
   }

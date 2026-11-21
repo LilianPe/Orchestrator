@@ -12,12 +12,12 @@ import type { GhostReplay } from './replay.js';
  * daemon delegates each ticket to the replay's project itself, on its clone, with its text and its linked tickets as they were.
  */
 
-/** The `meta` key the daemon writes at each start: `1` when its runs have sandboxes, `0` when they run on the host. */
+/** The `meta` key the daemon writes at each start: `1` when its runs have sandboxes, `0` under `--fake-runner`, which has none. */
 export const SANDBOXES_META = 'daemon-sandboxes';
 
-/** Why a replay runs with sandboxes only: on the host, the agent holds the host's git login and could push by itself. */
-export const HOST_RUNS_REFUSED =
-  'the daemon runs its agents on the host (no sandboxes): an agent there holds the host\'s git login and could push by itself, which no effect mode can hold back. A replay runs with sandboxes only (FACTORY_CONTAINER_CLI).';
+/** Why a replay needs the sandboxes: a daemon without them (`--fake-runner`) runs no agent, and no run executes on the host (ORC-179). */
+export const NO_SANDBOXES_REFUSED =
+  'the daemon has no sandboxes (--fake-runner): a replay runs real agents, in sandboxes only (FACTORY_CONTAINER_CLI).';
 
 /** The id of the delegation of a replayed ticket: once per replay and ticket, whatever the passes. */
 export const replayDelegationId = (replayId: string, ticketId: string) => `ghost:${replayId}:${ticketId}`;
@@ -66,7 +66,7 @@ export interface ReplaysDeps {
   projects: readonly string[];
   /** `<dir>/<replay>/<ticket>/`, as `factory ghost start` rebuilt it. */
   dir: string;
-  /** Whether the daemon's runs have sandboxes: without, no replayed ticket is delegated (`HOST_RUNS_REFUSED`). */
+  /** Whether the daemon's runs have sandboxes: without, no replayed ticket is delegated (`NO_SANDBOXES_REFUSED`). */
   sandboxes: boolean;
   accept(event: FactoryEvent): Promise<boolean>;
   now(): number;
@@ -150,7 +150,7 @@ export class Replays implements ReplaySource {
   async delegate(): Promise<void> {
     const replays = (await this.d.store.ghostReplays()).filter((r) => this.d.projects.includes(r.projectId)).sort((a, b) => a.startedAt - b.startedAt);
     if (!this.d.sandboxes) {
-      for (const r of replays) this.once(r.id, `replay ${r.id} not run: ${HOST_RUNS_REFUSED}`);
+      for (const r of replays) this.once(r.id, `replay ${r.id} not run: ${NO_SANDBOXES_REFUSED}`);
       return;
     }
     for (const replay of replays) {

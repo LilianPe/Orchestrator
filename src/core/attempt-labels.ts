@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { runSettingsTemplate, type Settings } from '../config/run-settings.js';
 import type { JobSpec, Workflow } from './workflow.js';
 import { VERSION } from '../version.js';
 import { buildPrompt, type PromptInput } from './prompt.js';
@@ -167,11 +166,9 @@ async function packFile(packDir: string, name: string): Promise<FileEntry[]> {
 }
 
 /**
- * The run settings as `runSettingsTemplate` builds them from `<packDir>/settings.json` (`<HOME>`
- * in place of the instance's home, keys sorted), plus the plugin's other files: `hooks/`,
- * `.claude-plugin/`, `agents/`, `commands/` and `.mcp.json`. Not the `<home>/run-settings.json`
- * file itself: written from the same pack settings at each start, its absolute paths differ by
- * instance and OS.
+ * The run settings, `<packDir>/settings.json` as every run reads it in its sandbox (keys sorted), plus the plugin's other
+ * files: `hooks/`, `.claude-plugin/`, `agents/`, `commands/` and `.mcp.json`. The same for every instance and OS (ORC-226):
+ * no path of the instance's home is added since runs left the host (ORC-179).
  */
 export async function configFingerprint(packDir: string): Promise<string> {
   const [[pack], ...plugin] = await Promise.all([
@@ -180,7 +177,7 @@ export async function configFingerprint(packDir: string): Promise<string> {
     ...PLUGIN_FILES.map(async (f) => (await packFile(packDir, f)).map((e) => ({ ...e, bytes: normalizeEol(e.bytes) }))),
   ]);
   const settings = pack
-    ? [{ path: 'settings', bytes: Buffer.from(stableJson(runSettingsTemplate(JSON.parse(pack.bytes.toString('utf8')) as Settings)), 'utf8') }]
+    ? [{ path: 'settings', bytes: Buffer.from(stableJson(JSON.parse(pack.bytes.toString('utf8'))), 'utf8') }]
     : [];
   return hashFiles([...settings, ...plugin.flat()]);
 }

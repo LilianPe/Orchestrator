@@ -148,7 +148,7 @@ describe('the daemon fetches a private repository with the App installation toke
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const READS: Record<string, (f: Fixture, auth?: GitAuth) => Promise<unknown>> = {
   "a launch's fetch (GitWorkspaces)": (f, auth) =>
-    new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).prepare({ projectId: 'p', repoPath: f.repo, ticketId: 'T-1', title: 't', kind: 'trunk-readonly', slot: 0, portBase: 0, runId: 'r1' }),
+    new GitWorkspaces({ root: join(f.dir, 'ws'), exec: f.exec, ...(auth ? { auth } : {}) }).prepare({ projectId: 'p', repoPath: f.repo, ticketId: 'T-1', title: 't', kind: 'trunk-readonly', runId: 'r1' }),
   "the repository's config, on its default branch (read before a launch)": (f, auth) => makeRepoConfig({ exec: f.exec, ...(auth ? { auth } : {}) })({ repoPath: f.repo }),
   "verify's and the dry run's clone": async (f, auth) => {
     const clone = mkdtempSync(join(f.dir, 'clone-'));

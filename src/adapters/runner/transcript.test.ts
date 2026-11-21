@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { drain } from '../../../test/contracts/agent-runtime.contract.js';
+import { ON_HOST, OnHostSandboxes } from '../../../test/helpers/on-host-sandboxes.js';
 import { ClaudeCodeRunner } from './claude-code.js';
 import type { TicketState } from '../../core/types.js';
 import { MASK, maskTranscriptLine, purgeRunDirs, purgeSessionDirs, purgeTranscripts, transcriptSecrets, transcriptTail } from './transcript.js';
@@ -157,9 +158,9 @@ describe('ClaudeCodeRunner transcript', () => {
         JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Fini avec tok-abcdef-123456.', total_cost_usd: 0.1, num_turns: 1 }),
       ].join('\n'),
     );
-    const runner = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, secrets: () => ['linear-client-secret'] });
+    const runner = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, secrets: () => ['linear-client-secret'], sandboxes: new OnHostSandboxes() });
     const h = runner.start({
-      runId: 'r-masked', cwd: process.cwd(), prompt: '/factory:dev', claudeSessionId: 'uuid-1', resume: false, model: 'sonnet',
+      runId: 'r-masked', sandboxId: ON_HOST, cwd: process.cwd(), prompt: '/factory:dev', claudeSessionId: 'uuid-1', resume: false, model: 'sonnet',
       pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false, limits: { turns: 50, durationMs: 10_000 },
       env: { FAKE_CLAUDE_SCRIPT: script, FACTORY_RUN_TOKEN: 'tok-abcdef-123456' },
     });

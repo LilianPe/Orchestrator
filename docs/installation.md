@@ -12,10 +12,9 @@ To take a first real ticket from delegation to its PR on your machine, follow [`
 | npm | the one shipped with Node 24 | Install and build. |
 | git | recent (worktrees) | One git worktree per ticket. |
 | A GitHub App | installed on the repository ([`github.md`](github.md#creating-the-app)) | The daemon reads and publishes on GitHub by its App alone: the `gh` CLI is no longer used (ORC-181). |
-| Claude Code CLI `claude` | logged in (subscription; a run gets the token of `claude.active` in `factory.yml`, else the daemon's `CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`) | Each run is a `claude -p … --output-format stream-json`. It must be on the daemon's `PATH`. |
-| bash | — | The `setup` and `verify` commands of `.factory/config.yml` are run via `bash -c`, without a login profile: the `PATH` is the daemon's (or the sandbox image's). A tool that only your profile puts on the `PATH` (nvm, asdf, volta, `~/.local/bin`) must be on the daemon's: `Environment=PATH=…` in the systemd unit, for example. |
-
-> **Transition note**: until the runs on the host go (ORC-179), `claude` on the host also logs in with an `ANTHROPIC_API_KEY` from the daemon's environment, when neither `factory.yml` nor `CLAUDE_CODE_OAUTH_TOKEN` gives a Claude token.
+| Podman, rootless (or Docker) | with cgroup v2 ([`first-run.md`](first-run.md)) | Every run, its `setup` and `verify` execute in a disposable container of the runner image (`FACTORY_CONTAINER_CLI`, `FACTORY_RUNNER_IMAGE`): `factory up` refuses to start without them, no run executes on the host (ORC-179). |
+| A Claude token | from `claude setup-token` (subscription): `claude.active` in `factory.yml`, else the daemon's `CLAUDE_CODE_OAUTH_TOKEN` | Each run is a `claude -p … --output-format stream-json` in its sandbox, `claude` being the runner image's; the egress proxy sets the token on its model calls (ORC-337). No `claude` is needed on the daemon's `PATH`. |
+| bash | — | The `setup` and `verify` commands of `.factory/config.yml` are run via `bash -c` in the sandbox, without a login profile: the `PATH` is the runner image's. |
 
 On the services side: a Linear workspace you are an admin of (to create the OAuth application, see [`linear.md`](linear.md)) and a GitHub repository cloned locally.
 
@@ -62,7 +61,6 @@ All of the instance's state lives in **`FACTORY_HOME`**, by default `~/.factory`
 | `config.yaml` | Instance configuration: port, host, projects, webhook relay, budget, knowledge base. See [`configuration.md`](configuration.md). | no |
 | `secrets.json` | Linear credentials and tokens. Written with mode `0600`. On Windows, which has no POSIX mode, the file inherits the permissions (ACL) of its directory: put `FACTORY_HOME` in a directory that only the factory's user can read (the user profile is, by default). | **yes** |
 | `factory.yml` | GitHub App, Claude token, budgets, every secret as an `env:` reference, never a value ([`configuration.md`](configuration.md)). Written by the first `factory init`. | no (references only) |
-| `run-settings.json` | Claude Code permissions passed to each run (`--settings`), regenerated on each `factory up`. | no |
 | `transcripts/<runId>.jsonl` | `stream-json` output of each run, secrets masked, deleted 30 days after its last write ([`operations.md`](operations.md#logs-transcripts-and-data)). | yes (code, ticket contents) |
 | `workspaces/<project>/<ticket>/` | Git worktree of each ticket in progress. | — |
 | `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |

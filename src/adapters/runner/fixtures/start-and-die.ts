@@ -4,12 +4,14 @@
  *
  *   node --import tsx start-and-die.ts <transcripts dir> <run id> <fake claude> <env as JSON>
  */
+import { ON_HOST, OnHostSandboxes } from '../../../../test/helpers/on-host-sandboxes.js';
 import { ClaudeCodeRunner } from '../claude-code.js';
 
 const [transcriptsDir, runId, fake, env] = process.argv.slice(2);
 if (!transcriptsDir || !runId || !fake || !env) throw new Error('usage: start-and-die.ts <dir> <run> <fake> <env>');
-new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fake] }).start({
+new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fake], sandboxes: new OnHostSandboxes() }).start({
   runId,
+  sandboxId: ON_HOST,
   cwd: process.cwd(),
   prompt: '/factory:dev',
   claudeSessionId: 'uuid-1',

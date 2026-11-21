@@ -87,7 +87,7 @@ describe.skipIf(!enabled)(`the tree of a worktree, in the agent's sandbox (${cli
     trunk = git(repo, 'rev-parse', 'origin/main^{tree}');
 
     const ws = new GitWorkspaces({ root: join(base, 'ws') });
-    ({ path: work } = await ws.prepare({ projectId: 'p', repoPath: repo, ticketId: 'ISO-1', title: 'tree', kind: 'worktree', slot: 0, portBase: 4200, runId: 'aaaaaaaa1111' }));
+    ({ path: work } = await ws.prepare({ projectId: 'p', repoPath: repo, ticketId: 'ISO-1', title: 'tree', kind: 'worktree', runId: 'aaaaaaaa1111' }));
     ({ id: box } = await provider.create(request({ workspacePath: work, network: 'none' })));
     read = worktreeReader(trusting, { runId: 'iso-tree', sandboxId: box, cwd: WORKSPACE_TARGET }, (m) => warnings.push(m));
     first = await read();

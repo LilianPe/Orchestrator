@@ -79,8 +79,8 @@ The ticket starts to do, whatever Linear says of it now (Done), and runs the fan
   `intake`'s duplicate search and the read of the ticket's own branches are skipped.
 - **Only the daemon's delegations.** Linear's webhooks and the reconciliation never route a ticket to a project on `factory/fantome`:
   its tickets of the same team stay the other projects'.
-- **Sandboxes required.** An agent run on the host gets the host's git login and could push by itself, which no effect mode holds
-  back. `start` refuses a replay when the daemon said at its last start that it runs without sandboxes, or when no daemon has
+- **Sandboxes required.** A real run needs them anyway (ORC-179); only a `--fake-runner` daemon has none, and its fake runs
+  replay nothing. `start` refuses a replay when the daemon said at its last start that it runs without sandboxes, or when no daemon has
   started yet (the `daemon-sandboxes` meta row); a daemon without sandboxes delegates no replayed ticket, and says why in its log.
 - **Once per project.** A second run of a ticket would start on the state of the first (its session, its branch, its kept PR):
   `start` refuses a ticket its project replayed already, and the daemon delegates none twice. Replay it on another project.

@@ -8,7 +8,7 @@ import { configProblems, type ConfigFacts } from './config-check.js';
 const perStepTokens = Object.fromEntries(factoryDefault.steps.filter(isAgentStep).map((s) => [s.id, 1000]));
 const budgets = { perStepTokens, perTicketTokens: checkBudgets(factoryDefault, { perStepTokens, perTicketTokens: Number.MAX_SAFE_INTEGER }).worst!.tokens };
 
-const sound: ConfigFacts = { fakeRunner: false, sandboxes: true, hostVerify: false, publisher: true, budgets };
+const sound: ConfigFacts = { fakeRunner: false, publisher: true, budgets };
 
 describe('configProblems (ORC-350)', () => {
   it('finds none in a configuration that can carry a ticket to its end', () => {
@@ -16,12 +16,6 @@ describe('configProblems (ORC-350)', () => {
   });
 
   it('names each setting under which every ticket would be blocked after its agent runs', () => {
-    const host = { ...sound, sandboxes: false, publisher: false };
-    expect(configProblems(host)).toEqual([
-      'verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1',
-      'publication impossible: it needs the sandboxes and the GitHub App',
-    ]);
-    expect(configProblems({ ...host, hostVerify: true })).toEqual(['publication impossible: it needs the sandboxes and the GitHub App']);
     expect(configProblems({ ...sound, publisher: false })).toEqual(['publication impossible: it needs the sandboxes and the GitHub App']);
   });
 
@@ -42,6 +36,6 @@ describe('configProblems (ORC-350)', () => {
   });
 
   it('finds none with the fake runner, which reaches no model, spends no token and publishes nothing real', () => {
-    expect(configProblems({ fakeRunner: true, sandboxes: false, hostVerify: true, publisher: true, budgets: undefined })).toEqual([]);
+    expect(configProblems({ fakeRunner: true, publisher: true, budgets: undefined })).toEqual([]);
   });
 });

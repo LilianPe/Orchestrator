@@ -11,7 +11,7 @@ import { fetchOrigin, originHeadOf } from '../adapters/workspace/git-workspaces.
 import { repoRoot } from '../app/root.js';
 import { homePaths, loadInstance } from '../config/instance.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
-import { HOST_RUNS_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
+import { NO_SANDBOXES_REFUSED, SANDBOXES_META } from '../ghost/delegate.js';
 import { asRepository, cloneAtStart, knowledgeAt, startTime } from '../ghost/history.js';
 import { blindPairs, ghostReport, GRADE_LABELS, GRADES, parseThreshold, type GhostGrade, type GhostReplay, type GhostSide, type GhostTicket } from '../ghost/replay.js';
 import { isFantome } from '../presets/fantome.js';
@@ -48,7 +48,7 @@ export interface GhostOptions {
   projects: readonly { id: string; repoPath: string; fantome: boolean }[];
   /**
    * Whether the daemon's runs have sandboxes, as it said at its last start (ORC-376); undefined when no daemon has said yet. A replay
-   * runs with sandboxes only: on the host, the agent could push by itself.
+   * runs with sandboxes only: a daemon without them (`--fake-runner`) runs no agent (ORC-179).
    */
   sandboxes(): Promise<boolean | undefined>;
   humanPr(repoPath: string, number: number): Promise<HumanPr>;
@@ -142,7 +142,7 @@ async function start(o: GhostOptions, projectId: string, values: { threshold?: s
   if (!project.fantome) return refuse(o, `${projectId} is not on the factory/fantome preset: a replay runs on such a project, which asks nothing, pushes nothing, opens no PR and writes no comment.`);
   const sandboxes = await o.sandboxes();
   if (sandboxes === undefined) return refuse(o, 'Replay refused: no daemon has started on this instance yet, so whether its runs have sandboxes is unknown; a replay runs with sandboxes only. Start the daemon (`factory up`), then the replay.');
-  if (!sandboxes) return refuse(o, `Replay refused: ${HOST_RUNS_REFUSED}`);
+  if (!sandboxes) return refuse(o, `Replay refused: ${NO_SANDBOXES_REFUSED}`);
   // A ticket replays once per project (ORC-376): a second run would start on the state of the first, its session and its branch.
   const earlier = (await o.store.ghostReplays()).filter((r) => r.projectId === projectId && r.id !== values.id);
   const again = tickets.map((t) => ({ t, r: earlier.find((r) => r.tickets.includes(t.ticketId)) })).find((x) => x.r);

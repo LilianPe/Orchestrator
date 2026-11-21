@@ -4,7 +4,7 @@ Where the daemon reads a repository's secrets (`repos[].secrets` of `factory.yml
 
 - Interface: `SecretSource` (`src/adapters/secrets/types.ts`), with `SecretSourceKind`, an adapter as `secret_sources.<name>.kind` names it.
 - Implementations: `env`, the daemon's environment (`src/adapters/secrets/env.ts`, built in, never declared), `systemd-creds` (`src/adapters/secrets/systemd-creds.ts`, ORC-398), `FakeSecretSource` (`src/adapters/secrets/fake.ts`, the harness's secret manager, with `fakeSecretKind`).
-- Registry: `SECRET_SOURCE_KINDS` (`src/adapters/secrets/registry.ts`): `env` and `systemd-creds`. No adapter that needs a network credential (a cloud KMS, Vault) before ORC-151 and ORC-179: until `verify` and the runs on the host are gone, their code can read the daemon's environment, so a manager's credential, worth far more than one secret. `systemd-creds` needs none. sops/age comes after ORC-179 as well.
+- Registry: `SECRET_SOURCE_KINDS` (`src/adapters/secrets/registry.ts`): `env` and `systemd-creds`. No adapter that needs a network credential (a cloud KMS, Vault) yet: it waited for `verify` and the runs to leave the host (ORC-151, ORC-179), whose code could read the daemon's environment, so a manager's credential, worth far more than one secret; they now come with ORC-418. `systemd-creds` needs none.
 - Reader: `SecretReader` (`src/adapters/secrets/reader.ts`) reads a setup's references from the opened sources, checks the minimal length (8 characters, below which sealing would purge too many files), and keeps what it read for the masking.
 - Suite: `test/contracts/secret-source.contract.ts`, run by `src/adapters/secrets/env.test.ts`, `src/adapters/secrets/systemd-creds.test.ts` and `src/adapters/secrets/fake.test.ts`.
 

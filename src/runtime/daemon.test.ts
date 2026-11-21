@@ -1,8 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { writeRunSettings } from '../config/run-settings.js';
 import { saveAgentOutput } from '../core/agent-output.js';
 import { FakeForge } from '../adapters/forge/fake.js';
 import { FakeRunner } from '../adapters/runner/fake.js';
@@ -32,7 +31,6 @@ function setup(
     runner?: Runner;
     verify?: Verifier;
     hold?: boolean;
-    settingsPath?: string;
     tweak?: (w: Workflow) => void;
     effectRetry?: EffectRetry;
     workspaces?: FakeWorkspaces;
@@ -58,8 +56,8 @@ function setup(
   const clock = new FakeClock(1_000);
   const orch = new Daemon({
     store, clock, bus, scheduler,
-    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })), hostChecks: true,
-    projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir, settingsPath: o.settingsPath,
+    tracker, forge: new FakeForge(), runner, workspaces: o.workspaces ?? new FakeWorkspaces(), verify: o.verify ?? (async () => ({ ok: true, failures: [] })),
+    projects: [{ id: 'p', repoPath: '/repo', teamKey: 'REL', workflow }], packDir,
     agentEnv: (r) => ({ FACTORY_RUN_TOKEN: r.token }), newId: () => `id-${++n}`, activityIntervalMs: 0, holdInboxUntilReplay: o.hold, factoryCommit: 'cafe42',
     // One attempt: a failed effect dies at once (the retries have their own tests).
     effectRetry: o.effectRetry ?? { attempts: 1, baseMs: 1, capMs: 1 },
@@ -300,26 +298,6 @@ describe('Daemon', () => {
     expect(run.labels!.fingerprints.workflow).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
-  it('gives two instances with different homes the same config fingerprint (ORC-226)', async () => {
-    const homes = [mkdtempSync(join(tmpdir(), 'home-a-')), mkdtempSync(join(tmpdir(), 'home-b-'))];
-    try {
-      const configs: (string | null)[] = [];
-      for (const home of homes) {
-        const settingsPath = writeRunSettings(packDir, home);
-        const { store, tracker, runner, orch } = setup({ settingsPath });
-        tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-        await orch.accept(delegated());
-        await orch.drained();
-        expect(runner.requests[0]!.settingsPath).toBe(settingsPath);
-        configs.push((await store.getRun(runner.requests[0]!.runId))!.labels!.fingerprints.config);
-      }
-      expect(readFileSync(join(homes[0]!, 'run-settings.json'), 'utf8')).not.toBe(readFileSync(join(homes[1]!, 'run-settings.json'), 'utf8'));
-      expect(configs[1]).toBe(configs[0]);
-    } finally {
-      for (const home of homes) rmSync(home, { recursive: true, force: true });
-    }
-  });
-
   it('stopAll() lets go of a run still under way: neither stopped nor closed, the ticket keeps it for recover() (ORC-344)', async () => {
     const { store, tracker, runner, orch } = setup();
     tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
@@ -468,6 +446,17 @@ describe('Daemon', () => {
     await orch.accept(delegated());
     await orch.drained();
     expect(logs).toContain('warn: verify of REL-1: boom');
+  });
+
+  it('gives two runs at work at once the same PORT: each listens in a container of its own, no PORT per place (ORC-179)', async () => {
+    const { tracker, runner, orch } = setup();
+    tracker.addIssue({ identifier: 'REL-1', title: 'A' });
+    tracker.addIssue({ identifier: 'REL-2', title: 'B' });
+    runner.enqueue({ hold: true }, { hold: true });
+    await orch.accept(delegated());
+    await orch.accept({ ...TRUSTED, id: 'e2', type: 'ticket.delegated', at: 1_000, projectId: 'p', ticketId: 'REL-2', payload: { linearSessionId: 'ls-2' } });
+    await vi.waitFor(() => expect(runner.requests).toHaveLength(2));
+    expect(runner.requests.map((r) => r.env['PORT'])).toEqual(['4200', '4200']);
   });
 
   it('never holds the queue on a daily budget in dollars, however much the day cost (ORC-216)', async () => {

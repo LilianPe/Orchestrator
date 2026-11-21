@@ -100,7 +100,7 @@ No image receives a secret at build time. Isolation test no. 7 looks for tokens 
 
 - **Publishing**: the factory pushes and opens the PR, with the GitHub App (ORC-125, [`github.md`](github.md#publishing)). Without it, a verified ticket is blocked: configure `github.*` or `GH_APP_*`. An agent in a runner has neither `gh` nor a token, and the proxy refuses `git push`. `factoryd` has neither either since ORC-181: the App reads the PRs.
 - **`factoryd`'s own `git fetch`** (ORC-442): the image gives git no credential of its own (the GitHub CLI's credential helper went with ORC-181). A private repository's clone under `repos/`, and the knowledge base's, are read with the App's installation token, as the push is, when their `origin` is an `https://github.com/` URL the App is installed on: no SSH key nor credential helper is needed in the container. An `origin` over SSH, or a repository the App is not installed on, is still read with whatever credential the container's git finds; with none, a launch is refused with `the forge could not be read` ([`github.md`](github.md#the-daemons-own-git)).
-- **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. `FACTORY_ALLOW_HOST_VERIFY` is not passed through, and would have no effect. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repoPath` is never mounted.
+- **`verify` no longer runs in `factoryd`** (ORC-151): its commands go into a fresh runner, on a clone, at network level `none`. Under compose, `FACTORY_CONTAINER_CLI` is set: a failed engine gives a ticket blocked for infrastructure reasons (`verify.errored`), never a fallback to `factoryd`. **`factoryd`'s `git`, next to the socket, reads nothing an agent wrote** (ORC-317): each agent has its own repository, and the git directory of `repoPath` is never mounted.
 
 ## Variables
 
@@ -123,7 +123,7 @@ In a `.env` file next to `compose.yaml` (not versioned). `docker compose` refuse
 | `FACTORY_ALLOW_ROOTFUL_ENGINE` | no | `1`: allows starting on an engine that is not rootless. For a development workstation, never for the server. |
 | `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | no | Commit identity (the product name and `factory@localhost` by default); compose copies them into `GIT_COMMITTER_*`. |
 
-> **Transition note**: compose still passes `ANTHROPIC_API_KEY` through: Claude Code authentication without an active account, for the runs of this container that still run next to the daemon (until ORC-179). Compose does not require it, nor the tokens above: without any, runs fail at authentication.
+> **Transition note**: compose still passes `ANTHROPIC_API_KEY` through, only as the key of the small model of messages when `factory.yml` sets no `message_model.api_key` (ORC-445): it never logs `claude` in, which runs in the sandboxes alone (ORC-179). Compose does not require it, nor the tokens above: without a Claude token, runs fail at authentication.
 
 GitHub webhooks read `github.webhookSecret` in `config.yaml` or `factory.yml` ([`github.md`](github.md#github-webhooks)): `compose.yaml` does not pass `GH_WEBHOOK_SECRET` through.
 
@@ -235,7 +235,7 @@ FACTORY_COMMIT="$(git rev-parse HEAD)" docker compose build
 docker compose up -d
 ```
 
-Each image has its copy of the installation in `$FACTORY_DIR/install`. The old ones remain, since a container may still be running from one of them: remove them by hand once the update is done. `run-settings.json` is regenerated at startup.
+Each image has its copy of the installation in `$FACTORY_DIR/install`. The old ones remain, since a container may still be running from one of them: remove them by hand once the update is done.
 
 **When moving to ORC-317:** workspaces become separate repositories. A ticket whose directory is still a `git worktree` is refused at launch (« is not the one the factory created »): delete `workspaces/<project>/<ticket>/` and `workspaces/<project>/_trunk/`, then `git -C <repoPath> worktree prune`. An unpushed commit there would be lost: push it first, by hand. And an agent may have written into the git directory of a repository already entrusted to the factory: check its `config`, its `hooks/` and `info/attributes`, or better, reclone it. The fix protects against what an agent will write, not against what it has already left behind.
 

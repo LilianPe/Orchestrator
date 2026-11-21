@@ -264,19 +264,20 @@ export abstract class DaemonLaunch extends DaemonEffects {
     });
   }
 
+  /** The pack's settings, as is: a sandbox sees nothing of the daemon's disk, there is no path of its home to deny (ORC-179). */
   private settingsPath(): string {
-    return this.d.settingsPath ?? join(this.d.packDir, 'settings.json');
+    return join(this.d.packDir, 'settings.json');
   }
 
   /**
    * The repository's `setup` in a worktree just made: in a sandbox of its own, gone and sealed before the
-   * agent's is opened (ORC-211), on the host without sandboxes, where it gets no secret. It throws on a
-   * failure; the launch then removes the worktree, so the next attempt runs it again.
+   * agent's is opened (ORC-211); without sandboxes, through the fake runner's or a test's stand-in, which runs nothing
+   * on the host (ORC-179). It throws on a failure; the launch then removes the worktree, so the next attempt runs it again.
    */
   private async runSetup(project: ProjectRuntime, ticketId: string, ws: Workspace, runId: string, vars: RepoVariables, commands: string[], services: readonly string[]): Promise<void> {
     const sandboxes = this.d.sandboxes;
     if (!sandboxes) {
-      const res = await this.d.verify(ws.path, commands, undefined, vars.env);
+      const res = await this.standInVerify()(ws.path, commands, undefined, vars.env);
       if (!res.ok) throw new Error(`The worktree setup failed: ${res.failures[0]!.command}`);
       return;
     }
@@ -568,7 +569,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
     // Drawn here: a launch that fails lets go of its own run only, never another launch's (ORC-339).
     const runId = this.newId();
     try {
-      const launched = await this.launch(project, ticketId, job, opts, slot, key, runId, recorded);
+      const launched = await this.launch(project, ticketId, job, opts, key, runId, recorded);
       // Lost to another job while the ticket holds yet another pending one: back in line.
       return launched === 'queued' ? await requeue() : (launched ?? 'done');
     } catch (err) {
@@ -642,14 +643,13 @@ export abstract class DaemonLaunch extends DaemonEffects {
     ticketId: string,
     job: JobSpec,
     opts: StartOpts,
-    slot: number,
     key: string,
     runId: string,
     recorded?: () => Promise<void>,
   ): Promise<StartOutcome | undefined> {
     const at: LaunchAt = { started: false };
     try {
-      return await this.launchRun(project, ticketId, job, opts, slot, key, runId, at, recorded);
+      return await this.launchRun(project, ticketId, job, opts, key, runId, at, recorded);
     } catch (err) {
       if (!at.started && !(err instanceof RetryableStart) && isTransient(err)) {
         // The whole of it in the daemon's log: the start's own message, which may reach the ticket, says less.
@@ -687,7 +687,6 @@ export abstract class DaemonLaunch extends DaemonEffects {
     ticketId: string,
     job: JobSpec,
     opts: StartOpts,
-    slot: number,
     key: string,
     runId: string,
     at: LaunchAt,
@@ -829,7 +828,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // when it names the ticket: the agent's HEAD is recorded as it left it, detached or on a branch of its own.
       const recorded = t.branch && namesTicket(issue.identifier, t.branch) ? t.branch : undefined;
       const branch = worktree ? (recorded ?? branchName(issue.identifier, issue.title, issue.labels, naming)) : undefined;
-      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, slot, portBase: wf.workspace.portBase, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
+      const asked = { projectId: project.id, repoPath: project.repoPath, ticketId, title: issue.title, kind: job.workspace, runId, ...(reviewed ? { sha: reviewed } : {}), ...(branch ? { branch, fetched } : {}) };
       let ws = await workspaces.prepare(asked);
       // Left by a daemon killed before the end of its setup (ORC-211): half installed, perhaps holding a secret the
       // configuration no longer names, so sealing it again proves nothing. It is made anew; no agent has worked in it.
@@ -875,7 +874,7 @@ export abstract class DaemonLaunch extends DaemonEffects {
       // The ticket's own worktree only: a review's clone is the run's, gone with it. Made anew on the default branch, its
       // branch holds nothing of the old one's: the old mark and human pushes end (ORC-358).
       const newBranch = ws.fresh && !ws.ahead && branchAnew(t) !== t;
-      if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: ws.port, branch: ws.branch, ...(newBranch ? { newBranch } : {}) }));
+      if (job.queue === 'dev' && job.workspace === 'worktree') t = await state(this.apply(t, { type: 'workspace.prepared', path: ws.path, port: wf.workspace.portBase, branch: ws.branch, ...(newBranch ? { newBranch } : {}) }));
       const moves = startMove(wf, job);
       if (moves && t.logical !== moves) await this.move(project, t, moves, undefined, state);
       t = await state(this.ticket(project.id, ticketId));
@@ -1115,10 +1114,11 @@ export abstract class DaemonLaunch extends DaemonEffects {
           // In a sandbox, the run's refusals log, on the host: it outlives the sandbox (ORC-217).
           ...(sandbox ? { FACTORY_REFUSALS_LOG: `${REFUSALS_TARGET}/refusals.jsonl` } : {}),
           ...this.fullReadEnvOf(t, sandbox ? WORKSPACE_TARGET : resolve(ws.path)),
-          ...(ws.port !== undefined ? { PORT: String(ws.port) } : {}),
+          // The same for every run of a worktree, each listening in a container of its own (ORC-179); none on a clone.
+          ...(job.workspace === 'worktree' ? { PORT: String(wf.workspace.portBase) } : {}),
           ...CLAUDE_RUN_ENV,
           // The ticket's session dir (out of the ticket session, the run's own) as Claude's whole config dir (ORC-128 point 4), login by the env
-          // (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). On the host, the daemon's own, as before.
+          // (a placeholder of CLAUDE_CODE_OAUTH_TOKEN the egress proxy swaps, ORC-337). Without a sandbox, the fake runner reads none.
           ...(sandbox ? { CLAUDE_CONFIG_DIR: `${SANDBOX_HOME}/.claude` } : {}),
         },
         sensitivePaths,
