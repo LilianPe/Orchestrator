@@ -95,6 +95,13 @@ describe('the Smee relay outside the development mode', () => {
     expect(() => relayWarnings({ relay: smee, dev: false })).toThrow(/relay: \{ kind: smee \}.*dev: false.*publicUrl.*factory init --dev/);
   });
 
+  it('names relay: { kind: none } alone to a config that has a publicUrl, where factory init --dev writes nothing', () => {
+    const server = { relay: smee, publicUrl: 'https://f.example.com' };
+    expect(relayWarnings(server)).toEqual([expect.stringMatching(/publicUrl: https:\/\/f\.example\.com brings Linear's webhooks already, set relay: \{ kind: none \}\.$/)]);
+    expect(relayWarnings(server)[0]).not.toContain('init --dev (');
+    expect(() => relayWarnings({ ...server, dev: false })).toThrow(/dev: false.*set relay: \{ kind: none \}\.$/);
+  });
+
   it('refuses a publicUrl beside the relay in the development mode, naming relay: { kind: none }', () => {
     expect(() => relayWarnings({ relay: smee, dev: true, publicUrl: 'https://f.example.com' })).toThrow(/publicUrl: https:\/\/f\.example\.com.*relay: \{ kind: none \}/);
   });

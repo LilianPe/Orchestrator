@@ -226,7 +226,7 @@ export interface DoctorOptions {
   serverSecrets?: SecretReport[];
   /** The projects whose spec gate no validator can pass (ORC-421), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says them first. */
   validatorWarnings?: string[];
-  /** The Smee relay of a config.yaml without the development mode's marker (ORC-446), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says it first. */
+  /** The Smee relay of a config.yaml without the development mode's marker (ORC-446), for the JSON report; never part of the verdict (its refusals stop doctor first, exit 1). In text, `runDoctorCommand` says it first. */
   relayWarnings?: string[];
 }
 

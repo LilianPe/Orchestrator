@@ -211,16 +211,18 @@ export function validatorWarnings(projects: readonly Pick<ProjectConfig, 'id' | 
 
 /**
  * The Smee relay in the development mode alone (ORC-444), the `dev: true` that `factory init --dev` writes, for `factory doctor` and
- * the daemon's start (ORC-446): a public channel, for a workstation, never a server. `dev: false` is refused, as is a `publicUrl` beside
- * it, a server's or a tunnel's, which brings Linear's webhooks already; a config.yaml written before the marker, with none, is a warning.
+ * the daemon's start (ORC-446): a public channel, for a workstation, never a server. `dev: false` is refused, as is `dev: true` beside a
+ * `publicUrl`, a server's or a tunnel's, which brings Linear's webhooks already; a config.yaml written before the marker, with none, is
+ * a warning.
  */
 export function relayWarnings(instance: Pick<InstanceConfig, 'relay' | 'dev' | 'publicUrl'>): string[] {
   if (instance.relay.kind !== 'smee') return [];
-  if (instance.dev && instance.publicUrl) throw new Error(`relay: { kind: smee } in config.yaml beside publicUrl: ${instance.publicUrl} brings Linear's webhooks already, a smee.io channel is useless there: set relay: { kind: none }, or remove publicUrl on a workstation.`);
+  const useless = instance.publicUrl && `publicUrl: ${instance.publicUrl} brings Linear's webhooks already, set relay: { kind: none }`;
+  if (instance.dev && useless) throw new Error(`relay: { kind: smee } in config.yaml beside ${useless}, or remove publicUrl on a workstation.`);
   if (instance.dev) return [];
-  const fix = 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev';
+  const fix = useless || 'on a server, set publicUrl to its https:// address and relay: { kind: none }; on a workstation, run factory init --dev (it writes dev: true)';
   if (instance.dev === false) throw new Error(`relay: { kind: smee } in config.yaml outside the development mode (dev: false): a smee.io channel is public, for a workstation only: ${fix}.`);
-  return [`Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: started as written before that marker; ${fix} (it writes dev: true).`];
+  return [`Warning: relay: { kind: smee } in config.yaml without dev: true, the development mode factory init --dev writes: the daemon starts it as before that marker; ${fix}.`];
 }
 
 /**

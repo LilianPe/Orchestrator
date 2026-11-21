@@ -43,7 +43,7 @@ Run it **in the repository** to entrust to the factory (otherwise it asks for th
 
 ### `factory up`
 
-Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), the smee relay when `config.yaml` has one (`factory init --dev`, a workstation; refused with `dev: false` or beside a `publicUrl`, warned without `dev: true`, the development mode, ORC-444, ORC-446), timers, Linear and GitHub reconciliation every 5 minutes through a database timer, queue re-evaluation every minute. Prints `Orchestrator is running: <url>`.
+Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), the smee relay when `config.yaml` has one (`factory init --dev`, a workstation; refused with `dev: false` or with `dev: true` beside a `publicUrl`, warned without `dev: true`, the development mode, ORC-444, ORC-446), timers, Linear and GitHub reconciliation every 5 minutes through a database timer, queue re-evaluation every minute. Prints `Orchestrator is running: <url>`.
 
 - Writes `<FACTORY_HOME>/run-settings.json` (see [`configuration.md`](configuration.md#what-does-not-leave-the-daemon)).
 - Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs)).
