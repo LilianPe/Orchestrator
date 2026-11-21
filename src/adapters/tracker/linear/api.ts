@@ -136,7 +136,7 @@ export class LinearApi {
 
   /**
    * Linear's rate-limit headers: the hour's requests and their reset (epoch ms) kept as the quota; returns the wait before
-   * a retry they ask for, its `Retry-After` in seconds first.
+   * a retry they ask for, its `Retry-After` in seconds first (a negative one taken as 0, ORC-434).
    */
   private readLimits(headers: { get(name: string): string | null } | undefined): number | undefined {
     const num = (name: string) => {
@@ -150,6 +150,6 @@ export class LinearApi {
     const reset = num('x-ratelimit-requests-reset');
     if (limit !== undefined && remaining !== undefined) this.quota = { limit, remaining, until: reset ?? now + QUOTA_WINDOW_MS };
     const retryAfter = num('retry-after');
-    return retryAfter !== undefined ? retryAfter * 1000 : reset !== undefined ? Math.max(0, reset - now) : undefined;
+    return retryAfter !== undefined ? Math.max(0, retryAfter * 1000) : reset !== undefined ? Math.max(0, reset - now) : undefined;
   }
 }

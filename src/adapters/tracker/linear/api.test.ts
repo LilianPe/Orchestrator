@@ -62,6 +62,12 @@ describe('LinearApi under its rate limit (ORC-350)', () => {
     expect(past.waits).toEqual([1_000, 2_000]);
   });
 
+  it('takes a negative Retry-After as one of 0, and backs off all the same (ORC-434)', async () => {
+    const { api, waits } = linear([http429({ 'retry-after': '-5' }), http429({ 'retry-after': '-5' }), ok()], { now: () => 1_000_000 });
+    await api.gql('query { viewer { id } }');
+    expect(waits).toEqual([1_000, 2_000]);
+  });
+
   it('keeps a critical call made while a rate limit is waited out until its end, rather than sending it to be refused', async () => {
     const now = () => 1_000_000;
     const answers: Answer[] = [http429({ 'retry-after': '20' })];
