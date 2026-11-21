@@ -41,7 +41,7 @@ const mcpRequest = (body: unknown = { jsonrpc: '2.0', id: 1, method: 'ping' }, t
 /** factory-agent's routes, gone with it (ORC-192), the bare prefix and a path past the MCP's. */
 const FACTORY_AGENT_PATHS = ['/agent', '/agent/issue/REL-1', '/agent/search?q=export', '/agent/kb/search?q=export', '/agent/ask', '/agent/mcp/extra'];
 
-async function setup(extra: Partial<Pick<ServerDeps, 'githubLogin' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls'>> & { clock?: FakeClock } = {}) {
+async function setup(extra: Partial<Pick<ServerDeps, 'githubLogin' | 'usageLimitedUntil' | 'perTicketTokens' | 'takeOver' | 'configProblems' | 'heldRows' | 'secrets' | 'seriousDefect' | 'replays' | 'knowledgeSearch' | 'disabledControls' | 'projects'>> & { clock?: FakeClock } = {}) {
   const store = new MemoryStore();
   const bus = new EventBus();
   const submitted: FactoryEvent[] = [];
@@ -409,6 +409,16 @@ describe('server', () => {
       expect(cards.map((c: { approvedBy?: string }) => c.approvedBy)).toEqual(['dashboard:local', undefined, undefined]);
     });
 
+    it('says when a card was approved already, by someone else: that first approval stands (ORC-454)', async () => {
+      const { app, store } = await setup();
+      await store.putMaturityCards('p', points, 4);
+      await store.approveMaturityCard('p', 'stack', points[0]!.value, 'github:armand', 7);
+      const res = await approve(app, '/api/maturity/p/stack/approve');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, already: true, card: { projectId: 'p', ...points[0], detectedAt: 4, approvedBy: 'github:armand', approvedAt: 7 } });
+      expect((await (await approve(app, '/api/maturity/p/stack/approve')).json()).already).toBe(true);
+    });
+
     it('refuses an unknown card, one from another origin, and asks for the GitHub sign-in as the other routes', async () => {
       const { app, store } = await setup();
       await store.putMaturityCards('p', points, 4);
@@ -422,6 +432,20 @@ describe('server', () => {
       const signedOut = (await setup({ githubLogin: GITHUB })).app;
       expect((await signedOut.request('/api/maturity')).status).toBe(401);
       expect((await approve(signedOut, '/api/maturity/p/stack/approve')).status).toBe(401);
+    });
+
+    it('neither lists nor approves the cards of a project no longer in the configuration (ORC-454)', async () => {
+      let reads = 0;
+      const { app, store } = await setup({ projects: () => (reads++, ['p']) });
+      await store.putMaturityCards('p', points, 4);
+      await store.putMaturityCards('gone', [points[0]!], 5);
+      const cards = (await (await app.request('/api/maturity')).json()).cards;
+      expect(cards.map((c: { projectId: string }) => c.projectId)).toEqual(['p', 'p']);
+      expect(reads).toBe(1);
+      const res = await approve(app, '/api/maturity/gone/stack/approve');
+      expect(res.status).toBe(404);
+      expect((await res.json()).error).toContain('gone');
+      expect((await store.maturityCards('gone'))[0]!.approvedBy).toBeUndefined();
     });
 
     it('records whoever signed in with GitHub as github:<login>', async () => {

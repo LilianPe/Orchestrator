@@ -3,7 +3,7 @@ import { fetchAuditList, fetchAuditSheet, fetchBlocks, fetchFlow, fetchMaturity,
 import { AuditList, AuditSheet, auditTicketOf } from './Audit.js';
 import { clockTime, Flow } from './Flow.js';
 import { Inspection } from './Inspection.js';
-import { Maturity } from './Maturity.js';
+import { approvalNotice, Maturity } from './Maturity.js';
 import { Measures, runIdOf } from './Measures.js';
 import { Overview } from './Overview.js';
 import { TakenOver, type ShellCommand } from './TakeOver.js';
@@ -205,7 +205,7 @@ function MaturityPage() {
   const approve = (card: MaturityCardView) =>
     postApproval(card).then(
       async (res) => {
-        setNotice(res.ok ? `${card.title} approved.` : await refusal(res, 'approval'));
+        setNotice(res.ok ? approvalNotice(((await res.json().catch(() => undefined)) ?? {}) as { already?: boolean; card?: MaturityCardView }, card) : await refusal(res, 'approval'));
         reload();
       },
       () => setNotice('Approval not sent: the server did not answer.'),

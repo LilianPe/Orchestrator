@@ -409,26 +409,10 @@ function readPyproject(m: Manifest, text: string): void {
   });
 }
 
-/** The names a pyproject.toml declares as dependencies, normalized (ORC-410): none when it does not parse. */
-export function pyprojectDependencies(text: string): string[] {
-  const m: Manifest = { path: 'pyproject.toml', deps: [], directives: [] };
-  try {
-    readPyproject(m, text);
-  } catch {
-    return [];
-  }
-  return m.deps.map((d) => d.name);
-}
-
-/** The names a package.json declares as dependencies, in every npm section (ORC-410): none when it does not parse. */
-export function packageJsonDependencies(text: string): string[] {
-  const m: Manifest = { path: 'package.json', deps: [], directives: [] };
-  try {
-    readPackageJson(m, text);
-  } catch {
-    return [];
-  }
-  return m.deps.map((d) => d.declared);
+/** The names a manifest declares as dependencies (ORC-410), and what kept it from being read in full (ORC-454): the names read before. */
+export interface ManifestNames {
+  names: string[];
+  problem?: string;
 }
 
 const READERS: Record<Exclude<ManifestKind, 'unsupported'>, (m: Manifest, text: string) => void> = {
@@ -436,6 +420,19 @@ const READERS: Record<Exclude<ManifestKind, 'unsupported'>, (m: Manifest, text: 
   'pyproject.toml': readPyproject,
   requirements: readRequirements,
 };
+
+/** The names `file`, a package.json (as declared, in every npm section) or a pyproject.toml (normalized), declares as dependencies. */
+export function manifestDependencies(file: 'package.json' | 'pyproject.toml', text: string): ManifestNames {
+  const m: Manifest = { path: file, deps: [], directives: [] };
+  const names = () => m.deps.map((d) => (file === 'package.json' ? d.declared : d.name));
+  try {
+    READERS[file](m, text);
+  } catch (err) {
+    // Any error of the reader, not only a ManifestError, is the manifest's problem: a RangeError of overrides nested too deep included.
+    return { names: names(), problem: err instanceof Error ? err.message : String(err) };
+  }
+  return { names: names() };
+}
 
 // ---------------------------------------------------------------- additions
 

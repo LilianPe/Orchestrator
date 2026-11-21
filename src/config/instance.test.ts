@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
 import { loadFactoryYml, parseFactoryYml } from './factory-yml.js';
 import {
+  currentProjectIds,
   daemonSecretValues,
   effectiveInstance,
   homePaths,
@@ -37,6 +38,20 @@ describe('instance config', () => {
     };
     saveInstance(home, cfg);
     expect(loadInstance(home)).toEqual(cfg);
+  });
+
+  it("reads the projects as config.yaml is now, a project added or removed since included; the fallback when it does not read (ORC-454)", () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    const project = (id: string) => ({ id, repoPath: `/code/${id}`, linearTeamKey: 'REL' });
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project('a')], limits: {} });
+    expect(currentProjectIds(home, ['x'])).toEqual(['a']);
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project('b')], limits: {} });
+    expect(currentProjectIds(home, ['x'])).toEqual(['b']);
+    writeFileSync(join(home, 'config.yaml'), 'port: [\n');
+    expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    writeFileSync(join(home, 'config.yaml'), '');
+    expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    expect(currentProjectIds(mkdtempSync(join(tmpdir(), 'factory-home-')), ['x'])).toEqual(['x']);
   });
 
   it('loads a config.yaml that still has the daily budget in dollars, without it: no queue waits on dollars (ORC-216)', () => {

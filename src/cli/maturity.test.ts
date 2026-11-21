@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -145,6 +146,66 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
     for (const image of ['pgvector/pgvector:pg16', 'postgis/postgis:16-3.4', 'docker.io/library/postgres:16', 'bitnami/postgresql:16', 'timescale/timescaledb:latest-pg16', '"postgres"', 'postgres@sha256:abc'])
       expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
     for (const image of ['prometheuscommunity/postgres-exporter:v0.15', 'postgres-backup:1', 'redis:7']) expect(valueOf(compose(image))['services'], image).toBe('none');
+  });
+
+  it('a Postgres image as the default of a variable, or the timescaledb-ha variant, is a Postgres; a variable alone is not (ORC-454)', () => {
+    const compose = (image: string) => repoOf({ 'compose.yaml': `services:\n  db:\n    image: ${image}\n` });
+    for (const image of ['${PG_IMAGE:-postgres:16}', '"${PG_IMAGE-postgis/postgis:16-3.4}"', 'timescale/timescaledb-ha:pg16', '${REGISTRY}/postgres:16', '${REGISTRY:-docker.io}/library/postgres:16'])
+      expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
+    for (const image of ['${PG_IMAGE}', '${PG_IMAGE:?set it}', '${REDIS:-redis:7}']) expect(valueOf(compose(image))['services'], image).toBe('none');
+  });
+
+  it("Cypress's specs test their area (ORC-454)", () => {
+    expect(valueOf(repoOf({ 'src/login/form.ts': '', 'src/login/form.cy.ts': '', 'src/cart/cart.tsx': '', 'src/cart/cart.cy.jsx': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
+});
+
+describe('the maturity report on what it reads only in part (ORC-454)', () => {
+  it('a malformed entry of package.json is said on Stack, Services and Visual paths, the dependencies read before it kept', () => {
+    const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { react: '^18.0.0', pg: 8 } }), 'package-lock.json': '{}' }));
+    expect(v['stack']).toBe('Node (npm), React; package.json not fully read (the version of "pg" in "dependencies" is not a string): Stack, Services and Visual paths may miss some of its dependencies');
+    expect(v['services']).toBe('none; package.json not fully read (see Stack): a dependency may be missing');
+    expect(v['visual_paths']).toBe('none: a front end, but none of its usual directories; package.json not fully read (see Stack): a dependency may be missing');
+  });
+
+  it('a Postgres a compose file runs needs no dependency: Services says nothing of the manifest not fully read', () => {
+    const v = valueOf(repoOf({ 'package.json': '{', 'compose.yaml': 'services:\n  db:\n    image: postgres:16\n' }));
+    expect(v['services']).toBe('postgres (compose.yaml)');
+    expect(v['visual_paths']).toBe('none: no front-end framework detected; package.json not fully read (see Stack): a dependency may be missing');
+  });
+
+  it('a package.json that does not parse, a pyproject.toml either: each said, neither read as no dependency', () => {
+    const v = valueOf(repoOf({ 'package.json': '{ "dependencies": ', 'pyproject.toml': '[project\n', 'uv.lock': '' }));
+    expect(v['stack']).toMatch(/^Node \(no lockfile\), Python \(uv\); package\.json not fully read \(invalid JSON .*\); pyproject\.toml not fully read \(unreadable TOML .*\): Stack, Services and Visual paths may miss some of their dependencies$/);
+  });
+
+  it('a reader that fails otherwise than on a malformed entry is said too, never stops the report', () => {
+    const deep = '{"overrides":' + '{"a":'.repeat(20_000) + '"1"' + '}'.repeat(20_001);
+    expect(valueOf(repoOf({ 'package.json': deep }))['stack']).toMatch(/^Node \(no lockfile\); package\.json not fully read \(.+\): Stack, Services and Visual paths may miss some of its dependencies$/);
+  });
+
+  it('a package.json that cannot be read (a directory) is said on the cards, never stops the report; pyproject.toml still read', () => {
+    const v = valueOf(repoOf({ 'package.json/index.js': '', 'pyproject.toml': '[project]\ndependencies = ["psycopg>=3"]\n' }));
+    expect(v['stack']).toBe('Node (no lockfile), Python (no uv.lock); package.json not fully read (cannot be read: not a regular file): Stack, Services and Visual paths may miss some of its dependencies');
+    expect(v['services']).toBe('postgres (dependency psycopg); package.json not fully read (see Stack): a dependency may be missing');
+  });
+
+  it('a compose file that cannot be read (a directory) is said on the Services card, never stops the report; the next compose file still read', () => {
+    expect(valueOf(repoOf({ 'docker-compose.yml/x': '' }))['services']).toBe('none; docker-compose.yml not read (cannot be read: not a regular file): a Postgres it runs may be missing');
+    expect(valueOf(repoOf({ 'docker-compose.yml/x': '', 'compose.yaml': 'services:\n  db:\n    image: postgres:16\n' }))['services']).toBe('postgres (compose.yaml)');
+  });
+
+  it('a compose file or a manifest that is a named pipe is said on the cards, never read: the report does not hang', () => {
+    const repo = repoOf({});
+    for (const file of ['docker-compose.yml', 'package.json']) execFileSync('mkfifo', [join(repo, file)]);
+    const v = valueOf(repo);
+    expect(v['services']).toBe('none; docker-compose.yml not read (cannot be read: not a regular file): a Postgres it runs may be missing; package.json not fully read (see Stack): a dependency may be missing');
+    expect(v['stack']).toBe('Node (no lockfile); package.json not fully read (cannot be read: not a regular file): Stack, Services and Visual paths may miss some of its dependencies');
+  });
+
+  it('well-formed manifests add nothing to the cards', () => {
+    const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }));
+    expect([v['stack'], v['services'], v['visual_paths']]).toEqual(['Node (npm), Vue', 'none', 'none: a front end, but none of its usual directories']);
   });
 });
 
