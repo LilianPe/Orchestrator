@@ -1,5 +1,6 @@
 import { parseAllDocuments } from 'yaml';
 import { execCmd, mustExec, type Exec } from '../adapters/exec.js';
+import type { SandboxLimits } from '../adapters/sandbox/docker-rootless.js';
 import {
   GitHubAppApi,
   type BranchProtection,
@@ -18,7 +19,7 @@ import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../confi
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage, sandboxConfig, visualProofLine } from '../app/sandbox-wiring.js';
+import { browserImage, sandboxConfig, sandboxLimits, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -73,8 +74,9 @@ export interface HostReport {
   reasons: string[];
 }
 
-/** The limits of an attempt's containers: processes, memory, CPUs (docs/tests.md, isolation 9). */
-const REQUIRED_CONTROLLERS = ['cpu', 'memory', 'pids'];
+/** The limits of an attempt's containers, each by the controller it is set through: CPUs, memory, processes (docs/tests.md, isolation 9). */
+const LIMIT_CONTROLLERS: Record<keyof SandboxLimits, string> = { cpus: 'cpu', memory: 'memory', pids: 'pids' };
+const REQUIRED_CONTROLLERS = Object.values(LIMIT_CONTROLLERS);
 
 /** What `info` says of the cgroups, whichever the engine. */
 interface EngineCgroups {
@@ -108,7 +110,13 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   const { cgroupV2, controllers, rootless, manager } = cgroups;
   const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
   const reasons = [...refused];
-  const missing = REQUIRED_CONTROLLERS.filter((controller) => !controllers.includes(controller));
+  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed one, refused
+  // above, leaves them unread: every controller stays required.
+  const limits = sandboxLimits(env);
+  const required = Object.entries(LIMIT_CONTROLLERS)
+    .filter(([limit]) => 'refused' in limits || limits[limit as keyof SandboxLimits] !== undefined)
+    .map(([, controller]) => controller);
+  const missing = required.filter((controller) => !controllers.includes(controller));
   // On cgroups v1, no delegation makes the limits work: the version alone is said.
   if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);
   else if (rootless && manager !== 'systemd') {
@@ -123,7 +131,7 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
     controllers,
     rootless,
     verdict: reasons.length > 0 ? 'refused' : 'accepted',
-    reasons: reasons.length > 0 ? reasons : [`${rootless ? 'rootless ' : ''}${cli} on cgroup v2, limits through ${REQUIRED_CONTROLLERS.join(', ')}`],
+    reasons: reasons.length > 0 ? reasons : [`${rootless ? 'rootless ' : ''}${cli} on cgroup v2, ${required.length > 0 ? `limits through ${required.join(', ')}` : 'no limit set (FACTORY_SANDBOX_*)'}`],
   };
 }
 

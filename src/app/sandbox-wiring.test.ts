@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Exec, ExecResult } from '../adapters/exec.js';
@@ -92,6 +93,15 @@ describe('sandboxLimits', () => {
   it('refuses garbage, naming the variable', () => {
     for (const [k, v] of [['FACTORY_SANDBOX_PIDS', '1.5'], ['FACTORY_SANDBOX_PIDS', '-1'], ['FACTORY_SANDBOX_MEMORY', '4 GB'], ['FACTORY_SANDBOX_MEMORY', 'lots'], ['FACTORY_SANDBOX_CPUS', 'two'], ['FACTORY_SANDBOX_CPUS', '1.']]) {
       expect(sandboxLimits({ [k!]: v })).toEqual({ refused: expect.stringMatching(`^${k}=${v}: `) });
+    }
+  });
+
+  it("takes FACTORY_SANDBOX_MEMORY as docs/configuration.md writes it, each example as the row says (ORC-451)", () => {
+    const row = readFileSync(join(import.meta.dirname, '../../docs/configuration.md'), 'utf8').split('\n').find((line) => line.startsWith('| `FACTORY_SANDBOX_MEMORY`'));
+    expect(row).toContain('`^[1-9][0-9]*[bkmg]?$`');
+    for (const [size, taken] of [['512m', true], ['4g', true], ['4G', true], ['1.5g', false], ['4gb', false], ['512 m', false]] as const) {
+      expect(row).toContain(`\`${size}\``);
+      expect(sandboxLimits({ FACTORY_SANDBOX_MEMORY: size })).toEqual(taken ? expect.objectContaining({ memory: size }) : { refused: expect.any(String) });
     }
   });
 });
