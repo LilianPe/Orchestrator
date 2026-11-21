@@ -127,6 +127,18 @@ export function loadInstance(home: string): InstanceConfig {
   return validate(existsSync(file) ? parse(readFileSync(file, 'utf8')) : {});
 }
 
+/**
+ * The ids of config.yaml's projects as the file is now (ORC-454): one `factory init` added while the daemon runs included, one
+ * removed left out. `fallback` when the file does not read (an edit under way).
+ */
+export function currentProjectIds(home: string, fallback: readonly string[]): readonly string[] {
+  try {
+    return loadInstance(home).projects.map((p) => p.id);
+  } catch {
+    return fallback;
+  }
+}
+
 export function saveInstance(home: string, cfg: InstanceConfig): void {
   const valid = validate(cfg);
   ensureTree(home);

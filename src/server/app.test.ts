@@ -435,7 +435,7 @@ describe('server', () => {
     });
 
     it('neither lists nor approves the cards of a project no longer in the configuration (ORC-454)', async () => {
-      const { app, store } = await setup({ projects: ['p'] });
+      const { app, store } = await setup({ projects: () => ['p'] });
       await store.putMaturityCards('p', points, 4);
       await store.putMaturityCards('gone', [points[0]!], 5);
       const cards = (await (await app.request('/api/maturity')).json()).cards;
