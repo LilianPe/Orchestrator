@@ -1,48 +1,51 @@
 # Command line
 
-Relais provides one executable, `relais`, for you, the operator (installed by `npm link`, see [`installation.md`](installation.md)). The agents have none: during a run they reach Relais through its MCP alone (`submit_result`, `kb_search`, see [`interface-and-security.md`](interface-and-security.md#factory-mcp)); `relais-agent` is gone (ORC-192).
+The factory provides one executable, `factory`, for you, the operator (installed by `npm link`, see [`installation.md`](installation.md)). The agents have none: during a run they reach the factory through its MCP alone (`submit_result`, `kb_search`, see [`interface-and-security.md`](interface-and-security.md#factory-mcp)); the agents' former CLI is gone (ORC-192).
 
-All `relais` commands read `RELAIS_HOME` (default `~/.relais`) and `config.yaml`. An unknown or incomplete command prints the help and exits with code 1.
+All `factory` commands read `FACTORY_HOME` (default `~/.factory`) and `config.yaml`. An unknown or incomplete command prints the help and exits with code 1.
 
-## `relais`
+## `factory`
 
 | Command | Role | Daemon required |
 |---|---|---|
-| `relais init` | Configure Relais for the current repository. | no |
+| `factory init [--dev]` | Configure the factory for the current repository (`--dev`: a smee.io relay for Linear's webhooks, on a workstation). | no |
+| `factory validate [repo]` | Check `.factory/config.yml` against the baseline, the tools of each agent step and the worst case of the budgets. | no |
 | `factory doctor [repo]` | Refuse a host without cgroup v2, a repository without a protected default branch or whose CI can expose secrets to the factory's branches. | no (GitHub App) |
-| `relais up [--fake-runner]` | Start the daemon. | — |
-| `relais plan` | List the delegated tickets and say which ones would be picked up. | no (Linear connected) |
+| `factory up [--fake-runner]` | Start the daemon. | — |
+| `factory plan` | List the delegated tickets and say which ones would be picked up. | no (Linear connected) |
 | `factory status` | State of the running instance: tickets, blocks, runs. | yes |
-| `relais pause` / `relais resume` | Suspend / resume the queue. | yes |
+| `factory pause` / `factory resume` | Suspend / resume the queue. | yes |
 | `factory stop <ID>` | Stop a ticket's run. | yes |
 | `factory dry-run <project>` | Run the dry run of a project's default branch (setup, build, tests in the sandbox) and print what breaks. | yes (with sandboxes) |
+| `factory replay <journal>...` | Replay exported journals (bit-for-bit regression, `--what-if <preset>`, `--export <ID>`). | no (no instance needed, except `--export`) |
 | `factory run repair <ID> [replay\|skip\|force] [<event>]` | List or repair a ticket's set-aside (dead-letter) events. | no (reads and writes the database) |
+| `factory flaky <project> [add <test> --reason <why> [--frozen] \| remove <test>]` | The known flaky tests, which `verify` marks indicative. | no (the database) |
 | `factory baseline <project> --since <YYYY-MM-DD> [--replace]` | Freeze the 90 days before the factory's start as the overview's baseline, from Linear and GitHub. | no (Linear connected, GitHub, the database) |
 | `factory ghost start\|collect\|judge\|report\|list` | Replay closed tickets without effects, judge the factory's PRs blind against the human ones, report against two thresholds written before (mergeable, mergeable as is). | no (the database, the GitHub App for `start`, git) |
 
 The commands that require the daemon go through its Unix socket, `cli/factory.sock` in `FACTORY_HOME`, when it is there (ORC-405): on the daemon's server, as the factory's user (mode 0600), with no GitHub sign-in, and their actions are journaled as `cli:<host>`. Otherwise they call `http://127.0.0.1:<port>/api/…` with the `port` from `config.yaml`, with no credential: a daemon that listens beyond loopback asks for a GitHub sign-in, which only the dashboard gives (ORC-399), and they then say so. From another machine: SSH to the server. In Docker, run them in the container: `docker compose exec factoryd node dist/src/cli/factory.js status`.
 
-### `relais init`
+### `factory init`
 
-Run it **in the repository** to entrust to Relais (otherwise it asks for the repository path). Interactive wizard:
+Run it **in the repository** to entrust to the factory (otherwise it asks for the repository path). Interactive wizard:
 
 1. Asks for the **Linear team key** (e.g. `REL`), uppercased.
 2. Adds (or replaces) the project in `config.yaml`: `id` = name of the repository directory (slug, 30 characters max), `repoPath` = git root, `linearTeamKey`; a project already there keeps its `id` and its other fields (`authz`…).
 3. With `--dev`, and without `publicUrl` or a configured relay, creates a **smee.io channel** and records it in `relay`: for a workstation only (ORC-411). Without `--dev` nor `publicUrl`, it creates none, says to set `publicUrl` or run `factory init --dev`, and skips step 4: Linear gives its webhook secret only for a webhook URL.
 4. Prints the exact values to enter in Linear (callback URL, webhook URL, categories) then asks for **Client ID**, **Client secret** and **Webhook signing secret** (asked again as long as the answer is empty and none is stored), recorded in `secrets.json`. An empty answer keeps the stored value as long as the client ID is the same; a new client ID asks for its secrets. Details: [`linear.md`](linear.md).
-5. Prints a proposed [`.factory/config.yml`](repository-configuration.md) from what it detects, and writes nothing in the repository (ORC-388): `setup` (npm's `npm ci`, pnpm's `pnpm install --frozen-lockfile`, uv's `uv sync --frozen`) and `commands` (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: `ruff`, `mypy` and pytest through uv when there are a `pyproject.toml` and a `uv.lock`, ORC-172; pytest is proposed as `test`, the red check's command, when Node proposes no `test`, and otherwise as `pytest`, with a warning that the red check runs `commands.test` only, ORC-420) and `preview`, what starts the application for the visual proof on `PORT` (the first of the `dev`, `start` and `preview` scripts in `package.json`, by the same package manager; none for Python, ORC-397), all in one proposal. A `package.json` that does not parse proposes nothing of Node. Nothing detected, or a `.factory/config.yml` already there, nothing proposed. Commit the file on the default branch: the factory reads it there. A `.factory/workflow.yml` or `.relais/workflow.yml` found is said to be ignored. When the repository will have no `commands.test`, the red check's command (none proposed, as for a Node repository without a `test` script, or, when a `.factory/config.yml` is there, none in the one of the default branch, where the daemon reads it), it warns that every ticket would block at the tests step (ORC-412); a file git cannot read there or that does not parse is `factory validate`'s and `factory doctor`'s to name.
+5. Prints a proposed [`.factory/config.yml`](repository-configuration.md) from what it detects, and writes nothing in the repository (ORC-388): `setup` (npm's `npm ci`, pnpm's `pnpm install --frozen-lockfile`, uv's `uv sync --frozen`) and `commands` (Node: the `lint`, `typecheck`, `test` scripts in `package.json`, through pnpm when its lockfile is the only one; Python: `ruff`, `mypy` and pytest through uv when there are a `pyproject.toml` and a `uv.lock`, ORC-172; pytest is proposed as `test`, the red check's command, when Node proposes no `test`, and otherwise as `pytest`, with a warning that the red check runs `commands.test` only, ORC-420) and `preview`, what starts the application for the visual proof on `PORT` (the first of the `dev`, `start` and `preview` scripts in `package.json`, by the same package manager; none for Python, ORC-397), all in one proposal. A `package.json` that does not parse proposes nothing of Node. Nothing detected, or a `.factory/config.yml` already there, nothing proposed. Commit the file on the default branch: the factory reads it there. A `.factory/workflow.yml` found, or the one of the former name's directory, is said to be ignored. When the repository will have no `commands.test`, the red check's command (none proposed, as for a Node repository without a `test` script, or, when a `.factory/config.yml` is there, none in the one of the default branch, where the daemon reads it), it warns that every ticket would block at the tests step (ORC-412); a file git cannot read there or that does not parse is `factory validate`'s and `factory doctor`'s to name.
    With the proposal comes the **maturity report** (ORC-410), one card per point, printed with its state (`[to approve]`, or `[approved by <who>]`) and the dashboard page where a person approves them (`#maturity`, [interface](interface-and-security.md)): **Stack** (Node and its package manager, Python and uv, the front-end framework among the dependencies, Node's peer and optional ones included), **Commands** (`setup` and the checks proposed), **main green or red** (the project's last dry run on its default branch stored in the database, ORC-408: green, or red with what breaks and `factory dry-run <project>` to run it again, its commit and when it ended; « not checked yet » without one, which cannot be approved: `init` reads files, never runs the repository; each dry run on the default branch the daemon records then sets the card, and drops its approval when the value changes, ORC-437), **Services** (a Postgres in a compose file, or its driver among the dependencies: an ORM alone is not one), **Visual paths** (the directories a front end renders from, the `visual_paths` to approve), **Areas without tests** (source directories without a test file; the walk stops past a bound on a large repository, and says so). The cards are stored in the instance's database (`maturity_cards` table, migration `0017_maturity_cards` on Postgres, brought up to date first), and `init` says which: `Cards stored in Postgres (FACTORY_DATABASE_URL).`, or SQLite with its path and a note that a daemon started with `FACTORY_DATABASE_URL` reads Postgres and does not see them (ORC-437). Running `init` again replaces them, and a card keeps its approval only when its value is unchanged. A database `init` cannot reach leaves the cards printed and not stored, and says so. With a `.factory/config.yml` already there, or nothing detected, no report: the stored cards are left as they are.
 6. Writes `config.yaml`, then prints how to create and install the factory's **GitHub App** by hand (its repository permissions, those of [`github-app-manifest.json`](github-app-manifest.json); its webhook `<publicUrl>/webhooks/github`, optional, with a `publicUrl`, disabled without one), ORC-411, on a first setup only (no Linear values yet, no `factory.yml`).
-7. On that first setup, writes `FACTORY_HOME/factory.yml`: `github` (`app_id: env:GH_APP_ID`, `private_key: env:GH_APP_KEY`; never `webhook_secret`, which an enabled App webhook adds by hand), `claude` (`token: env:CLAUDE_CODE_OAUTH_TOKEN`) and the budgets of a first run, which `factory validate` accepts; every secret a reference, never a value, and the variables to export are printed. An existing `factory.yml` is kept as it is, and an instance that runs without one gets none. When `config.yaml` already has a `github` App, it prints no App steps and writes no `github` in `factory.yml`, whose App would replace it.
-8. Prints the next steps: `relais up`, « Connect Linear », delegate a ticket.
+7. On that first setup, writes `FACTORY_HOME/factory.yml`: `github` (`app_id: env:GH_APP_ID`, `private_key: env:GH_APP_KEY`; never `webhook_secret`, which an enabled App webhook adds by hand), `claude` (one account, `main`, `token: env:CLAUDE_CODE_OAUTH_TOKEN`, and `active: main`) and the budgets of a first run, which `factory validate` accepts; every secret a reference, never a value, and the variables to export are printed. An existing `factory.yml` is kept as it is, and an instance that runs without one gets none. When `config.yaml` already has a `github` App, it prints no App steps and writes no `github` in `factory.yml`, whose App would replace it.
+8. Prints the next steps: `factory up`, « Connect Linear », delegate a ticket.
 
-`relais init` can be rerun: for a second repository (new project), or to change the Linear credentials. An empty answer keeps what is stored (ORC-83, ORC-411): the team key, the client ID, secret and webhook secret, and Linear's OAuth tokens while the client ID stays the same; `factory.yml` is never rewritten. It no longer writes `.factory/workflow.yml`: the workflow is the `factory/default` preset, and a repository's `.factory/workflow.yml` is ignored (`factory doctor` says so, and the daemon logs it at each start).
+`factory init` can be rerun: for a second repository (new project), or to change the Linear credentials. An empty answer keeps what is stored (ORC-83, ORC-411): the team key, the client ID, secret and webhook secret, and Linear's OAuth tokens while the client ID stays the same; `factory.yml` is never rewritten. It no longer writes `.factory/workflow.yml`: the workflow is the `factory/default` preset, and a repository's `.factory/workflow.yml` is ignored (`factory doctor` says so, and the daemon logs it at each start).
 
-### `relais up`
+### `factory up`
 
-Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), smee relay, timers, Linear and GitHub reconciliation every 5 minutes through a database timer, queue re-evaluation every minute. Prints `Relais is running: <url>`.
+Starts the daemon in the foreground: HTTP server (UI, API, webhooks, OAuth), the smee relay when `config.yaml` has one (`factory init --dev`, a workstation), timers, Linear and GitHub reconciliation every 5 minutes through a database timer, queue re-evaluation every minute. Prints `Orchestrator is running: <url>`.
 
-- Writes `<RELAIS_HOME>/run-settings.json` (see [`configuration.md`](configuration.md#what-does-not-leave-the-daemon)).
+- Writes `<FACTORY_HOME>/run-settings.json` (see [`configuration.md`](configuration.md#what-does-not-leave-the-daemon)).
 - Resumes whatever a previous shutdown or crash cut off, without human intervention: reattaches to the containers still alive, relaunches the other steps (see [`operations.md`](operations.md#shutdown-restart-and-interrupted-runs)).
 - If Linear is not connected, logs `Linear not connected: open <url>/oauth/start`.
 - If the webhook secret is missing from `secrets.json`, logs a warning: all webhooks will be refused (401) until it is filled in.
@@ -71,14 +74,14 @@ Check before entrusting a repository, run where the daemon runs (`docker compose
 - Resolves `owner/name` through `git remote get-url origin`; current repository by default.
 - `--json`: machine report (`host`, `branchProtection`, workflows with their triggers, secrets yes/no, environments and verdict; `accepted` false on any refusal).
 - Never prints a secret; when in doubt (ambiguous YAML, dynamic `on`, indirect secrets, API error), refuses.
-- Warns about a `.factory/workflow.yml` or a `.relais/workflow.yml` in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
+- Warns about a `.factory/workflow.yml` (or the one of the former name's directory) in the repository's working copy: ignored since the workflow is the `factory/default` preset, to delete (ORC-388). It looks only at their presence, never reads them, and the verdict does not change; `--json` lists them under `ignored`.
 - Warns when the project of the repository checked has a spec gate no validator can pass (ORC-421): `authz.validators` empty in `config.yaml`, every ticket stops at the gate, as its initiator cannot approve; a lone validator, the tickets they delegate themselves. `factory/fantome` projects approve their own specs. Said before the workflows, also by the daemon at its start; the verdict does not change; `--json` has the lines under `validatorWarnings`.
 - Warns when the `.factory/config.yml` of the default branch has no `commands.test` (ORC-412): the red check of the tests step has no command to run, and every ticket blocks there. The verdict does not change; `--json` has the line under `warnings`.
 - Says first whether this instance can take the visual proof (ORC-404): `available` with the capture image of `FACTORY_BROWSER_IMAGE` and its Playwright version, or `unavailable` and why (no sandboxes, the variable unset, the image absent from the engine or the engine not answering, an image without the label of `docker/browser.Dockerfile`, or one not built on `FACTORY_RUNNER_IMAGE`). Of the instance, not the repository: the verdict does not change; `--json` has it under `visualProof` (`available`, `detail`), a failed check included.
 
 Full rule, examples and limits: [`github.md`](github.md).
 
-### `relais plan`
+### `factory plan`
 
 Starts nothing. For each project, lists the tickets delegated to the agent in Linear, sorted by priority:
 
@@ -91,7 +94,7 @@ REL-9  already handled  Menu redesign (human_review)
 - `taken`: would pass the `tracker.pickup.checks` checks; at the Rapide level, a failed check follows as `assumed`, written in the spec;
 - `clarify`: fails a check: the delegation starts at `intake`, then `clarify` asks to complete the ticket, for the reasons that follow (ORC-423);
 - `not taken`: followed by the reasons: repository to specify, invalid `.factory/config.yml`, or a failed check when the chain does not start at `intake` (its launch refuses the ticket);
-- `already handled`: already tracked by Relais (with its logical state).
+- `already handled`: already tracked by the factory (with its logical state).
 
 Requires Linear to be connected (`Linear not connected: run `factory up`, then connect Linear.` otherwise).
 
@@ -107,9 +110,9 @@ Linear: connected · queue: active (0 waiting) · dev slots 1/3
 
 For each ticket: its state, a check in progress, the reason for a block, and its runs in progress with what they are executing. `, lease expired` follows a run the heartbeat no longer holds (ORC-220). Daemon unreachable, silent past 1 min (ORC-434), or asking for a GitHub sign-in: says so, exit code 1.
 
-### `relais pause` / `relais resume`
+### `factory pause` / `factory resume`
 
-`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in `relais.db` and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Resume » button.
+`pause`: no more runs start; requests accumulate in the queue. Runs in progress continue. The pause state is kept in the database (`factory.db`, or Postgres with `FACTORY_DATABASE_URL`) and survives a restart. `resume` restarts the queue. Equivalent to the UI's « Pause / Resume » button.
 
 ### `factory stop <ID>`
 
@@ -189,7 +192,7 @@ $ factory flaky p remove 'src/cart.test.ts > cart total'
 
 ### `factory baseline <project>` (ORC-230)
 
-The state of reference the Overview compares the factory with ([`interface-and-security.md`](interface-and-security.md)): what the team delivered without it over the 90 days before `--since`, the factory's start (the day given, UTC midnight, left out). Read from the project's Linear team and its GitHub repository, with the daemon's credentials (Linear's saved tokens; the GitHub App when configured, otherwise `gh`), then frozen in the store, one row per measure with its period:
+The state of reference the Overview compares the factory with ([`interface-and-security.md`](interface-and-security.md)): what the team delivered without it over the 90 days before `--since`, the factory's start (the day given, UTC midnight, left out). Read from the project's Linear team and its GitHub repository, with the daemon's credentials (Linear's saved tokens; the GitHub App, without which nothing is read on GitHub, ORC-181), then frozen in the store, one row per measure with its period:
 
 - **Delivered**: the team's issues completed in the period that have a PR merged in it, linked by Linear (the PR attached to the issue) or naming the issue in its branch or title.
 - **Median lead time**: from the issue's start (its first started state, In Progress) to its first merged PR; an issue never started is left out, and counted.

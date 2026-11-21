@@ -1,7 +1,7 @@
 {
-  "name": "Relais Factory",
-  "description": "GitHub App of the Relais daemon: read PRs, checks, review threads, workflows and environment rules. No administration.",
-  "url": "https://github.com/LilianPe/relais",
+  "name": "Orchestrator Factory",
+  "description": "GitHub App of the Orchestrator daemon: push its branches, open and read its PRs, write its checks, read statuses, workflows and environment rules. No administration.",
+  "url": "https://github.com/LilianPe/Orchestrator",
   "public": false,
   "default_permissions": {
     "contents": "write",

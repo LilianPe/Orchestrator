@@ -1,63 +1,65 @@
 # Daemon configuration
 
-Relais is configured at three levels:
+The factory is configured at these levels:
 
 | Level | File | Scope | Doc |
 |---|---|---|---|
-| Instance | `<RELAIS_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, knowledge base. | this page |
-| Secrets | `<RELAIS_HOME>/secrets.json` | Linear credentials. | this page |
+| Instance | `<FACTORY_HOME>/config.yaml` | The daemon: port, host, projects, webhook relay, knowledge base. | this page |
+| Secrets | `<FACTORY_HOME>/secrets.json` | Linear credentials. | this page |
+| Server | `<FACTORY_HOME>/factory.yml` | Secrets as references, the GitHub App, Claude accounts, budgets, tools, repositories' variables and secrets (ORC-209). | [below](#factoryyml-orc-209) |
 | Project | `.factory/config.yml` in each repository, read on its default branch | Its setup, its checks, its sensitive paths and limits; it can only tighten the preset. A `.factory/workflow.yml` is ignored since ORC-388: the workflow is the `factory/default` preset ([`preset.md`](preset.md)). | [`repository-configuration.md`](repository-configuration.md) |
 
-The two instance files are read **at startup** of `relais up`: restart after a change.
+The instance files are read **at startup** of `factory up`: restart after a change (but `claude.active` of `factory.yml`, ORC-215).
 
 ## Environment variables
 
 | Variable | Read by | Default | Effect | Secret |
 |---|---|---|---|---|
-| `RELAIS_HOME` | all `relais` commands | `$HOME/.relais` | Instance directory (see [`installation.md`](installation.md#the-daemons-home-directory)). | no |
-| `FACTORY_DATABASE_URL` | `relais up`, `relais plan` | — | Postgres connection string (`postgres://user:password@host:5432/database`). When set, the daemon keeps its state in Postgres (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`relais plan` reads it without migrating it); an unreachable database prevents startup, with no fallback to SQLite. Absent: SQLite database `relais.db`, until it is removed (ORC-178); in production (`NODE_ENV=production`, set by the image) its absence prevents startup, unless `FACTORY_STORE=sqlite` (ORC-350). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
-| `FACTORY_STORE` | `relais up`, `relais plan` | — | `sqlite`: in production, without `FACTORY_DATABASE_URL`, start on the SQLite database all the same (ORC-350). Otherwise a production start without `FACTORY_DATABASE_URL` is refused, so that a variable lost in a deployment never starts the factory on an empty database. No effect outside production or with `FACTORY_DATABASE_URL`. The commands that open the store (`plan`, `replay --export`, `run repair`…) refuse the same way. | no |
-| `FACTORY_CONTAINER_CLI` | `relais up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` runs there too. Absent: `relais up` refuses to start, unless `FACTORY_ALLOW_HOST_RUNS=1` (ORC-349). No effect with `--fake-runner`. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
-| `FACTORY_ALLOW_HOST_RUNS` | `relais up` | — | `1`: without `FACTORY_CONTAINER_CLI`, the agents run on the host, under the daemon's user, next to its secrets, and the daemon says so at startup. For development only. Otherwise, without a container engine, `relais up` refuses to start (ORC-349). No effect with `FACTORY_CONTAINER_CLI` or `--fake-runner`. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
-| `FACTORY_ALLOW_HOST_VERIFY` | `relais up` | — | `1`: without a sandbox, `verify` and the red check run the agent's code on the host, next to the daemon's secrets. Otherwise, they refuse and the ticket is blocked. No effect with `FACTORY_CONTAINER_CLI`: a failed engine never falls back to the host. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
-| `FACTORY_MESSAGE_MODEL` | `relais up` | — | `off`, `0`, `false` or `none` (any case): no small model classifies human messages, the `?` fallback rule does it alone (ORC-336). Any other value is logged as a warning and leaves the model on. See [`operations.md`](operations.md#the-small-model-of-messages). | no |
-| `FACTORY_RUNNER_IMAGE` | `relais up` | — | Image of the run containers (`docker/runner.Dockerfile`: node and pnpm, python and uv, git, gitleaks, claude): without gitleaks, every `verify` is a failure (ORC-151). Required with `FACTORY_CONTAINER_CLI`. | no |
-| `FACTORY_BROWSER_IMAGE` | `relais up`, `factory doctor` | — | The capture image of the visual proof (`docker/browser.Dockerfile`, ORC-404): the runner image plus Playwright's Chromium. When the engine has it with its label `factory.browser`, built on `FACTORY_RUNNER_IMAGE` (an image left from before the runner's update is refused), the sandboxes that shoot run it and the daemon wires the browser; otherwise a required visual proof is unavailable, its check neutral. Said at startup and by `factory doctor`. No effect without `FACTORY_CONTAINER_CLI`. | no |
-| `FACTORY_EGRESS_CONTROL` | `relais up` | — | Control socket of the `proxy` service (ORC-203). When set, the daemon drives that service instead of running the egress proxy in its own process. | no |
+| `FACTORY_HOME` | all `factory` commands | `$HOME/.factory` | Instance directory (see [`installation.md`](installation.md#the-daemons-home-directory)). | no |
+| `FACTORY_DATABASE_URL` | `factory up`, `factory plan` | — | Postgres connection string (`postgres://user:password@host:5432/database`). When set, the daemon keeps its state in Postgres (`PgStore`) and applies the Drizzle migrations from `drizzle/` at startup (`factory plan` reads it without migrating it); an unreachable database prevents startup, with no fallback to SQLite. Absent: SQLite database `<FACTORY_HOME>/factory.db`, until it is removed (ORC-178); in production (`NODE_ENV=production`, set by the image) its absence prevents startup, unless `FACTORY_STORE=sqlite` (ORC-350). Never passed to runs (`FACTORY_` prefix), never written to the daemon's log. | **yes** |
+| `FACTORY_STORE` | `factory up`, `factory plan` | — | `sqlite`: in production, without `FACTORY_DATABASE_URL`, start on the SQLite database all the same (ORC-350). Otherwise a production start without `FACTORY_DATABASE_URL` is refused, so that a variable lost in a deployment never starts the factory on an empty database. No effect outside production or with `FACTORY_DATABASE_URL`. The commands that open the store (`plan`, `replay --export`, `run repair`…) refuse the same way. | no |
+| `FACTORY_CONTAINER_CLI` | `factory up` | — | `docker` or `podman`. When set, each attempt runs in a disposable container (ORC-204): created when it launches, destroyed when it ends, and those a crash left behind are destroyed at the next startup. The repository's `setup` runs there too. Absent: `factory up` refuses to start, unless `FACTORY_ALLOW_HOST_RUNS=1` (ORC-349). No effect with `--fake-runner`. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
+| `FACTORY_ALLOW_HOST_RUNS` | `factory up` | — | `1`: without `FACTORY_CONTAINER_CLI`, the agents run on the host, under the daemon's user, next to its secrets, and the daemon says so at startup. For development only. Otherwise, without a container engine, `factory up` refuses to start (ORC-349). No effect with `FACTORY_CONTAINER_CLI` or `--fake-runner`. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
+| `FACTORY_ALLOW_HOST_VERIFY` | `factory up` | — | `1`: without a sandbox, `verify` and the red check run the agent's code on the host, next to the daemon's secrets. Otherwise, they refuse and the ticket is blocked. No effect with `FACTORY_CONTAINER_CLI`: a failed engine never falls back to the host. See [`interface-and-security.md`](interface-and-security.md#known-limitations). | no |
+| `FACTORY_MESSAGE_MODEL` | `factory up` | — | `off`, `0`, `false` or `none` (any case): no small model classifies human messages, the `?` fallback rule does it alone (ORC-336). Any other value is logged as a warning and leaves the model on. See [`operations.md`](operations.md#the-small-model-of-messages). | no |
+| `FACTORY_RUNNER_IMAGE` | `factory up` | — | Image of the run containers (`docker/runner.Dockerfile`: node and pnpm, python and uv, git, gitleaks, claude): without gitleaks, every `verify` is a failure (ORC-151). Required with `FACTORY_CONTAINER_CLI`. | no |
+| `FACTORY_BROWSER_IMAGE` | `factory up`, `factory doctor` | — | The capture image of the visual proof (`docker/browser.Dockerfile`, ORC-404): the runner image plus Playwright's Chromium. When the engine has it with its label `factory.browser`, built on `FACTORY_RUNNER_IMAGE` (an image left from before the runner's update is refused), the sandboxes that shoot run it and the daemon wires the browser; otherwise a required visual proof is unavailable, its check neutral. Said at startup and by `factory doctor`. No effect without `FACTORY_CONTAINER_CLI`. | no |
+| `FACTORY_EGRESS_CONTROL` | `factory up` | — | Control socket of the `proxy` service (ORC-203). When set, the daemon drives that service instead of running the egress proxy in its own process. | no |
 | `FACTORY_INSTALL_DIR` | `docker/entrypoint.sh` | — | Where to copy the installation, at a path the engine sees on the host; the daemon runs from that copy, one per image ([`deployment.md`](deployment.md#why-the-same-paths-on-both-sides)). | no |
 | `FACTORY_ALLOW_ROOTFUL_ENGINE` | `docker/entrypoint.sh` | — | `1`: allows the daemon container to start on an engine that is not rootless. Development workstation only. | no |
-| `FACTORY_COMMIT` | `relais up` | set when the image is built | The factory's commit, recorded on each attempt. | no |
-| `FACTORY_AGENT_PORT` | `relais up` | UI port + 1 | Port of the server that only serves the factory MCP (`/agent/mcp`), for containers. Started only with `FACTORY_CONTAINER_CLI`. | no |
-| `FACTORY_AGENT_HOST` | `relais up` | `127.0.0.1` | Listen address of that server. Containers reach it through the daemon's egress proxy (ORC-213), not through the network: loopback is enough. Under compose, `0.0.0.0`: the `proxy` service reaches it over the internal network. | no |
-| `FACTORY_SANDBOX_AGENT_HOST` | `relais up` | `host.docker.internal` | Name of the daemon in the runs' `RELAIS_API` (`http://<name>:<FACTORY_AGENT_PORT>/agent`). The container does not resolve it: the egress proxy recognizes this name and relays to the server of the factory MCP. | no |
-| `FACTORY_SANDBOX_PIDS` | `relais up` | `512` | Maximum number of processes in a run container (`--pids-limit`): a fork bomb hits it without starving the other attempts (ORC-218). `0` or `none`: no limit. A value that is not a positive integer prevents startup. | no |
-| `FACTORY_SANDBOX_MEMORY` | `relais up` | `4g` | Memory of a run container, with no swap beyond it (`--memory` and `--memory-swap`): a memory hog is killed by the OOM killer. Size in the engine's format (`512m`, `4g`). `0` or `none`: no limit. | no |
-| `FACTORY_POSTGRES_IMAGE` | `relais up` | `docker.io/library/postgres:16-bookworm` | Image of the Postgres the factory starts for each attempt of a repository with `services: [postgres]` (ORC-309, [`repository-configuration.md`](repository-configuration.md#services)). Fully qualified for rootless Podman. | no |
-| `FACTORY_SANDBOX_CPUS` | `relais up` | `2`, or the host's CPU count if it has fewer | CPUs of a run container (`--cpus`, decimals accepted: `0.5`). `0` or `none`: no limit. | no |
-| `FACTORY_REFUSALS_LOG` | `relais up` | `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` | File for the `PreToolUse` hook's refusal log; passed to runs on the host only if it is set. In a sandbox, ignored: each run writes to `<RELAIS_HOME>/runs/<runId>/refusals/refusals.jsonl` (ORC-217). See [`pack-and-skills.md`](pack-and-skills.md#pretooluse-hook-and-refusal-log). | no |
+| `FACTORY_COMMIT` | `factory up` | set when the image is built | The factory's commit, recorded on each attempt. | no |
+| `FACTORY_AGENT_PORT` | `factory up` | UI port + 1 | Port of the server that only serves the factory MCP (`/agent/mcp`), for containers. Started only with `FACTORY_CONTAINER_CLI`. | no |
+| `FACTORY_AGENT_HOST` | `factory up` | `127.0.0.1` | Listen address of that server. Containers reach it through the daemon's egress proxy (ORC-213), not through the network: loopback is enough. Under compose, `0.0.0.0`: the `proxy` service reaches it over the internal network. | no |
+| `FACTORY_SANDBOX_AGENT_HOST` | `factory up` | `host.docker.internal` | Name of the daemon in the runs' `FACTORY_API` (`http://<name>:<FACTORY_AGENT_PORT>/agent`). The container does not resolve it: the egress proxy recognizes this name and relays to the server of the factory MCP. | no |
+| `FACTORY_SANDBOX_PIDS` | `factory up` | `512` | Maximum number of processes in a run container (`--pids-limit`): a fork bomb hits it without starving the other attempts (ORC-218). `0` or `none`: no limit. A value that is not a positive integer prevents startup. | no |
+| `FACTORY_SANDBOX_MEMORY` | `factory up` | `4g` | Memory of a run container, with no swap beyond it (`--memory` and `--memory-swap`): a memory hog is killed by the OOM killer. Size in the engine's format (`512m`, `4g`). `0` or `none`: no limit. | no |
+| `FACTORY_POSTGRES_IMAGE` | `factory up` | `docker.io/library/postgres:16-bookworm` | Image of the Postgres the factory starts for each attempt of a repository with `services: [postgres]` (ORC-309, [`repository-configuration.md`](repository-configuration.md#services)). Fully qualified for rootless Podman. | no |
+| `FACTORY_SANDBOX_CPUS` | `factory up` | `2`, or the host's CPU count if it has fewer | CPUs of a run container (`--cpus`, decimals accepted: `0.5`). `0` or `none`: no limit. | no |
+| `FACTORY_REFUSALS_LOG` | `factory up` | `$CLAUDE_CONFIG_DIR/factory-refusals.jsonl` | File for the `PreToolUse` hook's refusal log; passed to runs on the host only if it is set. In a sandbox, ignored: each run writes to `<FACTORY_HOME>/runs/<runId>/refusals/refusals.jsonl` (ORC-217). See [`pack-and-skills.md`](pack-and-skills.md#pretooluse-hook-and-refusal-log). | no |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `claude`, in a sandbox and on the host | — | Claude Code account token when `factory.yml` does not choose one (`claude.active`). In a sandbox, the egress proxy sets it on the model calls, and the sandbox holds a placeholder (ORC-337). | **yes** |
-| `ANTHROPIC_API_KEY` | `claude`, on the host only | — | Claude Code authentication on the host, without `claude login` or an active account. Never passed to a sandbox (ORC-211); removed along with host runs (ORC-179). | **yes** |
 | `GH_APP_ID` | daemon (fallback for `github.appId`) | — | Identifier of the factory's GitHub App. | no |
 | `GH_APP_KEY` | daemon (fallback for `github.privateKey`) | — | PEM private key of the GitHub App, or path to the `.pem` file. | **yes** |
 | `GH_APP_INSTALLATION_ID` | daemon (fallback for `github.installationId`) | — | App installation to use; optional, the daemon can find it per repository. | no |
 | `GH_APP_CLIENT_ID` | daemon (fallback for `github.clientId`) | — | Client id of the GitHub App, for the dashboard's GitHub sign-in (ORC-399). **Required**, with its secret, as soon as `host` is not a loopback address. | no |
 | `GH_APP_CLIENT_SECRET` | daemon (fallback for `github.clientSecret`) | — | Client secret of the GitHub App, for the dashboard's GitHub sign-in (ORC-399). | **yes** |
-| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (inherited by runs) | the machine's git identity; in Docker `Relais <relais@localhost>` | Identity of the agents' commits. | no |
-| `PATH` | the daemon | — | Must contain `claude`, `gh`, `git`. Relais adds Relais's `bin/` to it for runs. | no |
+| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | git (inherited by runs) | the machine's git identity; in Docker `Orchestrator <factory@localhost>` | Identity of the agents' commits. | no |
+| `PATH` | the daemon | — | Must contain `git`, the engine's CLI with `FACTORY_CONTAINER_CLI`, and `claude` for runs on the host (the daemon image has none: in a sandbox, `claude` is the runner image's). | no |
+
+> **Transition note**: `ANTHROPIC_API_KEY` is still read, in transition. On the host only (`FACTORY_ALLOW_HOST_RUNS=1`), it authenticates `claude` without `claude login` or an active account, and is dropped as soon as an account is chosen; it is never passed to a sandbox (ORC-211) and goes with host runs (ORC-179). It is also the key of the small model of messages when the agents run in sandboxes, where the daemon has no `claude` (ORC-336, [`operations.md`](operations.md#the-small-model-of-messages)). The code also keeps the old `RELAIS_*` variables out of runs and refuses them in a repository's `env` (ORC-167); none is read any more, `RELAIS_HOME` included: set `FACTORY_HOME`.
 
 Variables reserved for tests (no effect on the daemon): `LINEAR_API_KEY` (live test of the Linear queries), `FACTORY_E2E=1` (pack test with the real `claude`). See [`acceptance.md`](acceptance.md#optional-live-checks).
 
-Variables **set by Relais** in each run's environment (do not set them yourself): `RELAIS_API` and `RELAIS_RUN_TOKEN` (the factory MCP's address and credential), `RELAIS_TICKET`, `FACTORY_REFUSALS_LOG` when the daemon has it (in a sandbox, always, pointing to the run's directory), `FACTORY_READ_MAX_LINES` when `factory.yml` declares `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` when a file must be read in full, `FACTORY_TOOLS` with the run's built-in tools (the hook refuses any other, ORC-383) and, for the `dev` queue, `PORT`. See ["What does not leave the daemon"](#what-does-not-leave-the-daemon). In a container, these paths are the container's, and its `PATH` is its image's, never the host's. Nothing of Relais's install is mounted in a run nor put on its `PATH` since `relais-agent` is gone (ORC-192).
+Variables **set by the factory** in each run's environment (do not set them yourself): `FACTORY_API` and `FACTORY_RUN_TOKEN` (the factory MCP's address and credential), `FACTORY_TICKET`, `FACTORY_REFUSALS_LOG` when the daemon has it (in a sandbox, always, pointing to the run's directory), `FACTORY_READ_MAX_LINES` when `factory.yml` declares `read_guard.max_lines`, `FACTORY_FULL_READ_PATHS` when a file must be read in full, `FACTORY_TOOLS` with the run's built-in tools (the hook refuses any other, ORC-383) and, for a run in the ticket's worktree, `PORT`. See ["What does not leave the daemon"](#what-does-not-leave-the-daemon). In a container, these paths are the container's, and its `PATH` is its image's, never the host's. Of the factory's install, only the pack (`/factory/pack`) and the run settings (`/factory/settings.json`) are mounted in a sandbox, read-only; nothing is put on its `PATH` since the agent's CLI is gone (ORC-192).
 
 ## `config.yaml`
 
-Written by `relais init`, editable by hand. Missing file = all default values. An invalid field prevents startup with `invalid config.yaml: <field>: <message>`.
+Written by `factory init`, editable by hand. Missing file = all default values. An invalid field prevents startup with `invalid config.yaml: <field>: <message>`.
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
 | `port` | integer > 0 | `4100` | HTTP server port (UI, API, webhooks, OAuth). Also the port the CLI queries (`http://127.0.0.1:<port>`). |
 | `host` | text | `127.0.0.1` | Listen address. Any value other than loopback (`localhost`, `127.x.x.x`, `::1`) puts the interface behind a GitHub sign-in (ORC-399): it requires the App's OAuth client, `dashboard` in `factory.yml`, an `https://` `publicUrl` and `secrets_key` (ORC-398), see [`interface-and-security.md`](interface-and-security.md#network-exposure-and-github-sign-in). In Docker: `0.0.0.0`. |
-| `publicUrl` | URL | — | Public HTTPS URL of Relais: the server's domain, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or a development tunnel. If set, it is used as the base for the OAuth callback URL (`<publicUrl>/oauth/callback`) and the webhook URL (`<publicUrl>/webhooks/linear`), and `relais init` does not create a smee channel. Without it: `http://localhost:<port>`. |
+| `publicUrl` | URL | — | Public HTTPS URL of the factory: the server's domain, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or a development tunnel. If set, it is used as the base for the OAuth callback URL (`<publicUrl>/oauth/callback`) and the webhook URL (`<publicUrl>/webhooks/linear`), and `factory init --dev` does not create a smee channel. Without it: `http://localhost:<port>`. |
 | `relay` | `{ kind: smee, url: <URL> }` or `{ kind: none }` | `{ kind: none }` | Linear webhook relay, for a workstation only: `none` on the server. `factory init --dev` creates a smee.io channel when there is neither `publicUrl` nor a relay; without `--dev`, `init` creates none (ORC-411). See [`linear.md`](linear.md#3-webhooks-production-and-development). |
 | `projects` | list of `{ id, repoPath, linearTeamKey, authz?, effects?, preset? }` | `[]` | One project = one local repository + one Linear team. See [`projects-and-workspaces.md`](projects-and-workspaces.md). `authz`: see [Authorization](#authorization). `effects: none`: nothing of the project leaves the factory, its effects kept as artifacts; `preset: factory/fantome`: the replay of closed tickets, always without effects, whose tickets only the daemon delegates, never Linear (ORC-231, ORC-376, [ghost-replay.md](ghost-replay.md)). |
 | `limits` | `{}` | `{}` | Empty since ORC-216: the daily budget in dollars (`perDayUsd`) is gone, a file that still has it loads without it, and nothing counts a day in dollars, not even for display (ORC-194). Budgets count tokens and turns: `budgets` of `factory.yml`. |
@@ -70,8 +72,8 @@ Example:
 port: 4100
 host: 127.0.0.1
 relay:
-  kind: smee
-  url: https://smee.io/AbCdEf123
+  kind: smee                     # workstation only (factory init --dev)
+  url: https://smee.io/AbCdEf123 # the dev relay's channel
 projects:
   - id: mon-app
     repoPath: /home/moi/code/mon-app
@@ -83,16 +85,16 @@ projects:
         6f1c2e0a-0000-4000-8000-000000000001: lilian-gh
         6f1c2e0a-0000-4000-8000-000000000002: armand-gh
 knowledge:
-  repoPath: /home/moi/.relais/knowledge
+  repoPath: /home/moi/.factory/knowledge
 github:
   appId: "123456"
-  privateKey: /home/moi/.relais/github-app.pem
+  privateKey: /home/moi/.factory/github-app.pem
   installationId: "987654" # optional
 ```
 
 ### GitHub App
 
-The `github` section configures the **daemon**'s identity on GitHub. It is optional, but without it the factory reads no PR, publishes nothing and merges nothing: the `gh` CLI and `GH_TOKEN` fallback is gone (ORC-181, [`github.md`](github.md#without-a-github-app)).
+The `github` section configures the **daemon**'s identity on GitHub. It is optional, but without it the factory reads no PR, publishes nothing and merges nothing: it has no other way to GitHub since ORC-181 ( [`github.md`](github.md#without-a-github-app)).
 
 | Key | Type | Default | Effect |
 |---|---|---|---|
@@ -102,11 +104,11 @@ The `github` section configures the **daemon**'s identity on GitHub. It is optio
 | `github.webhookSecret` | text | `GH_WEBHOOK_SECRET` | GitHub webhook secret (`POST /webhooks/github`, signature `X-Hub-Signature-256`). Absent: the `GH_WEBHOOK_SECRET` variable; without either, every GitHub webhook is refused (401). See [`github.md`](github.md#github-webhooks). |
 | `github.clientId`, `github.clientSecret` | text | `GH_APP_CLIENT_ID`, `GH_APP_CLIENT_SECRET` | The App's OAuth client, for the dashboard's GitHub sign-in off the loopback (ORC-399). One without the other prevents startup. In `factory.yml`: `client_id`, `client_secret: env:NAME`. |
 
-The `GH_APP_ID`, `GH_APP_KEY` and `GH_APP_INSTALLATION_ID` variables serve as a fallback, field by field. A partial configuration (`appId` without a key, or the reverse) prevents startup: Relais does not silently switch to `gh`.
+The `GH_APP_ID`, `GH_APP_KEY` and `GH_APP_INSTALLATION_ID` variables serve as a fallback, field by field. A partial configuration (`appId` without a key, or the reverse) prevents startup.
 
 The daemon exchanges an RS256 JWT for an **installation token limited to the requested repository**, keeps it in memory for at most an hour (60 s safety margin) and never passes it to runs. Permissions, creating the App and key rotation: [`github.md`](github.md#github-app-recommended).
 
-> **Target.** The section still lives in `config.yaml`: the move to `factory.yml` is tracked by ORC-209. The environment variables will remain the fallback for Docker and existing installations.
+> The section still lives in `config.yaml`, and the `github` section of `factory.yml` replaces it key by key ([below](#factoryyml-orc-209), ORC-209). The environment variables remain the fallback for Docker and existing installations.
 
 ### Authorization
 
@@ -120,7 +122,7 @@ The daemon exchanges an RS256 JWT for an **installation token limited to the req
 
 A project whose `authz.validators` is empty, or holds a single id, cannot get every spec approved: the initiator of a run never approves its spec, so with none every ticket stops at the spec gate, and with one the tickets that validator delegates. `factory doctor`, for the repository it checks, and the daemon's start, for every project, warn of it, naming `authz.validators` (ORC-421); a project on `factory/fantome` approves its own specs.
 
-Linear team members and GitHub permissions are not configured: they are read (Linear, then the GitHub App or `gh`) and read again every 60 s. The App only needs read access to *Metadata* to read a user's permission.
+Linear team members and GitHub permissions are not configured: they are read (Linear, then the GitHub App) and read again every 60 s. The App only needs read access to *Metadata* to read a user's permission.
 
 > **Target.** These designations will move to `.factory/config.yml` (ORC-209), and the matrix itself to the `factory/default` preset (ORC-187).
 
@@ -130,12 +132,12 @@ There is no budget in dollars (ORC-216): a run's cost (`costUsd`, the one Claude
 
 ### Ports
 
-- `port` (4100): the Relais server.
-- `workspace.portBase` of the workflow (4200): each run in the `dev` queue receives `PORT = base + slot no.`, from `base` to `base + concurrency - 1`. Useful if the agent starts a dev server. These ports must be free on the machine.
+- `port` (4100): the factory's server.
+- `workspace.portBase` of the workflow (4200, fixed by the preset): each run in a ticket's worktree receives `PORT = base + slot no.`, from `base` to `base + concurrency - 1`; a run on a clone (`ask`, `intake`, the AI review) receives none. Useful if the agent starts a dev server; the visual proof's application listens on `PORT` too ([`repository-configuration.md`](repository-configuration.md)). On the host, these ports must be free on the machine.
 
 ## `secrets.json`
 
-Written by `relais init` (application credentials) then by the OAuth connection (tokens), always with mode `0600`.
+Written by `factory init` (application credentials) then by the OAuth connection (tokens), always with mode `0600`.
 
 ```json
 {
@@ -154,14 +156,14 @@ Written by `relais init` (application credentials) then by the OAuth connection 
 
 | Field | Source | Role |
 |---|---|---|
-| `clientId`, `clientSecret` | entered during `relais init` | OAuth and token refresh. |
-| `webhookSecret` | entered during `relais init` (required) | Verifies the HMAC signature of Linear webhooks. Empty or absent: all webhooks are refused (401). |
+| `clientId`, `clientSecret` | entered during `factory init` | OAuth and token refresh. |
+| `webhookSecret` | entered during `factory init` (required) | Verifies the HMAC signature of Linear webhooks. Empty or absent: all webhooks are refused (401). |
 | `accessToken`, `refreshToken`, `expiresAt` | « Connect Linear » | Application token, refreshed automatically. |
 | `appUserId`, `organizationId` | « Connect Linear » | The agent's identity in Linear (used to list the tickets delegated to it). |
 
-Rerunning `relais init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
+Rerunning `factory init` with the **same** client ID keeps the tokens; with a different one, Linear must be reconnected.
 
-**Encrypted at rest (ORC-398).** `secrets_key` is required when the daemon is exposed off the loopback (`host` other than `localhost`, `::1` or `127.x.x.x`, as for the GitHub sign-in of ORC-399): without it the daemon refuses to start and names `secrets_key`. On the loopback it stays optional, and `factory doctor` warns of `secrets.json` in clear. With `secrets_key` in `factory.yml` (a reference, read at the start like the other server secrets, at least 32 characters: `openssl rand -base64 32`), the daemon encrypts `secrets.json` at its start if it is still in clear (`secrets.json: encrypted at rest with secrets_key` in its log), and at each write. Envelope encryption: a data key drawn at each write encrypts the JSON (AES-256-GCM), and is itself encrypted by a key derived from `secrets_key` (HKDF-SHA256). A sealed file without its key cannot be read: `relais init`, `plan` and `baseline` then need the daemon's environment, and `init` refuses (`secrets.json is encrypted at rest…`) once the file is sealed: write the Linear values in `factory.yml` instead. Losing `secrets_key` loses the Linear tokens: reconnect Linear.
+**Encrypted at rest (ORC-398).** `secrets_key` is required when the daemon is exposed off the loopback (`host` other than `localhost`, `::1` or `127.x.x.x`, as for the GitHub sign-in of ORC-399): without it the daemon refuses to start and names `secrets_key`. On the loopback it stays optional, and `factory doctor` warns of `secrets.json` in clear. With `secrets_key` in `factory.yml` (a reference, read at the start like the other server secrets, at least 32 characters: `openssl rand -base64 32`), the daemon encrypts `secrets.json` at its start if it is still in clear (`secrets.json: encrypted at rest with secrets_key` in its log), and at each write. Envelope encryption: a data key drawn at each write encrypts the JSON (AES-256-GCM), and is itself encrypted by a key derived from `secrets_key` (HKDF-SHA256). A sealed file without its key cannot be read: `factory init`, `plan` and `baseline` then need the daemon's environment, and `init` refuses (`secrets.json is encrypted at rest…`) once the file is sealed: write the Linear values in `factory.yml` instead. Losing `secrets_key` loses the Linear tokens: reconnect Linear.
 
 ## `factory.yml` (ORC-209)
 
@@ -256,9 +258,9 @@ secrets_key: creds:factory-secrets-key
 
 The daemon holds the secrets; Claude Code runs do not need them and must not access them.
 
-1. **Run environment by allowlist (ORC-211).** In a sandbox, a run receives its run variables (`FACTORY_API`, `FACTORY_RUN_TOKEN`, a random token valid during the run, `FACTORY_TICKET`…), the pack hook's settings, without secrets (`FACTORY_READ_MAX_LINES`, `FACTORY_FULL_READ_PATHS`), the variables the repository declares ([`repository-configuration.md`](repository-configuration.md#variables-and-secrets)) and a placeholder as `CLAUDE_CODE_OAUTH_TOKEN`, the egress proxy setting the `claude.active` account's token (without `factory.yml`, the daemon's variable of that name) on the model calls (ORC-337): nothing else, neither `ANTHROPIC_API_KEY`, nor `ANTHROPIC_BASE_URL`, nor `GH_TOKEN`. On the host, a run additionally receives the system variables (`PATH`, `HOME`, `LANG`, `TMPDIR`…), the commit identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) and, in transition, `ANTHROPIC_API_KEY` (until ORC-179, removed as soon as an active account exists). Any other variable stays in the daemon.
+1. **Run environment by allowlist (ORC-211).** In a sandbox, a run receives its run variables (`FACTORY_API`, `FACTORY_RUN_TOKEN`, a random token valid during the run, `FACTORY_TICKET`…), the pack hook's settings, without secrets (`FACTORY_READ_MAX_LINES`, `FACTORY_FULL_READ_PATHS`), the variables the repository declares ([`repository-configuration.md`](repository-configuration.md#variables-and-secrets)) and a placeholder as `CLAUDE_CODE_OAUTH_TOKEN`, the egress proxy setting the `claude.active` account's token (without `factory.yml`, the daemon's variable of that name) on the model calls (ORC-337): nothing else, no Anthropic key nor base URL (`ANTHROPIC_*`), no GitHub token. On the host, a run additionally receives the system variables (`PATH`, `HOME`, `LANG`, `TMPDIR`…), the commit identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`) and, in transition, an Anthropic API key (see the historical note under [Environment variables](#environment-variables)). Any other variable stays in the daemon.
 2. **No Linear for the agent.** The agent never sees the Linear token and reads no ticket: the prompt carries the run's ticket. Its run token opens only the factory MCP (`submit_result`, `kb_search`), for its own run (ORC-192). See [`interface-and-security.md`](interface-and-security.md#factory-mcp).
-3. **`run-settings.json`.** On each `relais up`, Relais writes `<RELAIS_HOME>/run-settings.json`: the pack's permissions (`packs/standard/settings.json`) plus refusals on the **real** path of `RELAIS_HOME`: `Read`/`Edit` of `secrets.json`, `Read` of `relais.db*`, `transcripts/**`, `logs/**`, and any Bash command that mentions `secrets.json` or `relais.db`. This file is passed to each run through `--settings`. The worktrees (`workspaces/`) stay readable.
+3. **`run-settings.json`.** On each `factory up`, the factory writes `<FACTORY_HOME>/run-settings.json`: the pack's permissions (`packs/standard/settings.json`) plus refusals on the **real** path of `FACTORY_HOME`: `Read`/`Edit` of `secrets.json`, `Read` of `factory.db*`, `transcripts/**`, `logs/**`, and any Bash command that mentions `secrets.json` or `factory.db`. This file is passed to each run through `--settings` (mounted read-only in a sandbox). The worktrees (`workspaces/`) stay readable.
 4. **GitHub App token kept out of runs.** The installation token is requested for the run's repository only, kept in the daemon's memory and never mounted in the runner's environment nor written to a transcript. The factory publishes (ORC-125), and the daemon holds no other GitHub token since ORC-181. See [`github.md`](github.md#tokens).
 
 Known limit: these refusals are Claude Code guardrails, not a security boundary. An agent that executes code (`node`, `npm`) as the same system user as the daemon can read `secrets.json`. Details and consequences: [`interface-and-security.md`](interface-and-security.md#known-limitations).
