@@ -18,7 +18,7 @@ import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../confi
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
+import { browserImage, sandboxConfig, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -91,20 +91,23 @@ interface EngineCgroups {
  * reports the controllers delegated to its user, the only ones it can limit through.
  */
 export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<HostReport> {
-  const cli = containerCli(env);
-  if (!cli) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
-  if (typeof cli !== 'string') return { verdict: 'refused', reasons: [cli.refused] };
+  const sandbox = sandboxConfig(env);
+  if (!sandbox) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
+  // What the start refuses of this environment, with its message (ORC-449): another CLI, unasked; no runner image, said beside the engine's answer.
+  const refused = 'refusal' in sandbox ? [sandbox.refusal] : [];
+  const { cli } = sandbox;
+  if (!cli) return { verdict: 'refused', reasons: refused };
   let cgroups: EngineCgroups;
   try {
     const args = cli === 'docker' ? ['info', '--format', '{{json .}}'] : ['info', '--format', 'json'];
     const info: unknown = JSON.parse(await mustExec(run, cli, args, { timeoutMs: 60_000 }));
     cgroups = cli === 'docker' ? dockerCgroups(info) : podmanCgroups(info);
   } catch (error) {
-    return { engine: cli, verdict: 'refused', reasons: [`cannot read the cgroups of the engine (${cli} info): ${errorMessage(error).slice(0, 600)}`] };
+    return { engine: cli, verdict: 'refused', reasons: [...refused, `cannot read the cgroups of the engine (${cli} info): ${errorMessage(error).slice(0, 600)}`] };
   }
   const { cgroupV2, controllers, rootless, manager } = cgroups;
   const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
-  const reasons: string[] = [];
+  const reasons = [...refused];
   const missing = REQUIRED_CONTROLLERS.filter((controller) => !controllers.includes(controller));
   // On cgroups v1, no delegation makes the limits work: the version alone is said.
   if (!cgroupV2) reasons.push(`no cgroup v2: ${cli} runs on cgroups v1 or the hybrid layout, the sandbox cannot limit processes, memory and CPUs`);
@@ -808,7 +811,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
   const refused = reports.filter((report) => report.verdict === 'refused').length;
   const branch = protection.branch ? ` ${protection.branch}` : '';
   const refusals = [
-    ...(host.verdict === 'refused' ? ['the host cannot limit the sandbox'] : []),
+    ...(host.verdict === 'refused' ? ['the host cannot run a limited sandbox'] : []),
     // Unread, the protection is unknown: never told as absent.
     ...(protection.verdict === 'refused'
       ? [protection.branch === undefined ? "the default branch's protection cannot be read" : `the default branch${branch} is not protected`]
@@ -966,8 +969,10 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   }
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
-  let validators: string[];
-  let relay: string[];
+  let validators: string[] = [];
+  let relay: string[] = [];
+  // What every failure from here reports, the warnings said so far included: `--json` keeps its form whatever stops the check (ORC-449).
+  const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, relayWarnings: relay, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
   let projects;
   let states;
   try {
@@ -989,17 +994,18 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     const unread = yml?.claude && !activeClaudeAccount(yml)?.token;
     if (!unread) claudeAccountReader(options.home, env, undefined, sealed)();
   } catch (error) {
-    out(errorMessage(error));
-    return 1;
+    // Through doctorFailure (ORC-449): `--json` stays JSON.
+    return doctorFailure(reportOf(), errorMessage(error));
   }
   // Its Linear team's statuses against factory.yml's (ORC-382): a warning, never the verdict.
   if (!options.json) for (const line of await statusWarnings(projects, { home: options.home, env, states, read: options.teamStatuses })) out(line);
+  const report = reportOf();
   if (!githubApp) {
-    out(
+    return doctorFailure(
+      report,
       'GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) ' +
         'to read the workflows and the environments.',
     );
-    return 1;
   }
   const api = new GitHubAppApi({
     ...githubApp,
@@ -1007,7 +1013,6 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     ...(options.exec ? { exec: options.exec } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
-  const report = { repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, relayWarnings: relay, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) };
   let config: RepoConfig;
   try {
     config = await makeRepoConfig(options.exec ? { exec: options.exec } : {})({ repoPath: options.repoPath }, { fetch: false });

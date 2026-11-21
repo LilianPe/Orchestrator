@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { execCmd, type Exec } from '../../src/adapters/exec.js';
 import { checkHost } from '../../src/cli/doctor.js';
 import { podmanCli } from '../../src/adapters/sandbox/docker-rootless.js';
-import { enabled, podman } from './helpers.js';
+import { enabled, image, podman } from './helpers.js';
 
 /**
  * `doctor`'s host check on the real engines (ORC-427), not on the fakes of src/cli/doctor.test.ts: the fields it reads of
@@ -68,7 +68,7 @@ describe.skipIf(!enabled || !podman)("doctor's host check on the real rootless P
     expect(Array.isArray(info.host['cgroupControllers'])).toBe(true);
     expect(existsSync(delegatedFile), `${delegatedFile}: no systemd session for uid ${uid}`).toBe(true);
 
-    const report = await checkHost({ FACTORY_CONTAINER_CLI: 'podman' });
+    const report = await checkHost({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: image });
     // Podman reads the controllers of its own process's cgroup, under the session's: a subset of what it delegates.
     expectWithin(report.controllers, delegatedFile, 'podman info');
     expect(report).toMatchObject({ engine: 'podman', cgroupV2: true, rootless: true });
@@ -88,7 +88,7 @@ describe.skipIf(!enabled || !podman)("doctor's host check on the real rootless P
     const info = dockerInfo(host);
     expect(info, `docker info on Podman's socket ${host}`).toBeDefined();
 
-    const [compat, native] = await Promise.all([checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, dockerOn(host)), checkHost({ FACTORY_CONTAINER_CLI: 'podman' })]);
+    const [compat, native] = await Promise.all([checkHost({ FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: image }, dockerOn(host)), checkHost({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: image })]);
     // Seen in the job's log: how the compat API tells the same engine (an under-report only refuses a good host).
     console.info(`ORC-427 compat API: ${JSON.stringify({ compat, native, CgroupDriver: info?.['CgroupDriver'], SecurityOptions: info?.['SecurityOptions'] })}`);
     expect(compat.engine).toBe('docker');
@@ -102,7 +102,7 @@ describe.skipIf(!enabled)("doctor's host check on the runner's rootful Docker (O
     if (!existsSync(ROOTFUL_DOCKER.slice('unix://'.length)) || !answers(() => run('docker', ['--version']))) return ctx.skip(`no rootful Docker at ${ROOTFUL_DOCKER}`);
     if (!dockerInfo(ROOTFUL_DOCKER)) return ctx.skip(`the Docker at ${ROOTFUL_DOCKER} does not answer`);
 
-    const report = await checkHost({ FACTORY_CONTAINER_CLI: 'docker' }, dockerOn(ROOTFUL_DOCKER));
+    const report = await checkHost({ FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: image }, dockerOn(ROOTFUL_DOCKER));
     console.info(`ORC-427 rootful Docker: ${JSON.stringify(report)}`);
     expect(report).toMatchObject({ engine: 'docker', cgroupV2: true, rootless: false });
     expectWithin(report.controllers, '/sys/fs/cgroup/cgroup.controllers', 'docker info');
