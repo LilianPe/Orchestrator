@@ -603,6 +603,8 @@ describe('classifyBreak', () => {
     ['Node\'s pg, its socket missing', 'Error: connect ENOENT /var/run/postgresql/.s.PGSQL.5432\n    at PipeConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)'],
     ['Go\'s lib/pq, its socket missing', 'dial unix /var/run/postgresql/.s.PGSQL.5432: connect: no such file or directory'],
     ['Go\'s pgx, its socket refusing', 'failed to connect to `host=/var/run/postgresql user=app database=app`: dial error (dial unix /var/run/postgresql/.s.PGSQL.5432: connect: connection refused)'],
+    ['MariaDB, its socket', "ERROR 2002 (HY000): Can't connect to local server through socket '/run/mysqld/mysqld.sock' (2)"],
+    ['MariaDB, the loopback without its port', "ERROR 2003 (HY000): Can't connect to server on '127.0.0.1' (115)"],
   ])('a database client that cannot reach its server on the Unix socket or the loopback is a service: %s', (_, output) => {
     for (const step of ['setup', 'command'] as const) expect(classifyBreak(output, step, declared).kind).toBe('service');
     expect(unreachable(output)).toBeUndefined();
@@ -611,6 +613,7 @@ describe('classifyBreak', () => {
   it('a database server that answered on its socket is no service down, and a remote MySQL is no service', () => {
     expect(classifyBreak('psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  password authentication failed for user "app"', 'setup', declared).kind).toBe('failure');
     expect(classifyBreak("ERROR 2003 (HY000): Can't connect to MySQL server on 'db.acme.com' (111)", 'command', declared).kind).toBe('failure');
+    expect(classifyBreak("ERROR 2003 (HY000): Can't connect to server on 'db.acme.com' (115)", 'command', declared).kind).toBe('failure');
   });
 
   it('a client refused by a host off the loopback is no service of the repository\'s', () => {

@@ -188,7 +188,7 @@ const LOOPBACK = String.raw`(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])`;
 const LOOPBACK_PORT = new RegExp(String.raw`${LOOPBACK}['"\`]?\)?(?::|,\s*(?:port[ =]?\s*)?|\s+port[ =]?\s*)\`?(\d{1,5})\b`);
 /**
  * A connection refused or not answered, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's,
- * Prisma's, MySQL's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
+ * Prisma's, MySQL's, MariaDB's. On the loopback, a service of the repository's that does not answer is its own, whether it refuses or times out.
  */
 const REFUSAL = /ECONNREFUSED|ETIMEDOUT|connection refused|connection timed out|i\/o timeout|failed to connect|could(?:n't| not) connect|can't connect to|connect call failed|can't reach database server/i;
 /** The egress proxy's relay, where the setup's tools reach the registries. */
@@ -199,14 +199,14 @@ const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
 /**
  * On the loopback, where the services listen: a port refusing there that is not the relay's, or what a database client says
  * of a server it cannot reach there, the host on the line (libpq's `Is the server running on host "localhost"`, MySQL's
- * `Can't connect to MySQL server on '127.0.0.1'`): of a remote one, a breakdown of the network. Its Unix socket is local
- * whatever the line names (libpq's, Node's `connect ECONNREFUSED` or `ENOENT`, Go's `dial unix`), but only where the client
+ * `Can't connect to MySQL server on '127.0.0.1'`, MariaDB's without `MySQL`): of a remote one, a breakdown of the network.
+ * Its Unix socket is local whatever the line names (libpq's, Node's `connect ECONNREFUSED` or `ENOENT`, Go's `dial unix`), but only where the client
  * said it could not reach it: a server that answered on its socket (`… .s.PGSQL.5432" failed: FATAL: password authentication
  * failed`) is no service down.
  */
 const LOOPBACK_HOST = new RegExp(String.raw`${LOOPBACK}\b`);
-const DB_SERVER = /could not connect to (?:server|database)|Is the server running|Can't connect to MySQL server/i;
-const DB_SOCKET = /Is the server running locally|connections on Unix domain socket "|on socket "[^"]*\.s\.PGSQL\.\d+" failed: (?:No such file or directory|Connection refused)|Can't connect to local MySQL server through socket|connect (?:ECONNREFUSED|ENOENT) \S*\.s\.PGSQL\.\d+|dial unix \S*\.s\.PGSQL\.\d+: connect: (?:no such file or directory|connection refused)/i;
+const DB_SERVER = /could not connect to (?:server|database)|Is the server running|Can't connect to (?:MySQL )?server/i;
+const DB_SOCKET = /Is the server running locally|connections on Unix domain socket "|on socket "[^"]*\.s\.PGSQL\.\d+" failed: (?:No such file or directory|Connection refused)|Can't connect to local (?:MySQL )?server through socket|connect (?:ECONNREFUSED|ENOENT) \S*\.s\.PGSQL\.\d+|dial unix \S*\.s\.PGSQL\.\d+: connect: (?:no such file or directory|connection refused)/i;
 const serviceLine = (line: string) => {
   const port = refusedOn(line);
   return port ? port !== RELAY_PORT : (LOOPBACK_HOST.test(line) && DB_SERVER.test(line)) || DB_SOCKET.test(line);
