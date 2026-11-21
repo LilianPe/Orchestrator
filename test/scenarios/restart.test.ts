@@ -15,7 +15,7 @@ async function inReview(h: ReturnType<typeof createHarness>): Promise<void> {
 
 /**
  * ORC-228: `restart({ mode: 'brutal' })` drops the process as `kill -9` would, in the middle of its
- * work, and another one starts on the same database (SQLite here, Postgres in `scenarios-pg`).
+ * work, and another one starts on the same database (a MemoryStore here, Postgres in `scenarios-pg`).
  */
 describe('a brutal restart in the middle of the processing', () => {
   it('loses no written event, timer or effect, and doubles no visible effect', async () => {

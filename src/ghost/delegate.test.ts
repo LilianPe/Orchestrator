@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FakeTracker } from '../adapters/tracker/fake.js';
 import { mayCheck } from '../core/engine.js';
 import type { FactoryEvent } from '../core/types.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { NO_SANDBOXES_REFUSED, Replays, replayDelegationId } from './delegate.js';
 import type { GhostReplay, GhostTicket } from './replay.js';
 import { defaultWorkflow } from '../presets/workflow.js';
@@ -26,7 +26,7 @@ const ticket = (replayId: string, ticketId: string, over: Partial<GhostTicket> =
 });
 
 async function withReplays(o: { sandboxes?: boolean } = {}) {
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const dir = mkdtempSync(join(tmpdir(), 'ghost-delegate-'));
   dirs.push(dir);
   const tracker = new FakeTracker();

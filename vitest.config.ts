@@ -56,8 +56,8 @@ export default defineConfig({
         },
       },
       {
-        // A real daemon killed with SIGKILL at random moments (ORC-163): on Postgres with DATABASE_URL,
-        // on a SQLite file otherwise. Its own CI job, with CHAOS_EVENTS=500 (docs/tests.md).
+        // A real daemon killed with SIGKILL at random moments (ORC-163): on Postgres, skipped without DATABASE_URL
+        // (ORC-178). Its own CI job, with CHAOS_EVENTS=500 (docs/tests.md).
         test: {
           name: 'chaos',
           include: ['test/chaos/**/*.test.ts'],

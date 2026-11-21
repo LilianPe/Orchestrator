@@ -19,7 +19,7 @@ Nothing below can be skipped for a real run: without rootless Podman and the run
 | 7 | **A Claude Code token** | `claude setup-token` on a machine logged in to the subscription account. | `factory.yml`: `claude.accounts[].token: env:CLAUDE_CODE_OAUTH_TOKEN` (any variable name), and that variable in the daemon's environment. In a sandbox the egress proxy sets it on the model calls; the agent only holds a placeholder. |
 | 8 | **Rootless Podman on Linux, cgroup v2**, with the systemd cgroup manager and the `cpu`, `memory` and `pids` controllers delegated to your user | `sudo loginctl enable-linger <user>`; check with `podman info --format json` (`host.cgroupVersion: v2`, `host.cgroupManager: systemd`, `host.security.rootless: true`). On Windows, inside WSL2 only: the sandboxes need a Linux daemon. `factory doctor` checks all of it (step 3). | `FACTORY_CONTAINER_CLI=podman` in the daemon's environment |
 | 9 | **The runner image**, built from this repository | `podman build -f docker/runner.Dockerfile -t localhost/factory-runner docker` | `FACTORY_RUNNER_IMAGE=localhost/factory-runner` |
-| 10 | **Postgres** (optional locally) | Outside production the daemon uses SQLite (`FACTORY_HOME/factory.db`) when no URL is set. To run on Postgres as the server will, a database of its own (never the test suites' one). | `FACTORY_DATABASE_URL=postgres://user:password@host:5432/database` |
+| 10 | **Postgres** | The only store (ORC-178): without the URL the daemon does not start. A database of its own (never the test suites' one). | `FACTORY_DATABASE_URL=postgres://user:password@host:5432/database` |
 | 11 | **Who validates the spec**: at least two Linear users | Every ticket waits for `/approve` from a designated validator, and never from the person who delegated it. With a lone validator, someone else must delegate; with two validators, either can delegate and the other approves. Linear user ids (UUIDs): `query { users { nodes { id name } } }` in Linear's GraphQL explorer. | `config.yaml`: `projects[].authz.validators` |
 | 12 | **Who may delegate**: each delegator's GitHub login, with write access to the pilot repository | The trigger needs Linear team membership **and** GitHub write access, read through the App on the login you map ([`linear.md`](linear.md#authorizations-who-can-do-what)). Without a mapping, the delegation is refused. | `config.yaml`: `projects[].authz.githubLogins` (Linear id → GitHub login) |
 
@@ -231,7 +231,7 @@ factory up
 The lines to read in its log (taken from a start on a scratch repository):
 
 ```text
-[factoryd] store: SQLite (/home/<user>/.factory/factory.db)        # or: store: Postgres (Drizzle migrations applied)
+[factoryd] store: Postgres (Drizzle migrations applied)
 [factoryd] Disabled in factory.yml: budgets.per_step_tokens.
 [factoryd] GitHub forge: GitHub App <id> (installation tokens limited to the run's repository, installation resolved per repository)
 [factoryd] Linear not connected: open http://localhost:4100/oauth/start

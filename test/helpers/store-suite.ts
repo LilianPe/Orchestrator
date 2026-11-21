@@ -86,7 +86,7 @@ function q(patch: Partial<QueueItem>): QueueItem {
 }
 
 /**
- * The `Store` contract both stores pass (ORC-132): the SQLite store cases, run on any
+ * The `Store` contract both stores pass (ORC-132, ORC-178): PgStore and the tests' MemoryStore, or any other
  * implementation. `store()` returns an empty store.
  */
 export function storeContract(store: () => Store | Promise<Store>): void {

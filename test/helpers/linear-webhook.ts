@@ -10,7 +10,7 @@ import type { FactoryEvent } from '../../src/core/types.js';
 
 /**
  * Runs `crash-after-ack.ts` in a child process: the delegation is written to the inbox of
- * `target` (a SQLite file or a Postgres URL), then the process is killed with SIGKILL. Returns the
+ * `target` (a Postgres URL), then the process is killed with SIGKILL. Returns the
  * status the webhook was answered and how the process ended.
  */
 export function crashAfterAck(target: string): { response: { status: number }; exited: { status: number | null; signal: string | null } } {

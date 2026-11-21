@@ -306,7 +306,7 @@ async function githubForge(home: string): Promise<GitHubAppForge> {
 export async function runGhostCommand(home: string, args: readonly string[]): Promise<number> {
   const instance = loadInstance(home);
   // The daemon migrates the schema; this only reads and writes rows.
-  const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+  const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   // Opened for the judge's answers only: the long clones of `start` hold no terminal.
   let rl: ReturnType<typeof createInterface> | undefined;
   // Each project's default branch, read once for all its tickets.

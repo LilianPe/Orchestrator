@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { newTicketState, type FactoryEvent, type TicketState } from '../../../core/types.js';
-import { SqliteStore } from '../../../store/sqlite-store.js';
+import { MemoryStore } from '../../../store/memory-store.js';
 import { createLinearIngest, type RetryPolicy } from './ingest.js';
 import { defaultWorkflow } from '../../../presets/workflow.js';
 import { FakeClock } from '../../../core/clock.js';
@@ -224,7 +224,7 @@ describe('mapLinearWebhook', () => {
           if (verdict instanceof Error) throw verdict;
           return verdict;
         },
-        deliveries: new SqliteStore(':memory:'),
+        deliveries: new MemoryStore(),
       });
       let n = 0;
       const send = async (body: any) => {
@@ -557,8 +557,8 @@ describe('ingest', () => {
     return { raw, sig: createHmac('sha256', 'sec').update(raw).digest('hex') };
   }
 
-  /** An inbox on the SQLite store, as the daemon has it without FACTORY_DATABASE_URL. */
-  function inbox(store = new SqliteStore(':memory:')) {
+  /** An inbox on a MemoryStore. */
+  function inbox(store = new MemoryStore()) {
     return {
       store,
       accept: (e: FactoryEvent) => store.appendInbox(e),
@@ -589,11 +589,11 @@ describe('ingest', () => {
     const fast = { baseMs: 5, maxMs: 20, horizonMs: 200 };
     const setup = (
       classify: (b: string) => Promise<'instruction' | 'question'>,
-      o: { store?: SqliteStore; accept?: (e: FactoryEvent) => Promise<unknown>; c?: MapContext; retry?: RetryPolicy } = {},
+      o: { store?: MemoryStore; accept?: (e: FactoryEvent) => Promise<unknown>; c?: MapContext; retry?: RetryPolicy } = {},
     ) => {
       const accepted: string[] = [];
       const logs: string[] = [];
-      const store = o.store ?? new SqliteStore(':memory:');
+      const store = o.store ?? new MemoryStore();
       const ingest = createLinearIngest({
         secret: () => 'sec',
         ctx: o.c ?? ctx(),
@@ -645,7 +645,7 @@ describe('ingest', () => {
 
     it('a redelivered webhook asks no model again, while it is kept or once it is in the inbox', async () => {
       const asked: string[] = [];
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       const { send, ingest } = setup(slow(100, asked), { store, accept: (e) => store.appendInbox(e) });
       const once = reply('a1', 'nouveau');
       await Promise.all([send(once), send(once)]);
@@ -680,7 +680,7 @@ describe('ingest', () => {
     });
 
     it('a stop between the answer and the inbox loses nothing: the next start writes what was kept', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       const first = setup(async () => new Promise<never>(() => {}), { store });
       // Answered and kept; the daemon stops before the model answers.
       expect(await first.send(reply('a1', 'corrige le tri'))).toEqual({ status: 200 });
@@ -711,9 +711,9 @@ describe('ingest', () => {
     });
 
     it('a failing inbox lookup is skipped, logged once, and never sets a delivery aside; a blip on the kept row removal strands nothing', async () => {
-      const inner = new SqliteStore(':memory:');
+      const inner = new MemoryStore();
       let blips = 2;
-      const store = Object.assign(Object.create(inner) as SqliteStore, {
+      const store = Object.assign(Object.create(inner) as MemoryStore, {
         inboxHas: async () => Promise.reject(new Error('connection reset')),
         deleteDelivery: async (key: string) => (blips-- > 0 ? Promise.reject(new Error('connection reset')) : inner.deleteDelivery(key)),
       });
@@ -755,7 +755,7 @@ describe('ingest', () => {
     });
 
     it('a redelivery of a row still kept but not being delivered delivers it again, timed at its first arrival', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       const { raw } = reply('a1', 'corrige');
       await store.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw, at: 4000 }));
       const events: FactoryEvent[] = [];
@@ -766,7 +766,7 @@ describe('ingest', () => {
     });
 
     it('a redelivery of a kept row that cannot be read sets it aside', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.receiveDelivery('AgentSessionEvent:activity:a1', '{broken');
       const { send, ingest, logs, accepted } = setup(async () => 'question', { store });
       expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
@@ -777,7 +777,7 @@ describe('ingest', () => {
     });
 
     it('the past-horizon clock starts at the first arrival as kept, not at each start', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       const now = Date.now();
       // Kept two hours ago, never written: past its hour already, so set aside at its first failure.
       await store.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw: reply('a1', 'corrige').raw, at: now - 2 * 3_600_000 }));
@@ -794,7 +794,7 @@ describe('ingest', () => {
 
     it('a session reply is not lost to the comment Linear writes for it, whichever comes first', async () => {
       for (const commentKept of [false, true]) {
-        const store = new SqliteStore(':memory:');
+        const store = new MemoryStore();
         const events: FactoryEvent[] = [];
         const { send, ingest } = setup(slow(100), { store, accept: async (e) => void (events.push(e), store.appendInbox(e)) });
         if (commentKept) {
@@ -810,7 +810,7 @@ describe('ingest', () => {
     });
 
     it('never runs more than 4 classifications at once, resumed and live together', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       for (const k of [1, 2, 3, 4, 5, 6]) {
         await store.receiveDelivery(`r${k}`, JSON.stringify({ raw: reply(`r${k}`, `resumed ${k}`, { id: `u${k}`, identifier: `REL-${k}` }).raw, at: 5000 }));
       }
@@ -837,7 +837,7 @@ describe('ingest', () => {
     });
 
     it("the factory's own comments, a session's, and an empty one never take the kept path", async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       const { send } = setup(async () => 'instruction', { store });
       const comment = (data: object) => signed(commentBody(data));
       for (const data of [{ id: 'k1', body: `fait ${effectMarker('e1')}` }, { id: 'k2', agentSessionId: 'as-1' }, { id: 'k3', body: '   ' }, { id: 'k4', body: '@quelqu-un regarde' }]) {
@@ -847,7 +847,7 @@ describe('ingest', () => {
     });
 
     it('without a model, a start still writes the rows an earlier start kept', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw: reply('a1', 'corrige ?').raw, at: 5000 }));
       const events: FactoryEvent[] = [];
       const ingest = createLinearIngest({ secret: () => 'sec', ctx: ctx(), accept: async (e) => void events.push(e), log: () => {}, deliveries: store });
@@ -858,7 +858,7 @@ describe('ingest', () => {
     });
 
     it('resume sets an unreadable row aside and goes on with the others', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       await store.receiveDelivery('bad', '{not json');
       await store.receiveDelivery('activity:a1', JSON.stringify({ raw: reply('a1', 'corrige').raw, at: 5000 }));
       const { ingest, accepted, logs } = setup(async () => 'instruction', { store });
@@ -871,7 +871,7 @@ describe('ingest', () => {
     });
 
     it('resumed deliveries wait for a slot instead of taking the fallback rule', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       for (const k of [1, 2, 3, 4, 5, 6]) {
         await store.receiveDelivery(`activity:a${k}`, JSON.stringify({ raw: reply(`a${k}`, `message ${k} ?`, { id: `u${k}`, identifier: `REL-${k}` }).raw, at: 5000 }));
       }
@@ -908,7 +908,7 @@ describe('ingest', () => {
     });
 
     it('once closed, a delivery not classified yet takes the fallback rule, the model never asked (ORC-355)', async () => {
-      const store = new SqliteStore(':memory:');
+      const store = new MemoryStore();
       for (const k of [1, 2, 3, 4, 5]) {
         await store.receiveDelivery(`activity:a${k}`, JSON.stringify({ raw: reply(`a${k}`, `message ${k} ?`, { id: `u${k}`, identifier: `REL-${k}` }).raw, at: 5000 }));
       }
@@ -935,10 +935,10 @@ describe('ingest', () => {
     });
 
     it('a redelivery is delivered again from the value the store returns, never read back by its key (ORC-355)', async () => {
-      const inner = new SqliteStore(':memory:');
+      const inner = new MemoryStore();
       const { raw } = reply('a1', 'corrige');
       await inner.receiveDelivery('AgentSessionEvent:activity:a1', JSON.stringify({ raw, at: 4000 }));
-      const store = Object.assign(Object.create(inner) as SqliteStore, { getMeta: async () => Promise.reject(new Error('not the way')) });
+      const store = Object.assign(Object.create(inner) as MemoryStore, { getMeta: async () => Promise.reject(new Error('not the way')) });
       const events: FactoryEvent[] = [];
       const { send, ingest } = setup(async () => 'question', { store, accept: async (e) => void events.push(e) });
       expect(await send(reply('a1', 'corrige'))).toEqual({ status: 200 });
@@ -947,11 +947,11 @@ describe('ingest', () => {
     });
 
     it('a redelivery whose first delivery ends while the store answers is not delivered again from the stale value (ORC-355)', async () => {
-      const inner = new SqliteStore(':memory:');
+      const inner = new MemoryStore();
       let calls = 0;
       let release!: () => void;
       const gate = new Promise<void>((r) => (release = r));
-      const store = Object.assign(Object.create(inner) as SqliteStore, {
+      const store = Object.assign(Object.create(inner) as MemoryStore, {
         receiveDelivery: async (key: string, value: string) => {
           const kept = await inner.receiveDelivery(key, value);
           if (++calls === 2) await gate;
@@ -970,10 +970,10 @@ describe('ingest', () => {
     });
 
     it('a later webhook of the issue never overtakes one whose row is still being kept', async () => {
-      const inner = new SqliteStore(':memory:');
+      const inner = new MemoryStore();
       let releaseInsert!: () => void;
       const slowInsert = new Promise<void>((r) => (releaseInsert = r));
-      const store = Object.assign(Object.create(inner) as SqliteStore, {
+      const store = Object.assign(Object.create(inner) as MemoryStore, {
         receiveDelivery: async (key: string, value: string) => {
           if (key.endsWith('activity:a1')) await slowInsert;
           return inner.receiveDelivery(key, value);
@@ -992,8 +992,8 @@ describe('ingest', () => {
     });
 
     it('a failed insert lets the next webhook of the issue through, and answers 500', async () => {
-      const inner = new SqliteStore(':memory:');
-      const store = Object.assign(Object.create(inner) as SqliteStore, {
+      const inner = new MemoryStore();
+      const store = Object.assign(Object.create(inner) as MemoryStore, {
         receiveDelivery: async (key: string, value: string) => (key.endsWith('activity:a1') ? Promise.reject(new Error('disk')) : inner.receiveDelivery(key, value)),
       });
       const { send, ingest, accepted } = setup(async () => 'instruction', { store });
@@ -1165,7 +1165,7 @@ describe('ingest', () => {
     const { raw, sig } = signed({ ...base, webhookTimestamp: 2000, data: { ...base.data, updatedAt: new Date(30).toISOString(), labelIds: ['l-bug', 'l-resume'] }, updatedFrom: { labelIds: ['l-bug'] } });
     // The pass reads the kept labels, then the webhook comes before it writes its own reading.
     let webhook: Promise<unknown> | undefined;
-    const passStore = Object.create(store) as SqliteStore;
+    const passStore = Object.create(store) as MemoryStore;
     passStore.getMeta = async (k: string) => {
       const v = await store.getMeta(k);
       if (k.startsWith('linear-labels:') && !webhook) {
@@ -1228,7 +1228,7 @@ describe('ingest', () => {
     expect(await ids()).toHaveLength(1);
   });
 
-  function make(store?: SqliteStore) {
+  function make(store?: MemoryStore) {
     const box = inbox(store);
     const ingest = createLinearIngest({
       secret: () => 'sec',

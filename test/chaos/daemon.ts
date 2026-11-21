@@ -1,6 +1,6 @@
 /**
  * The daemon the chaos test kills (ORC-163): the orchestrator, its worker, its outbox executor and
- * its timers on a real store (Postgres, or a SQLite file), with the fake adapters of the harness,
+ * its timers on a real store (Postgres), with the fake adapters of the harness,
  * started as `factory up` starts it (`recover`, the timers, the tick, the heartbeat, the worker's
  * poll). Its runs die with it, as containers lost: each life starts their steps again. The driver (`chaos.test.ts`) talks to it over IPC:
  *
@@ -15,7 +15,7 @@
  * the earlier lives wrote, as the real Linear keeps them across a restart of the daemon, so that a
  * replayed effect finds what its first execution wrote (ORC-162).
  *
- *   node --import tsx test/chaos/daemon.ts <sqlite file | postgres://…> <calls> <life> <now> <tickets>
+ *   node --import tsx test/chaos/daemon.ts <postgres://…> <calls> <life> <now> <tickets>
  */
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { FakeClock } from '../../src/core/clock.js';

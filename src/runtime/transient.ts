@@ -13,7 +13,6 @@ import { LinearApiError } from '../adapters/tracker/linear/api.js';
  * - **Postgres** (`pg`'s `DatabaseError`, wrapped by drizzle's `DrizzleQueryError` as its `cause`): the SQLSTATE classes
  *   `08` (connection), `53` (resources), `57P01`–`57P03` (server shutting down or starting), a serialization failure or
  *   a deadlock (`40001`, `40P01`); and `pg`'s own messages for a connection lost or not obtained in time.
- * - **SQLite** (`node:sqlite`): a busy or locked database (`errcode` 5 or 6).
  * - **git** (`execFailure`, exec.ts, and `fetchOrigin`'s `cause`): stderr naming the network or a 5xx.
  *
  * Everything else is permanent: a 4xx, a refusal, a bug, a closed pool (this process shutting down). The causes are
@@ -44,9 +43,8 @@ function transientHere(e: unknown): boolean {
   if (!(e instanceof Error)) return false;
   // undici's `TypeError: fetch failed` says nothing by itself: its cause tells a socket error from a certificate refused (read on the next turn).
   if (e.name === 'TimeoutError') return true;
-  const { code, errcode } = e as { code?: unknown; errcode?: unknown };
+  const { code } = e as { code?: unknown };
   if (typeof code === 'string' && (NETWORK_CODES.has(code) || UNDICI_TRANSIENT.has(code) || PG_TRANSIENT.test(code))) return true;
-  if (code === 'ERR_SQLITE_ERROR' && typeof errcode === 'number' && [5, 6].includes(errcode & 0xff)) return true;
   return PG_MESSAGES.test(e.message) || EXEC_NETWORK.test(e.message);
 }
 

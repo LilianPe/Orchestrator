@@ -31,7 +31,7 @@ import type { CleanVerifier, CleanVerifyRequest } from '../../src/core/clean-ver
 import type { Verifier } from '../../src/core/verify.js';
 import type { EffectRetry } from '../../src/runtime/outbox.js';
 import { recordWrite } from '../../src/adapters/tracker/linear/labels.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
+import { MemoryStore } from '../../src/store/memory-store.js';
 import type { Store } from '../../src/store/types.js';
 import type { Faults } from './faults.js';
 import type { TestPreset } from './test-preset.js';
@@ -78,8 +78,6 @@ export async function heldRun(h: ReturnType<typeof createHarness>): Promise<stri
   return (await h.ticket()).activeRunId!;
 }
 
-export type StoreKind = 'sqlite' | 'postgres';
-
 /**
  * The database of one harness (ORC-228). `connect` opens a store on it, read on the harness's
  * simulated clock (leases, backoffs, due rows), as a process does at its start: once when the
@@ -87,24 +85,21 @@ export type StoreKind = 'sqlite' | 'postgres';
  */
 export type HarnessDatabase = (now: () => number) => Store;
 
-/** An in-memory SQLite database: a single store, which every life of the harness reconnects to. */
-function sqliteDatabase(): HarnessDatabase {
-  let store: SqliteStore | undefined;
-  return (now) => (store ??= new SqliteStore(':memory:', now));
+/** A MemoryStore: a single store, which every life of the harness reconnects to. */
+function memoryDatabase(): HarnessDatabase {
+  let store: MemoryStore | undefined;
+  return (now) => (store ??= new MemoryStore(now));
 }
 
-let databases: { kind: StoreKind; create: () => HarnessDatabase } = { kind: 'sqlite', create: sqliteDatabase };
+let createDatabase: () => HarnessDatabase = memoryDatabase;
 
 /**
- * Where the harnesses created from now on keep their state: an in-memory SQLite database each by
+ * Where the harnesses created from now on keep their state: a MemoryStore each by
  * default, a Postgres database each in the `scenarios-pg` project (test/helpers/pg-harness.ts).
  */
-export function useHarnessDatabases(kind: StoreKind, create: () => HarnessDatabase): void {
-  databases = { kind, create };
+export function useHarnessDatabases(create: () => HarnessDatabase): void {
+  createDatabase = create;
 }
-
-/** The database the scenarios run on, for the few written for one of them (a SQLite file, say). */
-export const harnessStoreKind = (): StoreKind => databases.kind;
 
 /**
  * A store as one process sees it: `kill()` is that process dying (`kill -9`). From then on none of
@@ -220,7 +215,7 @@ export function createHarness(
     /** `false`: a daemon without sandboxes and without a stand-in for `verify` (`DaemonDeps.verify`). */
     hostChecks?: boolean;
     /**
-     * A store to run on instead of the harness's own database (the SQLite file a SIGKILLed child
+     * A store to run on instead of the harness's own database (the Postgres schema a SIGKILLed child
      * left). It keeps its own clock: `advance` then moves no lease or backoff of it.
      */
     store?: Store;
@@ -303,7 +298,7 @@ export function createHarness(
   const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome, fullChain: opts.fullChain, statuses: opts.statuses });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
-  const database: HarnessDatabase = given ? () => given : databases.create();
+  const database: HarnessDatabase = given ? () => given : createDatabase();
   const tracker = new FakeTracker(Object.values(workflow.states));
   const forge = new FakeForge();
   const runner = new FakeRunner(clock);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { queueCapacity, Scheduler } from './capacity.js';
 
 describe('queueCapacity', () => {
@@ -11,7 +11,7 @@ describe('queueCapacity', () => {
 
 describe('Scheduler', () => {
   it('hands out slots up to capacity per queue', () => {
-    const s = new Scheduler(new SqliteStore(':memory:'), { dev: 2, questions: 1 });
+    const s = new Scheduler(new MemoryStore(), { dev: 2, questions: 1 });
     expect(s.tryAcquire('dev', 'A')).toBe(0);
     expect(s.tryAcquire('dev', 'B')).toBe(1);
     expect(s.tryAcquire('dev', 'C')).toBeNull();
@@ -22,7 +22,7 @@ describe('Scheduler', () => {
   });
 
   it('reuses freed slot indexes', () => {
-    const s = new Scheduler(new SqliteStore(':memory:'), { dev: 2, questions: 1 });
+    const s = new Scheduler(new MemoryStore(), { dev: 2, questions: 1 });
     s.tryAcquire('dev', 'A');
     s.tryAcquire('dev', 'B');
     expect(s.release('A')).toBe('dev');
@@ -30,7 +30,7 @@ describe('Scheduler', () => {
   });
 
   it('acquire waits for a slot, and a freed slot goes to the one waiting before any new launch (ORC-353)', async () => {
-    const s = new Scheduler(new SqliteStore(':memory:'), { dev: 1, questions: 1 });
+    const s = new Scheduler(new MemoryStore(), { dev: 1, questions: 1 });
     s.tryAcquire('dev', 'A');
     const waiting = s.acquire('dev', 'verify:1');
     s.release('A');
@@ -40,7 +40,7 @@ describe('Scheduler', () => {
   });
 
   it('acquire is served by a raised capacity, and cancel gives up the waits with null', async () => {
-    const s = new Scheduler(new SqliteStore(':memory:'), { dev: 1, questions: 1 });
+    const s = new Scheduler(new MemoryStore(), { dev: 1, questions: 1 });
     s.tryAcquire('dev', 'A');
     const raised = s.acquire('dev', 'verify:1');
     s.setCapacity({ dev: 2, questions: 1 });
@@ -52,7 +52,7 @@ describe('Scheduler', () => {
   });
 
   it('refuses a second slot for the same ticket', () => {
-    const s = new Scheduler(new SqliteStore(':memory:'), { dev: 3, questions: 1 });
+    const s = new Scheduler(new MemoryStore(), { dev: 3, questions: 1 });
     s.tryAcquire('dev', 'A');
     expect(s.tryAcquire('dev', 'A')).toBeNull();
   });

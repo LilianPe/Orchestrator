@@ -38,7 +38,7 @@ function droppable(down: { now: boolean }): (store: Store) => Store {
  */
 async function sitOut(h: Harness, policy: RetryPolicy, from: number, back: () => void, each: () => Promise<void> = async () => {}): Promise<void> {
   for (let n = 1; h.clock.now() - from < OUTAGE_MS; n++) {
-    // A millisecond past it: the SQLite store hands out a queue item only once its wait is over, strictly.
+    // A millisecond past it: the store hands out a queue item only once its wait is over, strictly.
     await h.advance(backoff(policy, n) + 1);
     await each();
   }

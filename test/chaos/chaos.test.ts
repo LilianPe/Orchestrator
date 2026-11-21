@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { migratePgStore } from '../../src/store/pg/migrate.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
 import { allEffects, checkChain, settled, type VisibleCall } from '../helpers/faults.js';
 import { createTestSchema, PG_URL } from '../helpers/pg-database.js';
 import { storeAt } from '../helpers/store-at.js';
@@ -18,8 +17,8 @@ const CUT_BOUND = /^Too many relaunches after a cut: /;
  * ORC-163: a real daemon process (`daemon.ts`) killed with SIGKILL at random moments while a driver
  * sends it events from Linear, restarted on the same database each time. At the end: no acknowledged
  * event lost or decided twice, nothing left in the inbox or the outbox, every ticket's journal
- * replayed bit for bit, and no visible effect doubled. On Postgres when DATABASE_URL is set, on a
- * SQLite file otherwise. Unlike the harness's `mortal`, the kill is the kernel's: a transaction under
+ * replayed bit for bit, and no visible effect doubled. On Postgres, skipped without DATABASE_URL
+ * (ORC-178: no other store survives a process). Unlike the harness's `mortal`, the kill is the kernel's: a transaction under
  * way at the kill is rolled back by the database, never committed.
  *
  * CHAOS_EVENTS (100 by default, 500 in the CI's chaos job), CHAOS_SEED, CHAOS_TICKETS, CHAOS_RUN_MS (the runs'
@@ -93,22 +92,15 @@ function readCalls(file: string): VisibleCall[] {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe('chaos: kill -9 at random moments (ORC-163)', () => {
-  it(`${EVENTS} events on ${PG_URL ? 'Postgres' : 'a SQLite file'}, seed ${SEED}: nothing lost, nothing doubled`, { timeout: 30 * 60_000 }, async () => {
+describe.skipIf(!PG_URL)('chaos: kill -9 at random moments (ORC-163)', () => {
+  it(`${EVENTS} events on Postgres, seed ${SEED}: nothing lost, nothing doubled`, { timeout: 30 * 60_000 }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'factory-chaos-'));
     const calls = join(dir, 'calls.jsonl');
-    let target: string;
-    let drop = async () => {};
-    if (PG_URL) {
-      const db = await createTestSchema('factory_chaos');
-      const pool = new Pool({ connectionString: db.url, max: 1 });
-      await migratePgStore(pool).finally(() => pool.end());
-      target = db.url;
-      drop = () => db.drop();
-    } else {
-      target = join(dir, 'factory.db');
-      await new SqliteStore(target).close();
-    }
+    const db = await createTestSchema('factory_chaos');
+    const pool = new Pool({ connectionString: db.url, max: 1 });
+    await migratePgStore(pool).finally(() => pool.end());
+    const target = db.url;
+    const drop = () => db.drop();
 
     // One stream each: how many send gaps are drawn before a kill depends on the machine's timing.
     const events = chaosEvents(rng(SEED), EVENTS, TICKETS);

@@ -31,8 +31,7 @@ const updatedAt = () => timestamp('updated_at', { withTimezone: true, mode: 'dat
  * workflow, attempt, evidence and artifact tables the engine will fill in later tickets.
  *
  * Legacy compatibility columns (`attempts.data`, `attempts.token`) keep the current `Store`
- * methods (`putRun`, `getRun`) working while SQLite is still the wired store. They
- * go away with those methods.
+ * methods (`putRun`, `getRun`) working. They go away with those methods.
  */
 export const inbox = pgTable(
   'inbox',

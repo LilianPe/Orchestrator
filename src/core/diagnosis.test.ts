@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import type { OutboxRow } from '../store/types.js';
 import { newTicketState, type FactoryEvent } from './types.js';
 import { ticketDiagnoses, type HeldRow } from './diagnosis.js';
@@ -12,7 +12,7 @@ const event = (id: string, ticketId = 'REL-1'): FactoryEvent =>
 
 describe('ticketDiagnoses (ORC-350)', () => {
   it('tells why a ticket is stuck: its block, the row the worker holds, its last failed effect, its dead letters and its place in the queue, secrets masked', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     await store.putTicket({ ...newTicketState('p', 'REL-1', 'Export', 'dev', 1), blocked: true, blockKind: 'infra', blockReason: `push refused for https://x-access-token:${SECRET}@github.com` });
     // A decided comment whose effect died.
     await store.appendInbox(event('e1'));
@@ -56,7 +56,7 @@ describe('ticketDiagnoses (ORC-350)', () => {
   });
 
   it('tells no effect that failed once and then went through', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     await store.putTicket(newTicketState('p', 'REL-1', 'Export', 'dev', 1));
     await store.appendInbox(event('e1'));
     await store.decide({
@@ -75,7 +75,7 @@ describe('ticketDiagnoses (ORC-350)', () => {
   });
 
   it('finds a ticket the store does not track yet by the row the worker holds, and none it knows nothing of', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     const held: HeldRow = { projectId: 'p', eventId: 'e1', type: 'ticket.delegated', error: 'Linear unreachable', attempts: 1, behind: 0 };
     const [d] = await ticketDiagnoses({ store, held: (id) => (id === 'REL-9' ? [held] : []), mask }, 'REL-9');
     expect(d).toMatchObject({ projectId: 'p', ticketId: 'REL-9', tracked: false, heldRow: { eventId: 'e1' }, deadLetters: [], queue: [] });
@@ -85,7 +85,7 @@ describe('ticketDiagnoses (ORC-350)', () => {
   });
 
   it('keeps to the project asked for when the same identifier is tracked in two', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     await store.putTicket(newTicketState('p', 'REL-1', 'Export', 'dev', 1));
     await store.putTicket(newTicketState('q', 'REL-1', 'Export', 'todo', 1));
     expect((await ticketDiagnoses({ store, mask }, 'REL-1')).map((d) => d.projectId).sort()).toEqual(['p', 'q']);

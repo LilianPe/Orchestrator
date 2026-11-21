@@ -8,7 +8,7 @@ import { FakeForge } from '../../src/adapters/forge/fake.js';
 import { FakeSandboxProvider } from '../../src/adapters/sandbox/fake.js';
 import type { AckMode } from '../../src/config/factory-yml.js';
 import type { EventPayloads } from '../../src/core/types.js';
-import { SqliteStore } from '../../src/store/sqlite-store.js';
+import { MemoryStore } from '../../src/store/memory-store.js';
 import type { EffectOutcome } from '../../src/store/types.js';
 import { CRASH_WORKFLOW } from '../helpers/crash-workflow.js';
 import { assessment, drafted, SPEC } from '../helpers/chain.js';
@@ -25,11 +25,11 @@ import type { WorkflowOverrides } from '../helpers/workflow-with.js';
 const LEASE_MS = 50;
 
 /** A store whose first settle of each row of `kind` finds its lease gone: the row runs again once it expires. */
-class LosingStore extends SqliteStore {
+class LosingStore extends MemoryStore {
   private lost = new Set<string>();
 
   constructor(private readonly kind: string) {
-    super(':memory:');
+    super();
   }
 
   override async completeEffect(id: string, lease?: string, at?: number, outcome?: EffectOutcome): Promise<boolean> {

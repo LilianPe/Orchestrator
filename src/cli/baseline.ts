@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { repoRoot } from '../app/root.js';
 import { FactoryYmlError } from '../config/factory-yml.js';
 import { GITHUB_APP_SECRETS, LINEAR_SECRETS, loadSealedFactoryYml } from '../config/server-secrets.js';
-import { effectiveInstance, homePaths } from '../config/instance.js';
+import { effectiveInstance } from '../config/instance.js';
 import { BASELINE_DAYS, BASELINE_MEASURES, DAY_MS, baselinePeriod, computeBaseline, type BaselineMeasure, type BaselineValue, type CompletedIssue, type MergedPr } from '../core/baseline.js';
 import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
@@ -115,7 +115,7 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     return 1;
   }
   // The daemon migrates the schema; this only writes rows.
-  const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+  const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
   try {
     return await runBaseline({
       store,

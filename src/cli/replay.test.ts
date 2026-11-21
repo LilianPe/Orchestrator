@@ -1,10 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createHarness } from '../../test/helpers/harness.js';
-import { homePaths, saveInstance } from '../config/instance.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { saveInstance } from '../config/instance.js';
 import { runReplayCommand } from './replay.js';
 
 const journals = join(import.meta.dirname, '../../test/replay/journals');
@@ -51,29 +49,10 @@ describe('factory replay (ORC-174)', () => {
     }
   });
 
-  it('--export writes the journal of a ticket of the instance, which then replays', async () => {
+  it('refuses to export without the instance database: Postgres only (ORC-178), its export tests in test/integration/replay-export-pg.test.ts', async () => {
     const home = tmp();
     saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: '/repo', linearTeamKey: 'REL' }], limits: {} });
-    const h = createHarness({ store: new SqliteStore(homePaths(home).db) });
-    h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV' });
-    await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
-    h.orch.stopAll();
-    await h.orch.drained();
-    await h.store.close();
-
-    const file = join(home, 'REL-1.json');
-    expect(await run(['--export', 'REL-1', '--out', file], { FACTORY_HOME: home })).toEqual({ code: 0, out: `Journal of REL-1 written to ${file}.` });
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ format: 1, projectId: 'p', ticketId: 'REL-1' });
-    expect((await run([file])).code).toBe(0);
-  });
-
-  it('refuses to export a ticket the instance has not journaled, or an instance without a base', async () => {
-    const home = tmp();
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: '/repo', linearTeamKey: 'REL' }], limits: {} });
-    await expect(run(['--export', 'REL-1'], { FACTORY_HOME: home })).rejects.toThrow(/no instance database/);
-    expect(existsSync(homePaths(home).db)).toBe(false);
-    await new SqliteStore(homePaths(home).db).close();
-    await expect(run(['--export', 'REL-999'], { FACTORY_HOME: home })).rejects.toThrow(/no event journaled for REL-999/);
+    await expect(run(['--export', 'REL-1'], { FACTORY_HOME: home })).rejects.toThrow(/FACTORY_DATABASE_URL is not set/);
   });
 
   it('exits 2, after the other journals, on a journal it cannot read or one without a decision', async () => {

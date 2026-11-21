@@ -1,8 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -62,36 +58,6 @@ describe('isTransient (ORC-343)', () => {
     // This process closing its own pool: no outage to wait out.
     expect(isTransient(new Error('Cannot use a pool after calling end on the pool'))).toBe(false);
     expect(isTransient(new Error('Client was closed and is not queryable'))).toBe(false);
-  });
-
-  it('tells a SQLite database another connection holds', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'transient-'));
-    const file = join(dir, 'db.sqlite');
-    const a = new DatabaseSync(file);
-    const b = new DatabaseSync(file, { timeout: 0 });
-    try {
-      a.exec('CREATE TABLE t (x)');
-      a.exec('BEGIN EXCLUSIVE');
-      let busy: unknown;
-      try {
-        b.exec('INSERT INTO t VALUES (1)');
-      } catch (err) {
-        busy = err;
-      }
-      expect(isTransient(busy)).toBe(true);
-      a.exec('ROLLBACK');
-      let syntax: unknown;
-      try {
-        b.exec('INSERT INTO nowhere VALUES (1)');
-      } catch (err) {
-        syntax = err;
-      }
-      expect(isTransient(syntax)).toBe(false);
-    } finally {
-      a.close();
-      b.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it('tells GitHub down or rate limited from a refusal', () => {

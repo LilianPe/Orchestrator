@@ -12,7 +12,7 @@ import { FakeTracker } from '../adapters/tracker/fake.js';
 import { FakeWorkspaces } from '../adapters/workspace/fake.js';
 import type { Workflow } from '../core/workflow.js';
 import { loadTestWorkflow } from '../../test/helpers/harness.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { hashText } from '../core/attempt-labels.js';
 import { EventBus } from '../server/live-feed.js';
 import { FakeClock } from '../core/clock.js';
@@ -45,7 +45,7 @@ function setup(
   // `dev` straight to Human Review, as the harness has it: the AI review's own scenarios are test/scenarios/review.test.ts (ORC-183).
   const workflow = loadTestWorkflow();
   o.tweak?.(workflow);
-  const store = new SqliteStore(':memory:');
+  const store = new MemoryStore();
   const tracker = new FakeTracker();
   const fakeRunner = new FakeRunner();
   fakeRunner.submit = (runId, output) => saveAgentOutput(store, runId, output);
@@ -475,7 +475,7 @@ describe('Daemon', () => {
 
   describe('the cost caps of factory.yml (ORC-340)', () => {
     /** An earlier attempt of REL-1 that spent `output` tokens. */
-    const spent = (store: SqliteStore, output: number, run: { id: string; job: string; queue: 'dev' | 'questions' } = { id: 'old', job: 'dev', queue: 'dev' }) =>
+    const spent = (store: MemoryStore, output: number, run: { id: string; job: string; queue: 'dev' | 'questions' } = { id: 'old', job: 'dev', queue: 'dev' }) =>
       store.putRun({ ...run, projectId: 'p', ticketId: 'REL-1', status: 'limit', claudeSessionId: 's', startedAt: 1, endedAt: 2, costUsd: 1, turns: 1, lastText: '', token: `t-${run.id}`, cwd: '/w', tokens: { input: 0, output, cacheRead: 5_000_000, cacheCreation: 0 } });
 
     it('blocks a ticket past per_ticket_tokens before its next run, before any workspace, and says why', async () => {
@@ -771,7 +771,7 @@ describe('Daemon', () => {
       ({ ...TRUSTED, id: 'm1', type: 'status.changed', at: 1_500, projectId: 'p', ticketId: 'REL-1', payload: { from: 'dev', to: 'human_review' } });
     const label = (id: string): FactoryEvent =>
       ({ ...TRUSTED, id, type: 'pr.checks_failed', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { number: 3, url: 'u', branch: 'b', failures: ['test'] } });
-    const fixCiStarted = async (store: SqliteStore) => (await store.listEffects('p', 'REL-1')).some((r) => r.effect.kind === 'start_run' && r.effect.job === 'fix-ci');
+    const fixCiStarted = async (store: MemoryStore) => (await store.listEffects('p', 'REL-1')).some((r) => r.effect.kind === 'start_run' && r.effect.job === 'fix-ci');
 
     it('dead-letters it and blocks the ticket, with a message naming it; the events behind it go on', async () => {
       const { store, tracker, orch } = broken();

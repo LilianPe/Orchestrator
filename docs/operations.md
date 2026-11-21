@@ -66,7 +66,7 @@ Every call to Linear's API is bounded (30 s). A rate limit (a 429, or a `RATELIM
 | Daemon log | Standard output of `factory up` (`[factoryd] …`, warnings starting with `Warning:`). As a service: `journalctl`, `docker compose logs`. The `<FACTORY_HOME>/logs/` folder is not used for now. |
 | Run transcript | `<FACTORY_HOME>/transcripts/<runId>.jsonl`: Claude Code's `stream-json` output (messages, tool calls, result, cost), **masked** (see below). Outside the database and the log. Also via `GET /api/runs/<runId>/transcript`. |
 | A ticket's Claude session | `<FACTORY_HOME>/sessions/<projet>/<ticket>/`: the ticket's Claude Code config folder, mounted as `~/.claude` for the runs that resume its session (with a sandbox, ORC-217). Outside the database and the log; the source of truth stays in the database, the session only provides context. Each run's role and session id are stored on the run (`sessionRole`, `claudeSessionId`). |
-| Events, runs, costs, queue | Postgres when `FACTORY_DATABASE_URL` is set (tables `inbox`, `journal`, `tickets`, `attempts`, `outbox`, `timers`…), otherwise `<FACTORY_HOME>/factory.db` (SQLite; in production only with `FACTORY_STORE=sqlite`, ORC-350). The last 100 events: UI or `GET /api/events/recent`. At startup the daemon writes `store: Postgres (Drizzle migrations applied)` or `store: SQLite (<chemin>)`. |
+| Events, runs, costs, queue | Postgres, the only store (ORC-178): `FACTORY_DATABASE_URL` (tables `inbox`, `journal`, `tickets`, `attempts`, `outbox`, `timers`…); without it the daemon does not start. The last 100 events: UI or `GET /api/events/recent`. At startup the daemon writes `store: Postgres (Drizzle migrations applied)`. A SQLite database file left in `<FACTORY_HOME>` from before Postgres is neither read nor taken into Postgres: the start names it (`<file>: left from the SQLite store, not read (ORC-178)…`) until it is [archived and deleted](#archiving-the-sqlite-data-orc-178). |
 | Run labels | Each run keeps, fixed at creation, what it ran with (`labels`, also in `/api/state`): job, queue, model, the factory's version, its commit read from `FACTORY_COMMIT` if set, `sha256` fingerprints of the prompt (the run's own, specific to the ticket, and its template, where the ticket fields are replaced by placeholders: identical from one ticket to another for the same job), of the skills, the workflow and the config (`settings`, `hooks/`, `.claude-plugin/`, `agents/`, `commands/`, `.mcp.json`). The config fingerprint covers the run settings without the `<FACTORY_HOME>` path, and the pack's text files are hashed with LF line endings: two instances, Windows or Linux, with the same config and the same pack have the same fingerprints. Symbolic links in the pack are neither followed nor hashed. In Postgres, also in the `attempts` columns. Labels that have no source yet (the factory's commit without `FACTORY_COMMIT`, effort, image, risk, register and delivered facts, knowledge index) are `null`, and `labels.pending` (computed on read) gives the tickets that will fill them. The pack fingerprints are computed on every run, as Claude Code rereads the pack: a change counts from the next run. An unreadable pack gives `null` fingerprints (warning `attempt labels: pack not fingerprinted` in the log), without preventing the run. |
 | What the team sees | Each ticket's Linear agent session: acknowledgement, live activity, questions, summaries, errors. |
 
@@ -74,14 +74,53 @@ Transcripts are **kept for 30 days**: at startup, then every day, the daemon del
 
 As soon as it is read, each line of the run's output is masked (`[masked]`), before being written to the transcript, streamed to the UI and relayed into the Linear session; the run's last text (stored with the run and posted in Linear) is masked too. Masked: the values of the daemon's and the run's secret variables (names ending in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_PASS`, `_PWD`, `APIKEY`, `_KEY`, `CREDENTIALS` or `DATABASE_URL`, 8 characters or more; `*_ASKPASS`, which names a program, stays readable), the secrets in `secrets.json` (client secret, webhook secret and Linear tokens) and the GitHub webhook secret in `config.yaml`, the credentials (`user:password`) of any environment value that is a URL, as well as the known shapes of GitHub, Anthropic and Linear tokens, `Bearer` tokens and PEM private keys. A secret that has neither form (a password typed into a file in the repository, for example) stays visible.
 
-Examples of reading the database (with `sqlite3`, daemon stopped or read-only):
+Examples of reading the database (with `psql`, read-only queries):
 
 ```bash
-sqlite3 ~/.factory/factory.db '.tables'      # tickets, events, inbox, outbox, runs, timers, queue, meta…
-sqlite3 ~/.factory/factory.db "select id, status, cost_usd, datetime(started_at/1000,'unixepoch') from runs order by started_at desc limit 10"
+psql "$FACTORY_DATABASE_URL" -c '\dt'      # inbox, journal, tickets, attempts, outbox, timers, decision_trace…
+psql "$FACTORY_DATABASE_URL" -c "select id, status, started_at from attempts order by started_at desc limit 10"
 ```
 
-The SQLite schema is defined in `src/store/sqlite-store.ts`; the `data` columns contain JSON. The Postgres schema is in `src/store/pg/schema.ts` and its migrations in `drizzle/`. Rejected webhooks (signature, freshness) are **not** recorded in the database: they only leave a log line in smee mode (the development relay).
+The Postgres schema is in `src/store/pg/schema.ts` and its migrations in `drizzle/`. Rejected webhooks (signature, freshness) are **not** recorded in the database: they only leave a log line in smee mode (the development relay).
+
+## Archiving the SQLite data (ORC-178)
+
+> **Transition note** (ORC-178): the SQLite files of before Postgres, to archive once per server.
+>
+> Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds in `FACTORY_HOME` at its start; a `relais.db` still in Relais's old home, `~/.relais` by default, is found by hand).
+>
+> On the server, the daemon stopped (`systemctl stop factory` or `docker compose stop`), with `SQLITE_HOME` the folder holding the files (`FACTORY_HOME`, `~/.factory` by default, or Relais's old home for `relais.db`):
+>
+> ```bash
+> set -euo pipefail
+> SQLITE_HOME="${FACTORY_HOME:-$HOME/.factory}"
+> STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+> ARCHIVE="$HOME/relais-sqlite-$STAMP.tar.gz"
+> cd "$SQLITE_HOME"
+> # What exists of the four, with each database's -wal and -shm (the daemon stopped, the files are whole).
+> ITEMS=$(ls -d relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm transcripts workspaces 2>/dev/null || true)
+> echo "$ITEMS"
+> tar -czf "$ARCHIVE" $ITEMS
+> sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+> tar -tzf "$ARCHIVE" > /dev/null && echo "archive readable: $ARCHIVE"
+> ```
+>
+> From a workstation (or the backup host), copy it off the server and check it there:
+>
+> ```bash
+> scp '<server>:~/relais-sqlite-<STAMP>.tar.gz*' .
+> sha256sum -c relais-sqlite-<STAMP>.tar.gz.sha256
+> ```
+>
+> Only once that check passes off the server, back on the server, in `SQLITE_HOME`, the daemon still stopped. Delete `transcripts/` and `workspaces/` only where they are SQLite's time (Relais's home, or a factory that never ran on Postgres): on a server already on `FACTORY_DATABASE_URL` before ORC-178, they hold the current runs' transcripts and worktrees, so delete the `.db` files alone there:
+>
+> ```bash
+> rm -f relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm
+> rm -rf transcripts workspaces
+> rm -f "$ARCHIVE" "$ARCHIVE.sha256"
+> ```
+>
+> Then start the daemon: its start no longer names any SQLite file. It makes `transcripts/` and `workspaces/` again as runs need them; the worktrees come back from the pushed branches.
 
 ## Measures (ORC-235)
 
@@ -115,7 +154,7 @@ The Messages API call has `max_tokens` 16, thinking off, low effort: Claude Haik
 
 `FACTORY_MESSAGE_MODEL` set to `off`, `0`, `false` or `none` (any case) turns the model off, and any other value is logged as a warning: the fallback rule (a `?` outside a URL makes a question, anything else an instruction) classifies alone. The fake runner (`--fake-runner`) never calls it.
 
-**After the answer.** Linear fails a webhook delivery that is not answered with a 200 within 5 s, and retries it after 1 minute, 1 hour and 6 hours ([Linear's webhook docs](https://linear.app/developers/webhooks)). So a webhook that may carry a message is answered as soon as it is kept in the store (a row of the `deliveries` table on Postgres, migration `0011_deliveries`, ORC-355; a `delivery:<kind>:<key>` meta row on SQLite: the raw webhook and its arrival time), before it is mapped or classified. The kind is in the row's key because a session reply and the comment Linear writes for it share their delivery key: each is kept, and the inbox keeps their event once by its id. A comment the mapping would drop on its body alone (the factory's own, a session's, one opened by a mention, an empty one) is not kept. Then, per issue (by its stable id, which survives a move to another team), its events are mapped in the ingest's turn in arrival order, classified out of any turn and side by side, and written to the inbox in the turn in arrival order. Then the kept row goes. A webhook of the same issue that comes behind it goes the same way, so as to keep its place. Webhooks of other issues, and the reconciliation that shares the turn, wait for no model. Each step that fails (the mapping, the write, the removal of the kept row) is tried again in the background, from 1 s and doubling up to 5 min, for an hour from the delivery's first arrival as kept (a restart does not start the hour again). Past that hour the row is moved aside (`aside` true in `deliveries` on Postgres, `delivery-aside:<key>` on SQLite; logged as an `ERROR`): it is no longer tried at each start, and an operator can still read it. A row that cannot be read back is set aside the same way. At start, before the server or the relay takes any webhook, `resume` sets the kept rows on their way in the order received (with the model off too: what an earlier start kept is still written, by the fallback rule), so a new webhook of their issue goes behind them. Resumed rows wait for a classification slot instead of taking the fallback rule, until the ingest closes. On a stop, the relay closes first. A webhook still received after that is kept for the next start rather than refused, since a relay could not send it again. The retries stop short, and what is not written stays kept for the next start, all before the store closes. A message not yet classified when the ingest closes takes the fallback rule without a model call, so the stop waits for no new one (ORC-355). A webhook kept already is answered and not written twice; if no delivery of it is under way any more, it is delivered again from the row the store returns, timed at its first arrival. An event the inbox already holds asks no model. That lookup only spares a call: when it fails, it is logged once and the event is classified and written all the same. A webhook's issue is taken before its row is even kept, so a later webhook of that issue cannot overtake it while the insert runs. Without the model, every webhook is written before its answer, as before.
+**After the answer.** Linear fails a webhook delivery that is not answered with a 200 within 5 s, and retries it after 1 minute, 1 hour and 6 hours ([Linear's webhook docs](https://linear.app/developers/webhooks)). So a webhook that may carry a message is answered as soon as it is kept in the store (a row of the `deliveries` table, migration `0011_deliveries`, ORC-355: the raw webhook and its arrival time), before it is mapped or classified. The kind is in the row's key because a session reply and the comment Linear writes for it share their delivery key: each is kept, and the inbox keeps their event once by its id. A comment the mapping would drop on its body alone (the factory's own, a session's, one opened by a mention, an empty one) is not kept. Then, per issue (by its stable id, which survives a move to another team), its events are mapped in the ingest's turn in arrival order, classified out of any turn and side by side, and written to the inbox in the turn in arrival order. Then the kept row goes. A webhook of the same issue that comes behind it goes the same way, so as to keep its place. Webhooks of other issues, and the reconciliation that shares the turn, wait for no model. Each step that fails (the mapping, the write, the removal of the kept row) is tried again in the background, from 1 s and doubling up to 5 min, for an hour from the delivery's first arrival as kept (a restart does not start the hour again). Past that hour the row is moved aside (`aside` true in `deliveries`; logged as an `ERROR`): it is no longer tried at each start, and an operator can still read it. A row that cannot be read back is set aside the same way. At start, before the server or the relay takes any webhook, `resume` sets the kept rows on their way in the order received (with the model off too: what an earlier start kept is still written, by the fallback rule), so a new webhook of their issue goes behind them. Resumed rows wait for a classification slot instead of taking the fallback rule, until the ingest closes. On a stop, the relay closes first. A webhook still received after that is kept for the next start rather than refused, since a relay could not send it again. The retries stop short, and what is not written stays kept for the next start, all before the store closes. A message not yet classified when the ingest closes takes the fallback rule without a model call, so the stop waits for no new one (ORC-355). A webhook kept already is answered and not written twice; if no delivery of it is under way any more, it is delivered again from the row the store returns, timed at its first arrival. An event the inbox already holds asks no model. That lookup only spares a call: when it fails, it is logged once and the event is classified and written all the same. A webhook's issue is taken before its row is even kept, so a later webhook of that issue cannot overtake it while the insert runs. Without the model, every webhook is written before its answer, as before.
 
 **Bound.** At most 4 classifications run at once; past that, a message gets the fallback rule at once, and no process is queued. A call is cut at 3 s, and the fallback rule decides. The acknowledgement comes after the write, and Linear marks a session unresponsive when no activity arrives within 10 s. Measured on a developer's machine (low effort): the model itself answers in about 0.9 s (`duration_api_ms`). The time of a message (`at`, and so `signOfLifeMs`) is taken when the webhook arrives, before any wait, so the wait for the model shows in the measure.
 
@@ -152,7 +191,7 @@ This lease has its own bound, on top of the one above. Every 30 s (`RUN_BEAT_MS`
 
 A worker processes the inbox, with one task per ticket: a ticket's events go one after the other, in order of arrival, and tickets progress side by side (a long `setup`, an `npm ci`, only holds back its own ticket). For each event, a single transaction:
 
-1. takes the ticket lock (`pg_advisory_xact_lock` on Postgres; on SQLite, the transaction and the ticket's task in the single process);
+1. takes the ticket lock (`pg_advisory_xact_lock`);
 2. checks that the inbox row is the oldest pending one for its ticket and that no effect of the ticket is unfinished, otherwise leaves it for later;
 3. reads the ticket's projection and the workflow version it is pinned to, calls `decide`;
 4. writes the journal, the decision (`decision_trace`: what is needed to replay it with `factory replay`, ORC-174), the projection, the timers, the effects in the outbox (id `ticket:seq:i`, `seq` being the event's position in the ticket's journal) and marks the inbox row as processed. A timer armed by a decision only fires once that decision's effects have been executed: a failed effect removes it before it fires.
@@ -180,7 +219,6 @@ An outage of GitHub, Linear or the database passes by itself: a ticket is not bl
 | Linear API | 5xx, 408, 429, a GraphQL error `RATELIMITED` | an error of the query, an unknown issue, 401 |
 | Network (`fetch`, `pg`) | connection refused, reset, timed out, name not resolved now | |
 | Postgres | SQLSTATE `08…`, `53…`, `57P01`–`57P03`, `40001`, `40P01`; connection lost, or none obtained in time | a constraint, a syntax error; the pool closed by a shutdown |
-| SQLite | database busy or locked | anything else |
 | `git fetch` | host unreachable, connection cut, a 5xx | a 403, a repository not found |
 
 Anything else is permanent. Where each one goes:

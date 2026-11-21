@@ -56,7 +56,8 @@ import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, GITHUB_CALLBACK_PATH, type ServerDeps } from '../server/app.js';
 import { listenCliSocket } from '../server/cli-socket.js';
 import { EventBus } from '../server/live-feed.js';
-import { openStore } from '../store/open.js';
+import { oldDatabaseWarnings, openStore } from '../store/open.js';
+import type { Store } from '../store/types.js';
 import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
 import { TrackerSwitch } from './tracker-switch.js';
@@ -69,6 +70,11 @@ export interface BootOptions {
   log?: (m: string) => void;
   /** Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * A store opened by the caller instead of the instance's Postgres (the tests' MemoryStore): the factory takes it where it
+   * would open its own, and closes it when it stops or fails to start from there on.
+   */
+  store?: Store;
 }
 
 /** The dashboard's GitHub sign-in off the loopback (ORC-399), from what `startRefusals` checked; none on the loopback, where nobody signs in. */
@@ -136,8 +142,13 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
   const fromLinear = projects.filter((p) => !replaying.includes(p.id));
 
-  const { store, kind } = await openStore({ env, sqlitePath: paths.db, migrationsFolder: join(root, 'drizzle'), log });
-  log(kind === 'postgres' ? 'store: Postgres (Drizzle migrations applied)' : `store: SQLite (${paths.db})`);
+  // A SQLite file left from before Postgres is named, never opened (ORC-178).
+  for (const line of oldDatabaseWarnings(o.home)) log(line);
+  let store = o.store;
+  if (!store) {
+    store = await openStore({ env, migrationsFolder: join(root, 'drizzle'), log });
+    log('store: Postgres (Drizzle migrations applied)');
+  }
   // From here on, a failed start closes the store it opened (the Postgres pool would keep the process alive).
   try {
     const clock = new SystemClock();

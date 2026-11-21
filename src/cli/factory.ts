@@ -46,7 +46,7 @@ async function main(): Promise<number> {
   // Its own options, and no instance needed to replay a file (the CI has none).
   if (process.argv[2] === 'replay') return runReplayCommand(process.argv.slice(3));
   // Its own options, on the store alone.
-  if (process.argv[2] === 'flaky') return runFlakyCommand(factoryHome(), process.argv.slice(3));
+  if (process.argv[2] === 'flaky') return runFlakyCommand(process.argv.slice(3));
   // Its own options; Linear, GitHub and the store, no running instance needed.
   if (process.argv[2] === 'baseline') return runBaselineCommand(factoryHome(), process.argv.slice(3));
   // Its own options, on the store and the projects; GitHub through the App, no running instance needed (ORC-231).
@@ -97,7 +97,7 @@ async function main(): Promise<number> {
       const workflow = defaultWorkflow();
       const projects = cfg.projects.map((p) => ({ id: p.id, repoPath: p.repoPath, teamKey: p.linearTeamKey, workflow }));
       // Read-only: the schema is the daemon's to migrate.
-      const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
+      const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle'), migrate: false });
       // The branch naming as the daemon reads it on the default branch (ORC-283), without a fetch: a preview.
       const repoConfig = makeRepoConfig();
       const naming = async (p: { repoPath: string }) => (await repoConfig(p, { fetch: false })).branches;
@@ -117,7 +117,7 @@ async function main(): Promise<number> {
       if (!arg) break;
       return runDryRunCommand(control, arg);
     case 'run':
-      if (arg === 'repair') return runRepairCommand(home, positionals.slice(2));
+      if (arg === 'repair') return runRepairCommand(positionals.slice(2));
       break;
     default:
       break;
@@ -136,7 +136,7 @@ async function runInitCommand(args: string[]): Promise<number> {
     dev: values.dev,
     exec: execCmd,
     createSmee: () => createSmeeChannel(),
-    storeCards: instanceCards(home),
+    storeCards: instanceCards,
     io: {
       ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
       print: (s) => console.log(s),

@@ -9,7 +9,7 @@ import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConfig } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
 import { slugify } from '../core/naming.js';
-import { SqliteStore } from '../store/sqlite-store.js';
+import { MemoryStore } from '../store/memory-store.js';
 import { GITHUB_APP_PERMISSIONS, instanceCards, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitDeps, type InitIO } from './init.js';
 import type { MaturityReport } from './maturity.js';
 import { runValidateCommand } from './validate.js';
@@ -228,12 +228,12 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
   async function initCards(
     files: Record<string, string>,
     {
-      store = new SqliteStore(':memory:'),
+      store = new MemoryStore(),
       now = 1_700_000_000_000,
       repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-')),
       home = mkdtempSync(join(tmpdir(), 'factory-init-home-')),
       storeCards = async (projectId: string, report: MaturityReport) => ({ cards: await storeReport(store, projectId, report, now), where: 'the test store' }),
-    }: { store?: SqliteStore; now?: number; repo?: string; home?: string; storeCards?: InitDeps['storeCards'] } = {},
+    }: { store?: MemoryStore; now?: number; repo?: string; home?: string; storeCards?: InitDeps['storeCards'] } = {},
   ) {
     for (const [path, content] of Object.entries(files)) {
       mkdirSync(dirname(join(repo, path)), { recursive: true });
@@ -257,7 +257,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
   });
 
   it('a card approved and detected the same again says by whom; nothing over an existing .factory/config.yml', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     const { projectId, repo } = await initCards(NPM, { store });
     await store.approveMaturityCard(projectId, 'stack', 'Node (npm)', 'armand', 1_700_000_000_001);
     const again = await initCards(NPM, { store, repo, now: 1_700_000_000_002 });
@@ -268,7 +268,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
   });
 
   it("the main card says the project's last dry run on main, stored before init ran (ORC-408)", async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     const projectId = slugify(basename(repo), 30);
     const at = Date.UTC(2026, 10, 20, 14, 3);
@@ -279,18 +279,13 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     expect((await store.maturityCards(projectId)).find((c) => c.key === 'main')?.value).toMatch(/^red: /);
   });
 
-  it("a first init, FACTORY_HOME not made yet, stores the cards in the instance's SQLite", async () => {
+  it('without FACTORY_DATABASE_URL, init finishes and says the cards are not stored, naming the variable (ORC-178)', async () => {
     vi.stubEnv('FACTORY_DATABASE_URL', '');
-    vi.stubEnv('NODE_ENV', 'test');
     try {
       const home = join(mkdtempSync(join(tmpdir(), 'factory-init-')), 'home');
-      const { out } = await initCards(NPM, { home, storeCards: instanceCards(home) });
-      expect(out).not.toContain('Cards not stored');
-      // Said: a daemon on Postgres would not see them (ORC-437).
-      expect(out).toContain(`Cards stored in SQLite (${join(home, 'factory.db')}): a daemon started with FACTORY_DATABASE_URL reads Postgres and does not see them.`);
-      const store = new SqliteStore(join(home, 'factory.db'));
-      expect((await store.maturityCards()).map((c) => c.key)).toContain('main');
-      await store.close();
+      const { out } = await initCards(NPM, { home, storeCards: instanceCards });
+      expect(out).toContain('Cards not stored (FACTORY_DATABASE_URL is not set: the factory keeps its state in Postgres only. Set it to the Postgres URL.)');
+      expect(existsSync(join(home, 'factory.db'))).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }

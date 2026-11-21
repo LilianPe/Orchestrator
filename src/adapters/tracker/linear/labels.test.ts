@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { SqliteStore } from '../../../store/sqlite-store.js';
+import { MemoryStore } from '../../../store/memory-store.js';
 import { knownLabels, labelChanges, recordLabels } from './labels.js';
 
 describe('labels known to the factory (ORC-185)', () => {
   it('keeps the newest reading: an older one, a webhook out of order or a pass read before it, does not overwrite it', async () => {
-    const store = new SqliteStore(':memory:');
+    const store = new MemoryStore();
     expect(await knownLabels(store, 'p', 'REL-1')).toBeUndefined();
     await recordLabels(store, 'p', 'REL-1', ['b', 'a', 'a'], 200);
     await recordLabels(store, 'p', 'REL-1', ['old'], 100);
