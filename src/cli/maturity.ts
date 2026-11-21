@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { manifestDependencies } from '../checks/deps.js';
 import { mainCardValue, type DryRun } from '../core/dry-run.js';
@@ -53,9 +53,13 @@ interface Manifests {
   problems: { file: string; problem?: string }[];
 }
 
-/** The text of a file the cards read, or why it cannot be read (a directory, no read permission): a problem of the cards, never a failure of init (ORC-454). */
+/**
+ * The text of a file the cards read, or why it cannot be read (no read permission; not a regular file, such as a directory or
+ * a named pipe, whose read would block init): a problem of the cards, never a failure of init (ORC-454).
+ */
 function readText(path: string): { text: string } | { problem: string } {
   try {
+    if (!statSync(path).isFile()) return { problem: 'cannot be read: not a regular file' };
     return { text: readFileSync(path, 'utf8') };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
