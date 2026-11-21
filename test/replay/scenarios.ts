@@ -129,7 +129,7 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
       const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
       await h.send('pr.checks_failed', red);
       await h.send('pr.checks_failed', red);
-      await h.send('label.changed', { label: 'agent:stop', change: 'added' });
+      await h.send('session.stopped', { linearSessionId: 'ls-1' });
     },
   },
   /**

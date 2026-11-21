@@ -64,7 +64,7 @@ describe('the Rapide level of factory/fantome (ORC-231)', () => {
       ev('session.prompted', { linearSessionId: 's1', body: 'encore', author: 'L' }),
       ev('session.mentioned', { linearSessionId: 's2', body: 'pourquoi ?', author: 'L' }),
       ev('status.changed', { from: 'human_review', to: 'ai_review' }),
-      ev('label.changed', { label: 'agent:stop', change: 'added' }),
+      ev('label.changed', { label: 'bug', change: 'added' }),
       ev('session.stopped', { linearSessionId: 's1' }),
       ev('pr.checks_failed', { number: 3, url: 'u', branch: 'b', failures: ['test'] }),
       ev('pr.conflicted', { number: 3, url: 'u', branch: 'b', headSha: 'h', baseRef: 'main' }),

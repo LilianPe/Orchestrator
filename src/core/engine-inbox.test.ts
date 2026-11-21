@@ -517,7 +517,7 @@ describe('the relay of a question the answer agent cannot answer (ORC-182)', () 
     });
 
     it('work cancelled to go on, by a stop, keeps them for the launch that resumes it', () => {
-      const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev', relayed }), ev('label.changed', { label: 'agent:stop', change: 'added' }), workflow);
+      const out = decide(ticket({ activeRunId: 'r1', activeJob: 'dev', relayed }), ev('session.stopped', { linearSessionId: 's1' }), workflow);
       expect(out.events.map((e) => e.type)).toContain('work.cancelled');
       expect(dropped(out)).toEqual([]);
       expect(activities(out).filter((a) => a.runId)).toEqual([]);

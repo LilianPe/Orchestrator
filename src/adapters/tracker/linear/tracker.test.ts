@@ -3,6 +3,8 @@ import { LinearApi, type FetchLike } from './api.js';
 import { IssueNotFoundError } from '../types.js';
 import { Q } from './queries.js';
 import { effectUuid, LinearTracker } from './tracker.js';
+import { FACTORY_LABELS } from '../../../core/engine.js';
+import { defaultWorkflow } from '../../../presets/workflow.js';
 
 type Handler = (vars: Record<string, any>) => unknown;
 
@@ -428,6 +430,18 @@ describe('LinearTracker', () => {
     );
     expect(created).toEqual(['Human Review', 'AI Review', 'Ready to Merge', 'Done', 'agent:reprendre']);
     expect(calls.find((c) => c.op === 'StateCreate')!.vars).toEqual({ input: { name: 'Human Review', teamId: 't-1', type: 'started', color: '#5e6ad2' } });
+  });
+
+  it('a connection to a new team creates neither Ready to Merge nor any agent:* label (ORC-201)', async () => {
+    const { api } = fakeLinear({
+      TeamStates: () => ({ workflowStates: conn([]) }),
+      TeamLabels: () => ({ issueLabels: conn([]) }),
+      Team: () => ({ teams: { nodes: [{ id: 't-1', key: 'REL', name: 'Factory' }] } }),
+      StateCreate: (v) => ({ workflowStateCreate: { success: true, workflowState: { id: 'x', name: v.input.name } } }),
+      LabelCreate: (v) => ({ issueLabelCreate: { success: true, issueLabel: { id: 'y', name: v.input.name } } }),
+    });
+    const created = await new LinearTracker(api, 'app-1').ensureSetup('REL', defaultWorkflow().states, FACTORY_LABELS);
+    expect(created).toEqual(['Todo', 'In Progress', 'Human Review', 'AI Review', 'Done', 'Bloqué']);
   });
 
   it('creates a session on an issue', async () => {

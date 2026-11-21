@@ -126,8 +126,8 @@ describe('decide — authorization matrix (ORC-186)', () => {
     const rework = ev('status.changed', { from: 'human_review', to: 'ai_review' }, 'u-out', []);
     expect(decide(review, rework, workflow).effects).toEqual([expect.objectContaining({ kind: 'comment' })]);
     expect(starts(decide(review, { ...rework, actor: 'u-dev', roles: WRITER } as FactoryEvent, workflow).effects)).toHaveLength(1);
-    // A label that starts nothing (agent:stop) and a move no rule answers are not checked.
-    expect(decide(review, ev('label.changed', { label: 'agent:stop', change: 'added' }, 'u-out', []), workflow).effects.map((e) => e.kind)).toContain('stop_run');
+    // The stop of a session and a move no rule answers are not checked.
+    expect(decide(review, ev('session.stopped', { linearSessionId: 'ls-1' }, 'u-out', []), workflow).effects.map((e) => e.kind)).toContain('stop_run');
     expect(decide(review, ev('status.changed', { from: 'human_review', to: 'todo' }, 'u-out', []), workflow).trace).not.toContainEqual(
       expect.stringMatching(AUTHZ_REFUSED),
     );
@@ -148,7 +148,6 @@ describe('decide — authorization matrix (ORC-186)', () => {
     expect(mayCheck(e('session.prompted', { linearSessionId: 's', body: '', author: 'A' }), workflow)).toBe(true);
     // No label starts a run since ORC-196 and ORC-392.
     expect(mayCheck(e('label.changed', { label: 'relance', change: 'added' }), workflow)).toBe(false);
-    expect(mayCheck(e('label.changed', { label: 'agent:stop', change: 'added' }), workflow)).toBe(false);
     expect(mayCheck(e('status.changed', { from: 'human_review', to: 'ai_review' }), workflow)).toBe(true);
     // A move back to In Progress starts nothing since ORC-190: the feedback does, a review on the PR checked on its author.
     expect(mayCheck(e('status.changed', { from: 'human_review', to: 'dev' }), workflow)).toBe(false);

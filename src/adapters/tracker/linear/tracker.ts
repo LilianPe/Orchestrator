@@ -445,7 +445,7 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return agentSessionCreateOnIssue.agentSession.id;
   }
 
-  async ensureSetup(teamKey: string, states: Partial<Record<LogicalState, string>>, labels: string[]): Promise<string[]> {
+  async ensureSetup(teamKey: string, states: Partial<Record<LogicalState, string>>, labels: readonly string[]): Promise<string[]> {
     const created: string[] = [];
     const existing = new Set((await this.teamStates(teamKey, true)).map((s) => s.name));
     const teamId = await this.teamId(teamKey);

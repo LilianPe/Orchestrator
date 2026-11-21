@@ -731,7 +731,7 @@ function stagnationBlock(p: EventPayloads['run.finished'], workflow: Workflow): 
  * on the PR never unblocks (ORC-190): authorized, in Human Review, it starts work as a reply does, and gives that bound back
  * when it arms its round (`startReaction`).
  */
-const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
+const HUMAN_RELAUNCH = new Set<EventType>(['session.prompted', 'ticket.commented', 'status.changed', 'ticket.delegated', 'pr.reviewed']);
 
 /** A human's relaunch of a blocked ticket: those events, and a mention that answers the block (ORC-415). */
 const relaunchedByHuman = (event: FactoryEvent, ticket: TicketState): boolean => HUMAN_RELAUNCH.has(event.type) || repliesToBlock(event, ticket);
@@ -747,7 +747,7 @@ function resetRedCi(out: Decision, ticket: TicketState | undefined): void {
 }
 
 /**
- * Work starts again on a blocked ticket. Relaunched by a human (a reply, a label, a status change), the
+ * Work starts again on a blocked ticket. Relaunched by a human (a reply, a status change), the
  * red-CI count and the « Loop » guard reset; by a machine event (a timer, red CI itself), it does not, or a timer armed before
  * the block would undo it.
  */
@@ -1160,13 +1160,8 @@ function prFailed(event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, tic
   return r && { ...r, input: 'ci_failures' };
 }
 
-/** The label `agent:stop` stops the ticket's work, as the stop of its session does (until ORC-201 removes the `agent:*` labels). */
-export const STOP_LABEL = 'agent:stop';
-
-/** The stop of the ticket's session in Linear, or the label `agent:stop` added: the work stops, the ticket blocked until a reply. */
-function stopped(out: Decision, event: FactoryEvent<'label.changed' | 'session.stopped'>): Decision {
-  const label = event.type !== 'label.changed' || (event.payload.change === 'added' && event.payload.label === STOP_LABEL);
-  if (!label) return noReaction(out, event.type);
+/** The stop of the ticket's session in Linear: the work stops, the ticket blocked until a reply. The `agent:stop` label no longer (ORC-201). */
+function stopped(out: Decision, event: FactoryEvent<'session.stopped'>): Decision {
   reacted(out, event.type);
   return stop(out);
 }
@@ -1220,7 +1215,6 @@ function react(out: Decision, event: FactoryEvent, ticket: TicketState | undefin
       return start(ticket?.blocked ? resumeBlocked(event, ticket, workflow) : undefined);
     case 'session.mentioned':
       return start(mentionAnswersBlock(event, ticket) ? resumeBlocked(event, ticket!, workflow) : askQuestion(event, ticket, workflow));
-    case 'label.changed':
     case 'session.stopped':
       return stopped(out, event);
     case 'pr.checks_failed':
@@ -1469,8 +1463,6 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
   if (!HUMAN_EVENTS.has(event.type) || (event.type === 'ticket.delegated' && (event.payload.noRepo || event.payload.replay))) return false;
   // A review that asks nothing (an approval, no words) is decided without the matrix: no read of Linear or GitHub for it (ORC-190).
   if (event.type === 'pr.reviewed') return asksForFix(event.payload);
-  // No label starts a run: `agent:stop` stops, outside the matrix.
-  if (event.type === 'label.changed') return false;
   if (event.type !== 'status.changed') return true;
   // A move to Done may merge (ORC-148): its actor is always checked. A move to AI Review reviews again (`reviewAgain`).
   return event.payload.to === 'done' || reviewsAgain(event, workflow);
@@ -1478,7 +1470,7 @@ export function mayCheck(event: FactoryEvent, workflow: Workflow): boolean {
 
 /** The events a human sends that the matrix may check (`mayCheck`): a cheap filter before any read. */
 export const HUMAN_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
-  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'label.changed', 'status.changed', 'pr.reviewed',
+  'ticket.delegated', 'session.mentioned', 'command', 'session.prompted', 'ticket.commented', 'status.changed', 'pr.reviewed',
 ]);
 
 /** A human acting on a run by a move (`reviewAgain`): relaunching it when the ticket is blocked, triggering it otherwise. */
@@ -2073,6 +2065,9 @@ function newRun(out: Decision, state: TicketState | undefined, workflow: Workflo
 /** Label put next to the status while the factory waits for a human (ORC-170). */
 export const BLOCKED_LABEL = 'Bloqué';
 
+/** The labels the connection to Linear creates in a team: `Bloqué` alone, no `agent:*` label any longer (ORC-201). */
+export const FACTORY_LABELS: readonly string[] = [BLOCKED_LABEL];
+
 /**
  * The label follows the ticket's blocked flag from before the event to after the decision, however it
  * changed: a block or unblock decided here, or a lift made by `reduce` itself (a repair, a cancellation).
@@ -2581,7 +2576,11 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       break;
     case 'label.changed': {
       // Routing is sticky (ORC-291): a ticket at work stays in its repo, whichever repo of the team a label added names.
-      const { change, otherRepo } = event.payload;
+      const { change, label, otherRepo } = event.payload;
+      // The stop label the connection created before ORC-201 may still be in the team: whoever adds it is told how to stop.
+      if (change === 'added' && label === 'agent:stop' && ticket?.delegated) {
+        out.effects.push({ kind: 'comment', body: `The \`agent:stop\` label stops nothing any longer: to stop the work, press Stop in the agent session, write \`${STOP_COMMAND}\` there, or remove the delegation.` });
+      }
       if (change === 'added' && otherRepo && ticket && holds(ticket)) {
         out.effects.push({ kind: 'comment', body: `This ticket stays on the repository ${event.projectId}: the repository does not change along the way. With no branch or PR yet, stop the work, remove the delegation, wait 5 minutes for the reconciliation to see it, then delegate again. Otherwise, open a new ticket for the other repository.` });
       }

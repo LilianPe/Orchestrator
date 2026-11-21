@@ -43,7 +43,7 @@ import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning, presetWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
-import { BLOCKED_LABEL, STOP_LABEL } from '../core/engine.js';
+import { FACTORY_LABELS } from '../core/engine.js';
 import { SystemClock } from '../core/clock.js';
 import { logicalFromName, Daemon, type ProjectRuntime } from '../runtime/daemon.js';
 import { queueCapacity, Scheduler } from '../runtime/capacity.js';
@@ -70,8 +70,6 @@ export interface BootOptions {
   /** Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
 }
-
-const FACTORY_LABELS = [STOP_LABEL, BLOCKED_LABEL];
 
 /**
  * The dashboard's GitHub sign-in off the loopback (ORC-399): the factory App's OAuth client, who factory.yml lets in, and
