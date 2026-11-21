@@ -70,7 +70,7 @@ describe('clarify, end to end (ORC-210)', () => {
     expect(h.runner.requests).toHaveLength(1);
     expect(elicitations(h).at(-1)).toMatchObject({ body: expect.stringContaining(WINDOW.question), options: WINDOW.options });
     await answer(h, 'Sliding', 'user-armand');
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:intake', '/factory:spec_draft']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:intake', '/factory:spec-draft']);
     expect(h.runner.requests[1]!.prompt).toContain('Yes, to everyone');
     expect(h.runner.requests[1]!.prompt).not.toContain('No, admins are exempt');
     // Intake reads the answers as its feedback, once: the decisions are for the steps after the guard.
@@ -129,7 +129,7 @@ describe('clarify and the wait on a « blocked by » ticket (ORC-210, ORC-363)',
     Object.assign(h.tracker.issues.get('REL-2')!, { stateName: 'Done', stateType: 'completed' });
     h.runner.enqueue(SPEC_DECIDED);
     await reconcile();
-    expect(skills()).toEqual(['/factory:intake', '/factory:intake', '/factory:spec_draft']);
+    expect(skills()).toEqual(['/factory:intake', '/factory:intake', '/factory:spec-draft']);
     expect(h.runner.requests[2]!.prompt).toMatch(/## Decisions[\s\S]*Yes, to everyone/);
     expect(moves()).toEqual(['Spec']);
     expect((await h.ticket()).waitingOn ?? undefined).toBeUndefined();

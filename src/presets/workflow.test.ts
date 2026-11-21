@@ -9,10 +9,10 @@ import { agentStep, DEFAULT_STATES, defaultWorkflow, workflowViolations, type St
 /**
  * The hashes of the workflow of `factory/default`: the canonical one, which each ticket's frozen version and the replay
  * journals carry, and the one of its JSON text, keys in their order, which the journals hold. A change of either changes the
- * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-460, the skills named after their step).
+ * journals: re-record them (`npm run replay:record`) and pin the new hashes in the same PR (last: ORC-468, `factory:spec-draft`).
  */
-const CANONICAL = 'c9c84628ae8e7096aaeb5f5c8a018b161f00f598c24f6e317f44f0c44119d360';
-const TEXT = 'sha256:815d31d2a5f5d46f971181028b2275c1a28b269af3ab78716ac6ba0f51fcc19d';
+const CANONICAL = 'fb61f5cf92bcde8bbd78bd75e73ac3fd36b2dc34e774c755f142f6e28775fe97';
+const TEXT = 'sha256:e67f64af04c3ea200b6db9cd1b19dcfa5fe6442765ffeb74da86aeb7d3f058cf';
 
 describe('defaultWorkflow (ORC-388, ORC-389, ORC-391)', () => {
   // The safety net of ORC-177's later parts: a change of the workflow is a change of the journals, seen in their diff.

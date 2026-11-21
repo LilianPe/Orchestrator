@@ -205,7 +205,7 @@ A timer only acts on the round that armed it (`at`): a round answered, asked aga
 
 ## `spec_draft`, `spec_check` and the `spec_review` gate (ORC-212)
 
-The `spec` job (agent, skill `factory:spec_draft`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
+The `spec` job (agent, skill `factory:spec-draft`, Sonnet, effort high, the repository's network, in the ticket's worktree, its own session) writes the spec of the ticket and writes nothing else: since ORC-383 the run holds it to that, with `Read`, `Grep` and `Glob` only. It reads no other ticket (ORC-192): it judges the linked tickets from what the ticket says of them. It hands it back in the `spec` field of `submit_result` (`src/core/spec.ts`):
 
 | Section | What it holds |
 | -- | -- |

@@ -18,9 +18,16 @@ describe('frozenWorkflow (ORC-393)', () => {
 
   it('launches the skills a version frozen before ORC-460 named by their new names: the pack no longer has the old ones', () => {
     const current = defaultWorkflow();
-    const old = JSON.parse(JSON.stringify(current).replaceAll('"factory:build"', '"factory:dev"').replaceAll('"factory:spec_draft"', '"factory:spec"')) as typeof current;
+    const old = JSON.parse(JSON.stringify(current).replaceAll('"factory:build"', '"factory:dev"').replaceAll('"factory:spec-draft"', '"factory:spec"')) as typeof current;
     old.jobs['fix-ci']!.skill = 'factory:fix-ci';
     expect(JSON.stringify(old.jobs)).toMatch(/factory:dev"[\s\S]*factory:fix-ci"/);
+    expect(frozenWorkflow(workflowVersion(old)).jobs).toEqual(current.jobs);
+  });
+
+  it('launches `factory:spec-draft` for a version frozen before ORC-468 on `factory:spec_draft`', () => {
+    const current = defaultWorkflow();
+    const old = JSON.parse(JSON.stringify(current).replaceAll('"factory:spec-draft"', '"factory:spec_draft"')) as typeof current;
+    expect(old.jobs.spec!.skill).toBe('factory:spec_draft');
     expect(frozenWorkflow(workflowVersion(old)).jobs).toEqual(current.jobs);
   });
 });

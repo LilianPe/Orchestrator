@@ -46,7 +46,7 @@ describe('buildPrompt', () => {
     const approved = buildPrompt({ skill: 'factory:tests', issue, spec: { version: 2, approved: true, text: '**Acceptance criteria**\n1. Given x, then y.' } });
     expect(approved).toContain('## Approved spec (version 2)\n');
     expect(approved).toContain('**Acceptance criteria**\n1. Given x, then y.');
-    expect(buildPrompt({ skill: 'factory:spec_draft', issue, spec: { version: 1, approved: false, text: 'draft' } })).toContain('## Spec under review (version 1)\n');
+    expect(buildPrompt({ skill: 'factory:spec-draft', issue, spec: { version: 1, approved: false, text: 'draft' } })).toContain('## Spec under review (version 1)\n');
   });
 
   it('renders the PR url after the branch line', () => {

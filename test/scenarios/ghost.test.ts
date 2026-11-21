@@ -149,7 +149,7 @@ describe('the replay of a closed ticket, from its start to its collection (ORC-3
     await h.delegateReplays();
 
     // The fantome's pipeline, step by step, each on the clone at the start.
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec-draft', '/factory:tests', '/factory:build']);
     const worktrees = h.workspaces.prepared.filter((w) => w.kind === 'worktree');
     expect(worktrees.length).toBeGreaterThan(0);
     expect(new Set(worktrees.map((w) => w.repoPath))).toEqual(new Set([CLONE]));

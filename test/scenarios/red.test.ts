@@ -35,7 +35,7 @@ describe('the tests step and the red check (ORC-123)', () => {
     h.checks.failNext('AssertionError: expected 1 to be 2');
     await delegated(h);
     expect(h.checks.calls.map((c) => c.commands)).toEqual([["npm test -- 'src/export.test.ts'"]]);
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec-draft', '/factory:tests', '/factory:build']);
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
     expect((await measureTicket(h.store, 'p', 'REL-1')).red).toEqual([{ id: expect.any(String), verified: true, cause: 'assertion' }]);
   });

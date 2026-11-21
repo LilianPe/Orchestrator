@@ -26,10 +26,10 @@ describe('standard workflow', () => {
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.' });
     h.runner.enqueue(assessment(), drafted());
     await delegate(h);
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec-draft']);
     expect(await h.ticket()).toMatchObject({ logical: 'spec', spec: { version: 1 } });
     await toBuild(h, { build: [BUILD] });
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec_draft', '/factory:tests', '/factory:build']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:intake', '/factory:spec-draft', '/factory:tests', '/factory:build']);
     const req = h.runner.requests[3]!;
     // The ticket session starts at the tests step (ORC-217): the build resumes it.
     expect(req).toMatchObject({ resume: true, model: 'sonnet', cwd: '/tmp/factory-fake/p/REL-1', readOnly: false });
