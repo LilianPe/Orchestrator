@@ -9,7 +9,7 @@ export interface RelayOptions {
 const REJECTED_401_HINT =
   'wrong webhook secret, clock skew, or a body smee.io cannot replay byte for byte: ' +
   'smee.io re-serializes the JSON it receives, so a signature over other bytes no longer matches; ' +
-  'if secret and clock are right, set publicUrl instead of the smee relay';
+  'if secret and clock are right, set public_url in factory.yml instead of the smee relay';
 
 export function startSmeeRelay(o: RelayOptions): { close(): void } {
   const es = new EventSource(o.url);

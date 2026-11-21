@@ -9,11 +9,11 @@ The factory talks to GitHub through **git** and a **factory GitHub App**, the on
 The GitHub App is the identity of the **daemon**, not of the agents. It is used to read PRs, checks and review threads, and to publish: push the ticket's branch, open its draft PR, merge.
 
 ```yaml
-# <FACTORY_HOME>/config.yaml
+# <FACTORY_HOME>/factory.yml
 github:
-  appId: "123456"
-  privateKey: /home/factory/.factory/github-app.pem # inline PEM or file path
-  installationId: "987654"                          # optional
+  app_id: "123456"
+  private_key: env:GH_APP_KEY # a reference, never the value: the PEM, or the path of the .pem file
+  installation_id: "987654"   # optional
 ```
 
 Environment variables serve as a fallback, for existing installations and Docker:
@@ -24,12 +24,12 @@ Environment variables serve as a fallback, for existing installations and Docker
 | `GH_APP_KEY` | PEM private key, or path to the `.pem` file |
 | `GH_APP_INSTALLATION_ID` | installation to use; optional |
 
-A value in `config.yaml` takes precedence over the environment variable. If only one of the two values `appId` / `privateKey` is provided, startup fails with an explicit message rather than silently starting without the App.
+They are read field by field, for a field `factory.yml` does not set. If only one of the two values `app_id` / `private_key` is provided, startup fails with an explicit message rather than silently starting without the App.
 
 #### Creating the App
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
-2. Enter a name and a URL. **Webhook**: active, URL `<publicUrl>/webhooks/github`, secret = the value of `github.webhookSecret` (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). `<publicUrl>` is the server's HTTPS URL, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)); on a workstation, a tunnel (ngrok, `cloudflared tunnel`) in `publicUrl`, for development only (smee relays Linear's webhooks, not GitHub's). Without a public URL, leave it disabled: the reconciliation reads the PRs every 5 minutes (ORC-181).
+2. Enter a name and a URL. **Webhook**: active, URL `<public_url>/webhooks/github`, secret = the value `github.webhook_secret` references (or `GH_WEBHOOK_SECRET`); events: *Pull request*, *Pull request review*, *Pull request review comment*, *Check run*, *Check suite*, *Push*, *Workflow run* (the last two are also used for the revert and CI cost measurements, see [GitHub webhooks](#github-webhooks); *Workflow run* requires the *Actions* read permission, already in the manifest). `<public_url>` is the server's HTTPS URL, behind its reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)); on a workstation, a tunnel (ngrok, `cloudflared tunnel`) in `public_url`, for development only (smee relays Linear's webhooks, not GitHub's). Without a public URL, leave it disabled: the reconciliation reads the PRs every 5 minutes (ORC-181).
 3. Under **Repository permissions**, apply the manifest [`github-app-manifest.json`](github-app-manifest.json):
    - **Contents**: read/write (the ticket's branch, and the captures' `factory/artifacts` branch, ORC-407);
    - **Pull requests**: read/write;
@@ -38,15 +38,15 @@ A value in `config.yaml` takes precedence over the environment variable. If only
    - **Actions**: read (list environments and their protection rules, for `factory doctor`; read the log of a failed Actions job, for the fix of a red CI, ORC-459);
    - **Metadata**: read (mandatory for every App).
    No **administration** permission, no `Actions` write, no `Workflows`. `factory doctor` refuses an installation that holds *Administration*, *Workflows* or *Actions* at write, and warns about any other permission above the manifest (ORC-439, ORC-441, ORC-443, [below](#factory-doctor-host-branch-protection-ci-secrets-and-factory-branches)).
-   For the dashboard's GitHub sign-in (ORC-399), under **Identifying and authorizing users**: *Callback URL* `<publicUrl>/auth/github/callback`, *Expire user authorization tokens* left on, *Request user authorization (OAuth) during installation* off. If `dashboard` in `factory.yml` names an `org` or a `team`, add the **Organization permission** *Members*: read, and install the App on that org: GitHub answers a membership to the App's user token only then. A list of `logins` needs neither.
+   For the dashboard's GitHub sign-in (ORC-399), under **Identifying and authorizing users**: *Callback URL* `<public_url>/auth/github/callback`, *Expire user authorization tokens* left on, *Request user authorization (OAuth) during installation* off. If `dashboard` in `factory.yml` names an `org` or a `team`, add the **Organization permission** *Members*: read, and install the App on that org: GitHub answers a membership to the App's user token only then. A list of `logins` needs neither.
 4. Create the App, note its **App ID** and its **Client ID**, **Generate a client secret** (for the dashboard's sign-in, `GH_APP_CLIENT_SECRET`), then **Generate a private key**. Place the `.pem` outside the repository, with mode `0600` (for example `~/.factory/github-app.pem`).
 5. **Install** the App on the repositories entrusted to the factory. The installation ID is visible in the URL `https://github.com/settings/installations/<id>`; it is optional, the daemon can look it up repository by repository.
-6. Fill in `config.yaml` or the `GH_APP_*` variables (`factory init` prints these steps and writes `factory.yml` with `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, ORC-411), then restart `factory up`. Startup logs the chosen forge, without secrets.
+6. Fill in the `github` section of `factory.yml` or the `GH_APP_*` variables (`factory init` prints these steps and writes `factory.yml` with `github: { app_id: env:GH_APP_ID, private_key: env:GH_APP_KEY }`, ORC-411), then restart `factory up`. Startup logs the chosen forge, without secrets.
 
 #### Tokens
 
-- The daemon signs an **RS256 JWT** with the private key: `iss = appId`, `iat = now - 60 s`, `exp = now + 9 min`.
-- It exchanges this JWT for an **installation token**: `POST /app/installations/{id}/access_tokens` with `{ "repositories": ["<run's repository>"] }`. If `installationId` is not configured, it first calls `GET /repos/{owner}/{repo}/installation`.
+- The daemon signs an **RS256 JWT** with the private key: `iss = app_id`, `iat = now - 60 s`, `exp = now + 9 min`.
+- It exchanges this JWT for an **installation token**: `POST /app/installations/{id}/access_tokens` with `{ "repositories": ["<run's repository>"] }`. If `installation_id` is not configured, it first calls `GET /repos/{owner}/{repo}/installation`.
 - The token lasts **at most 1 hour**. It is cached **per repository** until it expires, with a 60 s safety margin.
 - It stays **in the daemon's memory**: never written to disk, never logged, never passed to Claude Code runs. A run therefore cannot act on another repository with this token.
 - The private key is never logged. The startup message contains only the App ID and, where applicable, the installation ID.
@@ -54,7 +54,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 #### Key rotation
 
 1. GitHub App → **Private keys → Generate a private key**.
-2. Drop in the new `.pem` (mode `0600`) and update `github.privateKey` or `GH_APP_KEY`.
+2. Drop in the new `.pem` (mode `0600`) and update what `github.private_key` references, or `GH_APP_KEY`.
 3. Restart the daemon; cached installation tokens are discarded and new ones are issued with the new key.
 4. Revoke the old key in GitHub. Already-issued installation tokens expire on their own in less than an hour, but a compromised private key can issue new ones: revoke it without delay.
 
@@ -77,7 +77,7 @@ The daemon's git reads the forge with the App's installation token too (ORC-442)
 The factory publishes (ORC-125), through the outbox's `publish` effect, which `decide` only writes for the commit that `verify` has just found green (invariant I1) and which `mayPublish` checks again at execution time. It requires sandboxes and the GitHub App (*Contents* and *Pull requests* write permissions). `GitPublisher` (`src/publish/publish.ts`):
 
 1. reads from the forge the default branch and the head of the ticket's branch; a head already at the commit goes straight to the PR, without pushing: that is the replay of an interrupted publication;
-2. bundles the branch, in the agent's own repository (ORC-317), in a fresh sandbox at `none`, its `.git` read-only; no host git runs there, and the git directory of `repoPath` is mounted nowhere. It verifies the bundle, clones it without checkout, without the repository's hooks or config, and compares its head to the verified commit;
+2. bundles the branch, in the agent's own repository (ORC-317), in a fresh sandbox at `none`, its `.git` read-only; no host git runs there, and the git directory of `repo_path` is mounted nowhere. It verifies the bundle, clones it without checkout, without the repository's hooks or config, and compares its head to the verified commit;
 3. checks the diff since the base, blocking: `factory/chemins-interdits` (outgoing symbolic links and `package.json#scripts` included), `factory/binaires`, `factory/anti-triche`, `factory/secrets`;
 4. pushes **forward only**, with `--force-with-lease` on the head it read: if the branch carries a commit absent from the work (a human push, or rewritten history), nothing is pushed, nothing is forced: the agent rebases its work on a human's push (ORC-159), and `verify` refuses a commit that does not carry it (`factory/commits-humains`);
 5. opens the **draft** PR, looked up by branch before creation (a normal PR if the repository's plan has no drafts). It leaves draft when the ticket moves to *Human Review*: GitHub does not merge a draft. At that move the factory also labels it `revue: requise`, `revue: échantillon` or `revue: auto` (ORC-198, [preset](preset.md#the-class-of-the-diff-and-the-review-label-orc-198)), one label of that group at a time, created by GitHub on first use (*Pull requests* write is enough); best effort, like the move out of draft;
@@ -116,7 +116,7 @@ On each repository entrusted to the factory, the daemon's git must read its bran
 
 ## Human permissions
 
-The [authorization matrix](linear.md#authorizations-who-can-do-what) (ORC-186) reads a user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), through the GitHub App (*Metadata* read permission, already requested); without the App, the read fails and the delegation is refused. The GitHub login of each Linear user is declared in `config.yaml` (`projects[].authz.githubLogins`, see [configuration](configuration.md#authorization)). A permission once read is kept for 60 s.
+The [authorization matrix](linear.md#authorizations-who-can-do-what) (ORC-186) reads a user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), through the GitHub App (*Metadata* read permission, already requested); without the App, the read fails and the delegation is refused. The GitHub login of each Linear user is declared in `factory.yml` (`projects[].authz.github_logins`, see [configuration](configuration.md#authorization)). A permission once read is kept for 60 s.
 
 ## What the reconciliation reads
 
@@ -134,7 +134,7 @@ Events produced (see [`preset.md`](preset.md#reactions)):
 | Observation | Event | Standard pack |
 |---|---|---|
 | New PR for the branch | `pr.opened` | URL added to the Linear session |
-| CI turning red | `pr.checks_failed` (with the list of failing checks) | `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (the preset's `counters.review_ci`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`preset.md`](preset.md#limits)) |
+| CI turning red | `pr.checks_failed` (with the list of failing checks and the head they ran on, ORC-466) | ignored, with a trace, on another PR than the ticket's open one or on a head a push has left behind (ORC-466); then `fix-ci` if the ticket is in *Human Review* or *AI Review* and not blocked, a round of the review and CI loop (the preset's `counters.review_ci`, 2 per run, shared with `rebase` and the AI review's `fix-review`, ORC-184); after that the ticket is blocked ([`preset.md`](preset.md#limits)) |
 | CI turning green | `pr.checks_passed` | lifts the block caused by the red-CI limit; the count of the loop stays, one per run (ORC-184) |
 | PR merged | `pr.merged` | *Done*, the `after_merge` step (the requester mentioned with the PR's link, the changelog entry, ORC-197), worktree deleted, no run (ORC-193); after that, no more code runs on the ticket |
 | Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |
@@ -146,9 +146,9 @@ Without a GitHub webhook, it takes up to 5 minutes for a merge or CI to be taken
 
 ## GitHub webhooks
 
-`POST /webhooks/github` receives the App's webhooks (ORC-134), at `<publicUrl>/webhooks/github`. In production GitHub calls the server directly in HTTPS, through the host's reverse proxy or the optional `caddy` service (`--profile tls`), which pass the body unchanged to `factoryd` in plain HTTP: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221). On a workstation, a tunnel in `publicUrl` stands in for it.
+`POST /webhooks/github` receives the App's webhooks (ORC-134), at `<public_url>/webhooks/github`. In production GitHub calls the server directly in HTTPS, through the host's reverse proxy or the optional `caddy` service (`--profile tls`), which pass the body unchanged to `factoryd` in plain HTTP: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221). On a workstation, a tunnel in `public_url` stands in for it.
 
-- **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhookSecret` in `config.yaml`, otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `factory up` reports it at startup;
+- **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhook_secret` in `factory.yml` (a reference), otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `factory up` reports it at startup;
 - **inbox written before the response** (ORC-147): a 200 means "written"; if the daemon goes down right after, even with `kill -9`, the event is processed at the next startup. If the write fails, the response is 500: GitHub does not resend a failed delivery on its own; redeliver it from the App's *Advanced* tab, or let the reconciliation catch it up;
 - **deduplication and replay**: each event's id comes from the signed body (PR number, SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does not cover (it is only used for the log). A redelivery, a replayed body, or the same fact seen by the reconciliation carries an id the inbox already has: it is not reprocessed. GitHub does not sign a timestamp: there is no freshness check; deduplication in the database stands in for it;
 - **linking to the ticket**: by the PR's (or push's) branch, like the reconciliation, and by repository: `repository.full_name` must be the `origin` repository of the ticket's project (read once via `git remote get-url origin`). Only a branch of a tracked ticket, in its project's repository, produces an event; everything else (another repository where the App is installed, another branch, a body of another shape) is accepted (200) and ignored. An older PR of the branch, already closed, is ignored too.
@@ -190,7 +190,7 @@ The pack forbids agents from `gh pr merge` and any push ([`pack-and-skills.md`](
 - **Require status checks to pass** with your CI checks;
 - do not put the factory's GitHub App in the exceptions (*bypass*).
 
-The knowledge repository (`knowledge.repoPath`) deserves the same protection: a human merges there.
+The knowledge repository (`knowledge.repo_path`) deserves the same protection: a human merges there.
 
 `factory doctor` refuses a repository whose default branch has neither (ORC-208). It reads, with the App's read permissions only (*Metadata*): `GET /repos/{owner}/{repo}` for the default branch, `GET /repos/{owner}/{repo}/branches/{branch}` for the classic protection's flag, `protection.enabled` (not the branch's `protected`, which GitHub also sets for an active ruleset, whatever its rules), `GET /repos/{owner}/{repo}/rules/branches/{branch}` for the rules the repository's **active** rulesets apply to it (a ruleset in *Evaluate* mode applies none), and `GET /repos/{owner}/{repo}/rulesets/{id}` of each ruleset with a pull request rule, whose `current_user_can_bypass` says whether the App is in its bypass list (for the App's installation token, checked on the real GitHub against a direct push: isolation test no. 12, ORC-427). Accepted:
 

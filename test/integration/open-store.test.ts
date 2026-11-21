@@ -52,7 +52,7 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
 
   it('starts the daemon on Postgres when FACTORY_DATABASE_URL is set, and serves its state', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-pg-'));
-    saveInstance(home, { port: 4187, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4187, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const logs: string[] = [];
     const app = await startFactory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: { [DATABASE_URL_ENV]: db.url } });
     try {
@@ -71,7 +71,7 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
 
   it('starts on Postgres beside a relais.db and a factory.db left from SQLite, neither read nor changed (ORC-178)', async () => { // transition, à retirer
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-pg-'));
-    saveInstance(home, { port: 4188, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    saveInstance(home, { port: 4188, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     // Not SQLite files: a start that opened one would fail on it.
     for (const name of OLD_DATABASES) writeFileSync(join(home, name), `not a database: ${name}`);
     const logs: string[] = [];

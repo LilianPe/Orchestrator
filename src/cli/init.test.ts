@@ -89,7 +89,9 @@ describe('factory init', () => {
     expect(out).toContain('http://localhost:4100/oauth/callback');
     expect(out).toContain('https://smee.io/abc');
     expect(out).toContain('Agent session events');
-    expect(existsSync(join(home, 'config.yaml'))).toBe(true);
+    // The daemon reads factory.yml alone (ORC-199).
+    expect(existsSync(join(home, 'factory.yml'))).toBe(true);
+    expect(existsSync(join(home, 'config.yaml'))).toBe(false);
   });
 
   it('criterion 1 (ORC-172): a Python repository with no config gets uv sync --frozen, ruff, mypy and pytest, as its `test` (ORC-420)', async () => {
@@ -184,7 +186,7 @@ describe('factory init', () => {
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     const old = `${repo.replaceAll('\\', '/')}/`;
     const project = { id: 'old', repoPath: process.platform === 'win32' ? old.toUpperCase() : old, linearTeamKey: 'OLD' };
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project], limits: {} });
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project] });
     const exec: Exec = async (cmd, args) =>
       cmd === 'git' && args[0] === 'rev-parse' ? { stdout: '', stderr: 'not a git repository', code: 128 } : { stdout: '', stderr: '', code: 0 };
     const io = scriptedIO([`${repo}/`, 'REL', 'cid', 'csecret', 'whsecret']);
@@ -302,7 +304,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
 /** A fresh home and repository, and what one `init` run with `answers` printed. */
 async function initOnce(o: { home?: string; repo?: string; answers?: string[]; dev?: boolean; smee?: () => Promise<string>; config?: Partial<InstanceConfig> } = {}) {
   const home = o.home ?? mkdtempSync(join(tmpdir(), 'factory-init-home-'));
-  if (o.config) saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {}, ...o.config });
+  if (o.config) saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], ...o.config });
   const repo = o.repo ?? mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
   const io = scriptedIO(o.answers ?? ['REL', 'cid', 'csecret', 'whsecret']);
   await runInit({ io, home, cwd: repo, dev: o.dev, createSmee: o.smee ?? (async () => 'https://smee.io/abc'), exec: gitTop(repo) });
@@ -351,7 +353,7 @@ describe('factory init: Smee only for development (ORC-411)', () => {
     expect(loadInstance(home).relay).toEqual({ kind: 'none' });
   });
 
-  it('keeps a channel config.yaml already has, without --dev', async () => {
+  it('keeps a channel factory.yml already has, without --dev', async () => {
     const { home, out } = await initOnce({ config: { relay: { kind: 'smee', url: 'https://smee.io/old' } } });
     expect(loadInstance(home).relay).toEqual({ kind: 'smee', url: 'https://smee.io/old' });
     expect(out).toContain('https://smee.io/old');
@@ -387,31 +389,46 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(out).toContain('webhook_secret: env:GH_WEBHOOK_SECRET');
   });
 
-  it('writes no factory.yml on an instance that runs without one: it would change how it runs', async () => {
-    const { home } = await initOnce({ dev: true });
+  it('writes a factory.yml on an instance that ran without one, never reading its config.yaml, nor naming an App it ran without (ORC-199)', async () => {
+    const { home, repo } = await initOnce({ dev: true });
     rmSync(join(home, 'factory.yml'));
-    const { out } = await initOnce({ home, dev: true });
-    expect(existsSync(join(home, 'factory.yml'))).toBe(false);
+    writeFileSync(join(home, 'config.yaml'), 'port: 4555\nprojects: [{ id: other, repoPath: /other, linearTeamKey: OTH }]\n');
+    const { out } = await initOnce({ home, repo, dev: true });
+    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
+    expect(yml.claude?.active).toBe('main');
+    expect(yml.github).toBeUndefined();
+    expect(loadInstance(home)).toMatchObject({ port: 4100, projects: [expect.objectContaining({ linearTeamKey: 'REL' })] });
+    expect(loadInstance(home).projects).toHaveLength(1);
     expect(out).not.toContain('https://github.com/settings/apps/new');
+  });
+
+  it('keeps the comments of what it does not change, and writes no default the file leaves out (ORC-199)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'factory.yml'), 'port: 4200 # my port\npublic_url: https://f.example.com # tunnel\n');
+    await initOnce({ home });
+    const text = readFileSync(join(home, 'factory.yml'), 'utf8');
+    expect(text).toContain('port: 4200 # my port\npublic_url: https://f.example.com # tunnel\n');
+    expect(text).not.toMatch(/^(host|relay):/m);
   });
 
   it('replaces every entry of the repository an older init wrote in another form, keeping the first one\'s fields', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
     const authz = { maintainers: [], validators: ['v'], githubLogins: {} };
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'a', repoPath: `${repo}/`, linearTeamKey: 'OLD', authz }, { id: 'b', repoPath: repo, linearTeamKey: 'OLD' }], limits: {} });
+    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'a', repoPath: `${repo}/`, linearTeamKey: 'OLD', authz }, { id: 'b', repoPath: repo, linearTeamKey: 'OLD' }] });
     await initOnce({ home, repo });
     expect(loadInstance(home).projects).toEqual([{ id: 'a', repoPath: repo, linearTeamKey: 'REL', authz }]);
   });
 
-  it('leaves the GitHub App of config.yaml in place: no github in the factory.yml it writes, which would replace it', async () => {
-    const { home, out } = await initOnce({ config: { github: { appId: '7', privateKey: '/k.pem' } } });
-    const yml = parseFactoryYml(readFileSync(join(home, 'factory.yml'), 'utf8'), ENV);
-    expect(yml.github).toBeUndefined();
-    expect(yml.claude?.active).toBe('main');
+  it('leaves the GitHub App of factory.yml in place, and prints no App steps for it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-init-home-'));
+    writeFileSync(join(home, 'factory.yml'), '# my App\ngithub: { app_id: "7", private_key: env:MY_KEY }\n');
+    const { out } = await initOnce({ home });
+    const text = readFileSync(join(home, 'factory.yml'), 'utf8');
+    expect(text).toContain('# my App\ngithub: { app_id: "7", private_key: env:MY_KEY }\n');
+    expect(parseFactoryYml(text, { MY_KEY: '/k.pem' }).github).toEqual({ appId: '7', privateKey: '/k.pem' });
     expect(out).not.toContain('GH_APP_ID');
     expect(out).not.toContain('https://github.com/settings/apps/new');
-    expect(loadInstance(home).github).toEqual({ appId: '7', privateKey: '/k.pem' });
   });
 
   it('the permissions it prints are the manifest\'s', () => {
@@ -423,10 +440,10 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     const first = await initOnce({ dev: true });
     const { home, repo } = first;
     // Edited since: a credential init never asked, the OAuth tokens of « Connect Linear », the roles added by hand.
+    const cfg = loadInstance(home);
     writeFileSync(join(home, 'factory.yml'), 'github: { app_id: "42", private_key: env:MY_KEY }\n');
     const secrets = loadSecrets(home);
     saveSecrets(home, { ...secrets, linear: { ...secrets.linear!, accessToken: 'at', refreshToken: 'rt', expiresAt: 1 } });
-    const cfg = loadInstance(home);
     saveInstance(home, { ...cfg, projects: cfg.projects.map((p) => ({ ...p, authz: { maintainers: [], validators: ['v1', 'v2'], githubLogins: { u: 'login' } } })) });
     const before = { yml: readFileSync(join(home, 'factory.yml'), 'utf8'), secrets: loadSecrets(home), config: loadInstance(home) };
 
@@ -434,7 +451,7 @@ describe('factory init: the GitHub App and factory.yml (ORC-411)', () => {
     expect(readFileSync(join(home, 'factory.yml'), 'utf8')).toBe(before.yml);
     expect(loadSecrets(home)).toEqual(before.secrets);
     expect(loadInstance(home)).toEqual(before.config);
-    expect(out).toContain('factory.yml kept');
+    expect(out).toContain('factory.yml: its projects and webhook relay written, the rest kept as it is.');
   });
 
   it('a new value replaces the stored one; another client ID keeps nothing of the old application', async () => {

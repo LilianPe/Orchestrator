@@ -48,6 +48,7 @@ describe("the ticket's branch name", () => {
     await delegated(h, ['Feature']);
     h.tracker.addIssue({ identifier: 'REL-1', title: 'Export CSV', description: 'Exporter les audits en CSV depuis la liste des audits.', labels: ['Bug'] });
     h.runner.enqueue({ output: DONE });
+    await h.send('pr.opened', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv' });
     await h.send('pr.checks_failed', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] });
     const worktrees = h.workspaces.prepared.filter((p) => p.kind === 'worktree');
     expect(worktrees.length).toBeGreaterThanOrEqual(2);
@@ -59,6 +60,7 @@ describe("the ticket's branch name", () => {
     await delegated(h, ['Feature']);
     await h.store.putTicket({ ...(await h.ticket()), branch: 'agent/rel-1' });
     h.runner.enqueue({ output: DONE });
+    await h.send('pr.opened', { number: 7, url: 'https://forge/pr/7', branch: 'agent/rel-1' });
     await h.send('pr.checks_failed', { number: 7, url: 'https://forge/pr/7', branch: 'agent/rel-1', failures: ['test'] });
     expect(h.workspaces.prepared.filter((p) => p.kind === 'worktree').at(-1)!.branch).toBe('agent/rel-1');
   });
@@ -69,6 +71,7 @@ describe("the ticket's branch name", () => {
       await delegated(h, ['Feature']);
       await h.store.putTicket({ ...(await h.ticket()), branch: recorded });
       h.runner.enqueue({ output: DONE });
+      await h.send('pr.opened', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv' });
       await h.send('pr.checks_failed', { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] });
       const worktrees = h.workspaces.prepared.filter((p) => p.kind === 'worktree');
       expect(worktrees.length, recorded).toBeGreaterThanOrEqual(2);

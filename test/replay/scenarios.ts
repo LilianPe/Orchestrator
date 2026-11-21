@@ -126,7 +126,10 @@ export const SCENARIOS: Record<string, { preset?: TestPreset; authz?: HarnessAut
     preset: testPreset({ ciFixAttempts: 1 }),
     run: async (h) => {
       await delegated(h);
-      const red = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv', failures: ['test'] };
+      const pr = { number: 7, url: 'https://forge/pr/7', branch: 'feat/rel-1-export-csv' };
+      // A red CI is read on the ticket's open PR only (ORC-466).
+      await h.send('pr.opened', pr);
+      const red = { ...pr, failures: ['test'] };
       await h.send('pr.checks_failed', red);
       await h.send('pr.checks_failed', red);
       await h.send('session.stopped', { linearSessionId: 'ls-1' });

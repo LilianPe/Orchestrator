@@ -89,7 +89,8 @@ describe('mapGithubWebhook', () => {
   it('maps a failed check on the PR head to red CI at once, named per head as GithubReconciler names it', async () => {
     for (const conclusion of ['failure', 'timed_out', 'cancelled', 'action_required']) {
       const out = await mapGithubWebhook('check_run', checkRunBody(conclusion), ctx(tracked({ prNumber: 3 })));
-      expect(out).toMatchObject([{ id: checksEventId('REL-1', 3, 'fail', 'head1'), type: 'pr.checks_failed', payload: { number: 3, failures: ['test'] } }]);
+      // With the head the checks ran on: a red CI of a head the PR left behind is ignored (ORC-466).
+      expect(out).toMatchObject([{ id: checksEventId('REL-1', 3, 'fail', 'head1'), type: 'pr.checks_failed', payload: { number: 3, failures: ['test'], headSha: 'head1' } }]);
     }
     const suite = { ...checkRunBody('failure'), check_suite: { ...checkRunBody('failure').check_run, app: { name: 'GitHub Actions' } } };
     expect(await mapGithubWebhook('check_suite', suite, ctx(tracked({ prNumber: 3 })))).toMatchObject([{ payload: { failures: ['GitHub Actions'] } }]);

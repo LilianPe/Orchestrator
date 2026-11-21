@@ -769,6 +769,9 @@ describe('Daemon', () => {
     /** A human's move to Human Review, where a red CI starts `fix-ci`. */
     const inReview = (): FactoryEvent =>
       ({ ...TRUSTED, id: 'm1', type: 'status.changed', at: 1_500, projectId: 'p', ticketId: 'REL-1', payload: { from: 'dev', to: 'human_review' } });
+    /** The ticket's PR, open: a red CI is read on it only (ORC-466). */
+    const opened = (): FactoryEvent =>
+      ({ ...TRUSTED, id: 'o1', type: 'pr.opened', at: 1_400, projectId: 'p', ticketId: 'REL-1', payload: { number: 3, url: 'u', branch: 'b' } });
     const label = (id: string): FactoryEvent =>
       ({ ...TRUSTED, id, type: 'pr.checks_failed', at: 2_000, projectId: 'p', ticketId: 'REL-1', payload: { number: 3, url: 'u', branch: 'b', failures: ['test'] } });
     const fixCiStarted = async (store: MemoryStore) => (await store.listEffects('p', 'REL-1')).some((r) => r.effect.kind === 'start_run' && r.effect.job === 'fix-ci');
@@ -776,6 +779,7 @@ describe('Daemon', () => {
     it('dead-letters it and blocks the ticket, with a message naming it; the events behind it go on', async () => {
       const { store, tracker, orch } = broken();
       await orch.accept(delegated());
+      await orch.accept(opened());
       await orch.accept(inReview());
       await orch.drained();
       await orch.accept(label('l1'));
@@ -802,6 +806,7 @@ describe('Daemon', () => {
     it('replays it once fixed with `factory run repair`, which unblocks the ticket and is journaled', async () => {
       const { store, tracker, orch, fix } = broken();
       await orch.accept(delegated());
+      await orch.accept(opened());
       await orch.accept(inReview());
       await orch.accept(label('l1'));
       await orch.drained();
@@ -825,6 +830,7 @@ describe('Daemon', () => {
     it('reopens the dead letter of an event its upcast refuses when it is forced: the command does not fail', async () => {
       const { store, orch } = broken();
       await orch.accept(delegated());
+      await orch.accept(opened());
       await orch.accept(inReview());
       await orch.accept({ ...label('future'), schemaVersion: 99 } as unknown as StoredEvent);
       await orch.drained();
@@ -842,6 +848,7 @@ describe('Daemon', () => {
     it('dead-letters a replay that throws again on the same event, one failure more', async () => {
       const { store, orch } = broken();
       await orch.accept(delegated());
+      await orch.accept(opened());
       await orch.accept(inReview());
       await orch.accept(label('l1'));
       await orch.drained();
@@ -858,6 +865,7 @@ describe('Daemon', () => {
     ] as const)('%s: unblocks the ticket without the decision of the event', async (action, label_) => {
       const { store, tracker, orch } = broken();
       await orch.accept(delegated());
+      await orch.accept(opened());
       await orch.accept(inReview());
       await orch.accept(label('l1'));
       await orch.drained();
