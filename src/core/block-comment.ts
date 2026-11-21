@@ -5,7 +5,7 @@ import type { TicketState } from './types.js';
  * facts and not a sentence. `reason` is also the ticket's `blockReason`, shown only: the block's kind says its cause (ORC-345).
  */
 export interface BlockFacts {
-  /** The step of `factory/default`, or the name of a job out of the preset. */
+  /** The step of `factory/default`, or the name of a job out of the preset; of a refusal (`waits: 'never'`), its cause. */
   step: string;
   /** The attempts the block ends: its last one is its bound. Effects recorded before may carry an `attempt` too, read by none. */
   max: number;
@@ -56,7 +56,8 @@ function stateLine({ branch, sha, ci, tokens, durationMs }: BlockStatus): string
  */
 export function composeBlockComment(facts: BlockFacts, status: BlockStatus): string {
   return [
-    `🔴 Blocked at step ${facts.step} (attempt ${facts.max}/${facts.max})`,
+    // Refused for good, the ticket is not blocked in the factory's state: no block, no attempt (ORC-425).
+    facts.waits === 'never' ? `⛔ Refused: ${facts.step}` : `🔴 Blocked at step ${facts.step} (attempt ${facts.max}/${facts.max})`,
     `Reason: ${facts.reason.replace(/\s+/g, ' ').trim()}`,
     'What I tried:',
     ...facts.tried.slice(0, MAX_TRIED).map((t) => `- ${t}`),

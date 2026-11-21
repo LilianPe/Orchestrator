@@ -149,7 +149,7 @@ export abstract class DaemonEffects extends DaemonChecks {
     const t = await this.d.store.getTicket(projectId, ticketId);
     if (!t) return;
     const facts = blockFacts({
-      step: 'workflow version',
+      step: 'old frozen workflow version',
       reason: `This ticket is frozen on workflow version ${hash.slice(0, 12)}, of another format than the one this factory reads (${WORKFLOW_FORMAT}): it is refused, and none of its events is decided.`,
       tried: ['Reading the workflow version the ticket started with.'],
       question: 'Can you open a new ticket for this request? It starts on the current workflow; this one stays refused.',
