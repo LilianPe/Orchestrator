@@ -23,7 +23,7 @@ vi.mock('../../src/adapters/runner/message-classifier.js', () => {
   const never = () => {
     throw new Error('the small model was called by the golden replay');
   };
-  return { messageClassifier: never, apiClassifier: never, cliClassifier: never };
+  return { messageClassifier: never, apiClassifier: never };
 });
 
 const set = loadGoldenSet();

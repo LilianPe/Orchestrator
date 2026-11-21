@@ -44,7 +44,8 @@ export interface RunRequest {
   sensitivePaths?: readonly string[];
   /**
    * The sandbox the run executes in (ORC-204): `claude` runs there through `SandboxProvider.spawnCommand`,
-   * and `cwd`, `pluginDir` and `settingsPath` are paths in the sandbox. Absent: on the host (fake runner, tests).
+   * and `cwd`, `pluginDir` and `settingsPath` are paths in the sandbox. Absent only for the fake runner, which runs nothing:
+   * `ClaudeCodeRunner` refuses such a run (ORC-179).
    */
   sandboxId?: string;
 }

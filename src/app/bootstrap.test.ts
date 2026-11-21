@@ -12,7 +12,6 @@ import type { TicketState } from '../core/types.js';
 import type { RunRecord } from '../store/types.js';
 import { TimerService } from '../runtime/timers.js';
 import { saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
-import { posixPath } from '../config/run-settings.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { startFactory, type BootOptions } from './bootstrap.js';
 import { runQueueCommand, runStatusCommand } from '../cli/control.js';
@@ -31,8 +30,8 @@ describe('bootstrap', () => {
     expect(app.url).toBe('http://localhost:4199');
     const state = await (await fetch('http://127.0.0.1:4199/api/state')).json();
     expect(state).toMatchObject({ linearConnected: false, paused: false, tickets: [] });
-    const runSettings = JSON.parse(readFileSync(join(home, 'run-settings.json'), 'utf8'));
-    expect(runSettings.permissions.deny).toContain(`Read(/${posixPath(home)}/secrets.json)`);
+    // No run settings written for the host: a run reads the pack's own, in its sandbox (ORC-179).
+    expect(existsSync(join(home, 'run-settings.json'))).toBe(false);
     await app.stop();
   });
 
@@ -425,18 +424,20 @@ describe('bootstrap', () => {
     await app.stop();
   });
 
-  it('refuses to start real runs without a container engine or FACTORY_ALLOW_HOST_RUNS=1 (ORC-349)', async () => {
+  it('refuses to start real runs without a container engine, FACTORY_ALLOW_HOST_RUNS=1 or not (ORC-349, ORC-179)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4194, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
-    await expect(startOnMemory({ home, log: () => {}, env: {} })).rejects.toThrow(/FACTORY_ALLOW_HOST_RUNS=1/);
+    for (const env of [{}, { FACTORY_ALLOW_HOST_RUNS: '1' }, { FACTORY_ALLOW_HOST_RUNS: '1', FACTORY_ALLOW_HOST_VERIFY: '1' }]) {
+      await expect(startOnMemory({ home, log: () => {}, env })).rejects.toThrow(/^FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container/);
+    }
   });
 
   it('launches no run on a configuration that would block every ticket, and says why on /health (ORC-350)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4176, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     const logs: string[] = [];
-    // Runs on the host, verify not allowed there, no GitHub App: every verified ticket would be blocked.
-    const app = await startOnMemory({ home, log: (m) => void logs.push(m), env: { FACTORY_ALLOW_HOST_RUNS: '1' } });
+    // No GitHub App: every verified ticket would be blocked. The engine is named, never asked for a run here.
+    const app = await startOnMemory({ home, log: (m) => void logs.push(m), env: { FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: 'factory-runner:test' } });
     try {
       const res = await fetch('http://127.0.0.1:4176/health');
       expect(res.status).toBe(503);
@@ -444,7 +445,7 @@ describe('bootstrap', () => {
       expect(await res.json()).toEqual({ ok: false, store: 'ok', takingTickets: false });
       // No budget in factory.yml: refused as `factory validate` refuses it.
       expect(logs.some((l) => /factory\.yml: budgets\.per_step_tokens\./.test(l))).toBe(true);
-      expect(logs).toContain('Invalid configuration, no run is launched until it is fixed and the factory restarted: verify cannot run: no sandbox (FACTORY_CONTAINER_CLI) and no FACTORY_ALLOW_HOST_VERIFY=1');
+      expect(logs).toContain('Invalid configuration, no run is launched until it is fixed and the factory restarted: publication impossible: it needs the sandboxes and the GitHub App');
     } finally {
       await app.stop();
     }

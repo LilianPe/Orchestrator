@@ -314,7 +314,7 @@ describe('a disposable sandbox per attempt', () => {
     expect(h.tracker.comments('REL-1').at(-1)).toContain('engine down');
   });
 
-  it('without sandboxes and without the explicit flag, verify refuses to run the code on the host (ORC-151)', async () => {
+  it('without sandboxes and without a stand-in for verify, it refuses to run the code on the host (ORC-151, ORC-179)', async () => {
     const h = createHarness({ workflow: VERIFIED, hostChecks: false });
     await delegate(h);
     expect(h.checks.calls).toEqual([]);
@@ -322,10 +322,10 @@ describe('a disposable sandbox per attempt', () => {
     const t = await h.ticket();
     expect(t.blocked).toBe(true);
     expect(causeOf(t.blockKind)).toBe('infra');
-    expect(h.tracker.comments('REL-1').at(-1)).toContain('FACTORY_ALLOW_HOST_VERIFY');
+    expect(h.tracker.comments('REL-1').at(-1)).toContain('never on the host');
   });
 
-  it('the explicit flag keeps the host path, in the worktree (ORC-151)', async () => {
+  it("the fake runner's or a test's stand-in answers for verify without sandboxes (ORC-151, ORC-179)", async () => {
     const h = createHarness({ workflow: VERIFIED, hostChecks: true });
     await delegate(h);
     expect(h.checks.calls).toMatchObject([{ commands: ['npm test'] }]);

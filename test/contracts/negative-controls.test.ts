@@ -1,5 +1,5 @@
 import { DEFAULT_REQUIREMENTS } from '../../src/adapters/sandbox/types.js';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, type TestContext } from 'vitest';
@@ -21,7 +21,8 @@ import { FakeTracker } from '../../src/adapters/tracker/fake.js';
 import type { LabelsWritten, TrackerIssue } from '../../src/adapters/tracker/types.js';
 import { FakeClock } from '../../src/core/clock.js';
 import type { RunOutcome, VerifyFailure } from '../../src/core/types.js';
-import { runVerify, type VerifyResult } from '../../src/core/verify.js';
+import type { VerifyResult } from '../../src/core/verify.js';
+import { bashChecks } from '../helpers/bash-checks.js';
 import { describeAgentRuntimeContract, type AgentRuntimeSubject, type AgentScript } from './agent-runtime.contract.js';
 import { asNegativeControl, contractCases } from './cases.js';
 import { describeCheckRunnerContract, type CheckRunnerSubject } from './check-runner.contract.js';
@@ -261,15 +262,24 @@ function checksThat(checks: CheckRunner, patch: Partial<CheckRunnerSubject> = {}
   });
 }
 
+// The honest base each control below breaks one way: it must pass the whole contract, or a control proves nothing.
+describeCheckRunnerContract('bashChecks, the base of the controls', () => {
+  const log = join(cwd, 'runs.log');
+  return checksThat(
+    { run: bashChecks },
+    { slow: 'sleep 5', counted: { command: `echo run >> '${log}'`, runs: async () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0) } },
+  )();
+});
+
 describeCheckRunnerContract(
   'a check runner that rejects when a command cannot start',
-  checksThat({ run: async (dir, commands, timeoutMs) => (existsSync(dir) ? runVerify(dir, commands, timeoutMs) : Promise.reject(new Error('spawn bash ENOENT'))) }),
+  checksThat({ run: async (dir, commands, timeoutMs) => (existsSync(dir) ? bashChecks(dir, commands, timeoutMs) : Promise.reject(new Error('spawn bash ENOENT'))) }),
   { violates: [UNSTARTABLE] },
 );
 
 describeCheckRunnerContract(
   'a check runner that skips the commands it cannot start',
-  checksThat({ run: async (dir, commands, timeoutMs) => (existsSync(dir) ? runVerify(dir, commands, timeoutMs) : { ok: true, failures: [] }) }),
+  checksThat({ run: async (dir, commands, timeoutMs) => (existsSync(dir) ? bashChecks(dir, commands, timeoutMs) : { ok: true, failures: [] }) }),
   { violates: [UNSTARTABLE] },
 );
 
@@ -278,7 +288,7 @@ describeCheckRunnerContract(
   checksThat({
     run: async (dir, commands, timeoutMs) =>
       existsSync(dir)
-        ? runVerify(dir, commands, timeoutMs)
+        ? bashChecks(dir, commands, timeoutMs)
         : { ok: false, failures: commands.map((command) => ({ command, exitCode: 127, output: `bash: ${dir}: No such file or directory` })) },
   }),
   { violates: [UNSTARTABLE] },
@@ -305,7 +315,7 @@ const IN_ORDER = 'runs every command and reports the failures in order';
 const TIMEOUT = 'a command that outlives the timeout fails without an exit code';
 
 const verifying = (then: (r: VerifyResult) => VerifyResult | Promise<VerifyResult>): CheckRunner => ({
-  run: async (dir, commands, timeoutMs) => then(await runVerify(dir, commands, timeoutMs)),
+  run: async (dir, commands, timeoutMs) => then(await bashChecks(dir, commands, timeoutMs)),
 });
 const eachFailure = (patch: (f: VerifyFailure) => VerifyFailure) => verifying((r) => ({ ...r, failures: r.failures.map(patch) }));
 
@@ -338,7 +348,7 @@ describeCheckRunnerContract(
   checksThat({
     run: async (dir, commands, timeoutMs) => {
       for (const command of commands) {
-        const r = await runVerify(dir, [command], timeoutMs);
+        const r = await bashChecks(dir, [command], timeoutMs);
         if (!r.ok) return r;
       }
       return { ok: true, failures: [] };
@@ -355,7 +365,7 @@ describeCheckRunnerContract(
 
 describeCheckRunnerContract(
   'a check runner that ignores the timeout',
-  checksThat({ run: (dir, commands) => runVerify(dir, commands) }),
+  checksThat({ run: (dir, commands) => bashChecks(dir, commands) }),
   { violates: [TIMEOUT] },
 );
 

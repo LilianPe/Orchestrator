@@ -30,9 +30,7 @@ import type { ProjectRuntime } from './daemon.js';
 /** A verdict on a commit: what ran on it, absent when it was found green before and nothing ran again. */
 type Verified = VerifyResult & { sha?: string | undefined; commands?: readonly string[]; visual?: CleanVerifyResult['visual']; flaky?: CleanVerifyResult['flaky']; diffClass?: CleanVerifyResult['diffClass'] };
 
-const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI) and FACTORY_ALLOW_HOST_VERIFY is not 1: I do not run the agent's code on the host.";
-
-/** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, `hostChecks` or not. */
+/** A human's push is checked in a fresh clone of the forge (ORC-159): without sandboxes there is none, whatever stands in for `verify`. */
 const PUSH_NEEDS_SANDBOXES = 'no sandbox (FACTORY_CONTAINER_CLI): a commit a human pushed is only checked in a fresh clone of the forge, which needs the sandboxes.';
 
 /** The daemon's checks (ORC-394): `verify`, the clean check, the red check, the freeze and the verdict a check submits. */
@@ -77,11 +75,11 @@ export abstract class DaemonChecks extends DaemonBase {
       let uncommitted: string[];
       let runTests: RedDeps['run'];
       if (!sandboxes) {
-        if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
+        const verify = this.standInVerify();
         uncommitted = await this.d.workspaces.uncommitted(run.cwd);
         const { env } = await this.repoVariablesOf(project, run.repoConfig);
         runTests = async (cmd) => {
-          const res = await this.d.verify(run.cwd, [cmd], undefined, env);
+          const res = await verify(run.cwd, [cmd], undefined, env);
           return res.ok ? { exitCode: 0, output: '' } : { exitCode: res.failures[0]!.exitCode, output: res.failures[0]!.output };
         };
       } else {
@@ -114,17 +112,17 @@ export abstract class DaemonChecks extends DaemonBase {
   /**
    * The commands of a job on what its run committed (ORC-151): out of the agent's worktree and the daemon, in
    * `runCleanVerify`. It throws when there is no verdict, an infrastructure failure the agent is not sent. Without
-   * sandboxes, only under the explicit `hostChecks`: in the worktree, on the host, and without any of these guarantees.
+   * sandboxes, only the fake runner's or a test's stand-in (`DaemonDeps.verify`), which runs nothing of the agent's (ORC-179).
    */
   protected async verifyWork(project: ProjectRuntime, t: TicketState, run: RunRecord, job: JobSpec, output?: AgentOutput): Promise<Verified> {
     const { sandboxes } = this.d;
     if (!sandboxes) {
-      if (!this.d.hostChecks) throw new Error(HOST_CHECKS_OFF);
+      const verify = this.standInVerify();
       // Read before the commands: what they would commit is not what they checked.
       const sha = await this.d.workspaces.head(run.cwd);
       // As on the clone, before any command: a refused branch runs nothing.
       const { failures: paths, diffClass } = await this.checkPathsOnHost(project, t, run);
-      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await this.d.verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
+      const verified = paths.length || !job.verify.length ? { ok: true, failures: [] } : await verify(run.cwd, job.verify, undefined, (await this.repoVariablesOf(project, run.repoConfig)).env, (m) => this.log('warn', `verify of ${t.ticketId}: ${m}`));
       // `factory/tests-gelés` (ORC-131), blocking from the first ticket, on top of the job's commands.
       const frozen = goesThroughFreeze(t, job) ? await this.checkFrozen(project, run.cwd, t.frozenTests!) : [];
       const blocking = [...paths, ...frozen];

@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiClassifier, classifierBackend, cliClassifier, messageClassifier, parseVerdict, quoted } from './message-classifier.js';
+import { apiClassifier, classifierOn, messageClassifier, parseVerdict, quoted } from './message-classifier.js';
 
 const answer = (content: unknown, status = 200): typeof fetch => (async () => ({ ok: status < 300, status, json: async () => ({ content }) })) as unknown as typeof fetch;
-
-/** A `claude` that runs `script` in node: node's own arguments before `--`, the classifier's after it, unread. */
-const cli = (script: string, timeoutMs?: number) =>
-  cliClassifier({ command: [process.execPath, '-e', script, '--'], env: process.env, ...(timeoutMs ? { timeoutMs } : {}) });
-const printing = (out: string, ms = 0) => cli(`setTimeout(() => process.stdout.write(${JSON.stringify(out)}), ${ms})`);
 
 describe('the small model of messages (ORC-336)', () => {
   it('reads one of the two words as the whole answer, anything else as no verdict', () => {
@@ -61,50 +56,14 @@ describe('the small model of messages (ORC-336)', () => {
     expect(Date.now() - t).toBeLessThan(2_000);
   });
 
-  it('claude -p: the result word is the verdict; a failure, a missing binary or a timeout rejects with its reason', async () => {
-    expect(await printing(JSON.stringify({ type: 'result', is_error: false, result: 'question' }))('x')).toBe('question');
-    await expect(printing(JSON.stringify({ is_error: true, result: 'question' }))('x')).rejects.toThrow('claude reported an error');
-    await expect(printing('not json')('x')).rejects.toThrow('unparseable answer');
-    await expect(cli('process.exit(3)')('x')).rejects.toThrow('exit 3');
-    await expect(cli("process.stdout.write('x'.repeat(200 * 1024))")('x')).rejects.toThrow('output too large');
-    await expect(cliClassifier({ command: ['no-such-claude-binary'], env: process.env })('x')).rejects.toThrow('spawn failed: ENOENT');
-    const t = Date.now();
-    await expect(cli('setTimeout(() => {}, 10_000)', 200)('x')).rejects.toThrow('timed out after 200 ms');
-    expect(Date.now() - t).toBeLessThan(5_000);
-  });
-
-  it.skipIf(process.platform === 'win32')('claude -p: a signal from outside is reported by its name, never with the command line', async () => {
-    await expect(cli("process.kill(process.pid, 'SIGTERM')")('the prompt')).rejects.toThrow(/^killed by SIGTERM$/);
-  });
-
-  it('claude -p: the bound holds even when a grandchild keeps the pipe open', async () => {
-    // The grandchild inherits stdout and outlives the killed child: the backstop rejects without waiting for it.
-    const script = `require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: 'inherit' }); setTimeout(() => {}, 10_000)`;
-    const t = Date.now();
-    await expect(cli(script, 200)('x')).rejects.toThrow('timed out after 200 ms');
-    expect(Date.now() - t).toBeLessThan(3_000);
-  });
-
-  it('claude -p gets the account, never the key: ANTHROPIC_API_KEY left out, CLAUDE_CODE_OAUTH_TOKEN through', async () => {
-    const script = "process.stdout.write(JSON.stringify({ result: !process.env.ANTHROPIC_API_KEY && process.env.CLAUDE_CODE_OAUTH_TOKEN === 't' ? 'question' : 'instruction' }))";
-    const run = (env: NodeJS.ProcessEnv, claudeToken?: string) =>
-      cliClassifier({ command: [process.execPath, '-e', script, '--'], env: { ...process.env, ...env }, ...(claudeToken ? { claudeToken } : {}) })('x');
-    expect(await run({ ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 't' })).toBe('question');
-    expect(await run({ ANTHROPIC_API_KEY: 'k' }, 't')).toBe('question');
-  });
-
-  it('picks the backend of the runners credential, and none when turned off', () => {
+  it('reaches the model by the Messages API alone, and none when turned off or without a key: no claude -p on the host (ORC-179)', () => {
     for (const off of ['off', 'OFF', '0', 'false', 'None', ' none ']) {
-      expect(messageClassifier({ FACTORY_MESSAGE_MODEL: off, ANTHROPIC_API_KEY: 'k' }, undefined, true)).toBeUndefined();
+      expect(messageClassifier({ FACTORY_MESSAGE_MODEL: off, ANTHROPIC_API_KEY: 'k' })).toBeUndefined();
     }
-    // On the host, as a run there: the Claude account before the key, a Claude Code login without either.
-    expect(classifierBackend({ ANTHROPIC_API_KEY: 'k' }, undefined, true)).toBe('api');
-    expect(classifierBackend({ ANTHROPIC_API_KEY: 'k' }, 'token', true)).toBe('cli');
-    expect(classifierBackend({ ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 't' }, undefined, true)).toBe('cli');
-    expect(classifierBackend({}, undefined, true)).toBe('cli');
-    // With sandboxes, the daemon image has no `claude`: the key alone reaches a model.
-    expect(classifierBackend({ ANTHROPIC_API_KEY: 'k' }, 'token', false)).toBe('api');
-    expect(classifierBackend({ CLAUDE_CODE_OAUTH_TOKEN: 't' }, 'token', false)).toBeUndefined();
+    expect(messageClassifier({ ANTHROPIC_API_KEY: 'k' })).toBeDefined();
+    // The Claude account is the sandboxes' alone: without a key, no model.
+    expect(messageClassifier({ CLAUDE_CODE_OAUTH_TOKEN: 't' })).toBeUndefined();
+    expect(messageClassifier({})).toBeUndefined();
   });
 
   describe('its API key (ORC-445)', () => {
@@ -116,7 +75,7 @@ describe('the small model of messages (ORC-336)', () => {
         keys.push((init.headers as Record<string, string>)['x-api-key']!);
         return answer([{ type: 'text', text: 'question' }])('', init);
       }) as unknown as typeof fetch);
-      const classify = messageClassifier(env, undefined, false, apiKey, log);
+      const classify = messageClassifier(env, apiKey, log);
       await classify!('x');
       await classify!('y');
       return keys;
@@ -126,10 +85,7 @@ describe('the small model of messages (ORC-336)', () => {
       const logs: string[] = [];
       expect(await keyUsed({ ANTHROPIC_API_KEY: 'old' }, 'own', (m) => logs.push(m))).toEqual(['own', 'own']);
       expect(logs).toEqual([]);
-      expect(classifierBackend({}, undefined, false, 'own')).toBe('api');
-      // On the host, a key alone still goes through the Messages API, and the Claude account before it.
-      expect(classifierBackend({}, undefined, true, 'own')).toBe('api');
-      expect(classifierBackend({}, 'token', true, 'own')).toBe('cli');
+      expect(messageClassifier({}, 'own')).toBeDefined();
     });
 
     it('falls back on ANTHROPIC_API_KEY in transition, with one warning for the daemon, not one per message', async () => {
@@ -140,17 +96,17 @@ describe('the small model of messages (ORC-336)', () => {
 
     it('gives no warning when the transition key is not the one used', () => {
       const logs: string[] = [];
-      expect(messageClassifier({ ANTHROPIC_API_KEY: 'old' }, 'token', true, undefined, (m) => logs.push(m))).toBeDefined();
+      expect(messageClassifier({ ANTHROPIC_API_KEY: 'old' }, 'own', (m) => logs.push(m))).toBeDefined();
       expect(logs).toEqual([]);
     });
   });
 
   it('warns of a FACTORY_MESSAGE_MODEL it does not know, and stays on', () => {
     const logs: string[] = [];
-    expect(classifierBackend({ FACTORY_MESSAGE_MODEL: 'disabled', ANTHROPIC_API_KEY: 'k' }, undefined, false, undefined, (m) => logs.push(m))).toBe('api');
+    expect(classifierOn({ FACTORY_MESSAGE_MODEL: 'disabled' }, (m) => logs.push(m))).toBe(true);
     expect(logs).toEqual([expect.stringContaining('FACTORY_MESSAGE_MODEL=disabled is not recognised')]);
     logs.length = 0;
-    for (const on of ['on', '1', 'TRUE', '']) classifierBackend({ FACTORY_MESSAGE_MODEL: on }, undefined, true, undefined, (m) => logs.push(m));
+    for (const on of ['on', '1', 'TRUE', '']) expect(classifierOn({ FACTORY_MESSAGE_MODEL: on }, (m) => logs.push(m))).toBe(true);
     expect(logs).toEqual([]);
   });
 });

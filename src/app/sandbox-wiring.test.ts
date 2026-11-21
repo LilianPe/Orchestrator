@@ -5,35 +5,39 @@ import type { Exec, ExecResult } from '../adapters/exec.js';
 import { BROWSER_REQUIREMENTS } from '../adapters/browser/types.js';
 import { defaultLimits } from '../adapters/sandbox/docker-rootless.js';
 import type { Egress } from '../network/proxy-service.js';
-import { browserImage, checkHostRuns, instanceId, makeSandboxes, sandboxConfig, sandboxLimits, sandboxRefusals } from './sandbox-wiring.js';
+import { browserImage, checkSandboxes, instanceId, makeSandboxes, sandboxConfig, sandboxLimits, sandboxRefusals } from './sandbox-wiring.js';
 
-describe('checkHostRuns (ORC-349)', () => {
-  it('refuses agents on the host without a container engine, naming both ways out', () => {
-    expect(() => checkHostRuns({})).toThrow(/FACTORY_CONTAINER_CLI.*FACTORY_ALLOW_HOST_RUNS=1/s);
-    // Only `1` is the explicit choice: anything else is not.
-    for (const v of ['', '0', 'true', 'yes']) expect(() => checkHostRuns({ FACTORY_ALLOW_HOST_RUNS: v })).toThrow();
+describe('checkSandboxes (ORC-349, ORC-179)', () => {
+  it('refuses to start without a container engine, whatever FACTORY_ALLOW_HOST_RUNS says: no run on the host any more', () => {
+    for (const v of [undefined, '', '0', '1']) {
+      expect(() => checkSandboxes(v === undefined ? {} : { FACTORY_ALLOW_HOST_RUNS: v })).toThrow(/^FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container/);
+    }
+    expect(sandboxRefusals({ FACTORY_ALLOW_HOST_RUNS: '1' })[0]).not.toMatch(/FACTORY_ALLOW_HOST_RUNS/);
   });
 
-  it('lets a container engine, or the explicit choice of the host, through', () => {
-    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: 'r:1' })).not.toThrow();
-    expect(() => checkHostRuns({ FACTORY_ALLOW_HOST_RUNS: '1' })).not.toThrow();
+  it('lets a container engine with its runner image through', () => {
+    expect(() => checkSandboxes({ FACTORY_CONTAINER_CLI: 'podman', FACTORY_RUNNER_IMAGE: 'r:1' })).not.toThrow();
+  });
+
+  it('makes no sandbox provider without an engine: it throws the refusal, never a host fallback', () => {
+    expect(() => makeSandboxes({}, 'i', {} as Egress)).toThrow(/^FACTORY_CONTAINER_CLI is not set/);
+    expect(() => makeSandboxes({ FACTORY_CONTAINER_CLI: 'podman' }, 'i', {} as Egress)).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   });
 });
 
 describe('sandboxRefusals (ORC-449)', () => {
   it("refuses, before anything opens, every environment the sandboxes cannot run in: the start's and doctor's", () => {
-    expect(sandboxRefusals({})).toEqual([expect.stringMatching(/^FACTORY_CONTAINER_CLI is not set: .*FACTORY_ALLOW_HOST_RUNS=1/)]);
+    expect(sandboxRefusals({})).toEqual([expect.stringMatching(/^FACTORY_CONTAINER_CLI is not set: .*FACTORY_RUNNER_IMAGE/)]);
     expect(sandboxRefusals({ FACTORY_CONTAINER_CLI: 'lxc', FACTORY_RUNNER_IMAGE: 'r:1' })).toEqual(['FACTORY_CONTAINER_CLI=lxc: docker or podman expected.']);
     expect(sandboxRefusals({ FACTORY_CONTAINER_CLI: 'podman' })).toEqual(['FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.']);
   });
 
-  it('lets an engine with its runner image, or the explicit choice of the host, through', () => {
+  it('lets an engine with its runner image through', () => {
     expect(sandboxRefusals({ FACTORY_CONTAINER_CLI: 'docker', FACTORY_RUNNER_IMAGE: 'r:1' })).toEqual([]);
-    expect(sandboxRefusals({ FACTORY_ALLOW_HOST_RUNS: '1' })).toEqual([]);
   });
 
-  it('is what checkHostRuns throws, at the start before anything opens', () => {
-    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'podman' })).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
+  it('is what checkSandboxes throws, at the start before anything opens', () => {
+    expect(() => checkSandboxes({ FACTORY_CONTAINER_CLI: 'podman' })).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
   });
 });
 
@@ -47,16 +51,14 @@ describe('the sandboxes the start refuses before anything opens (ORC-450)', () =
       const env = { ...ENGINE, [k!]: v };
       const { refused } = sandboxLimits(env) as { refused: string };
       expect(sandboxConfig(env)).toEqual({ cli: 'docker', refusal: refused });
-      expect(() => checkHostRuns(env)).toThrow(refused);
+      expect(() => checkSandboxes(env)).toThrow(refused);
     }
   });
 
   it('refuses a daemon without a uid or a gid, with its message', () => {
     vi.spyOn(process, 'getgid').mockReturnValue(undefined as unknown as number);
     expect(sandboxConfig(ENGINE)).toEqual({ cli: 'docker', refusal: 'The sandboxes require a daemon on Linux (uid and gid).' });
-    expect(() => checkHostRuns(ENGINE)).toThrow('The sandboxes require a daemon on Linux (uid and gid).');
-    // Without sandboxes, none is needed.
-    expect(() => checkHostRuns({ FACTORY_ALLOW_HOST_RUNS: '1' })).not.toThrow();
+    expect(() => checkSandboxes(ENGINE)).toThrow('The sandboxes require a daemon on Linux (uid and gid).');
   });
 
   it('hands makeSandboxes the limits and the ids it checked', () => {

@@ -7,7 +7,8 @@ import { describeAgentRuntimeContract, drain, type AgentScript } from '../../../
 import { ContainerSandboxProvider } from '../sandbox/docker-rootless.js';
 import { FakeSandboxProvider } from '../sandbox/fake.js';
 import type { SandboxProvider } from '../sandbox/types.js';
-import { buildClaudeArgs, childEnv, ClaudeCodeRunner, estimateCostUsd, liveDir, NO_PUSH, SANDBOX_CLAUDE_TOKEN, worktreeReader } from './claude-code.js';
+import { ON_HOST, OnHostSandboxes } from '../../../test/helpers/on-host-sandboxes.js';
+import { buildClaudeArgs, ClaudeCodeRunner, estimateCostUsd, liveDir, SANDBOX_CLAUDE_TOKEN, worktreeReader } from './claude-code.js';
 import type { RunRequest } from './types.js';
 
 const fx = (n: string) => join(import.meta.dirname, 'fixtures', n);
@@ -28,17 +29,18 @@ vi.mock('../exec.js', async (importOriginal) => {
 
 function req(patch: Partial<RunRequest> = {}, env: Record<string, string> = {}): RunRequest {
   return {
-    runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false,
+    runId: `r-${Math.random().toString(36).slice(2)}`, cwd: process.cwd(), prompt: '/factory:dev\n\n## Ticket', claudeSessionId: 'uuid-1', resume: false, sandboxId: ON_HOST,
     model: 'sonnet', pluginDir: '/pack', settingsPath: '/pack/settings.json', readOnly: false,
     limits: { turns: 50, durationMs: 10_000 }, env, ...patch,
   };
 }
 
-function runner(sandboxes?: FakeSandboxProvider) {
+/** Every run goes through a sandbox provider (ORC-179): by default the test's own, which runs the fake CLI here. */
+function runner(sandboxes: FakeSandboxProvider = new OnHostSandboxes()) {
   const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
   return {
     transcriptsDir,
-    r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, ...(sandboxes ? { sandboxes } : {}) }),
+    r: new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], killGraceMs: 500, sandboxes }),
   };
 }
 
@@ -102,11 +104,12 @@ describe('the settings of the read guard, through the allowlist of a sandbox (OR
 });
 
 const scripts: Record<AgentScript, Partial<RunRequest>> = {
-  success: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') } },
-  failure: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') } },
-  hang: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' } },
-  chatty: { env: { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' } },
-  unlaunchable: { cwd: join(mkdtempSync(join(tmpdir(), 'factory-contract-')), 'missing') },
+  success: { sandboxId: ON_HOST, env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') } },
+  failure: { sandboxId: ON_HOST, env: { FAKE_CLAUDE_SCRIPT: fx('stream-error.jsonl') } },
+  hang: { sandboxId: ON_HOST, env: { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_HANG: '1' } },
+  chatty: { sandboxId: ON_HOST, env: { FAKE_CLAUDE_SCRIPT: fx('stream-many-turns.jsonl'), FAKE_CLAUDE_HANG: '1' } },
+  // Its sandbox gone: nothing to spawn in, and never the host (ORC-179).
+  unlaunchable: { sandboxId: 'sbx-gone' },
 };
 
 const shared = runner().r;
@@ -411,7 +414,7 @@ describe('ClaudeCodeRunner: caps and stagnation of the build (ORC-136)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'factory-killed-'));
     const killed = join(dir, 'killed.mjs');
     writeFileSync(killed, `console.log(${JSON.stringify(assistant('m1'))});\nsetTimeout(() => process.kill(process.pid, 'SIGKILL'), 50);\nsetInterval(() => {}, 1000);\n`);
-    const r = new ClaudeCodeRunner({ transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-tr-')), command: [process.execPath, killed] });
+    const r = new ClaudeCodeRunner({ transcriptsDir: mkdtempSync(join(tmpdir(), 'factory-tr-')), command: [process.execPath, killed], sandboxes: new OnHostSandboxes() });
     expect(await r.start(req()).done).toMatchObject({ outcome: 'failure', infra: true });
   });
 
@@ -609,15 +612,14 @@ describe('ClaudeCodeRunner attached to an attempt of a dead daemon', () => {
 describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("names a placeholder for the chosen account, never its token nor the daemon's (ORC-337)", async () => {
+  it("names a placeholder for the daemon's token, never the token (ORC-337)", async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'daemon-login');
     const { sandboxes, id, spawnCommand } = await sandbox();
-    const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-tr-'));
-    const r = new ClaudeCodeRunner({ transcriptsDir, command: [process.execPath, fx('fake-claude.mjs')], sandboxes, claudeToken: () => 'chosen-account' });
+    const { r } = runner(sandboxes);
     await r.start(req({ sandboxId: id, cwd: '/work' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') })).done;
     const [, , opts] = spawnCommand.mock.calls[0]! as Parameters<SandboxProvider['spawnCommand']>;
     expect(opts!.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: SANDBOX_CLAUDE_TOKEN });
-    expect(JSON.stringify(opts)).not.toMatch(/chosen-account|daemon-login/);
+    expect(JSON.stringify(opts)).not.toMatch(/daemon-login/);
   });
 
   it('follows the token resolved with the proxy when given one: none there, no placeholder, whatever the daemon holds (ORC-337)', async () => {
@@ -704,12 +706,15 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     expect(env['XDG_RUNTIME_DIR']).not.toBe('/moved');
   });
 
-  it('refuses a sandboxed run without a sandbox provider, spawning nothing', async () => {
-    const { r, transcriptsDir } = runner();
+  it('refuses a run without a sandbox, spawning nothing: no run on the host (ORC-179)', async () => {
+    const { sandboxes, spawnCommand } = await sandbox();
+    const { r, transcriptsDir } = runner(sandboxes);
     const argsFile = join(transcriptsDir, 'args.txt');
-    const h = r.start(req({ sandboxId: 'sbx-1' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_ARGS: argsFile }));
+    const { sandboxId: _, ...onHost } = req({}, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl'), FAKE_CLAUDE_ARGS: argsFile });
+    const h = r.start(onHost);
     expect(await drain(h.events)).toEqual([]);
-    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sandbox'), infra: true });
+    expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('never executes on the host'), infra: true });
+    expect(spawnCommand).not.toHaveBeenCalled();
     expect(existsSync(argsFile)).toBe(false);
   });
 
@@ -719,78 +724,5 @@ describe('ClaudeCodeRunner in a sandbox (ORC-204)', () => {
     const h = r.start(req({ sandboxId: 'sbx-404' }, { FAKE_CLAUDE_SCRIPT: fx('stream-success.jsonl') }));
     await drain(h.events);
     expect(await h.done).toMatchObject({ outcome: 'failure', lastText: expect.stringContaining('sbx-404'), infra: true });
-  });
-});
-
-describe('childEnv: a run on the host (ORC-211)', () => {
-  it('keeps the system, its login and the run variables, nothing else of the daemon', () => {
-    const env = childEnv(
-      {
-        HOME: '/h', PATH: '/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
-        CLAUDE_CODE_OAUTH_TOKEN: 'c',
-        AWS_SECRET_ACCESS_KEY: 'a', GITHUB_TOKEN: 'gt', NPM_TOKEN: 'n', DATABASE_URL: 'postgres://u:p@h/d', ANTHROPIC_BASE_URL: 'https://gateway', SOME_DAEMON_VAR: 'v',
-        LINEAR_API_KEY: 'lin', LINEAR_TOKEN: 'x', FACTORY_HOME: '/data', FACTORY_UI_PASSWORD: 'pw', FACTORY_SECRET: 's',
-      },
-      { FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1' },
-    );
-    expect(env).toEqual({
-      HOME: '/h', PATH: '/bin', LANG: 'fr_FR.UTF-8', LC_ALL: 'C', TMPDIR: '/t', GIT_AUTHOR_NAME: 'n',
-      CLAUDE_CODE_OAUTH_TOKEN: 'c',
-      FACTORY_API: 'http://127.0.0.1:4100/agent', FACTORY_RUN_TOKEN: 't', FACTORY_TICKET: 'REL-1',
-      ...NO_PUSH,
-    });
-  });
-
-  it('gives no run on the host a GitHub token (ORC-125), and keeps ANTHROPIC_API_KEY until the host runs go (ORC-179)', () => {
-    expect(childEnv({ GH_TOKEN: 'g', GH_HOST: 'h', ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s' }, {})).toEqual({ ANTHROPIC_API_KEY: 'k', SSH_AUTH_SOCK: '/s', ...NO_PUSH });
-  });
-
-  it('the chosen account replaces any other login of the daemon', () => {
-    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {}, 'chosen')).toEqual({ HOME: '/h', CLAUDE_CODE_OAUTH_TOKEN: 'chosen', ...NO_PUSH });
-  });
-
-  it('without a chosen account, a host run keeps both logins of the daemon, as before ORC-337', () => {
-    // The daemon's CLAUDE_CODE_OAUTH_TOKEN goes to the proxy for the sandboxes (`proxyHasToken`), never as a chosen account here.
-    expect(childEnv({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old' }, {})).toEqual({ HOME: '/h', ANTHROPIC_API_KEY: 'k', CLAUDE_CODE_OAUTH_TOKEN: 'old', ...NO_PUSH });
-  });
-
-  it('drops variables left over from the old prefix', () => {
-    const env = childEnv({ HOME: '/h', RELAIS_UI_PASSWORD: 'pw', RELAIS_HOME: '/old' }, {}); // transition, à retirer (ORC-167)
-    expect(env).toEqual({ HOME: '/h', ...NO_PUSH });
-  });
-
-  describe('a push from the host fails by its git config, however the command names it (ORC-349)', () => {
-    // No global config of the machine: its pushurl or its rewrites would decide for the test.
-    const isolated = { GIT_CONFIG_GLOBAL: '/dev/null' };
-    const clean = { ...process.env, ...isolated };
-    const git = (cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
-    const repos = () => {
-      const dir = mkdtempSync(join(tmpdir(), 'factory-nopush-'));
-      const id = { ...clean, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@x', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@x' };
-      git(dir, ['init', '-q', '--bare', 'origin.git'], id);
-      git(dir, ['clone', '-q', 'origin.git', 'w'], id);
-      const work = join(dir, 'w');
-      git(work, ['commit', '-q', '--allow-empty', '-m', 'agent'], id);
-      return { origin: join(dir, 'origin.git'), work };
-    };
-    // What the parsing hook misses: a name in a variable, a substitution, an alias, a URL of its own.
-    const disguised = (origin: string) => [
-      'git push origin HEAD:refs/heads/a',
-      'g=git; $g push origin HEAD:refs/heads/b',
-      'git $(printf push) origin HEAD:refs/heads/c',
-      'git -c alias.ship=push ship origin HEAD:refs/heads/d',
-      `git push file://${origin} HEAD:refs/heads/e`,
-      `git push ${origin} HEAD:refs/heads/f`,
-    ];
-
-    it.skipIf(process.platform === 'win32')('fails every push to every remote, and leaves the fetch alone', () => {
-      const { origin, work } = repos();
-      const env = { ...childEnv(process.env, {}), ...isolated };
-      for (const command of disguised(origin)) expect(spawnSync('bash', ['-c', command], { cwd: work, env, encoding: 'utf8' }).status, command).not.toBe(0);
-      expect(git(origin, ['for-each-ref'], env).stdout).toBe('');
-      expect(git(work, ['fetch', '-q', 'origin'], env).status).toBe(0);
-      // The control: the same push without the run's config reaches the remote.
-      expect(git(work, ['push', '-q', 'origin', 'HEAD:refs/heads/control'], clean).status).toBe(0);
-    });
   });
 });

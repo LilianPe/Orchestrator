@@ -9,8 +9,6 @@ export interface WorkspaceRequest {
   ticketId: string;
   title: string;
   kind: WorkspaceKind;
-  slot: number;
-  portBase: number;
   runId: string;
   /** The published commit a `published` workspace is on (ORC-183). */
   sha?: string;
@@ -25,7 +23,6 @@ export interface WorkspaceRequest {
 
 export interface Workspace {
   path: string;
-  port?: number;
   branch?: string;
   /** True when `prepare` just created the worktree: the repository's `setup` is then the caller's to run (ORC-204). */
   fresh?: boolean;

@@ -4,6 +4,7 @@ import type { Sandbox, SandboxProvider } from '../adapters/sandbox/types.js';
 import type { Tracker } from '../adapters/tracker/types.js';
 import type { Workspace } from '../adapters/workspace/types.js';
 import type { JobSpec, Workflow } from '../core/workflow.js';
+import type { Verifier } from '../core/verify.js';
 import { Worker } from './worker.js';
 import { FrozenFormatError, frozenWorkflow, workflowVersion } from './workflow-version.js';
 import type { DecisionOutcome, DecisionRequest, EffectOutcome, OutboxRow, RunRecord, Store, WorkflowVersion } from '../store/types.js';
@@ -66,6 +67,9 @@ export const endKey = (runId: string): string => `attempt:${runId}:finished`;
 export const takeOverKey = (projectId: string, ticketId: string): string => `take-over-${projectId}-${ticketId}`;
 
 /** The daemon's state and what every part of it uses (ORC-394): the projects' workflows, a ticket's projection and its changes, the log. */
+/** Why a daemon without sandboxes and without a stand-in for `verify` checks nothing. */
+const HOST_CHECKS_OFF = "no sandbox (FACTORY_CONTAINER_CLI): the agent's code runs in the sandboxes only, never on the host.";
+
 export abstract class DaemonBase {
   protected background = new Map<Promise<void>, string | undefined>();
   /** Runs whose event stream is still open (the runner is working, nothing for the factory to do): drained() does not wait for them. */
@@ -138,6 +142,15 @@ export abstract class DaemonBase {
     const p = this.d.projects.find((x) => x.id === id);
     if (!p) throw new Error(`unknown project ${id}`);
     return p;
+  }
+
+  /**
+   * The checks of a daemon without sandboxes, the fake runner's or a test's stand-in (`DaemonDeps.verify`): without one,
+   * the infrastructure failure that blocks the ticket. The agent's code never runs on the host (ORC-179).
+   */
+  protected standInVerify(): Verifier {
+    if (!this.d.verify) throw new Error(HOST_CHECKS_OFF);
+    return this.d.verify;
   }
 
   protected log(level: 'info' | 'warn' | 'error', message: string): void {

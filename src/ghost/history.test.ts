@@ -137,7 +137,7 @@ describe('the historical environment of a replayed ticket (ORC-231)', () => {
     expect(await startTime({ dir, sha: base })).toBe((t0 + 60) * 1000);
 
     const ws = new GitWorkspaces({ root: temp() });
-    const made = await ws.prepare({ projectId: 'ghost', repoPath: dir, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree', slot: 0, portBase: 3000, runId: 'r1' });
+    const made = await ws.prepare({ projectId: 'ghost', repoPath: dir, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree', runId: 'r1' });
     expect(made.fresh).toBe(true);
     expect(git(made.path, ['rev-parse', 'HEAD'])).toBe(base);
     expect(existsSync(join(made.path, 'b.txt'))).toBe(true);

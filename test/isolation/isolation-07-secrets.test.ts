@@ -99,7 +99,14 @@ describe.skipIf(!enabled)(`no secret in the sandbox (${cli}, isolation n° 7)`, 
     const saved = Object.fromEntries(Object.keys(DAEMON_SECRETS).map((k) => [k, process.env[k]]));
     Object.assign(process.env, DAEMON_SECRETS);
     try {
-      const runner = new ClaudeCodeRunner({ transcriptsDir: workspace(), sandboxes: provider, claudeToken: () => CHOSEN_ACCOUNT, command: ['sh', '-c', `env > ${WORKSPACE_TARGET}/env.txt; cat /proc/[0-9]*/environ > ${WORKSPACE_TARGET}/proc.txt 2>/dev/null; true`, 'sh'] });
+      const runner = new ClaudeCodeRunner({
+        transcriptsDir: workspace(),
+        sandboxes: provider,
+        // As the daemon wires it: the chosen account's token is among the daemon's secrets and the proxy's, never a run's (ORC-337).
+        secrets: () => [CHOSEN_ACCOUNT],
+        proxyHasToken: () => true,
+        command: ['sh', '-c', `env > ${WORKSPACE_TARGET}/env.txt; cat /proc/[0-9]*/environ > ${WORKSPACE_TARGET}/proc.txt 2>/dev/null; true`, 'sh'],
+      });
       await runner.start({
         runId: 'iso-07',
         cwd: WORKSPACE_TARGET,

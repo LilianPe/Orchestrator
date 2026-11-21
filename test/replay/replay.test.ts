@@ -12,7 +12,7 @@ vi.mock('../../src/adapters/runner/message-classifier.js', () => {
   const never = () => {
     throw new Error('the small model was called on replay');
   };
-  return { messageClassifier: never, apiClassifier: never, cliClassifier: never };
+  return { messageClassifier: never, apiClassifier: never };
 });
 
 const dir = join(import.meta.dirname, 'journals');

@@ -1,9 +1,8 @@
 import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { defaultWorkflow } from '../presets/workflow.js';
-import { buildRunSettings, posixPath, runSettingsTemplate, type Settings } from '../config/run-settings.js';
 import { VERSION } from '../version.js';
 import { buildPrompt, type PromptInput } from './prompt.js';
 import {
@@ -165,21 +164,6 @@ describe('attempt labels', () => {
     expect(prints.skills).toBeNull();
     expect(prints.config).toMatch(SHA);
     expect(errors).toHaveLength(1);
-  });
-
-  it('fingerprints the run settings without the instance home: two homes give one config fingerprint', () => {
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Settings;
-    const homes = [join(tmpdir(), 'home-a'), '/srv/factory/home-b'];
-    const built = homes.map((home) => buildRunSettings(settings, home));
-    expect(stableJson(built[0])).not.toBe(stableJson(built[1]));
-    // Each home's run settings are the template with that home in place of <HOME> (on Windows, written as is and in lower case).
-    homes.forEach((home, i) => {
-      const abs = `/${posixPath(resolve(home))}`;
-      const own = built[i]!;
-      const deny = [...new Set(own.permissions.deny!.map((r) => r.split(abs).join('<HOME>').split(abs.toLowerCase()).join('<HOME>')))];
-      const homeless = { ...own, permissions: { ...own.permissions, deny } };
-      expect(homeless).toEqual(runSettingsTemplate(settings));
-    });
   });
 
   it('gives a text file the same fingerprint with CRLF and LF line ends, and leaves binary files as they are', async () => {

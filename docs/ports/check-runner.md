@@ -3,8 +3,8 @@
 A job's verification commands (`verify`), run outside the agent, and their verdict.
 
 - Interface: `CheckRunner` (`src/adapters/checks/types.ts`), new port (ORC-225); `run` has the `Verifier` type from `src/core/verify.ts`. The ticket's `Verifier` is that type.
-- Implementations: `runVerify` (`src/core/verify.ts`, `bash -c` in a directory; `{ run: runVerify }` is a `CheckRunner`), `FakeCheckRunner` (`src/adapters/checks/fake.ts`). With sandboxes, `verify` does not go through this port: `runCleanVerify` (`src/core/clean-verify.ts`, ORC-151) runs the commands in a fresh sandbox, on a clone of the frozen SHA, and rejects instead of answering when it has no verdict. This port remains for `setup` without a sandbox and for `FACTORY_ALLOW_HOST_VERIFY=1`.
-- Suite: `test/contracts/check-runner.contract.ts`, run by `src/adapters/checks/fake.test.ts` and `src/adapters/checks/run-verify.test.ts`.
+- Implementations: `FakeCheckRunner` (`src/adapters/checks/fake.ts`), and the fake runner's stand-in that passes and runs nothing (`src/app/bootstrap.ts`). `runVerify`, `bash -c` in the agent's worktree on the host, is gone (ORC-179). `verify` does not go through this port: `runCleanVerify` (`src/core/clean-verify.ts`, ORC-151) runs the commands in a fresh sandbox, on a clone of the frozen SHA, and rejects instead of answering when it has no verdict. This port remains for a daemon without sandboxes, the fake runner's or a test's (`DaemonDeps.verify`), where it stands in for `verify`, the red check and `setup`.
+- Suite: `test/contracts/check-runner.contract.ts`, run by `src/adapters/checks/fake.test.ts`; its negative controls (`test/contracts/negative-controls.test.ts`) break a test-only `bash` runner, `test/helpers/bash-checks.ts`.
 
 ## Methods
 
@@ -22,7 +22,7 @@ The result carries no attempt: the engine is what ties it to its run (`verify.pa
 
 ## What the suite asks of the implementation
 
-`CheckRunnerSubject`: a directory, a command that passes, two commands that fail with distinct codes and the text they print, and optionally a command that exceeds 200 ms, a directory where no command starts (`runVerify`: a missing directory, where `bash` does not launch), and a command that passes while counting its launches, to check that a replay reruns. The fake interprets these commands through a fallback `Verifier` (the one from its constructor).
+`CheckRunnerSubject`: a directory, a command that passes, two commands that fail with distinct codes and the text they print, and optionally a command that exceeds 200 ms, a directory where no command starts (for a `bash` runner, a missing directory, where `bash` does not launch), and a command that passes while counting its launches, to check that a replay reruns. The fake interprets these commands through a fallback `Verifier` (the one from its constructor).
 
 ## Known gaps
 

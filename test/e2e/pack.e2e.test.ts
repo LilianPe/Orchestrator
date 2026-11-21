@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeRunner } from '../../src/adapters/runner/claude-code.js';
+import { ON_HOST, OnHostSandboxes } from '../helpers/on-host-sandboxes.js';
 
 const pack = join(import.meta.dirname, '../../packs/standard');
 
 describe.skipIf(process.env['FACTORY_E2E'] !== '1')('pack with the real claude CLI', () => {
   it('loads the session-start hook and refuses git push (ORC-191)', async () => {
-    // A push with a real target, so that only a refusal stops it short of git (on the host, the run's git config would fail it anyway).
+    // A push with a real target, so that only a refusal stops it short of git.
     const remote = mkdtempSync(join(tmpdir(), 'factory-e2e-remote-'));
     execFileSync('git', ['init', '-q', '--bare'], { cwd: remote });
     const cwd = mkdtempSync(join(tmpdir(), 'factory-e2e-'));
@@ -17,9 +18,11 @@ describe.skipIf(process.env['FACTORY_E2E'] !== '1')('pack with the real claude C
     execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'e2e'], { cwd });
     execFileSync('git', ['remote', 'add', 'origin', remote], { cwd });
     const transcriptsDir = mkdtempSync(join(tmpdir(), 'factory-e2e-tr-'));
-    const runner = new ClaudeCodeRunner({ transcriptsDir });
+    // The test's own provider runs the real CLI here, in `cwd`: the pack is under test, not the sandbox (the isolation suite's).
+    // No egress proxy here to swap a placeholder for the token: the developer's own login goes through as is.
+    const runner = new ClaudeCodeRunner({ transcriptsDir, sandboxes: new OnHostSandboxes(), proxyHasToken: () => false });
     const h = runner.start({
-      runId: 'e2e', cwd, claudeSessionId: crypto.randomUUID(), resume: false, model: 'haiku', pluginDir: pack,
+      runId: 'e2e', sandboxId: ON_HOST, cwd, claudeSessionId: crypto.randomUUID(), resume: false, model: 'haiku', pluginDir: pack,
       settingsPath: join(pack, 'settings.json'), readOnly: false, limits: { turns: 6, durationMs: 120_000 },
       env: { FACTORY_TICKET: 'E2E-1', FACTORY_REFUSALS_LOG: join(transcriptsDir, 'refusals.jsonl') },
       // The rules forbid pushing: told plainly, the model declines without calling the tool, and the guard would go untested.

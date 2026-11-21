@@ -212,7 +212,7 @@ export function createHarness(
     dryRunFiles?: DaemonDeps['dryRunFiles'];
     /** An instance without the GitHub App or the sandboxes: it cannot publish (ORC-125). */
     noPublisher?: boolean;
-    /** `false`: an instance with neither sandboxes nor `FACTORY_ALLOW_HOST_VERIFY`. */
+    /** `false`: a daemon without sandboxes and without a stand-in for `verify` (`DaemonDeps.verify`). */
     hostChecks?: boolean;
     /**
      * A store to run on instead of the harness's own database (the Postgres schema a SIGKILLed child
@@ -334,8 +334,7 @@ export function createHarness(
       captureHost: life.gate(forge),
       ...(opts.noPublisher ? {} : { publisher: life.gate(publisher) }),
       workspaces: life.gate(workspaces),
-      verify: life.gate(checks.run),
-      hostChecks: opts.hostChecks ?? true,
+      ...(opts.hostChecks === false ? {} : { verify: life.gate(checks.run) }),
       originUrl: async () => '/origin',
       // The clean check is proved by itself (clean-verify.test.ts, the isolation suite): a scenario decides its verdict through the same fake.
       // A human's push (ORC-159) is checked on the commit pushed, not on the worktree.

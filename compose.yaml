@@ -27,8 +27,9 @@ services:
       # No runner gets it (the provider refuses the mount), and `verify` runs nothing here (ORC-151). A hook an agent left in `.git` still can: see docs/deployment.md.
       - ${FACTORY_ENGINE_SOCKET:?définissez FACTORY_ENGINE_SOCKET (socket du moteur rootless)}:/var/run/docker.sock
     environment:
-      # The login of `claude`: an account of factory.yml (`token: env:CLAUDE_TOKEN_1`), or, on this image where the
-      # runs still share the daemon's container, an API key (until ORC-179). Unset here, unset in the container.
+      # The login of `claude`, which runs in the sandboxes alone: an account of factory.yml (`token: env:CLAUDE_TOKEN_1`),
+      # set by the egress proxy on their model calls. ANTHROPIC_API_KEY: only the small model of messages' key, in
+      # transition (ORC-445); it never logs `claude` in (ORC-179). Unset here, unset in the container.
       CLAUDE_TOKEN_1:
       CLAUDE_TOKEN_2:
       ANTHROPIC_API_KEY:

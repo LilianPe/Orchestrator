@@ -8,7 +8,7 @@ The engine only talks to the world through seven ports. Each has a **sheet** (wh
 | Forge | `Forge` | [forge.md](forge.md) | `test/contracts/forge.contract.ts` | `FakeForge`, `GitHubAppForge` (on a scripted `fetch`) |
 | Publisher | `Publisher` | [publisher.md](publisher.md) | `test/contracts/publisher.contract.ts` | `FakePublisher` (`GitPublisher` through its own tests) |
 | SandboxProvider | `SandboxProvider` | [sandbox-provider.md](sandbox-provider.md) | `test/contracts/sandbox.contract.ts` | `FakeSandboxProvider`, `SandboxRouter`, `ContainerSandboxProvider` (isolation tests) |
-| CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner`, `runVerify` |
+| CheckRunner | `CheckRunner` | [check-runner.md](check-runner.md) | `test/contracts/check-runner.contract.ts` | `FakeCheckRunner` |
 | AgentRuntime | `Runner` | [agent-runtime.md](agent-runtime.md) | `test/contracts/agent-runtime.contract.ts` | `FakeRunner`, `ClaudeCodeRunner` (fake `claude` CLI) |
 | SecretSource (ORC-308) | `SecretSource` | [secret-source.md](secret-source.md) | `test/contracts/secret-source.contract.ts` | `env`, `FakeSecretSource` |
 
