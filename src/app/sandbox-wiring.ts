@@ -11,21 +11,39 @@ export function instanceId(home: string): string {
   return createHash('sha256').update(resolve(home)).digest('hex').slice(0, 12);
 }
 
+/** What the sandboxes run with, as `sandboxConfig` checked it. */
+export interface SandboxConfig {
+  cli: 'docker' | 'podman';
+  image: string;
+  uid: number;
+  gid: number;
+  limits: SandboxLimits;
+}
+
 /**
- * What the sandboxes run with (ORC-204), `FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`: none without the CLI, or the
- * start's refusal, with its message: another CLI than docker or podman, no runner image (`cli` kept, the engine still askable).
+ * What the sandboxes run with (ORC-204), `FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`, the daemon's uid and gid and
+ * the `FACTORY_SANDBOX_*` limits: none without the CLI, or the start's refusal, with its message: another CLI than docker or
+ * podman, no runner image, no uid or gid, a limit `sandboxLimits` refuses (`cli` kept, the engine still askable, ORC-450).
  */
-export function sandboxConfig(env: NodeJS.ProcessEnv): { cli: 'docker' | 'podman'; image: string } | { cli?: 'docker' | 'podman'; refusal: string } | undefined {
+export function sandboxConfig(env: NodeJS.ProcessEnv): SandboxConfig | { cli?: 'docker' | 'podman'; refusal: string } | undefined {
   const cli = containerCli(env);
   if (!cli) return undefined;
   if (typeof cli !== 'string') return { refusal: `${cli.refused}.` };
   const image = env['FACTORY_RUNNER_IMAGE'];
-  return image ? { cli, image } : { cli, refusal: 'FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.' };
+  if (!image) return { cli, refusal: 'FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.' };
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) return { cli, refusal: 'The sandboxes require a daemon on Linux (uid and gid).' };
+  try {
+    return { cli, image, uid, gid, limits: sandboxLimits(env) };
+  } catch (error) {
+    return { cli, refusal: (error as Error).message };
+  }
 }
 
 /**
  * The daemon's environment the start refuses, for the start and `factory doctor`'s host check alike (ORC-449), each with the
- * start's message: `sandboxConfig`'s refusal, or no container engine at all, where an agent would run on the host under the
+ * start's message: `sandboxConfig`'s refusal (a limit or the uid/gid too, ORC-450), or no container engine at all, where an agent would run on the host under the
  * daemon's user, next to its secrets, unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349).
  */
 export function sandboxRefusals(env: NodeJS.ProcessEnv): string[] {
@@ -53,15 +71,11 @@ export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: 
   if (!sandbox) return undefined;
   // The start refused it already, before anything opened (`checkHostRuns`).
   if ('refusal' in sandbox) throw new Error(sandbox.refusal);
-  const { cli, image } = sandbox;
-  const uid = process.getuid?.();
-  const gid = process.getgid?.();
-  if (uid === undefined || gid === undefined) throw new Error('The sandboxes require a daemon on Linux (uid and gid).');
   return new SandboxRouter([
     {
       name: 'container',
       provider: new ContainerSandboxProvider({
-        cli, image, uid, gid, instance, limits: sandboxLimits(env), egress,
+        ...sandbox, instance, egress,
         ...(env['FACTORY_POSTGRES_IMAGE'] ? { postgresImage: env['FACTORY_POSTGRES_IMAGE'] } : {}),
         ...(o.browserImage ? { browserImage: o.browserImage } : {}),
         ...(o.exec ? { exec: o.exec } : {}),
