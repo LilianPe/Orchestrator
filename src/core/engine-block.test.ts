@@ -181,6 +181,12 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
   it.each([
     ['in the session', classified('command', '/status'), { kind: 'activity', type: 'response', linearSessionId: 's-dev', body: expect.stringContaining('Blocked: The run failed.') }],
     ['as a comment', comment(signed, 'command', { body: '/status' }), { kind: 'comment', body: expect.stringContaining('Blocked: The run failed.') }],
+    [
+      'in a mention',
+      // A mention triggers: its author needs write access to the repository as well.
+      ev('session.mentioned', { linearSessionId: 's-m', body: '/status', author: 'Lilian', ack: true, kind: 'command' }, { ...signed, roles: [...MEMBER, 'repo_writer'] }),
+      { kind: 'activity', type: 'response', linearSessionId: 's-m', body: expect.stringContaining('Blocked: The run failed.') },
+    ],
   ])('`/status` %s answers, resumes nothing, the step kept', (_where, event, answer) => {
     const out = decide(blockedOn('dev'), event, workflow);
     expect(out.effects).toEqual([answer]);
@@ -278,7 +284,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     expect(mayCheck(comment({}), workflow)).toBe(true);
   });
 
-  describe('a mention answers the block as a reply does (ORC-415): never unblocked with no step running', () => {
+  describe('a mention answers the block as a reply does (ORC-415, ORC-426): never unblocked with no step running', () => {
     const writer = { actor: 'u-member', roles: ['team_member', 'repo_writer'] as readonly Role[] };
     const mention = (kind?: MessageKind, extra: Partial<FactoryEvent> = writer) =>
       ev('session.mentioned', { linearSessionId: 's-m', body: 'Pourquoi le tri ?', author: 'Lilian', ack: true, ...(kind ? { kind } : {}) }, extra);
@@ -286,6 +292,7 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
     it.each([
       ['a question', mention('question')],
       ['a row with no class', mention()],
+      ['an instruction (ORC-426)', mention('instruction')],
     ])('%s starts the job that blocked, the mention kept for its agent, in its session, and says it resumes', (_what, event) => {
       const out = decide(blockedOn('dev'), event, workflow);
       expect(starts(out)).toEqual([{ kind: 'start_run', job: 'dev', input: 'feedback' }]);
@@ -310,9 +317,12 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       }
     });
 
-    it('needs the right to relaunch a block: refused, the ticket keeps its block and nothing starts', () => {
+    it.each([
+      ['a question', 'question'],
+      ['an instruction, as an instruction reply does (ORC-426)', 'instruction'],
+    ] as const)('%s needs the right to relaunch a block: refused, the ticket keeps its block and nothing starts', (_what, kind) => {
       const matrix = { ...DEFAULT_MATRIX, relaunch_blocked: { ...DEFAULT_MATRIX.relaunch_blocked, anyOf: [['maintainer' as const]] } };
-      const out = decide(blockedOn('dev'), mention('question'), workflow, matrix);
+      const out = decide(blockedOn('dev'), mention(kind), workflow, matrix);
       expect(out.trace.join()).toContain('authz: refused relaunch_blocked');
       expect(out.events).toEqual([]);
       expect(starts(out)).toEqual([]);
@@ -324,11 +334,6 @@ describe('a reply resumes the blocked step (ORC-196)', () => {
       expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
     });
 
-    it('an instruction waits in the inbox, the block kept, as before', () => {
-      const out = decide(blockedOn('dev'), mention('instruction'), workflow);
-      expect(starts(out)).toEqual([]);
-      expect(out.events.map((e) => e.type)).toEqual(['feedback.appended']);
-    });
   });
 
   it('unblocked, the ticket forgets the step', () => {
