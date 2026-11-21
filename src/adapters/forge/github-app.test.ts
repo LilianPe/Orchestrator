@@ -7,6 +7,7 @@ import {
   createAppJwt,
   GitHubAppForge,
   parseGitHubRemote,
+  streamTail,
   type HttpClient,
   type HttpRequest,
 } from './github-app.js';
@@ -110,9 +111,17 @@ function scriptedGitHub(prs: Record<string, { number: number; runs: Route; statu
       return { body: pr ? [openPr({ number: pr.number, html_url: `https://github.com/acme/app/pull/${pr.number}`, head: { ref: branch, sha: sha(branch) } })] : [] };
     },
     ...Object.entries(prs).flatMap(([branch, pr]): Route[] => [
+      (url) =>
+        url.pathname === `/repos/acme/app/pulls/${pr.number}`
+          ? { body: openPr({ number: pr.number, html_url: `https://github.com/acme/app/pull/${pr.number}`, head: { ref: branch, sha: sha(branch) }, base: { ref: 'main', sha: 'base-sha' } }) }
+          : undefined,
       (url, init, body) => (url.pathname === `/repos/acme/app/commits/${sha(branch)}/check-runs` ? pr.runs(url, init, body) : undefined),
       (url) => (url.pathname === `/repos/acme/app/commits/${sha(branch)}/status` ? { body: { statuses: pr.statuses ?? [] } } : undefined),
     ]),
+    // The base branch's CI, at its tip, and any Actions job's log (ORC-459).
+    (url) => (url.pathname === '/repos/acme/app/commits/base-sha/check-runs' ? { body: { check_runs: [{ id: 90, name: 'test', status: 'completed', conclusion: 'success' }] } } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/commits/base-sha/status' ? { body: { statuses: [] } } : undefined),
+    (url) => (/^\/repos\/acme\/app\/actions\/jobs\/\d+\/logs$/.test(url.pathname) ? { raw: 'Error: boom' } : undefined),
     (url) =>
       url.pathname === '/graphql'
         ? { body: threadsAnswer([
@@ -1434,5 +1443,95 @@ describe('GitHubAppForge.pullRequest, for factory ghost (ORC-181)', () => {
     const odd: Route = (url) => (url.pathname === '/repos/acme/app/pulls/12/commits' ? { body: [{ sha: 'c0' }] } : undefined);
     const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
     await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), odd]).forge.pullRequest('/repo', 12)).rejects.toThrow(/unreadable answer/);
+  });
+});
+
+describe('GitHubAppForge.ciFailures (ORC-459)', () => {
+  const pull = (url: URL) => (url.pathname === '/repos/acme/app/pulls/7' ? { body: openPr({ base: { ref: 'develop', sha: 'base1' } }) } : undefined);
+  const base = (runs: unknown[], statuses: unknown[] = []): Route[] => [
+    (url) => (url.pathname === '/repos/acme/app/commits/base1/check-runs' ? { body: { check_runs: runs } } : undefined),
+    (url) => (url.pathname === '/repos/acme/app/commits/base1/status' ? { body: { statuses } } : undefined),
+  ];
+  const job = (id: number, name: string, conclusion = 'failure') => ({ id, name, status: 'completed', conclusion, app: { id: 15368, slug: 'github-actions' } });
+  const logRoute = (answer: (id: number) => ReturnType<Route>): Route => (url) => {
+    const m = /^\/repos\/acme\/app\/actions\/jobs\/(\d+)\/logs$/.exec(url.pathname);
+    return m ? answer(Number(m[1])) : undefined;
+  };
+
+  it("reads the head's failed checks with their logs, the factory's own and the green ones left out, then the base branch's CI", async () => {
+    const calls: Call[] = [];
+    const { forge } = makeForge(
+      [
+        tokenRoute(42),
+        pull,
+        ...checksRoutes(
+          [
+            job(11, 'test'),
+            job(12, 'lint', 'success'),
+            { id: 13, name: 'factory/verify', status: 'completed', conclusion: 'failure', app: { id: 123, slug: 'orchestrator-factory' } },
+            { id: 14, name: 'circleci', status: 'completed', conclusion: 'timed_out', app: { id: 7, slug: 'circleci' }, output: { title: 'Timed out', summary: 'step `build` ran 60 min', text: null } },
+          ],
+          [{ context: 'ci/jenkins', state: 'error', description: 'Build #12 failed' }, { context: 'docs', state: 'success', description: null }],
+        ),
+        ...base([job(21, 'test')]),
+        logRoute((id) => (id === 11 ? { raw: '2026-11-21T10:00:00.0000000Z FAIL a.test.ts' } : undefined)),
+      ],
+      { installationId: 42, calls },
+    );
+    expect(await forge.ciFailures('/repo', 7)).toEqual({
+      head: 'abc123',
+      failed: [
+        { name: 'test', conclusion: 'failure', log: '2026-11-21T10:00:00.0000000Z FAIL a.test.ts' },
+        { name: 'circleci', conclusion: 'timed_out', log: 'Timed out\n\nstep `build` ran 60 min' },
+        { name: 'ci/jenkins', conclusion: 'error', log: 'Build #12 failed' },
+      ],
+      base: { branch: 'develop', sha: 'base1', checks: 'fail', failedChecks: ['test'] },
+    });
+    // The log read with the App's token, never a run's.
+    expect(calls.find((c) => c.url.includes('/actions/jobs/11/logs'))!.headers.authorization).toBe('Bearer ghs_test_token');
+  });
+
+  it('says a log GitHub refuses (expired, no permission, down) and still names the check: a log never costs the fix its run', async () => {
+    const make = (status: number) =>
+      makeForge([tokenRoute(42), pull, ...checksRoutes([job(11, 'test')], []), ...base([]), logRoute(() => ({ status, body: { message: 'nope' } }))], { installationId: 42 }).forge;
+    expect((await make(410).ciFailures('/repo', 7)).failed).toEqual([{ name: 'test', conclusion: 'failure', noLog: 'GitHub refused its log (410)' }]);
+    expect((await make(403).ciFailures('/repo', 7)).failed[0]!.noLog).toBe('GitHub refused its log (403)');
+    expect((await make(503).ciFailures('/repo', 7)).failed[0]!.noLog).toBe('GitHub refused its log (503)');
+  });
+
+  it('reads MAX_LOGS logs at most, and keeps only the end of each', async () => {
+    const calls: Call[] = [];
+    const jobs = Array.from({ length: 8 }, (_, i) => job(100 + i, `job-${i}`));
+    const { forge } = makeForge([tokenRoute(42), pull, ...checksRoutes(jobs, []), ...base([]), logRoute(() => ({ raw: 'x'.repeat(200_000) + '\nEND' }))], { installationId: 42, calls });
+    const { failed } = await forge.ciFailures('/repo', 7);
+    expect(failed.map((c) => c.name)).toEqual(jobs.map((j) => j.name));
+    expect(calls.filter((c) => c.url.includes('/actions/jobs/'))).toHaveLength(5);
+    expect(failed.filter((c) => c.log !== undefined)).toHaveLength(5);
+    // Its end only: the line the cut fell in dropped, its start being gone.
+    expect(failed[0]!.log).toBe('END');
+  });
+
+  it('rejects a PR without its base, and unreadable check runs, never read as no failure', async () => {
+    const noBase = makeForge([tokenRoute(42), (url) => (url.pathname === '/repos/acme/app/pulls/7' ? { body: openPr() } : undefined)], { installationId: 42 }).forge;
+    await expect(noBase.ciFailures('/repo', 7)).rejects.toThrow(/unreadable answer, not a pull request with its base/);
+    const badRun = makeForge([tokenRoute(42), pull, ...checksRoutes([{ name: 'test', status: 'completed', conclusion: 'failure' }], []), ...base([])], { installationId: 42 }).forge;
+    await expect(badRun.ciFailures('/repo', 7)).rejects.toThrow(/unreadable answer, not a list of check runs/);
+  });
+});
+
+describe('streamTail (ORC-459)', () => {
+  it("keeps a body's last bytes as it streams", async () => {
+    const chunks = ['abc', 'def', 'ghij'].map((c) => new TextEncoder().encode(c));
+    const body = new ReadableStream<Uint8Array>({ start: (c) => { for (const x of chunks) c.enqueue(x); c.close(); } });
+    expect(await streamTail(body, 5)).toBe('fghij');
+    expect(await streamTail(null, 5)).toBe('');
+  });
+
+  it('drops the line a cut fell in, and only when it cut', async () => {
+    const lines = (...parts: string[]) => (async function* () { for (const p of parts) yield new TextEncoder().encode(p); })();
+    expect(await streamTail(lines('secret-ghp_aaaa\n', 'Error: x\n', 'end'), 15)).toBe('Error: x\nend');
+    expect(await streamTail(lines('a\nb'), 15)).toBe('a\nb');
+    // A multi-byte character cut in half goes with its line.
+    expect(await streamTail(lines('é'.repeat(10), '\nok'), 6)).toBe('ok');
   });
 });

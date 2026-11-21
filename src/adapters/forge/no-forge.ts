@@ -12,6 +12,7 @@ const refuse = () => Promise.reject(new Error(NO_GITHUB_APP));
 export class NoForge implements Forge, RepoPermissions {
   findPr: Forge['findPr'] = refuse;
   unresolvedReviewComments: Forge['unresolvedReviewComments'] = refuse;
+  ciFailures: Forge['ciFailures'] = refuse;
   openPrs: Forge['openPrs'] = refuse;
   branches: Forge['branches'] = refuse;
   recentBranches: Forge['recentBranches'] = refuse;

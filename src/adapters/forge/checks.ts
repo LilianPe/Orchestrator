@@ -5,6 +5,9 @@ const PASSED = new Set(['pass', 'skipping']);
 const FAILED = new Set(['fail', 'cancel']);
 const KNOWN = new Set([...PASSED, ...FAILED, 'pending']);
 
+/** A bucket that fails the verdict: what `ciFailures` names, as `summarizeChecks` does (ORC-459). */
+export const isFailed = (bucket: string): boolean => FAILED.has(bucket);
+
 /**
  * A bucket outside pass/skipping/fail/cancel/pending (empty, or new) is never green: it reads as `pending` (ORC-303), so the
  * GitHub reconciliation sends no `pr.checks_passed`, and a merge refuses.

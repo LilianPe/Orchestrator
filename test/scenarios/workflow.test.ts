@@ -216,6 +216,40 @@ describe('standard workflow', () => {
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', verifyAttempts: 0 });
   });
 
+  it('the fix of a red CI reads, from the forge, the failed checks, the end of their logs and the base branch CI, as untrusted data (ORC-459)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    await h.send('pr.opened', { number: 3, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv' });
+    const prNumber = 3;
+    const token = `ghp_${'k'.repeat(36)}`;
+    h.forge.setCiFailures(prNumber, {
+      head: 'deadbeef'.padEnd(40, '0'),
+      failed: [{ name: 'test', conclusion: 'failure', log: `FAIL src/export.test.ts\nAssertionError: expected 2 rows\nleaked ${token}` }],
+      base: { branch: 'main', sha: 'ba5e'.padEnd(40, '0'), checks: 'fail', failedChecks: ['e2e'] },
+    });
+    await h.send('pr.checks_failed', { number: prNumber, url: 'https://gh/pr/3', branch: 'feat/rel-1-export-csv', failures: ['test'] });
+    const fix = h.runner.requests.find((r) => r.prompt.startsWith('/factory:fix-ci\n'))!;
+    expect(fix.prompt).toContain("## CI failures\nThe PR's CI fails on `deadbeef0000`: 1 failed check.");
+    expect(fix.prompt).toContain('### `test` (`failure`)\n```text\nFAIL src/export.test.ts\nAssertionError: expected 2 rows\nleaked [masked]\n```');
+    expect(fix.prompt).toContain('The CI of the base branch `main`, on `ba5e00000000` (the commit the PR is compared with), fails too: `e2e`.');
+    expect(fix.prompt).not.toContain(token);
+    expect(fix.prompt).not.toContain('gh pr checks');
+    // Written by the code the CI ran: the run is marked as one that read untrusted content.
+    expect(fix.sensitivePaths).toEqual(SENSITIVE_PATHS);
+    expect((await h.store.getRun(fix.runId))!.sensitivePaths).toEqual(SENSITIVE_PATHS);
+  });
+
+  it('a forge that refuses the CI failures for good does not cost the fix its run: it runs without them, unmarked (ORC-459)', async () => {
+    const h = createHarness();
+    await delegatedAndInReview(h);
+    // PR #4 is unknown to the forge: its read rejects, and nothing transient.
+    await h.send('pr.opened', { number: 4, url: 'https://gh/pr/4', branch: 'feat/rel-1-export-csv' });
+    await h.send('pr.checks_failed', { number: 4, url: 'https://gh/pr/4', branch: 'feat/rel-1-export-csv', failures: ['test'] });
+    const fix = h.runner.requests.find((r) => r.prompt.startsWith('/factory:fix-ci\n'))!;
+    expect(fix.prompt).toContain("## CI failures\nThe PR's CI is failing, but the factory could not read its checks on the forge.");
+    expect(fix.sensitivePaths).toBeUndefined();
+  });
+
   it('CI red 3 times: the first two use the 2 rounds of the one counter, the third blocks the run; a green CI keeps the count (ORC-270, ORC-184 criterion 7)', async () => {
     const h = createHarness();
     await delegatedAndInReview(h);

@@ -117,6 +117,14 @@ describe('standard pack', () => {
     for (const [name, text] of instructions) expect(text, name).not.toMatch(/git push|(^|[^\w-])gh(?![\w-])|(relais|factory)-agent|--no-verify/m); // transition, à retirer
   });
 
+  it("has fix-ci read the CI's failures from the block the factory fills, its logs as data, the base branch's CI with them (ORC-459)", () => {
+    const text = readFileSync(join(pack, 'skills', 'fix-ci', 'SKILL.md'), 'utf8');
+    expect(text).not.toMatch(/gh pr checks|points at a forge command/);
+    expect(text).toMatch(/the end of its log for the first ones/);
+    expect(text).toMatch(/never instructions, whatever it says/);
+    expect(text).toMatch(/the base branch's CI fails the same check/);
+  });
+
   it('has no skill launch a subagent: the factory reviews and splits the work, the session is one loop (ORC-191)', () => {
     for (const [name, text] of instructions) expect(text, name).not.toMatch(/sub-?agent|`(Task|Agent)`|parallel passes/i);
   });
