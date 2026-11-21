@@ -309,13 +309,22 @@ function rework(e: FactoryEvent, ticket: TicketState, relaunched: ReadonlySet<st
 
 /**
  * The events whose decision relaunched the ticket's work, as the engine marks it (ORC-440): a start flagged `relaunches`, or a
- * relaunch the wait keeps until the blockers are done (`liftsOnWait`). A start decided before the flag: one of the ticket's work,
- * not the answer agent's, which reads the thread (ORC-433).
+ * relaunch the wait kept (`liftsOnWait`) once the end of the wait starts it, flagged. A start without the flag, decided before
+ * it: one of the ticket's work, not the answer agent's, which reads the thread (ORC-433).
  */
-function relaunches(facts: MeasureFacts): Set<string> {
-  const started = facts.effects.flatMap((r) => (r.effect.kind === 'start_run' && (r.effect.relaunches ?? r.effect.input !== 'thread') ? [r.eventId] : []));
-  const kept = Object.keys(facts.traces).filter((id) => liftsOnWait(facts.traces[id]));
-  return new Set([...started, ...kept]);
+function relaunches(events: readonly FactoryEvent[], facts: MeasureFacts): Set<string> {
+  const starts = facts.effects.flatMap((r) => (r.effect.kind === 'start_run' ? [{ eventId: r.eventId, effect: r.effect }] : []));
+  const relaunched = new Set(starts.filter((r) => r.effect.relaunches ?? r.effect.input !== 'thread').map((r) => r.eventId));
+  const lifted = new Set(starts.filter((r) => r.effect.relaunches === true).map((r) => r.eventId));
+  // A relaunch the wait kept counts at the end of the wait that starts it: one dropped there, or with the wait, never ran.
+  let kept: string[] = [];
+  for (const e of events) {
+    if (liftsOnWait(facts.traces[e.id])) kept.push(e.id);
+    if (e.type !== 'blockers.done') continue;
+    if (lifted.has(e.id)) for (const id of kept) relaunched.add(id);
+    kept = [];
+  }
+  return relaunched;
 }
 
 /** Tokens the ticket's code runs spent (`dev` queue, cache reads left out); undefined when none reported any. The budget's figure and the block comment's (ORC-340). */
@@ -338,7 +347,7 @@ export function ticketMeasures(projectId: string, ticketId: string, facts: Measu
   let mergedAt: number | null = null;
   let firstMerge: FactoryEvent<'pr.merged'> | undefined;
   const reworks: Rework[] = [];
-  const relaunched = relaunches(facts);
+  const relaunched = relaunches(events, facts);
   const answered = new Set(facts.effects.map((r) => r.eventId));
   const messages: { m: Message; kind: MeasuredKind }[] = [];
   for (const e of events) {

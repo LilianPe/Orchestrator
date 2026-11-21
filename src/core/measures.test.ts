@@ -192,7 +192,7 @@ describe('ticketMeasures (ORC-235)', () => {
     expect(m.reworks).toEqual([{ cause: 'feedback', id: 'question' }, { cause: 'feedback', id: 'instruction' }]);
   });
 
-  it('reads the relaunch where the engine marks it: a flagged start, a relaunch the wait keeps, the old rows as before (ORC-440)', () => {
+  it('reads the relaunch where the engine marks it: a flagged start, a relaunch the wait kept once started, the old rows as before (ORC-440)', () => {
     const comment = (id: string, at: number) => ev(id, 'ticket.commented', at, { body: 'ok', author: 'h', kind: 'instruction' });
     const mention = (id: string, at: number) => ev(id, 'session.mentioned', at, { linearSessionId: `s-${id}`, body: '?', author: 'h', kind: 'instruction' });
     const started = (eventId: string, effect: object) => ({ ...row(`REL-1:${eventId}:0`, { kind: 'start_run', ...effect } as never), eventId });
@@ -202,6 +202,13 @@ describe('ticketMeasures (ORC-235)', () => {
         comment('flagged', 10),
         mention('waited', 20),
         comment('waited-comment', 25),
+        ev('done', 'blockers.done', 26, { blockers: ['REL-2'] }),
+        // Kept by a wait whose end started nothing (the ticket moved on): it never relaunched.
+        comment('dropped', 27),
+        ev('done-dropped', 'blockers.done', 28, { blockers: ['REL-2'] }),
+        // Kept, then the end of a wait starts its own start, not a relaunch.
+        comment('stale', 29),
+        ev('done-start', 'blockers.done', 29, { blockers: ['REL-2'] }),
         // Kept behind a wait on a ticket not blocked: no relaunch, its trace says only that it is not started.
         mention('kept', 30),
         // Its start says it relaunches nothing, whatever it reads.
@@ -214,11 +221,15 @@ describe('ticketMeasures (ORC-235)', () => {
         started('flagged', { job: 'dev', input: 'feedback', relaunches: true }),
         started('answered', { job: 'other', input: 'feedback', relaunches: false }),
         started('old', { job: 'dev-feedback', input: 'feedback' }),
+        started('done', { job: 'dev', input: 'feedback', relaunches: true }),
+        started('done-start', { job: 'dev' }),
       ],
       traces: {
         waited: ['on.session.mentioned[0]', `${LIFT_ON_WAIT}: dev`, 'dev not started, waiting'],
         'waited-comment': [`${LIFT_ON_WAIT}: dev-feedback`],
         kept: ['dev-feedback not started, waiting'],
+        dropped: [`${LIFT_ON_WAIT}: dev`],
+        stale: [`${LIFT_ON_WAIT}: dev`],
       },
     }));
     expect(m.reworks.map((r) => r.id)).toEqual(['flagged', 'waited', 'waited-comment', 'old']);

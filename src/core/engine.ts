@@ -901,7 +901,8 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   // The status of the step it starts, which the end of intake left to this start (ORC-382).
   const to = job.step !== undefined ? statusReached(workflow, job.step) : undefined;
   if (movesTo(ticket, to)) out.effects.push({ kind: 'move', to });
-  startAs(out, event, ticket, job, start);
+  // The relaunch the wait kept (`liftOnWait`) is made: the rework measure counts it here, not where it was kept (ORC-440).
+  startAs(out, event, ticket, job, start, lifting ? { relaunches: true } : {});
   return out;
 }
 
@@ -1564,16 +1565,19 @@ function liftOnWait(out: Decision, event: FactoryEvent, ticket: TicketState, lif
   out.trace.push(`${LIFT_ON_WAIT}: ${lift.job}`);
 }
 
-/** The trace of a relaunch the wait keeps (`liftOnWait`): no run starts with its decision, the rework measure reads it there (ORC-440). */
+/**
+ * The trace of a relaunch the wait keeps (`liftOnWait`): no run starts with its decision, the rework measure reads it there, and
+ * counts it once `blockers.done` starts it (ORC-440). Read back from the decisions stored: reworded, the past ones are no longer read.
+ */
 export const LIFT_ON_WAIT = 'relaunch kept for the end of the wait';
 
 /** A decision's trace holds a relaunch the wait keeps (`liftOnWait`). */
 export const liftsOnWait = (trace: readonly string[] | undefined): boolean => !!trace?.some((line) => line.startsWith(`${LIFT_ON_WAIT}:`));
 
 /** Starts `job` as `pending` was set aside: its input and its restrictions. */
-function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob): void {
+function startAs(out: Decision, event: FactoryEvent, ticket: TicketState, job: JobSpec, pending: PendingJob, relaunch: { relaunches?: true } = {}): void {
   const { job: _, ...run } = pendingOf(pending);
-  startRun(out, event, ticket, job, run);
+  startRun(out, event, ticket, job, { ...run, ...relaunch });
 }
 
 /**

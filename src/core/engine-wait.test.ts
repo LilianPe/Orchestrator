@@ -48,6 +48,8 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
     const e = event('blockers.done', { blockers: ['REL-2'] });
     const out = decide(waiting(), e, workflow);
     expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev' }));
+    // The wait's own start relaunches nothing (ORC-440).
+    expect(out.effects.find((x) => x.kind === 'start_run')).not.toHaveProperty('relaunches');
     expect(out.effects).toContainEqual({ kind: 'activity', type: 'thought', body: expect.stringContaining('REL-2') });
     expect(after(waiting(), e).waitingOn ?? undefined).toBeUndefined();
   });
@@ -103,7 +105,8 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
       const answered = after(blocked(), reply);
       const out = decide(answered, done, workflow);
       expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
-      expect(starts(answered, done)).toEqual([expect.objectContaining({ job: 'dev', input: 'feedback' })]);
+      // The relaunch the wait kept is made: its start says so (ORC-440).
+      expect(starts(answered, done)).toEqual([expect.objectContaining({ job: 'dev', input: 'feedback', relaunches: true })]);
       expect(after(answered, done)).toMatchObject({ blocked: false, humanInbox: [expect.objectContaining({ body: 'Semicolons' })] });
     });
 
@@ -141,6 +144,9 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
       const kept = blocked();
       const answered = after(kept, comment);
       expect(measured([[comment, decide(kept, comment, workflow)], [done, decide(answered, done, workflow)]])).toEqual([{ cause: 'feedback', id: 'c' }]);
+      // Moved on meanwhile, the end of the wait drops it: it never relaunched.
+      const moved = { ...answered, logical: 'human_review' as const };
+      expect(measured([[comment, decide(kept, comment, workflow)], [done, decide(moved, done, workflow)]])).toEqual([]);
       const free = blocked({ waitingOn: null });
       expect(measured([[comment, decide(free, comment, workflow)]])).toEqual([{ cause: 'feedback', id: 'c' }]);
     });

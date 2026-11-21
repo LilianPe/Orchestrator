@@ -859,7 +859,7 @@ export class PgStore implements AsyncStore {
     await this.db.execute(sql`update inbox set acked_at = to_timestamp(${at / 1000}) where id = ${eventId} and acked_at is null`);
   }
 
-  /** Five reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
+  /** Six reads side by side: the facts of a ticket for its measures, not a decision (no lock, no snapshot needed). */
   async measureFacts(projectId: string, ticketId: string): Promise<MeasureFacts> {
     const [events, runs, acked, ticket, effects, traced] = await Promise.all([
       this.db.execute<{ payload: FactoryEvent }>(sql`
@@ -874,8 +874,8 @@ export class PgStore implements AsyncStore {
       this.getTicket(projectId, ticketId),
       this.listEffects(projectId, ticketId),
       this.db.execute<{ id: string; trace: string[] }>(sql`
-        select d.event_id as id, d.decision->'trace' as trace from decision_trace d join journal j on j.event_id = d.event_id
-        where j.ticket_id = ${ticketId} and j.payload->>'projectId' = ${projectId} and jsonb_array_length(coalesce(d.decision->'trace', '[]'::jsonb)) > 0
+        select event_id as id, decision->'trace' as trace from decision_trace
+        where ticket_id = ${ticketId} and decision->>'projectId' = ${projectId} and jsonb_array_length(coalesce(decision->'trace', '[]'::jsonb)) > 0
       `),
     ]);
     return {
