@@ -1009,13 +1009,13 @@ describe("the daemon's environment the start refuses, doctor's host refuses", ()
     const host = await checkHost(env, asked.exec);
     expect(host).toMatchObject({ engine: 'docker', cgroupV2: true, verdict: 'refused', reasons: [message] });
     expect(asked.calls).toHaveLength(1);
-    const lines: string[] = [];
-    expect(await doctor([], [], { host }).then((r) => (lines.push(...r.lines), r.code))).toBe(1);
+    const { code, lines } = await doctor([], [], { host });
+    expect(code).toBe(1);
     expect(lines).toContain(`Host: refused — ${message}`);
   });
 
   it('refuses an engine neither docker nor podman with the message of the start, without asking it', async () => {
-    const env = { FACTORY_CONTAINER_CLI: 'lxc', FACTORY_RUNNER_IMAGE: 'factory-runner:test' };
+    const env = { FACTORY_CONTAINER_CLI: 'lxc', ...RUNNER };
     const message = await started(env);
     expect(message).toBe('FACTORY_CONTAINER_CLI=lxc: docker or podman expected.');
     const asked = engine(DOCKER_INFO);

@@ -18,7 +18,7 @@ import { activeClaudeAccount, claudeAccountReader, stepSettings } from '../confi
 import { startRefusals } from '../config/start-refusals.js';
 import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
-import { browserImage, containerCli, sandboxRefusals, visualProofLine } from '../app/sandbox-wiring.js';
+import { browserImage, sandboxConfig, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
 import { branchNameOfType, branchSpaces, branchTypes, DEFAULT_BRANCH_NAMING, LEGACY_BRANCHES, legacyBranchName, type BranchNaming } from '../core/naming.js';
 
@@ -91,11 +91,12 @@ interface EngineCgroups {
  * reports the controllers delegated to its user, the only ones it can limit through.
  */
 export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Promise<HostReport> {
-  const cli = containerCli(env);
-  if (!cli) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
+  const sandbox = sandboxConfig(env);
+  if (!sandbox) return { verdict: 'refused', reasons: ['no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox'] };
   // What the start refuses of this environment, with its message (ORC-449): another CLI, unasked; no runner image, said beside the engine's answer.
-  const refused = sandboxRefusals(env);
-  if (typeof cli !== 'string') return { verdict: 'refused', reasons: refused };
+  const refused = 'refusal' in sandbox ? [sandbox.refusal] : [];
+  const { cli } = sandbox;
+  if (!cli) return { verdict: 'refused', reasons: refused };
   let cgroups: EngineCgroups;
   try {
     const args = cli === 'docker' ? ['info', '--format', '{{json .}}'] : ['info', '--format', 'json'];

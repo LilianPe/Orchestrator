@@ -33,7 +33,6 @@ describe('sandboxRefusals (ORC-449)', () => {
 
   it('is what checkHostRuns throws, at the start before anything opens', () => {
     expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'podman' })).toThrow('FACTORY_RUNNER_IMAGE is required with FACTORY_CONTAINER_CLI.');
-    expect(() => checkHostRuns({ FACTORY_CONTAINER_CLI: 'lxc', FACTORY_RUNNER_IMAGE: 'r:1' })).toThrow('FACTORY_CONTAINER_CLI=lxc: docker or podman expected.');
   });
 });
 
