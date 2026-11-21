@@ -232,7 +232,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
       now = 1_700_000_000_000,
       repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-')),
       home = mkdtempSync(join(tmpdir(), 'factory-init-home-')),
-      storeCards = (projectId: string, report: MaturityReport) => storeReport(store, projectId, report, now),
+      storeCards = async (projectId: string, report: MaturityReport) => ({ cards: await storeReport(store, projectId, report, now), where: 'the test store' }),
     }: { store?: SqliteStore; now?: number; repo?: string; home?: string; storeCards?: InitDeps['storeCards'] } = {},
   ) {
     for (const [path, content] of Object.entries(files)) {
@@ -253,6 +253,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     expect(out).toContain(`${MATURITY_HEADER}http://localhost:4100/#maturity`);
     expect(out).toContain('  [to approve] Stack: Node (npm)');
     expect(out).toContain('  [to approve] Commands:\n    setup: npm ci\n    test: npm test');
+    expect(out).toContain('Cards stored in the test store.');
   });
 
   it('a card approved and detected the same again says by whom; nothing over an existing .factory/config.yml', async () => {
@@ -285,6 +286,8 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
       const home = join(mkdtempSync(join(tmpdir(), 'factory-init-')), 'home');
       const { out } = await initCards(NPM, { home, storeCards: instanceCards(home) });
       expect(out).not.toContain('Cards not stored');
+      // Said: a daemon on Postgres would not see them (ORC-437).
+      expect(out).toContain(`Cards stored in SQLite (${join(home, 'factory.db')}): a daemon started with FACTORY_DATABASE_URL reads Postgres and does not see them.`);
       const store = new SqliteStore(join(home, 'factory.db'));
       expect((await store.maturityCards()).map((c) => c.key)).toContain('main');
       await store.close();

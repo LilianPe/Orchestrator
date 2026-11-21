@@ -525,6 +525,7 @@ export function createApp(d: ServerDeps): Hono {
     const { value } = parsed.data;
     const card = await d.store.approveMaturityCard(c.req.param('projectId'), c.req.param('key'), value, operator(c).actor!, d.clock.now());
     if (card === 'changed') return c.json({ error: 'the card changed since it was shown: read it again' }, 409);
+    if (card === 'unchecked') return c.json({ error: `main is not checked yet: run factory dry-run ${c.req.param('projectId')}, then approve its result` }, 409);
     return card ? c.json({ ok: true, card }) : c.json({ error: 'no such card' }, 404);
   });
 

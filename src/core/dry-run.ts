@@ -10,6 +10,8 @@ import { ANSI, logExcerpt } from '../checks/log-excerpt.js';
 import { parseRepoConfig, REPO_CONFIG_PATH, RepoConfigError, setupOf, type RepoConfig } from '../config/repo-config.js';
 import { IN_SANDBOX } from '../publish/extract.js';
 import { BASE, boxOpener, cloneGit, fetchFromForge, initHardenedClone, reportRun, show, testCommands, verifyCommand, withDeadline, within, zFields, type CloneGit } from './clean-verify.js';
+import { MAIN_UNCHECKED } from './maturity.js';
+import { utc } from './prompt.js';
 import { RELEASE_AGE_DAYS, runSealedSetup, SetupFailure } from './sealed-setup.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
 
@@ -328,6 +330,18 @@ export const dryRunHolds = (last: DryRun, now: { sha: string; fingerprint: DryRu
 
 /** What breaks a dry run, each kind in its command once (ORC-409, and the `main` maturity card of ORC-410). */
 export const dryRunBroke = (run: DryRun): string => [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
+
+/**
+ * The `main` maturity card's value (ORC-410): the project's last dry run on its default branch, green or red with what breaks,
+ * its commit and when it ended; without one, not checked yet. `init` stores it, and each dry run on main sets it (ORC-437).
+ */
+export function mainCardValue(run: DryRun | undefined): string {
+  if (!run) return MAIN_UNCHECKED;
+  const of = `the dry run of ${run.sha.slice(0, 12)} on ${utc(run.endedAt)}`;
+  if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
+  const broke = dryRunBroke(run) || 'no break recorded';
+  return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
+}
 
 /**
  * What the block of a ticket a red dry run refuses says (ORC-409): what breaks, each break in its step, its command and the

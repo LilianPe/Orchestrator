@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { packageJsonDependencies, pyprojectDependencies } from '../checks/deps.js';
-import { dryRunBroke, type DryRun } from '../core/dry-run.js';
-import { utc } from '../core/prompt.js';
+import { mainCardValue, type DryRun } from '../core/dry-run.js';
+import { MAIN_CARD } from '../core/maturity.js';
 import type { MaturityPoint } from '../store/types.js';
 
 /** What init detected for the repository's `.factory/config.yml`: its install, its checks by name, what starts the application. */
@@ -36,20 +36,6 @@ const SOURCE = /\.(?:[cm]?[jt]sx?|py)$/;
 const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?|^test_.*\.py|_test\.py|^tests\.py)$/;
 /** A walk stops past this many entries: init stays quick on a large repository, and says so. */
 const WALK_LIMIT = 20_000;
-
-const MAIN_UNCHECKED = 'not checked yet: the dry run (ORC-408) runs setup, build and tests on main';
-
-/**
- * The `main` card: the project's last dry run on its default branch (ORC-408), green or red with what breaks, its commit and
- * when it ended; without one, not checked yet.
- */
-function main(run: DryRun | undefined): string {
-  if (!run) return MAIN_UNCHECKED;
-  const of = `the dry run of ${run.sha.slice(0, 12)} on ${utc(run.endedAt)}`;
-  if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
-  const broke = dryRunBroke(run) || 'no break recorded';
-  return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
-}
 
 /** The names of every dependency of the repository's package.json and pyproject.toml. */
 function dependencies(repo: string): Set<string> {
@@ -142,7 +128,7 @@ export function maturityReport(repo: string, detected: DetectedChecks, lastDryRu
   return [
     { key: 'stack', title: 'Stack', value: stack(repo, deps) },
     { key: 'commands', title: 'Commands', value: commands(detected) },
-    { key: 'main', title: 'main green or red', value: main(lastDryRun) },
+    { key: MAIN_CARD, title: 'main green or red', value: mainCardValue(lastDryRun) },
     { key: 'services', title: 'Services', value: services(repo, deps) },
     { key: 'visual_paths', title: 'Visual paths', value: visualPaths(repo, deps) },
     { key: 'untested', title: 'Areas without tests', value: untested(repo) },
