@@ -145,8 +145,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
   // A SQLite file left from before Postgres is named, never opened (ORC-178).
   for (const line of oldDatabaseWarnings(o.home)) log(line);
-  const store = o.store ?? (await openStore({ env, migrationsFolder: join(root, 'drizzle'), log }));
-  if (!o.store) log('store: Postgres (Drizzle migrations applied)');
+  let store = o.store;
+  if (!store) {
+    store = await openStore({ env, migrationsFolder: join(root, 'drizzle'), log });
+    log('store: Postgres (Drizzle migrations applied)');
+  }
   // From here on, a failed start closes the store it opened (the Postgres pool would keep the process alive).
   try {
     const clock = new SystemClock();

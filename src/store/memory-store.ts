@@ -31,6 +31,7 @@ import {
   timerRowId,
   PAUSE_ACCEPTED,
   pauseAcceptedValue,
+  queueRank,
   approvedCard,
   maturityCard,
   type Artifact,
@@ -152,11 +153,10 @@ interface QueueRecord {
   item: QueueItem;
 }
 
-const rank = (priority: number) => (priority === 0 ? 5 : priority);
 const queueKey = (projectId: string, ticketId: string, job: string) => `${projectId}:${ticketId}:${job}`;
 const open = (r: OutboxRecord) => r.status === 'pending' || r.status === 'running';
 /** The lease token of a stored attempt (ORC-344), 0 on a record from before it. */
-const leaseToken = (r: RunRecord) => (r as { leaseToken?: number }).leaseToken ?? 0;
+const leaseToken = (r: RunRecord) => r.leaseToken ?? 0;
 
 /**
  * The store of the tests and of the harness's fake adapters (ORC-178): the `Store` port in this process's memory, held to
@@ -167,7 +167,11 @@ export class MemoryStore implements Store {
   private readonly tickets = new Map<string, TicketState>();
   private readonly events = new Map<string, EventRow>();
   private readonly inbox = new Map<string, InboxRow>();
+  /** The inbox rows not processed yet, in arrival order: what every read of the inbox walks. */
+  private readonly unprocessed = new Map<string, InboxRow>();
   private inboxSeq = 0;
+  /** Events journaled per ticket (`null`: without one), the `seq` of the next decision. */
+  private readonly journaled = new Map<string | null, number>();
   private readonly runs = new Map<string, RunRecord>();
   private readonly timers = new Map<string, TimerRecord>();
   private readonly queue = new Map<string, QueueRecord>();
@@ -226,7 +230,7 @@ export class MemoryStore implements Store {
   }
 
   private pending(): InboxRow[] {
-    return [...this.inbox.values()].filter((r) => r.processedAt === null);
+    return [...this.unprocessed.values()];
   }
 
   async markInboxProcessed(id: string): Promise<void> {
@@ -237,8 +241,13 @@ export class MemoryStore implements Store {
   private markProcessed(id: string): boolean {
     const row = this.inbox.get(id);
     if (!row || row.processedAt !== null) return false;
-    row.processedAt = this.now();
+    this.processed(row);
     return true;
+  }
+
+  private processed(row: InboxRow): void {
+    row.processedAt = this.now();
+    this.unprocessed.delete(row.event.id);
   }
 
   /**
@@ -266,7 +275,7 @@ export class MemoryStore implements Store {
     if (openRows.length > 0 && !backedOff) return { status: 'waiting', reason: `effect ${openRows[0]!.id} is unfinished` };
     if (jumped && !backedOff) return { status: 'waiting', reason: `${first!.event.id} comes first` };
     if (this.events.has(event.id)) {
-      row.processedAt = this.now();
+      this.processed(row);
       return { status: 'duplicate' };
     }
 
@@ -278,8 +287,7 @@ export class MemoryStore implements Store {
     if (plan.ticket) this.refuseClaim(req.peers ?? [], known, plan.ticket);
 
     for (const r of openRows) Object.assign(r, { status: 'failed', error: `cancelled by ${event.id}` });
-    const seq = [...this.events.values()].filter((e) => e.ticketId === ticketId).length + 1;
-    this.events.set(event.id, { ticketId, event: copy(event) });
+    const seq = this.journal(event.id, ticketId, event);
     this.decisionTrace.set(event.id, copy(decisionRecord(event, seq, known, decidedOn(req, frozen), plan)));
     // Every version a decision ran on is kept, projection written or not: its replay needs it (ORC-174).
     if (req.workflow.hash !== '' && frozen.hash === req.workflow.hash && !this.workflowVersions.has(req.workflow.hash)) {
@@ -296,7 +304,7 @@ export class MemoryStore implements Store {
       });
       return id;
     });
-    row.processedAt = this.now();
+    this.processed(row);
     return { status: 'committed', seq, effectIds, known, plan, preempted };
   }
 
@@ -392,7 +400,9 @@ export class MemoryStore implements Store {
    */
   private appendResult(e: FactoryEvent | StoredEvent): boolean {
     if (this.inbox.has(e.id)) return false;
-    this.inbox.set(e.id, { seq: ++this.inboxSeq, processedAt: null, ackedAt: null, event: copy(e) as StoredEvent });
+    const row: InboxRow = { seq: ++this.inboxSeq, processedAt: null, ackedAt: null, event: copy(e) as StoredEvent };
+    this.inbox.set(e.id, row);
+    this.unprocessed.set(e.id, row);
     return true;
   }
 
@@ -433,13 +443,17 @@ export class MemoryStore implements Store {
 
   async effectTickets(): Promise<{ projectId: string; ticketId?: string }[]> {
     const now = this.now();
-    const seen = new Map<string, { projectId: string; ticketId?: string }>();
+    // The first open row of each ticket, in one pass: only it may be handed out.
+    const heads = new Map<string, OutboxRecord>();
     for (const r of this.outbox.values()) {
-      const due = (r.status === 'pending' && r.availableAt <= now) || (r.status === 'running' && (r.leaseUntil ?? 0) < now);
-      if (!due || this.openEffects(r.projectId, r.ticketId)[0] !== r) continue;
-      seen.set(`${r.projectId}\0${r.ticketId}`, { projectId: r.projectId, ...(r.ticketId === null ? {} : { ticketId: r.ticketId }) });
+      if (!open(r)) continue;
+      const key = `${r.projectId}\0${r.ticketId}`;
+      const head = heads.get(key);
+      if (!head || r.seq < head.seq || (r.seq === head.seq && r.i < head.i)) heads.set(key, r);
     }
-    return [...seen.values()];
+    return [...heads.values()]
+      .filter((r) => (r.status === 'pending' && r.availableAt <= now) || (r.status === 'running' && (r.leaseUntil ?? 0) < now))
+      .map((r) => ({ projectId: r.projectId, ...(r.ticketId === null ? {} : { ticketId: r.ticketId }) }));
   }
 
   async listEffects(projectId: string, ticketId?: string): Promise<OutboxRow[]> {
@@ -474,8 +488,16 @@ export class MemoryStore implements Store {
 
   async recordEvent(e: FactoryEvent): Promise<boolean> {
     if (this.events.has(e.id)) return false;
-    this.events.set(e.id, { ticketId: e.ticketId ?? null, event: copy(e) });
+    this.journal(e.id, e.ticketId ?? null, e);
     return true;
+  }
+
+  /** Writes a journal row; returns its position in its ticket's journal. */
+  private journal(id: string, ticketId: string | null, e: FactoryEvent): number {
+    const seq = (this.journaled.get(ticketId) ?? 0) + 1;
+    this.journaled.set(ticketId, seq);
+    this.events.set(id, { ticketId, event: copy(e) });
+    return seq;
   }
 
   async recentEvents(limit: number, ticketId?: string): Promise<FactoryEvent[]> {
@@ -505,7 +527,7 @@ export class MemoryStore implements Store {
   async claimRun(id: string, fence: number): Promise<number | undefined> {
     const run = this.runs.get(id);
     if (!run || run.status !== 'running' || leaseToken(run) !== fence) return undefined;
-    (run as { leaseToken?: number }).leaseToken = fence + 1;
+    run.leaseToken = fence + 1;
     return fence + 1;
   }
 
@@ -563,7 +585,7 @@ export class MemoryStore implements Store {
   async enqueue(item: QueueItem): Promise<string> {
     const key = queueKey(item.projectId, item.ticketId, item.job);
     const kept = this.queue.get(key);
-    this.queue.set(key, { queue: kept?.queue ?? item.queue, enqueuedAt: kept?.enqueuedAt ?? item.enqueuedAt, rank: rank(item.priority), lease: null, leaseUntil: null, item: copy(item) });
+    this.queue.set(key, { queue: kept?.queue ?? item.queue, enqueuedAt: kept?.enqueuedAt ?? item.enqueuedAt, rank: queueRank(item.priority), lease: null, leaseUntil: null, item: copy(item) });
     return key;
   }
 
@@ -581,8 +603,7 @@ export class MemoryStore implements Store {
   }
 
   private claimed(claim: QueueClaim): QueueRecord | undefined {
-    const { projectId, ticketId, job } = claim.item;
-    const row = this.queue.get(queueKey(projectId, ticketId, job));
+    const row = this.queue.get(claim.id);
     return row?.lease === claim.lease ? row : undefined;
   }
 
@@ -594,7 +615,7 @@ export class MemoryStore implements Store {
 
   async finishQueued(claim: QueueClaim): Promise<boolean> {
     const row = this.claimed(claim);
-    if (row) this.queue.delete(queueKey(claim.item.projectId, claim.item.ticketId, claim.item.job));
+    if (row) this.queue.delete(claim.id);
     return row !== undefined;
   }
 
@@ -811,12 +832,12 @@ export class MemoryStore implements Store {
 
   async findingsOf(projectId: string, ticketId: string, sha: string): Promise<ReviewFinding[]> {
     const rows = this.findings.filter((f) => f.projectId === projectId && f.ticketId === ticketId && f.sha === sha);
-    return sortBy([...rows], (f) => f.lens, (f) => f.n).map((f) => ({ ...copy(f.finding), lens: f.lens as ReviewLens, runId: f.runId }));
+    return sortBy(rows, (f) => f.lens, (f) => f.n).map((f) => ({ ...copy(f.finding), lens: f.lens as ReviewLens, runId: f.runId }));
   }
 
   async ticketFindings(projectId: string, ticketId: string): Promise<KeptFinding[]> {
     const rows = this.findings.filter((f) => f.projectId === projectId && f.ticketId === ticketId);
-    return sortBy([...rows], (f) => f.at, (f) => f.lens, (f) => f.n).map((f) => ({
+    return sortBy(rows, (f) => f.at, (f) => f.lens, (f) => f.n).map((f) => ({
       ...copy(f.finding),
       lens: f.lens as ReviewLens,
       runId: f.runId,

@@ -36,18 +36,18 @@ describe('bootstrap', () => {
     await app.stop();
   });
 
-  it('starts beside a relais.db or factory.db left from SQLite without opening it, and names each to archive (ORC-178)', async () => {
+  it('starts beside a relais.db or factory.db left from SQLite without opening it, and names each to archive (ORC-178)', async () => { // transition, à retirer
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
     saveInstance(home, { port: 4171, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     // Not a SQLite file: a start that opened one would fail on it.
-    writeFileSync(join(home, 'relais.db'), 'not a database');
+    writeFileSync(join(home, 'relais.db'), 'not a database'); // transition, à retirer
     writeFileSync(join(home, 'factory.db'), 'not a database either');
     const logs: string[] = [];
     const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {} });
     await app.stop();
     expect(logs.filter((m) => m.includes('left from the SQLite store, not read'))).toEqual(oldDatabaseWarnings(home));
     expect(oldDatabaseWarnings(home)).toHaveLength(2);
-    expect(readFileSync(join(home, 'relais.db'), 'utf8')).toBe('not a database');
+    expect(readFileSync(join(home, 'relais.db'), 'utf8')).toBe('not a database'); // transition, à retirer
   });
 
   it('refuses to start without FACTORY_DATABASE_URL: Postgres is the only store (ORC-178)', async () => {

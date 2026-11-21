@@ -67,7 +67,7 @@ Every call to Linear's API is bounded (30 s). A rate limit (a 429, or a `RATELIM
 | Daemon log | Standard output of `factory up` (`[factoryd] …`, warnings starting with `Warning:`). As a service: `journalctl`, `docker compose logs`. The `<FACTORY_HOME>/logs/` folder is not used for now. |
 | Run transcript | `<FACTORY_HOME>/transcripts/<runId>.jsonl`: Claude Code's `stream-json` output (messages, tool calls, result, cost), **masked** (see below). Outside the database and the log. Also via `GET /api/runs/<runId>/transcript`. |
 | A ticket's Claude session | `<FACTORY_HOME>/sessions/<projet>/<ticket>/`: the ticket's Claude Code config folder, mounted as `~/.claude` for the runs that resume its session (with a sandbox, ORC-217). Outside the database and the log; the source of truth stays in the database, the session only provides context. Each run's role and session id are stored on the run (`sessionRole`, `claudeSessionId`). |
-| Events, runs, costs, queue | Postgres, the only store (ORC-178): `FACTORY_DATABASE_URL` (tables `inbox`, `journal`, `tickets`, `attempts`, `outbox`, `timers`…); without it the daemon does not start. The last 100 events: UI or `GET /api/events/recent`. At startup the daemon writes `store: Postgres (Drizzle migrations applied)`. A `relais.db` or `factory.db` left in `<FACTORY_HOME>` from the SQLite store is neither read nor taken into Postgres: the start names it (`relais.db: left from the SQLite store, not read (ORC-178)…`) until it is [archived and deleted](#archiving-the-sqlite-data-orc-178). |
+| Events, runs, costs, queue | Postgres, the only store (ORC-178): `FACTORY_DATABASE_URL` (tables `inbox`, `journal`, `tickets`, `attempts`, `outbox`, `timers`…); without it the daemon does not start. The last 100 events: UI or `GET /api/events/recent`. At startup the daemon writes `store: Postgres (Drizzle migrations applied)`. A SQLite database file left in `<FACTORY_HOME>` from before Postgres is neither read nor taken into Postgres: the start names it (`<file>: left from the SQLite store, not read (ORC-178)…`) until it is [archived and deleted](#archiving-the-sqlite-data-orc-178). |
 | Run labels | Each run keeps, fixed at creation, what it ran with (`labels`, also in `/api/state`): job, queue, model, the factory's version, its commit read from `FACTORY_COMMIT` if set, `sha256` fingerprints of the prompt (the run's own, specific to the ticket, and its template, where the ticket fields are replaced by placeholders: identical from one ticket to another for the same job), of the skills, the workflow and the config (`settings`, `hooks/`, `.claude-plugin/`, `agents/`, `commands/`, `.mcp.json`). The config fingerprint covers the run settings without the `<FACTORY_HOME>` path, and the pack's text files are hashed with LF line endings: two instances, Windows or Linux, with the same config and the same pack have the same fingerprints. Symbolic links in the pack are neither followed nor hashed. In Postgres, also in the `attempts` columns. Labels that have no source yet (the factory's commit without `FACTORY_COMMIT`, effort, image, risk, register and delivered facts, knowledge index) are `null`, and `labels.pending` (computed on read) gives the tickets that will fill them. The pack fingerprints are computed on every run, as Claude Code rereads the pack: a change counts from the next run. An unreadable pack gives `null` fingerprints (warning `attempt labels: pack not fingerprinted` in the log), without preventing the run. |
 | What the team sees | Each ticket's Linear agent session: acknowledgement, live activity, questions, summaries, errors. |
 
@@ -86,40 +86,42 @@ The Postgres schema is in `src/store/pg/schema.ts` and its migrations in `drizzl
 
 ## Archiving the SQLite data (ORC-178)
 
-Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds in `FACTORY_HOME` at its start; a `relais.db` still in Relais's old home, `~/.relais` by default, is found by hand).
-
-On the server, the daemon stopped (`systemctl stop factory` or `docker compose stop`), with `SQLITE_HOME` the folder holding the files (`FACTORY_HOME`, `~/.factory` by default, or Relais's old home for `relais.db`):
-
-```bash
-set -euo pipefail
-SQLITE_HOME="${FACTORY_HOME:-$HOME/.factory}"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-ARCHIVE="$HOME/relais-sqlite-$STAMP.tar.gz"
-cd "$SQLITE_HOME"
-# What exists of the four, with each database's -wal and -shm (the daemon stopped, the files are whole).
-ITEMS=$(ls -d relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm transcripts workspaces 2>/dev/null || true)
-echo "$ITEMS"
-tar -czf "$ARCHIVE" $ITEMS
-sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
-tar -tzf "$ARCHIVE" > /dev/null && echo "archive readable: $ARCHIVE"
-```
-
-From a workstation (or the backup host), copy it off the server and check it there:
-
-```bash
-scp '<server>:~/relais-sqlite-<STAMP>.tar.gz*' .
-sha256sum -c relais-sqlite-<STAMP>.tar.gz.sha256
-```
-
-Only once that check passes off the server, back on the server, in `SQLITE_HOME`, the daemon still stopped. Delete `transcripts/` and `workspaces/` only where they are SQLite's time (Relais's home, or a factory that never ran on Postgres): on a server already on `FACTORY_DATABASE_URL` before ORC-178, they hold the current runs' transcripts and worktrees, so delete the `.db` files alone there:
-
-```bash
-rm -f relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm
-rm -rf transcripts workspaces
-rm -f "$ARCHIVE" "$ARCHIVE.sha256"
-```
-
-Then start the daemon: its start no longer names any SQLite file. It makes `transcripts/` and `workspaces/` again as runs need them; the worktrees come back from the pushed branches.
+> **Transition note** (ORC-178): the SQLite files of before Postgres, to archive once per server.
+>
+> Postgres is the only store since ORC-178, and its data started from zero: nothing of `relais.db` (Relais), `factory.db` (the factory before Postgres), `transcripts/` nor `workspaces/` of that time is taken into Postgres. They are archived off the server, as a dated copy, then deleted. A human operation, done once per server, the daemon stopped (the daemon never deletes them, and never reads them: it only names a `relais.db` or `factory.db` it finds in `FACTORY_HOME` at its start; a `relais.db` still in Relais's old home, `~/.relais` by default, is found by hand).
+>
+> On the server, the daemon stopped (`systemctl stop factory` or `docker compose stop`), with `SQLITE_HOME` the folder holding the files (`FACTORY_HOME`, `~/.factory` by default, or Relais's old home for `relais.db`):
+>
+> ```bash
+> set -euo pipefail
+> SQLITE_HOME="${FACTORY_HOME:-$HOME/.factory}"
+> STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+> ARCHIVE="$HOME/relais-sqlite-$STAMP.tar.gz"
+> cd "$SQLITE_HOME"
+> # What exists of the four, with each database's -wal and -shm (the daemon stopped, the files are whole).
+> ITEMS=$(ls -d relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm transcripts workspaces 2>/dev/null || true)
+> echo "$ITEMS"
+> tar -czf "$ARCHIVE" $ITEMS
+> sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+> tar -tzf "$ARCHIVE" > /dev/null && echo "archive readable: $ARCHIVE"
+> ```
+>
+> From a workstation (or the backup host), copy it off the server and check it there:
+>
+> ```bash
+> scp '<server>:~/relais-sqlite-<STAMP>.tar.gz*' .
+> sha256sum -c relais-sqlite-<STAMP>.tar.gz.sha256
+> ```
+>
+> Only once that check passes off the server, back on the server, in `SQLITE_HOME`, the daemon still stopped. Delete `transcripts/` and `workspaces/` only where they are SQLite's time (Relais's home, or a factory that never ran on Postgres): on a server already on `FACTORY_DATABASE_URL` before ORC-178, they hold the current runs' transcripts and worktrees, so delete the `.db` files alone there:
+>
+> ```bash
+> rm -f relais.db relais.db-wal relais.db-shm factory.db factory.db-wal factory.db-shm
+> rm -rf transcripts workspaces
+> rm -f "$ARCHIVE" "$ARCHIVE.sha256"
+> ```
+>
+> Then start the daemon: its start no longer names any SQLite file. It makes `transcripts/` and `workspaces/` again as runs need them; the worktrees come back from the pushed branches.
 
 ## Measures (ORC-235)
 

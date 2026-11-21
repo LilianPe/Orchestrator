@@ -68,7 +68,7 @@ describe.skipIf(!PG_URL)('openStore and the daemon on Postgres', () => {
     expect(logs.join('\n')).not.toContain(`${username}:${password}@`);
   });
 
-  it('starts on Postgres beside a relais.db and a factory.db left from SQLite, neither read nor changed (ORC-178)', async () => {
+  it('starts on Postgres beside a relais.db and a factory.db left from SQLite, neither read nor changed (ORC-178)', async () => { // transition, à retirer
     const home = mkdtempSync(join(tmpdir(), 'factory-boot-pg-'));
     saveInstance(home, { port: 4188, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
     // Not SQLite files: a start that opened one would fail on it.

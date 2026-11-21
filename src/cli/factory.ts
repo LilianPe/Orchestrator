@@ -136,7 +136,7 @@ async function runInitCommand(args: string[]): Promise<number> {
     dev: values.dev,
     exec: execCmd,
     createSmee: () => createSmeeChannel(),
-    storeCards: instanceCards(),
+    storeCards: instanceCards,
     io: {
       ask: async (q, def) => (await rl.question(`${q}${def ? ` [${def}]` : ''}: `)).trim() || def || '',
       print: (s) => console.log(s),

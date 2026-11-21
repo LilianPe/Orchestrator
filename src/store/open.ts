@@ -39,8 +39,8 @@ export async function openStore(o: OpenStoreOptions): Promise<Store> {
   return new PgStore({ connectionString: url, onError });
 }
 
-/** The SQLite files of the stores before Postgres, Relais's and the factory's: never opened again (ORC-178). */
-export const OLD_DATABASES = ['relais.db', 'factory.db'];
+/** The SQLite files of the stores before Postgres, Relais's and the factory's: never opened again (ORC-178; transition, à retirer). */
+export const OLD_DATABASES = ['relais.db', 'factory.db']; // transition, à retirer
 
 /**
  * What a start says of each SQLite file still in `home`: not read, its data not taken into Postgres, to archive off the

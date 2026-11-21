@@ -118,6 +118,9 @@ export type TimerRecord = TimerFired & {
   armedBy?: string;
 };
 
+/** A queue item's place by priority: 1 (urgent) first, 0 (none) after 4 (low). */
+export const queueRank = (priority: number): number => (priority === 0 ? 5 : priority);
+
 export interface QueueItem {
   projectId: string;
   ticketId: string;

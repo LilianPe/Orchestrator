@@ -68,7 +68,7 @@ All of the instance's state lives in **`FACTORY_HOME`**, by default `~/.factory`
 | `workspaces/<project>/_trunk/<runId>/` | Detached copy of the main branch, one per read-only question, deleted when it ends. | — |
 | `logs/` | Created at startup but not used yet: the daemon's logs go to standard output. | — |
 
-Backing up an instance = backing up `config.yaml`, `secrets.json`, `factory.yml` and the Postgres database of `FACTORY_DATABASE_URL` (`pg_dump`): the factory keeps its state nowhere else (ORC-178). A `relais.db` or `factory.db` left from the SQLite store is archived then deleted ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Worktrees are recreated from the pushed branches.
+Backing up an instance = backing up `config.yaml`, `secrets.json`, `factory.yml` and the Postgres database of `FACTORY_DATABASE_URL` (`pg_dump`): the factory keeps its state nowhere else (ORC-178). A SQLite database file left from before Postgres is archived then deleted ([`operations.md`](operations.md#archiving-the-sqlite-data-orc-178)). Worktrees are recreated from the pushed branches.
 
 ## Uninstalling
 

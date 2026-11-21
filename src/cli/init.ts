@@ -148,9 +148,7 @@ async function printMaturity(d: InitDeps, projectId: string, report: MaturityRep
  * The maturity cards in the instance's store (ORC-410), opened for the write and closed: Postgres brought to the latest
  * migration first, as init may run before the daemon ever did.
  */
-export const instanceCards =
-  () =>
-  async (projectId: string, report: MaturityReport): Promise<StoredCards> => {
+export async function instanceCards(projectId: string, report: MaturityReport): Promise<StoredCards> {
     const store = await openStore({ env: process.env, migrationsFolder: join(repoRoot(), 'drizzle') });
     const where = `Postgres (${DATABASE_URL_ENV})`;
     try {

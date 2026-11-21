@@ -283,7 +283,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     vi.stubEnv('FACTORY_DATABASE_URL', '');
     try {
       const home = join(mkdtempSync(join(tmpdir(), 'factory-init-')), 'home');
-      const { out } = await initCards(NPM, { home, storeCards: instanceCards() });
+      const { out } = await initCards(NPM, { home, storeCards: instanceCards });
       expect(out).toContain('Cards not stored (FACTORY_DATABASE_URL is not set: the factory keeps its state in Postgres only. Set it to the Postgres URL.)');
       expect(existsSync(join(home, 'factory.db'))).toBe(false);
     } finally {

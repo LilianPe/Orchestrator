@@ -78,8 +78,6 @@ export async function heldRun(h: ReturnType<typeof createHarness>): Promise<stri
   return (await h.ticket()).activeRunId!;
 }
 
-export type StoreKind = 'memory' | 'postgres';
-
 /**
  * The database of one harness (ORC-228). `connect` opens a store on it, read on the harness's
  * simulated clock (leases, backoffs, due rows), as a process does at its start: once when the
@@ -93,18 +91,15 @@ function memoryDatabase(): HarnessDatabase {
   return (now) => (store ??= new MemoryStore(now));
 }
 
-let databases: { kind: StoreKind; create: () => HarnessDatabase } = { kind: 'memory', create: memoryDatabase };
+let createDatabase: () => HarnessDatabase = memoryDatabase;
 
 /**
  * Where the harnesses created from now on keep their state: a MemoryStore each by
  * default, a Postgres database each in the `scenarios-pg` project (test/helpers/pg-harness.ts).
  */
-export function useHarnessDatabases(kind: StoreKind, create: () => HarnessDatabase): void {
-  databases = { kind, create };
+export function useHarnessDatabases(create: () => HarnessDatabase): void {
+  createDatabase = create;
 }
-
-/** The database the scenarios run on, for the few written for one of them. */
-export const harnessStoreKind = (): StoreKind => databases.kind;
 
 /**
  * A store as one process sees it: `kill()` is that process dying (`kill -9`). From then on none of
@@ -303,7 +298,7 @@ export function createHarness(
   const workflow = loadTestWorkflow(opts.workflow ?? opts.preset?.workflow, { aiReview: opts.aiReview, fantome: opts.fantome, fullChain: opts.fullChain, statuses: opts.statuses });
   const clock = opts.clock ?? new FakeClock(Date.UTC(2026, 9, 10, 9, 0));
   const given = opts.store;
-  const database: HarnessDatabase = given ? () => given : databases.create();
+  const database: HarnessDatabase = given ? () => given : createDatabase();
   const tracker = new FakeTracker(Object.values(workflow.states));
   const forge = new FakeForge();
   const runner = new FakeRunner(clock);

@@ -107,7 +107,7 @@ const dateToMs = (value: Date | string | null): number => {
 
 
 /**
- * Queue order of the `Store` port (MemoryStore's too): priority 1 (urgent) first, 0 (none) after 4 (low), then age, then
+ * Queue order of the `Store` port (test/helpers/store-suite.ts): priority 1 (urgent) first, 0 (none) after 4 (low), then age, then
  * arrival: `created_at` is the server's `clock_timestamp()` (as the inbox's `received_at`), so two
  * items enqueued at the same instant keep their order, whatever their ids (ORC-228).
  */
@@ -1137,7 +1137,7 @@ export class PgStore implements AsyncStore {
   }
 
   async putGhostTicket(t: GhostTicket): Promise<void> {
-    // Through JSON: an absent field stays absent, as MemoryStore keeps it.
+    // Through JSON: an absent field stays absent, as the `Store` contract has it.
     const data = JSON.parse(JSON.stringify(t)) as GhostTicket;
     await this.db.insert(schema.ghostTickets).values({ replayId: t.replayId, ticketId: t.ticketId, data }).onConflictDoUpdate({ target: [schema.ghostTickets.replayId, schema.ghostTickets.ticketId], set: { data } });
   }
@@ -1253,7 +1253,7 @@ export class PgStore implements AsyncStore {
     return {
       hosts: hosts.rows.map((r) => ({ host: r.host, requests: Number(r.requests), refused: Number(r.refused) })),
       rules: rules.rows.map((r) => ({ rule: r.rule, refusals: Number(r.refusals) })),
-      // Sorted here, as MemoryStore does: the same order on both, whatever the database's collation.
+      // Sorted here, as the `Store` contract has it: the same order on every store, whatever the database's collation.
       runs: runs.rows
         .map((r) => ({ runId: r.run_id, projectId: r.project_id, ticketId: r.ticket_id, requests: Number(r.requests), refused: Number(r.refused), refusals: Number(r.refusals) }))
         .sort(byMostRefused),
@@ -1310,7 +1310,7 @@ export class PgStore implements AsyncStore {
   }
 
   /**
-   * Reads the due timers without changing them, as MemoryStore does: a timer stays due until `fireTimer`
+   * Reads the due timers without changing them, as the `Store` contract has it: a timer stays due until `fireTimer`
    * fires it, so a pass cut before that (an error, a shutdown) finds it again on the next one. A
    * row written before ORC-161 (a job, `kind` = the job's name) reads as a `debounce` of that job.
    */
@@ -1378,7 +1378,7 @@ export class PgStore implements AsyncStore {
       );
       const current = existing.rows[0];
       if (current) {
-        // A deduped row keeps its place in line, as MemoryStore's queue keeps its first `enqueuedAt`. A row being
+        // A deduped row keeps its place in line, as the port's queue keeps its first arrival. A row being
         // handed out is not one: its claim's finish would remove the newer request with it.
         await tx.execute(sql`
           update outbox set payload = ${JSON.stringify(item)}::jsonb, updated_at = to_timestamp(${this.now() / 1000})
@@ -1514,7 +1514,7 @@ export class PgStore implements AsyncStore {
     });
   }
 
-  /** Items in line: pending, or handed out under a lease that expired (their holder died), as MemoryStore lists them. */
+  /** Items in line: pending, or handed out under a lease that expired (their holder died), as the `Store` port lists them. */
   async listQueue(): Promise<QueueItem[]> {
     const result = await this.db.execute<{ payload: QueueItem }>(
       sql`

@@ -6,7 +6,7 @@ import { delegatedJob } from '../core/chain.js';
 import { pickupFailures } from '../core/pickup.js';
 import { repoLabel } from '../core/routing.js';
 import { routedIssues } from '../adapters/tracker/linear/reconcile.js';
-import type { Store } from '../store/types.js';
+import { queueRank, type Store } from '../store/types.js';
 
 export interface PlanRow {
   identifier: string;
@@ -16,8 +16,6 @@ export interface PlanRow {
   status: 'taken' | 'already handled' | 'clarify' | 'not taken';
   reasons: string[];
 }
-
-const rank = (p: number) => (p === 0 ? 5 : p);
 
 export async function planRows(d: {
   tracker: Pick<Tracker, 'listDelegated'>;
@@ -74,7 +72,7 @@ export async function planRows(d: {
       rows.push({ ...row, status, reasons });
     }
   }
-  return rows.sort((a, b) => rank(a.priority) - rank(b.priority));
+  return rows.sort((a, b) => queueRank(a.priority) - queueRank(b.priority));
 }
 
 export function formatPlan(rows: PlanRow[]): string {
