@@ -178,6 +178,11 @@ describe('the maturity report on what it reads only in part (ORC-454)', () => {
     expect(v['stack']).toMatch(/^Node \(no lockfile\), Python \(uv\); package\.json not fully read \(invalid JSON .*\); pyproject\.toml not fully read \(unreadable TOML .*\): Stack, Services and Visual paths may miss some of their dependencies$/);
   });
 
+  it('a reader that fails otherwise than on a malformed entry is said too, never stops the report', () => {
+    const deep = '{"overrides":' + '{"a":'.repeat(20_000) + '"1"' + '}'.repeat(20_001);
+    expect(valueOf(repoOf({ 'package.json': deep }))['stack']).toMatch(/^Node \(no lockfile\); package\.json not fully read \(.+\): Stack, Services and Visual paths may miss some of its dependencies$/);
+  });
+
   it('well-formed manifests add nothing to the cards', () => {
     const v = valueOf(repoOf({ 'package.json': JSON.stringify({ dependencies: { vue: '3' } }), 'package-lock.json': '{}' }));
     expect([v['stack'], v['services'], v['visual_paths']]).toEqual(['Node (npm), Vue', 'none', 'none: a front end, but none of its usual directories']);
