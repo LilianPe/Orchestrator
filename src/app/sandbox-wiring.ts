@@ -40,34 +40,31 @@ export function sandboxConfig(env: NodeJS.ProcessEnv): SandboxConfig | { cli?: '
 
 /**
  * The daemon's environment the start refuses, for the start and `factory doctor`'s host check alike (ORC-449), each with the
- * start's message: `sandboxConfig`'s refusal (a limit or the uid/gid too, ORC-450), or no container engine at all, where an agent would run on the host under the
- * daemon's user, next to its secrets, unless `FACTORY_ALLOW_HOST_RUNS=1` chooses it, for development (ORC-349).
+ * start's message: `sandboxConfig`'s refusal (a limit or the uid/gid too, ORC-450), or no container engine at all. An agent
+ * runs in a sandbox or not at all: there is no run on the host any more (ORC-179).
  */
 export function sandboxRefusals(env: NodeJS.ProcessEnv): string[] {
   const sandbox = sandboxConfig(env);
   if (sandbox) return 'refusal' in sandbox ? [sandbox.refusal] : [];
-  if (env['FACTORY_ALLOW_HOST_RUNS'] === '1') return [];
   return [
-    'FACTORY_CONTAINER_CLI is not set: the agents would run on this machine, under the daemon\'s user, without isolation. ' +
-      'Set FACTORY_CONTAINER_CLI (docker or podman) and FACTORY_RUNNER_IMAGE, or FACTORY_ALLOW_HOST_RUNS=1 to run them on the host anyway (development only).',
+    'FACTORY_CONTAINER_CLI is not set: the agents run only in a rootless container, there is no run on this machine. ' +
+      'Set FACTORY_CONTAINER_CLI (podman, or docker) and FACTORY_RUNNER_IMAGE (docs/first-run.md).',
   ];
 }
 
 /** The start's `sandboxRefusals`, before anything opens: the first one throws. */
-export function checkHostRuns(env: NodeJS.ProcessEnv): void {
+export function checkSandboxes(env: NodeJS.ProcessEnv): void {
   const [refusal] = sandboxRefusals(env);
   if (refusal) throw new Error(refusal);
 }
 
 /**
- * The sandboxes of real runs (ORC-204): a container per attempt when FACTORY_CONTAINER_CLI is set, none
- * otherwise. Each reaches out only through `egress`, the factory's proxy (ORC-213).
+ * The sandboxes of real runs (ORC-204): a container per attempt, from FACTORY_CONTAINER_CLI. Each reaches out only
+ * through `egress`, the factory's proxy (ORC-213). Without an engine it throws, as the start did before anything opened (`checkSandboxes`).
  */
-export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress, o: { browserImage?: string; exec?: Exec } = {}): SandboxProvider | undefined {
+export function makeSandboxes(env: NodeJS.ProcessEnv, instance: string, egress: Egress, o: { browserImage?: string; exec?: Exec } = {}): SandboxProvider {
   const sandbox = sandboxConfig(env);
-  if (!sandbox) return undefined;
-  // The start refused it already, before anything opened (`checkHostRuns`).
-  if ('refusal' in sandbox) throw new Error(sandbox.refusal);
+  if (!sandbox || 'refusal' in sandbox) throw new Error(sandboxRefusals(env)[0]);
   return new SandboxRouter([
     {
       name: 'container',

@@ -1,7 +1,8 @@
 import type { Verifier, VerifyResult } from '../../core/verify.js';
 import type { CheckRunner } from './types.js';
 
-const PASS: VerifyResult = { ok: true, failures: [] };
+/** Every command passed: the fake runner's checks too (ORC-179). */
+export const PASS: VerifyResult = { ok: true, failures: [] };
 
 type Scripted = (commands: string[]) => VerifyResult | Promise<VerifyResult>;
 

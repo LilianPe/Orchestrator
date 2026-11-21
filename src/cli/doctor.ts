@@ -185,7 +185,7 @@ const BYPASS_ACTORS_WARNING =
   'in each ruleset that requires a pull request, the repository\'s and the organization\'s, no bypass actor its account holds ' +
   '(Repository admin or another role, Organization admin, its team, its user, or Deploy key for a deploy key); ' +
   'on a classic protection, "Do not allow bypassing the above settings" checked and no allowed bypass for it. ' +
-  'Otherwise a run on the host (FACTORY_ALLOW_HOST_RUNS=1) pushes to the default branch without a pull request (docs/github.md).';
+  'Otherwise any process of that user on this machine pushes to the default branch without a pull request; no agent holds such a credential, they run in containers only (docs/github.md).';
 
 /**
  * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, which the

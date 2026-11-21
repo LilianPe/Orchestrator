@@ -82,13 +82,12 @@ export interface DaemonDeps {
   publisher?: Publisher;
   runner: Runner;
   workspaces: WorkspaceManager;
-  verify: Verifier;
   /**
-   * The agent's code may run on the daemon's host when there are no sandboxes: `verify`, `red`. Off, they answer an
-   * infrastructure failure: without an explicit `FACTORY_ALLOW_HOST_VERIFY=1`, an instance that lost its sandboxes
-   * does not fall back on running that code next to its secrets. Ignored with `sandboxes`, which are never fallen back from.
+   * The checks of a daemon without sandboxes, the fake runner's or a test's (`verify`, `red`, `setup`): a stand-in that runs
+   * nothing of the agent's. Absent, they answer an infrastructure failure: the agent's code never runs on the daemon's host
+   * (ORC-179). Ignored with `sandboxes`, where `cleanVerify` checks a frozen commit in a sandbox of its own.
    */
-  hostChecks?: boolean;
+  verify?: Verifier;
   /** `verify` with sandboxes (ORC-151); a test replaces it. */
   cleanVerify?: CleanVerifier;
   /** The dry run (ORC-408); a test replaces it. */
@@ -104,11 +103,9 @@ export interface DaemonDeps {
   registries?: RegistryOpener;
   projects: ProjectRuntime[];
   packDir: string;
-  /** `--settings` file for runs; defaults to <packDir>/settings.json. */
-  settingsPath?: string;
   /**
    * Each attempt runs in a sandbox of its own (ORC-204), made at its launch and destroyed when it
-   * ends; `setup` runs there too. Absent: runs and `setup` on the host (fake runner, tests).
+   * ends; `setup` runs there too. Absent only under the fake runner and in tests: no agent runs on the host (ORC-179).
    */
   sandboxes?: SandboxProvider;
   /** Where each ticket's Claude session dir lives on the host (`<sessionsDir>/<project>/<ticket>`); required with `sandboxes`. */

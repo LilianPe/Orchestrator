@@ -36,7 +36,7 @@ export class FakeWorkspaces implements WorkspaceManager {
     const asked = req.branch ?? branchName(req.ticketId, req.title);
     const legacy = legacyBranchName(req.ticketId, req.title);
     const branch = !this.remoteBranches.has(asked) && this.remoteBranches.has(legacy) ? legacy : asked;
-    return { path, port: req.portBase + req.slot, branch, ...(fresh ? { fresh } : {}), ...(fresh && this.ahead.has(req.ticketId) ? { ahead: true } : {}) };
+    return { path, branch, ...(fresh ? { fresh } : {}), ...(fresh && this.ahead.has(req.ticketId) ? { ahead: true } : {}) };
   }
 
   async cleanup(projectId: string, ticketId: string): Promise<void> {

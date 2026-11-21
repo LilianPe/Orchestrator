@@ -86,7 +86,6 @@ export function homePaths(home: string) {
   return {
     config: join(home, 'config.yaml'),
     secrets: join(home, 'secrets.json'),
-    runSettings: join(home, 'run-settings.json'),
     db: join(home, 'factory.db'),
     /** The daemon's Unix socket for the CLI on its server (ORC-405), 0600 in a folder 0700: no GitHub sign-in through it. */
     socket: join(home, 'cli', 'factory.sock'),

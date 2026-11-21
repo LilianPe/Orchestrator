@@ -3,7 +3,6 @@ import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFile
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { addTokens, NO_TOKENS, spentTokens, type OverBudget, type RunOutcome, type Stagnation, type TokenUsage } from '../../core/types.js';
-import { execCmd, systemEnv } from '../exec.js';
 import { Channel } from './channel.js';
 import { failedCommand, LoopDetector, WORKTREE_TREE } from './stagnation.js';
 import { parseStreamLine, parseUsage } from './stream-parser.js';
@@ -17,13 +16,11 @@ export interface ClaudeRunnerOptions {
   killGraceMs?: number;
   /** Secrets held outside the environment (the daemon's secrets file), masked like the environment's. */
   secrets?: () => readonly string[];
-  /** Where a run with a `sandboxId` executes (ORC-204); without it such a run is refused, never run on the host. */
-  sandboxes?: SandboxProvider;
-  /** The token of the chosen Claude account (`claude.active`, ORC-211): a run on the host logs in with it in place of the daemon's login. */
-  claudeToken?: () => string | undefined;
+  /** Where every run executes (ORC-204): a run without a `sandboxId` is refused, never run on the host (ORC-179). */
+  sandboxes: SandboxProvider;
   /**
-   * Whether the egress proxy has a token to set on a sandboxed run's model calls (ORC-337), asked at each launch: with
-   * one, the run gets a placeholder. Without the option, whether there is a chosen account, else the daemon's `CLAUDE_CODE_OAUTH_TOKEN`.
+   * Whether the egress proxy has a token to set on a run's model calls (ORC-337), asked at each launch: with one, the run
+   * gets a placeholder. Without the option, whether the daemon has a `CLAUDE_CODE_OAUTH_TOKEN`.
    */
   proxyHasToken?: () => boolean;
   /** The daemon's log. */
@@ -81,34 +78,8 @@ function engineEnv(base: NodeJS.ProcessEnv, carriers: Record<string, string>): R
 }
 
 /**
- * What a run on the host gets of the daemon's env beyond the system (ORC-211), for `claude` and `git` to work.
- * Everything else stays in the daemon: the factory publishes by its GitHub App, and the agent has no token (ORC-125).
- * Transition: `ANTHROPIC_API_KEY` until the host runs go (ORC-179), and with them what `git fetch` reaches the forge by.
- */
-const HOST_LOGIN = ['CLAUDE_CONFIG_DIR', CLAUDE_TOKEN, 'ANTHROPIC_API_KEY', 'SSH_AUTH_SOCK', 'GIT_SSH_COMMAND'];
-
-/**
- * A run on the host pushes nowhere (ORC-349): git rewrites every push URL, the ticket's remote or one the agent names, to
- * a transport it does not have, however the command names it. Fetches are left alone. A config, not a barrier: git skips
- * it for a remote with an explicit `pushurl`, and an agent under the daemon's user can undo it, as it can read the daemon's
- * secrets. The barrier is the sandbox.
- */
-export const NO_PUSH = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.factory-no-push://.pushInsteadOf', GIT_CONFIG_VALUE_0: '' } as const;
-
-/** The env of a run on the host; `token`, the chosen account, replaces any other login. */
-export function childEnv(base: NodeJS.ProcessEnv, run: Record<string, string>, token?: string): Record<string, string> {
-  const env: Record<string, string> = { ...systemEnv(base), ...NO_PUSH };
-  for (const k of HOST_LOGIN) if (base[k] !== undefined) env[k] = base[k];
-  if (token) {
-    delete env['ANTHROPIC_API_KEY'];
-    env[CLAUDE_TOKEN] = token;
-  }
-  return { ...env, ...run };
-}
-
-/**
  * Where the running attempts' raw output is kept (ORC-220), per run: `stream`, `stderr`, `pid`. A file, not a
- * pipe, so the process that writes it (`docker exec`, or `claude` on the host) outlives a killed daemon, and the
+ * pipe, so the process that writes it (`docker exec`) outlives a killed daemon, and the
  * next one reads on. On the host only, out of any sandbox's reach: the agent can forge no result in it. Unmasked,
  * so the daemon's alone (0700), and removed with the attempt; what a crash leaves is purged at 30 days.
  */
@@ -232,10 +203,10 @@ const TREE_TIMEOUT_S = 30;
 const STDERR_LINE_MAX = 200;
 
 /**
- * In the sandbox when the run has one: the host never runs git on a worktree the agent writes from there (ORC-203). Holds the fields it reads, not the request.
+ * In the run's sandbox: the host never runs git on a worktree the agent writes (ORC-203). Holds the fields it reads, not the request.
  * A read that fails only leaves that failure uncounted, and a detector that sees nothing looks like an agent that does not loop: `warn` says it, once per run.
  */
-export function worktreeReader(sandboxes: Pick<SandboxProvider, 'exec'> | undefined, { runId, sandboxId, cwd }: Pick<RunRequest, 'runId' | 'sandboxId' | 'cwd'>, warn: (message: string) => void): () => Promise<string | undefined> {
+export function worktreeReader(sandboxes: Pick<SandboxProvider, 'exec'>, { runId, sandboxId, cwd }: Required<Pick<RunRequest, 'runId' | 'sandboxId' | 'cwd'>>, warn: (message: string) => void): () => Promise<string | undefined> {
   const argv = ['timeout', String(TREE_TIMEOUT_S), 'sh', '-c', WORKTREE_TREE];
   let warned = false;
   const unread = (code: number | undefined, stderr: string) => {
@@ -245,7 +216,7 @@ export function worktreeReader(sandboxes: Pick<SandboxProvider, 'exec'> | undefi
   };
   return async () => {
     try {
-      const read = await (sandboxId !== undefined ? sandboxes!.exec(sandboxId, argv, { cwd }) : execCmd(argv[0]!, argv.slice(1), { cwd }));
+      const read = await sandboxes.exec(sandboxId, argv, { cwd });
       const tree = read.code === 0 ? read.stdout.trim() : '';
       if (tree) return tree;
       unread(read.code, read.stderr);
@@ -265,31 +236,29 @@ export class ClaudeCodeRunner implements Runner {
     // Masked as read: the transcript, the stream events (SSE, Linear) and the final text never
     // hold a secret value the daemon or the run knows of.
     const secrets = transcriptSecrets({ ...process.env, ...req.env }, this.o.secrets?.());
-    const chosen = this.o.claudeToken?.();
     // The pack's PreToolUse hook refuses any tool off `--tools`, and journals it (ORC-383): the same list, a second guard.
     const runEnv = req.tools ? { ...req.env, FACTORY_TOOLS: req.tools.join(',') } : req.env;
-    let env = childEnv(process.env, runEnv, chosen);
-    let argv = [...(this.o.command ?? ['claude']), ...buildClaudeArgs(req)];
-    let cwd = req.cwd;
-    if (req.sandboxId !== undefined) {
-      try {
-        if (!this.o.sandboxes) throw new Error(`run ${req.runId} asks for sandbox ${req.sandboxId} but the runner has no sandbox provider`);
-        // The allowlist of the runner (ORC-211): the run's variables and a placeholder for the account's token, nothing else.
-        // Without a token, none: `claude` says it is not logged in, clearer than the proxy's 401.
-        const hasToken = this.o.proxyHasToken?.() ?? !!(chosen ?? process.env[CLAUDE_TOKEN]);
-        const { PATH: sandboxPath, ...run } = runEnv;
-        const named = { ...run, ...(hasToken ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
-        // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
-        // the container gets it through `env` (no secret in it, so on the command line is fine).
-        const inner = sandboxPath !== undefined ? ['env', `PATH=${sandboxPath}`, ...argv] : argv;
-        // The host process (`docker exec`) gets what the provider says, never the container's env as it is.
-        const spawned = this.o.sandboxes.spawnCommand(req.sandboxId, inner, { cwd: req.cwd, env: named });
-        argv = spawned.command;
-        env = engineEnv(process.env, spawned.env);
-        cwd = process.cwd(); // req.cwd is a path in the sandbox
-      } catch (e) {
-        return failed(maskTranscriptLine(e instanceof Error ? e.message : String(e), secrets));
-      }
+    const { sandboxId } = req;
+    let argv: string[];
+    let env: Record<string, string>;
+    try {
+      // No run on the host (ORC-179): `claude` runs in its sandbox or not at all.
+      if (sandboxId === undefined) throw new Error(`run ${req.runId} has no sandbox: a run never executes on the host`);
+      // The allowlist of the runner (ORC-211): the run's variables and a placeholder for the account's token, nothing else.
+      // Without a token, none: `claude` says it is not logged in, clearer than the proxy's 401.
+      const hasToken = this.o.proxyHasToken?.() ?? !!process.env[CLAUDE_TOKEN];
+      const { PATH: sandboxPath, ...run } = runEnv;
+      const named = { ...run, ...(hasToken ? { [CLAUDE_TOKEN]: SANDBOX_CLAUDE_TOKEN } : {}) };
+      const command = [...(this.o.command ?? ['claude']), ...buildClaudeArgs(req)];
+      // req.env.PATH is the sandbox's: the host's `docker` is found on the daemon's, the command in
+      // the container gets it through `env` (no secret in it, so on the command line is fine).
+      const inner = sandboxPath !== undefined ? ['env', `PATH=${sandboxPath}`, ...command] : command;
+      // The host process (`docker exec`) gets what the provider says, never the container's env as it is.
+      const spawned = this.o.sandboxes.spawnCommand(sandboxId, inner, { cwd: req.cwd, env: named });
+      argv = spawned.command;
+      env = engineEnv(process.env, spawned.env);
+    } catch (e) {
+      return failed(maskTranscriptLine(e instanceof Error ? e.message : String(e), secrets));
     }
     const [cmd, ...args] = argv;
     const dir = this.dir(req.runId);
@@ -298,13 +267,14 @@ export class ClaudeCodeRunner implements Runner {
     const err = openSync(join(dir, 'stderr'), 'a', 0o600);
     let child: ChildProcess;
     try {
-      child = spawn(cmd!, args, { cwd, env, stdio: ['ignore', out, err], detached: true });
+      // req.cwd is a path in the sandbox: the engine's CLI runs from the daemon's.
+      child = spawn(cmd!, args, { cwd: process.cwd(), env, stdio: ['ignore', out, err], detached: true });
     } finally {
       closeSync(out);
       closeSync(err);
     }
     if (child.pid !== undefined) writeFileSync(join(dir, 'pid'), [child.pid, startTime(child.pid)].filter((x) => x !== undefined).join(' '), { mode: 0o600 });
-    return this.follow({ runId: req.runId, limits: req.limits, model: req.model, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, req, (m) => this.o.log?.(maskTranscriptLine(m, secrets))) } : {}) });
+    return this.follow({ runId: req.runId, limits: req.limits, model: req.model, secrets, remainingMs: req.limits.durationMs, child, stagnation: req.stagnation, ...(req.stagnation?.repeats ? { tree: worktreeReader(this.o.sandboxes, { ...req, sandboxId }, (m) => this.o.log?.(maskTranscriptLine(m, secrets))) } : {}) });
   }
 
   /**
@@ -350,7 +320,7 @@ export class ClaudeCodeRunner implements Runner {
     let usageLimit: RunResult['usageLimit'];
     let model = a.model;
 
-    // Sandboxed, this kills the `docker exec` client, not `claude` in the container: the daemon
+    // This kills the `docker exec` client, not `claude` in the container: the daemon
     // destroys the sandbox at the end of the run, which ends it.
     const signal = (sig: NodeJS.Signals) => {
       if (pid === undefined) return;

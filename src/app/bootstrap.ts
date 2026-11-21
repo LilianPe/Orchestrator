@@ -7,6 +7,7 @@ import { createGithubIngest, githubMapContext, githubRepoOf } from '../adapters/
 import { githubAuthorizeUrl, githubSignIn } from '../adapters/forge/github-login.js';
 import { GithubReconciler } from '../adapters/forge/github-reconcile.js';
 import { NoForge } from '../adapters/forge/no-forge.js';
+import { PASS } from '../adapters/checks/fake.js';
 import { FakePublisher } from '../adapters/publisher/fake.js';
 import { CachedRoleResolver } from '../adapters/roles/cached.js';
 import { ClaudeCodeRunner, liveDir } from '../adapters/runner/claude-code.js';
@@ -18,8 +19,8 @@ import { registriesViaEgress } from '../network/egress-fetch.js';
 import { EgressProxy } from '../network/proxy.js';
 import { EgressClient, sandboxAgentHost, type Egress } from '../network/proxy-service.js';
 import { GitPublisher } from '../publish/publish.js';
-import { hostSecretScan, OutputPolicy, sandboxSecretScan } from '../publish/output-policy.js';
-import { browserImage, checkHostRuns, instanceId, makeSandboxes, visualProofLine } from './sandbox-wiring.js';
+import { OutputPolicy, sandboxSecretScan } from '../publish/output-policy.js';
+import { browserImage, checkSandboxes, instanceId, makeSandboxes, visualProofLine } from './sandbox-wiring.js';
 import { PlaywrightShooter } from '../adapters/browser/playwright.js';
 import { configProblems } from './config-check.js';
 import { LinearApi } from '../adapters/tracker/linear/api.js';
@@ -39,7 +40,6 @@ import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-con
 import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
 import { daemonSecretValues, effectiveInstance, homePaths, linearSettings, saveLinearTokens, sealSecretsAtRest, validatorWarnings } from '../config/instance.js';
 import { githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
-import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
 import { defaultWorkflow, missingStatusWarning, presetWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
@@ -50,7 +50,6 @@ import { logicalFromName, Daemon, type ProjectRuntime } from '../runtime/daemon.
 import { queueCapacity, Scheduler } from '../runtime/capacity.js';
 import { TimerService } from '../runtime/timers.js';
 import type { FactoryEvent } from '../core/types.js';
-import { runVerify } from '../core/verify.js';
 import { KnowledgeBase } from '../knowledge/kb.js';
 import { PreviewRecipes } from '../knowledge/preview-recipe.js';
 import { startSmeeRelay } from '../relay/smee.js';
@@ -101,9 +100,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398).
   const secretsKey = yml?.secretsKey;
   if (secretsKey && sealSecretsAtRest(o.home, secretsKey)) log('secrets.json: encrypted at rest with secrets_key');
-  // Before anything opens: no agent on the host but by choice (ORC-349), sandboxes only with docker or podman and their runner image,
+  // Before anything opens: no agent on the host (ORC-179), sandboxes only with docker or podman and their runner image,
   // valid limits and the daemon's uid/gid (`sandboxRefusals`, said by `factory doctor` too, ORC-449, ORC-450). --fake-runner launches none.
-  if (!o.fakeRunner) checkHostRuns(env);
+  if (!o.fakeRunner) checkSandboxes(env);
   const paths = homePaths(o.home);
   const port = o.port ?? instance.port;
   const baseUrl = instance.publicUrl ?? `http://localhost:${port}`;
@@ -182,19 +181,15 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const capacity = queueCapacity(yml?.concurrency);
     const scheduler = new Scheduler(store, capacity);
-    // The chosen account replaces a host run's login (ORC-211). The sandboxes' token goes to the proxy alone (ORC-337):
+    // The sandboxes' token goes to the proxy alone (ORC-337):
     // it sets it on their model calls, which hold a placeholder; the runner only asks whether there is one. factory.yml's `claude`
     // section is read again at each launch: a change of `active` counts from the next run, without a restart (ORC-215).
     const claudeAccount = claudeAccountReader(o.home, env, log, sealed);
     const claudeTokenOf = () => claudeAccount().token;
-    const chosenClaudeToken = () => {
-      const a = claudeAccount();
-      return a.name ? a.token : undefined;
-    };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     // A repository's secrets: its env ones from the start, the others by the values its setups read (ORC-308), a rotated one included.
     const daemonSecrets = () => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
-    // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
+    // A container per attempt (ORC-204), from FACTORY_CONTAINER_CLI; --fake-runner launches no agent, and has none.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
     const egressControl = env['FACTORY_EGRESS_CONTROL'];
@@ -213,11 +208,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const capture = browser?.image;
     const sandboxes = o.fakeRunner ? undefined : makeSandboxes(env, instanceId(o.home), egress, capture ? { browserImage: capture } : {});
     if (browser && sandboxes) log(visualProofLine(browser));
-    if (!o.fakeRunner && !sandboxes) {
-      log('Warning: FACTORY_ALLOW_HOST_RUNS=1 and no FACTORY_CONTAINER_CLI, runs execute on the host, without isolation.');
-      // Without it, verify refuses to run: one of the `configProblems` below.
-      if (env['FACTORY_ALLOW_HOST_VERIFY'] === '1') log("Warning: FACTORY_ALLOW_HOST_VERIFY=1, verify runs the agent's code on the host, next to the daemon's secrets.");
-    }
     // No default cap (ORC-216): the values are to calibrate, any default would be a guess that stops work silently.
     if (yml?.budgets?.perTicketTokens === undefined) log('Warning: no ticket budget (budgets.per_ticket_tokens in factory.yml): a ticket runs whatever it spends; `factory validate` refuses until it is set.');
     // Said at each start (ORC-381): a control off is a choice of this server's, never a repository's. The Claude usage limit is not one.
@@ -225,9 +215,10 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     const ticketCap = ticketCapOf(yml);
     if (disabled.length) log(`Disabled in factory.yml: ${disabled.join(', ')}.`);
     if (sandboxes && !claudeTokenOf()) log('Warning: no Claude token (claude.active in factory.yml, or CLAUDE_CODE_OAUTH_TOKEN): sandboxed runs will not be able to authenticate.');
-    const runner: Runner = o.fakeRunner
-      ? Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) })
-      : new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, claudeToken: chosenClaudeToken, proxyHasToken: () => !!claudeTokenOf(), log, ...(sandboxes ? { sandboxes } : {}) });
+    // No sandboxes only under --fake-runner: `claude` runs in a sandbox or not at all (ORC-179).
+    const runner: Runner = sandboxes
+      ? new ClaudeCodeRunner({ transcriptsDir: paths.transcripts, secrets: daemonSecrets, proxyHasToken: () => !!claudeTokenOf(), log, sandboxes })
+      : Object.assign(new FakeRunner(), { submit: (runId: string, output: AgentOutput) => saveAgentOutput(store, runId, output) });
     // Without the App, no forge at all (ORC-181): every read says the App is missing, and nothing is published.
     const appForge = githubApp ? new GitHubAppForge({ ...githubApp, log }) : undefined;
     // The daemon's own git reads a private repository with the App's token (ORC-442); without the App, with the machine's credentials.
@@ -243,15 +234,11 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       log('Warning: no GitHub App (github.app_id and github.private_key in factory.yml, or GH_APP_ID and GH_APP_KEY): the factory reads no PR, publishes nothing and merges nothing.');
     }
     const publisher = o.fakeRunner ? new FakePublisher() : sandboxes && appForge ? new GitPublisher({ sandboxes, forge: appForge, runsDir: paths.runs, log }) : undefined;
-    // gitleaks on every text it publishes (ORC-214), as on the diff: in its sandboxes, or the host's own for host runs. The fake runner's daemon reaches no model.
-    const outputPolicy = o.fakeRunner ? new OutputPolicy() : new OutputPolicy(sandboxes ? sandboxSecretScan({ sandboxes, runsDir: paths.runs, log }) : hostSecretScan());
-    if (!o.fakeRunner && !sandboxes) log("Warning: runs on the host, the texts the factory publishes are scanned by the host's gitleaks: without it, nothing is posted.");
+    // gitleaks on every text it publishes (ORC-214), as on the diff, in its sandboxes. The fake runner's daemon reaches no model.
+    const outputPolicy = sandboxes ? new OutputPolicy(sandboxSecretScan({ sandboxes, runsDir: paths.runs, log })) : new OutputPolicy();
     // A configuration under which every ticket would be blocked launches no run (ORC-350): /health says so, the log and the diagnosis why.
-    const hostChecks = !!o.fakeRunner || env['FACTORY_ALLOW_HOST_VERIFY'] === '1';
     const problems = configProblems({
       fakeRunner: !!o.fakeRunner,
-      sandboxes: !!sandboxes,
-      hostVerify: hostChecks,
       publisher: !!publisher,
       budgets: yml?.budgets,
     });
@@ -310,15 +297,14 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ...(publisher ? { publisher } : {}),
       runner,
       workspaces,
-      verify: runVerify,
-      hostChecks,
+      // The fake runner's checks pass and run nothing: no command of a repository runs on the host (ORC-179). With sandboxes, none is needed.
+      ...(o.fakeRunner ? { verify: async () => PASS } : {}),
       configProblems: problems,
       ...(yml?.maxDiff ? { maxDiff: yml.maxDiff } : {}),
       projects,
       packDir,
       // The answer agent reads the session at work there (ORC-182).
       transcriptsDir: paths.transcripts,
-      settingsPath: writeRunSettings(packDir, o.home),
       ...(ticketCap ? { perTicketTokens: ticketCap } : {}),
       ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),
       ...(yml?.acknowledge ? { acknowledge: yml.acknowledge } : {}),
@@ -367,7 +353,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
 
     const webhookSecret = () => linearSettings(o.home, yml)?.webhookSecret ?? '';
     // The fake runner's daemon reaches no model: its messages are classified by the fallback rule (ORC-336).
-    const classify = o.fakeRunner ? undefined : messageClassifier(env, claudeTokenOf(), !sandboxes, yml?.messageModel?.apiKey, log);
+    const classify = o.fakeRunner ? undefined : messageClassifier(env, yml?.messageModel?.apiKey, log);
     const ingest = createLinearIngest({
       serial: labelsTurn,
       // A message for the model is kept in the store and answered before it is classified (ORC-336); what an earlier

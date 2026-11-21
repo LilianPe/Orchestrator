@@ -61,7 +61,7 @@ function fixture() {
 type Fixture = ReturnType<typeof fixture>;
 
 const req = (repo: string, patch: object = {}) => ({
-  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, slot: 1, portBase: 4200, runId: 'abcdef123456', ...patch,
+  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, runId: 'abcdef123456', ...patch,
 });
 const other = { ticketId: 'REL-2', title: 'Other' };
 

@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { buildClaudeArgs, childEnv } from '../../src/adapters/runner/claude-code.js';
+import { systemEnv } from '../../src/adapters/exec.js';
+import { buildClaudeArgs } from '../../src/adapters/runner/claude-code.js';
 import { CLAUDE_RUN_ENV } from '../../src/runtime/launch.js';
 import { packDir as pack } from '../helpers/harness.js';
 
@@ -15,6 +16,10 @@ import { packDir as pack } from '../helpers/harness.js';
  * test checks the options alone, the reset being defence in depth.
  */
 const enabled = process.env['FACTORY_ISOLATION'] === '1' && !!(process.env['CLAUDE_CODE_OAUTH_TOKEN'] || process.env['ANTHROPIC_API_KEY']);
+
+/** The login this test runs `claude` with, the one `enabled` found. */
+const login = (env: NodeJS.ProcessEnv): Record<string, string> =>
+  Object.fromEntries(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'].flatMap((k) => (env[k] ? [[k, env[k]]] : [])));
 
 const base = mkdtempSync(join(tmpdir(), 'factory-iso11-'));
 const repo = join(base, 'repo');
@@ -65,7 +70,8 @@ describe.skipIf(!enabled)('claude -p loads nothing of the repository (isolation 
     const host = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^CLAUDECODE|^CLAUDE_CODE_(?!OAUTH_TOKEN$)|^CLAUDE_CONFIG_DIR$/.test(k)));
     const r = spawnSync('claude', [...args, '--tools', '', '--max-turns', '2'], {
       cwd: repo,
-      env: childEnv(host, { ...CLAUDE_RUN_ENV, CLAUDE_CONFIG_DIR: configDir }),
+      // The CLI measured as is, its options alone: the system and the login, nothing else of this machine (a run gets its sandbox's).
+      env: { ...systemEnv(host), ...login(host), ...CLAUDE_RUN_ENV, CLAUDE_CONFIG_DIR: configDir },
       encoding: 'utf8',
       timeout: 110_000,
     });

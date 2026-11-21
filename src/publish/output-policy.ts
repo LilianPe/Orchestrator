@@ -1,13 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { execCmd, type Exec } from '../adapters/exec.js';
 import type { SandboxProvider } from '../adapters/sandbox/types.js';
 import type { ActivityInput, IssueHistory, LabelsWritten, SearchHit, Tracker, TrackerIssue } from '../adapters/tracker/types.js';
 import { agentOutputSchema, type AgentOutput } from '../core/agent-output.js';
-import { boxOpener, gitleaksArgv, gitleaksFindings, sandboxGitleaksArgv, withDeadline } from '../core/clean-verify.js';
+import { boxOpener, gitleaksFindings, sandboxGitleaksArgv, withDeadline } from '../core/clean-verify.js';
 import type { PlanStep } from '../core/session-plan.js';
 import { VERIFY_TIMEOUT_MS } from '../core/verify.js';
 import { formatRecap, type RecapRun } from './describe.js';
@@ -298,14 +296,5 @@ export function sandboxSecretScan(d: { sandboxes: SandboxProvider; runsDir: stri
     const dir = join(d.runsDir, id);
     const inBox = boxOpener(sandboxes, { runId: id, ticketId: 'output-policy', log: d.log });
     return inTextDir(dir, s, () => inBox('scan', dir, [], async (box) => gitleaksFindings(await sandboxes.exec(box, sandboxGitleaksArgv(['dir'], '.'))).found.map((f) => f.RuleID)), d.log);
-  };
-}
-
-/** The same scan with the host's gitleaks, for an instance whose runs are on the host (`FACTORY_ALLOW_HOST_RUNS`): none installed, nothing is posted. */
-export function hostSecretScan(exec: Exec = execCmd): SecretScan {
-  return async (s) => {
-    const dir = await mkdtemp(join(tmpdir(), 'factory-output-'));
-    const [cmd, ...args] = gitleaksArgv(['dir'], dir);
-    return inTextDir(dir, s, async () => gitleaksFindings(await exec(cmd!, args, { timeoutMs: VERIFY_TIMEOUT_MS })).found.map((f) => f.RuleID));
   };
 }

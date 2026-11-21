@@ -1,10 +1,6 @@
-import { execFile } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { childEnv } from './claude-code.js';
-
 /**
  * Classifies a human message with a small model at ingestion (ORC-336). Rejects, with its reason (an HTTP status, a
- * spawn error, an exit code, a timeout, an answer that is neither word), whenever the model gives no verdict.
+ * failed request, a timeout, an answer that is neither word), whenever the model gives no verdict.
  */
 export type MessageClassifier = (body: string) => Promise<'instruction' | 'question'>;
 
@@ -12,12 +8,10 @@ export const CLASSIFIER_MODEL = 'claude-haiku-5-5';
 
 /**
  * The event waits for the verdict before it is journaled, and the ack after it: Linear marks a session as
- * unresponsive without an activity within 10 s. Measured on a developer's machine (2.1.319, low effort): the model
- * answers in about 0.9 s (`duration_api_ms`); `claude -p` takes 1.7 to 3.4 s in all, its start included. Past its
- * bound, a call is cut and the fallback rule classifies.
+ * unresponsive without an activity within 10 s. Measured on a developer's machine (low effort): the model
+ * answers in about 0.9 s (`duration_api_ms`). Past its bound, a call is cut and the fallback rule classifies.
  */
 export const API_TIMEOUT_MS = 3_000;
-export const CLI_TIMEOUT_MS = 6_000;
 
 /** The message is data, never instructions: it comes quoted, and the answer is read as one word or nothing. */
 const SYSTEM =
@@ -75,91 +69,31 @@ export function apiClassifier(apiKey: string, o: { fetch?: typeof fetch; timeout
   };
 }
 
-/**
- * `claude -p`, as the runners reach Claude: the chosen account's token, or the daemon's login. No tool, no MCP, no
- * settings, no session kept, out of any repository; the message on stdin. Without its non-essential traffic
- * (telemetry, updates), it starts about 5 s sooner.
- */
-export function cliClassifier(o: { command?: string[]; env: NodeJS.ProcessEnv; claudeToken?: string; timeoutMs?: number }): MessageClassifier {
-  const timeoutMs = o.timeoutMs ?? CLI_TIMEOUT_MS;
-  const [cmd = 'claude', ...pre] = o.command ?? [];
-  const args = [
-    ...pre,
-    '-p', '--model', CLASSIFIER_MODEL, '--effort', 'low', '--output-format', 'json',
-    '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence', '--system-prompt', SYSTEM,
-  ];
-  // The account, never a key: `claude` would take ANTHROPIC_API_KEY over CLAUDE_CODE_OAUTH_TOKEN, which passes through.
-  const env = childEnv({ ...o.env, ANTHROPIC_API_KEY: undefined }, { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }, o.claudeToken);
-  return (body) =>
-    new Promise((resolve, reject) => {
-      // A grandchild that keeps the pipe open would hold execFile's callback: the bound rejects on its own as well.
-      const backstop = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs + 500);
-      const child = execFile(cmd, args, { cwd: tmpdir(), env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }, (err, stdout) => {
-        clearTimeout(backstop);
-        if (err) {
-          const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
-          if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new Error('output too large'));
-          // Short, fixed reasons: never execFile's message, which carries the command line and so the prompt.
-          if (e.killed) return reject(new Error(`timed out after ${timeoutMs} ms`));
-          const signal = (err as { signal?: string | null }).signal;
-          if (signal) return reject(new Error(`killed by ${signal}`));
-          return reject(new Error(typeof e.code === 'number' ? `exit ${e.code}` : `spawn failed: ${e.code ?? 'unknown'}`));
-        }
-        try {
-          const r = JSON.parse(stdout) as { is_error?: boolean; result?: unknown };
-          if (r.is_error) return reject(new Error('claude reported an error'));
-          resolve(parseVerdict(r.result));
-        } catch (parse) {
-          reject(parse instanceof SyntaxError ? new Error('unparseable answer') : parse);
-        }
-      });
-      child.stdin?.on('error', () => undefined);
-      child.stdin?.end(quoted(body));
-    });
-}
-
 const OFF = ['off', '0', 'false', 'none'];
 const ON = ['', 'on', '1', 'true'];
 
 /**
- * The backend the runners' credential points to (ORC-336). Runs on the host (no sandbox): as a run on the host would,
- * the chosen Claude account or a Claude Code login go through `claude -p`, an API key alone through the Messages API.
- * Runs in sandboxes: the daemon image has no `claude` (no agent runs there), so only an API key reaches a model.
- * The key is `message_model.api_key` of factory.yml (ORC-445), else `ANTHROPIC_API_KEY` in transition (`apiKeyOf`). factory.yml's
- * key is the classifier's alone, no run's: on the host without a Claude account, it takes the Messages API over a Claude Code login.
- * `FACTORY_MESSAGE_MODEL` off, 0, false or none turns it off. Without a backend, or when it fails, the fallback rule classifies.
+ * Whether the small model is on (ORC-336): `FACTORY_MESSAGE_MODEL` off, 0, false or none turns it off, any other value
+ * than on, 1, true or empty is warned of and leaves it on.
  */
-export function classifierBackend(
-  env: NodeJS.ProcessEnv,
-  claudeToken: string | undefined,
-  hostClaude: boolean,
-  apiKey?: string,
-  log: (m: string) => void = () => {},
-): 'api' | 'cli' | undefined {
+export function classifierOn(env: NodeJS.ProcessEnv, log: (m: string) => void = () => {}): boolean {
   const setting = (env['FACTORY_MESSAGE_MODEL'] ?? '').trim().toLowerCase();
-  if (OFF.includes(setting)) return undefined;
+  if (OFF.includes(setting)) return false;
   if (!ON.includes(setting)) log(`Warning: FACTORY_MESSAGE_MODEL=${env['FACTORY_MESSAGE_MODEL']} is not recognised (off, 0, false or none turn it off): the small model stays on.`);
-  const account = !!claudeToken || !!env['CLAUDE_CODE_OAUTH_TOKEN'];
-  const key = apiKeyOf(env, apiKey);
-  if (hostClaude && (account || !key)) return 'cli';
-  return key ? 'api' : undefined;
+  return true;
 }
 
 /** factory.yml's key, else the daemon's `ANTHROPIC_API_KEY`: a transition (ORC-445). */
 const apiKeyOf = (env: NodeJS.ProcessEnv, apiKey: string | undefined): string | undefined => apiKey || env['ANTHROPIC_API_KEY'];
 
-/** Built once at the daemon's start: the transition key, when it is the one used, is warned of once. */
-export function messageClassifier(
-  env: NodeJS.ProcessEnv,
-  claudeToken: string | undefined,
-  hostClaude: boolean,
-  apiKey?: string,
-  log: (m: string) => void = () => {},
-): MessageClassifier | undefined {
-  const backend = classifierBackend(env, claudeToken, hostClaude, apiKey, log);
-  if (backend === 'api') {
-    if (!apiKey) log('Warning: the small model of messages reads ANTHROPIC_API_KEY, in transition: set message_model.api_key in factory.yml (env:NAME).');
-    return apiClassifier(apiKeyOf(env, apiKey)!);
-  }
-  return backend === 'cli' ? cliClassifier({ env, ...(claudeToken ? { claudeToken } : {}) }) : undefined;
+/**
+ * The small model, through the Messages API alone (ORC-179): no `claude -p` on the host, the daemon image has no `claude`, and
+ * the agents' Claude account reaches the model from their sandboxes only. The key is `message_model.api_key` of factory.yml
+ * (ORC-445), else `ANTHROPIC_API_KEY` in transition, warned of once. Off or without a key: none, the fallback rule classifies.
+ */
+export function messageClassifier(env: NodeJS.ProcessEnv, apiKey?: string, log: (m: string) => void = () => {}): MessageClassifier | undefined {
+  const key = apiKeyOf(env, apiKey);
+  if (!classifierOn(env, log) || !key) return undefined;
+  if (!apiKey) log('Warning: the small model of messages reads ANTHROPIC_API_KEY, in transition: set message_model.api_key in factory.yml (env:NAME).');
+  return apiClassifier(key);
 }

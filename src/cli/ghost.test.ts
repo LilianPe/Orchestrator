@@ -111,7 +111,7 @@ describe('factory ghost start (ORC-231)', () => {
   it('ORC-376 criterion 2: a daemon without sandboxes, the replay is refused with the reason, before anything is written', async () => {
     const host = withGhost({ sandboxes: false });
     expect(await host.ghost(['start', 'ghost', ...THRESHOLDS, '--tickets', 'REL-1=12'])).toBe(1);
-    expect(host.lines.at(-1)).toMatch(/no sandboxes.*could push by itself/);
+    expect(host.lines.at(-1)).toMatch(/no sandboxes \(--fake-runner\).*in sandboxes only/);
     expect(await host.store.ghostReplays()).toEqual([]);
     expect(host.environments).toEqual([]);
     // No daemon has said yet: refused too, not run on a guess.

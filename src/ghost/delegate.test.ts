@@ -6,7 +6,7 @@ import { FakeTracker } from '../adapters/tracker/fake.js';
 import { mayCheck } from '../core/engine.js';
 import type { FactoryEvent } from '../core/types.js';
 import { SqliteStore } from '../store/sqlite-store.js';
-import { HOST_RUNS_REFUSED, Replays, replayDelegationId } from './delegate.js';
+import { NO_SANDBOXES_REFUSED, Replays, replayDelegationId } from './delegate.js';
 import type { GhostReplay, GhostTicket } from './replay.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 
@@ -107,7 +107,7 @@ describe('the daemon delegates each replayed ticket to the replay\'s project (OR
     await replays.delegate();
     await replays.delegate();
     expect(accepted).toEqual([]);
-    expect(logs).toEqual([`replay g1 not run: ${HOST_RUNS_REFUSED}`]);
+    expect(logs).toEqual([`replay g1 not run: ${NO_SANDBOXES_REFUSED}`]);
   });
 
   it('a ticket replays once per project: a later replay of it, even written before the first ran, is not delegated, and says why once', async () => {

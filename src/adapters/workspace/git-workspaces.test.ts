@@ -39,7 +39,7 @@ function tokenRemote(base: string, repo: string, url = TOKEN_URL) {
 const agentConfig = (path: string) => readFileSync(join(path, '.git', 'config'), 'utf8');
 
 const req = (repo: string, patch: object = {}) => ({
-  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, slot: 1, portBase: 4200, runId: 'abcdef123456', ...patch,
+  projectId: 'p', repoPath: repo, ticketId: 'REL-1', title: 'Export CSV', kind: 'worktree' as const, runId: 'abcdef123456', ...patch,
 });
 
 describe('GitWorkspaces', () => {
@@ -65,7 +65,7 @@ describe('GitWorkspaces', () => {
     const { repo, root } = fixtureRepo();
     const ws = new GitWorkspaces({ root });
     const w = await ws.prepare(req(repo));
-    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), port: 4201, branch: 'feat/rel-1-export-csv', fresh: true });
+    expect(w).toEqual({ path: join(root, 'p', 'REL-1'), branch: 'feat/rel-1-export-csv', fresh: true });
     expect(git(w.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/rel-1-export-csv');
     expect(await ws.prepare(req(repo))).toEqual({ ...w, fresh: undefined });
     await ws.cleanup('p', 'REL-1');

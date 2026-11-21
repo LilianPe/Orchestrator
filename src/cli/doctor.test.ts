@@ -1271,7 +1271,7 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
       const warning = result.lines.find((line) => line.startsWith('  Warning: bypass actors not read'));
       expect(warning).toBeDefined();
       expect(result.text).toContain('Check by hand what the warning under the default branch names.');
-      for (const named of ['Administration', 'Repository admin', 'Organization admin', 'Deploy key', 'gh token', 'Do not allow bypassing the above settings', 'FACTORY_ALLOW_HOST_RUNS=1']) {
+      for (const named of ['Administration', 'Repository admin', 'Organization admin', 'Deploy key', 'gh token', 'Do not allow bypassing the above settings', 'no agent holds such a credential']) {
         expect(warning).toContain(named);
       }
       const json = JSON.parse((await doctor([], [], { json: true, ...options })).text) as { branchProtection: { verdict: string; warnings: string[] } };
