@@ -1014,7 +1014,8 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
       expect(result.code).toBe(0);
       const warning = result.lines.find((line) => line.startsWith('  Warning: bypass actors not read'));
       expect(warning).toBeDefined();
-      for (const named of ['Administration', 'Repository admin', 'Deploy key', 'Do not allow bypassing the above settings', 'FACTORY_ALLOW_HOST_RUNS=1']) {
+      expect(result.text).toContain('Check by hand what the warning under the default branch names.');
+      for (const named of ['Administration', 'Repository admin', 'Organization admin', 'Deploy key', 'gh token', 'Do not allow bypassing the above settings', 'FACTORY_ALLOW_HOST_RUNS=1']) {
         expect(warning).toContain(named);
       }
       const json = JSON.parse((await doctor([], [], { json: true, ...options })).text) as { branchProtection: { verdict: string; warnings: string[] } };
@@ -1026,6 +1027,7 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
     const result = await doctor([], [], pullRequest('always'));
     expect(result.code).toBe(1);
     expect(result.text).not.toContain('bypass actors not read');
+    expect(result.text).not.toContain('Check by hand what the warning');
   });
 
   it('puts the protection in the JSON report', async () => {

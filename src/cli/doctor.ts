@@ -162,13 +162,15 @@ export interface BranchProtectionReport extends Partial<BranchProtection> {
 
 /**
  * GitHub returns a ruleset's `bypass_actors` only to an account that can edit it, the Administration write permission the App
- * must not have, and a classic protection's bypass settings need it too (ORC-428): who else bypasses goes unread. An actor
- * the daemon's SSH keys push as lets a run on the host push to the default branch without a pull request.
+ * must not have, and a classic protection's bypass settings need it too (ORC-428): who else bypasses goes unread. A run on the
+ * host keeps the daemon's user and every git credential it holds (SSH keys, an HTTPS credential helper, a `gh` token): one
+ * that is a bypass actor pushes to the default branch without a pull request.
  */
 const BYPASS_ACTORS_WARNING =
-  'Warning: bypass actors not read: GitHub shows them only to an account with the Administration permission, which the App does not have. ' +
-  "Check by hand that the identity the daemon's SSH keys push with bypasses nothing on this branch: in each ruleset that requires a pull request, " +
-  'no bypass actor it holds (Repository admin or another role it has, its team, its user, or a Deploy key if one of the keys is one); ' +
+  'Warning: bypass actors not read: GitHub shows them only with the Administration permission, which the App is not given (docs/github-app-manifest.json). ' +
+  "Check by hand that no git credential of the daemon's user (SSH keys or agent, HTTPS credential helper, gh token) bypasses this branch's rules: " +
+  'in each ruleset that requires a pull request, the repository\'s and the organization\'s, no bypass actor its account holds ' +
+  '(Repository admin or another role, Organization admin, its team, its user, or Deploy key for a deploy key); ' +
   'on a classic protection, "Do not allow bypassing the above settings" checked and no allowed bypass for it. ' +
   'Otherwise a run on the host (FACTORY_ALLOW_HOST_RUNS=1) pushes to the default branch without a pull request (docs/github.md).';
 
@@ -716,7 +718,9 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
+        ? `Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches.${
+            protection.warnings ? ' Check by hand what the warning under the default branch names.' : ''
+          }`
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
