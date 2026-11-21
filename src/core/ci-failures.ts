@@ -82,9 +82,9 @@ export function formatCiFailures(report: CiFailureReport, secrets: readonly stri
   ];
   failed.slice(0, MAX_NAMED).forEach((check, i) => {
     const title = `### ${name(check.name)} (${name(check.conclusion)})`;
+    if (i >= MAX_LOGS) return void out.push(title);
     const log = check.log === undefined ? '' : scrubLog(check.log, secrets);
-    if (i >= MAX_LOGS) out.push(title);
-    else if (log) out.push(`${title}\n${fenced(log)}`);
+    if (log) out.push(`${title}\n${fenced(log)}`);
     else out.push(`${title}\nNo log: ${check.noLog ?? 'the forge gave an empty one'}.`);
   });
   if (failed.length > MAX_NAMED) out.push(`And ${failed.length - MAX_NAMED} more failed checks.`);

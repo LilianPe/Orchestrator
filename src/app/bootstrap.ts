@@ -204,7 +204,9 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
     };
     // The daemon's own secrets never enter a run's environment; masked all the same, should one surface.
     // A repository's secrets: its env ones from the start, the others by the values its setups read (ORC-308), a rotated one included.
-    const daemonSecrets = () => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
+    const daemonSecrets = (): string[] => [...daemonSecretValues(o.home, yml, env), ...repoSecrets.values(), ...(githubSecret ? [githubSecret] : []), ...(oauthClient ? [oauthClient.clientSecret] : [])];
+    // Masked where the daemon shows a text it did not write: the diagnosis, the CI logs a fix reads (ORC-459).
+    const allSecrets = () => transcriptSecrets(env, daemonSecrets());
     // A container per attempt (ORC-204) when FACTORY_CONTAINER_CLI is set; --fake-runner stays on the host.
     // The sandboxes' only way out (ORC-213): it applies each run's network level and journals its connections.
     // In a service of its own under compose (ORC-203), in this process otherwise.
@@ -313,7 +315,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       tracker: trackerSwitch,
       outputPolicy,
       forge,
-      secretValues: () => transcriptSecrets(env, daemonSecrets()),
+      secretValues: allSecrets,
       // Only the GitHub App merges (ORC-148): without it, a Done goes back to Human Review with the reason.
       // A fake run writes nothing real: its fake PR's number would be another one's on the forge.
       // The visual proof's captures shown in the PR from the repository's `factory/artifacts` branch, by the same App (ORC-407).
@@ -460,7 +462,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       heldRows: (ticketId) => daemon.heldRows(ticketId),
       // `factory dry-run`: a new one, after any under way, which reads what changed meanwhile (a known flaky test, a variable).
       dryRun: (projectId) => daemon.dryRun(projectId, { fresh: true }),
-      secrets: () => transcriptSecrets(env, daemonSecrets()),
+      secrets: allSecrets,
       oauth: linearSettings(o.home, yml)
         ? {
             authorizeUrl: () => {

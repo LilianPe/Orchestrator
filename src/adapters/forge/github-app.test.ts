@@ -1491,12 +1491,12 @@ describe('GitHubAppForge.ciFailures (ORC-459)', () => {
     expect(calls.find((c) => c.url.includes('/actions/jobs/11/logs'))!.headers.authorization).toBe('Bearer ghs_test_token');
   });
 
-  it('says a log GitHub refuses (expired, no permission) and still names the check; a transient refusal rejects', async () => {
+  it('says a log GitHub refuses (expired, no permission, down) and still names the check: a log never costs the fix its run', async () => {
     const make = (status: number) =>
       makeForge([tokenRoute(42), pull, ...checksRoutes([job(11, 'test')], []), ...base([]), logRoute(() => ({ status, body: { message: 'nope' } }))], { installationId: 42 }).forge;
     expect((await make(410).ciFailures('/repo', 7)).failed).toEqual([{ name: 'test', conclusion: 'failure', noLog: 'GitHub refused its log (410)' }]);
     expect((await make(403).ciFailures('/repo', 7)).failed[0]!.noLog).toBe('GitHub refused its log (403)');
-    await expect(make(503).ciFailures('/repo', 7)).rejects.toThrow(/503/);
+    expect((await make(503).ciFailures('/repo', 7)).failed[0]!.noLog).toBe('GitHub refused its log (503)');
   });
 
   it('reads MAX_LOGS logs at most, and keeps only the end of each', async () => {
@@ -1525,5 +1525,13 @@ describe('streamTail (ORC-459)', () => {
     const body = new ReadableStream<Uint8Array>({ start: (c) => { for (const x of chunks) c.enqueue(x); c.close(); } });
     expect(await streamTail(body, 5)).toBe('fghij');
     expect(await streamTail(null, 5)).toBe('');
+  });
+
+  it('drops the line a cut fell in, and only when it cut', async () => {
+    const lines = (...parts: string[]) => (async function* () { for (const p of parts) yield new TextEncoder().encode(p); })();
+    expect(await streamTail(lines('secret-ghp_aaaa\n', 'Error: x\n', 'end'), 15)).toBe('Error: x\nend');
+    expect(await streamTail(lines('a\nb'), 15)).toBe('a\nb');
+    // A multi-byte character cut in half goes with its line.
+    expect(await streamTail(lines('é'.repeat(10), '\nok'), 6)).toBe('ok');
   });
 });

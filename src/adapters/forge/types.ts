@@ -47,7 +47,7 @@ export interface Forge {
   unresolvedReviewComments(repoPath: string, prNumber: number): Promise<FeedbackItem[]>;
   /**
    * The PR's red CI as its fix reads it (ORC-459): the failed checks of its head, each with the end of its log as the forge
-   * returned it (untrusted, raw), and the CI of its base branch at its tip.
+   * returned it (untrusted, raw), and the CI of its base branch on the commit the PR is compared with.
    */
   ciFailures(repoPath: string, prNumber: number): Promise<CiFailureReport>;
   /** Every open PR of the repository, the most recently updated first, each with its first files (ORC-207): every page read, never a list cut short. */
