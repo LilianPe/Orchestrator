@@ -3,12 +3,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Document, parseDocument } from 'yaml';
-import { FANTOME, factoryYmlText, parseInstanceKeys, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
+import { FANTOME, FactoryYmlError, factoryYmlText, parseInstanceKeys, type FactoryYml, type ProjectConfig, type Relay } from './factory-yml.js';
 import { isSealed, openSecretsFile, sealSecretsFile } from './secrets-file.js';
 import { validatorsNeeded } from '../core/authz.js';
 
 export type { ProjectConfig } from './factory-yml.js';
-export type GithubConfig = NonNullable<FactoryYml['github']>;
 
 /** The instance as the daemon runs it (ORC-199): factory.yml's instance keys, each with its default, and its GitHub App. */
 export interface InstanceConfig {
@@ -19,7 +18,7 @@ export interface InstanceConfig {
   dev?: boolean;
   projects: ProjectConfig[];
   knowledge?: { repoPath: string };
-  github?: GithubConfig;
+  github?: FactoryYml['github'];
 }
 
 export interface LinearSecrets {
@@ -96,46 +95,42 @@ export function loadInstance(home: string): InstanceConfig {
 }
 
 /** A project as factory.yml writes it. */
-function projectYml(p: ProjectConfig): Record<string, unknown> {
-  const { repoPath, linearTeamKey, authz, ...rest } = p;
+function projectYml({ id, repoPath, linearTeamKey, authz, effects, preset }: ProjectConfig): Record<string, unknown> {
   return {
-    id: rest.id,
+    id,
     repo_path: repoPath,
     linear_team_key: linearTeamKey,
     ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, github_logins: authz.githubLogins } } : {}),
-    ...(rest.effects ? { effects: rest.effects } : {}),
-    ...(rest.preset ? { preset: rest.preset } : {}),
+    ...(effects ? { effects } : {}),
+    ...(preset ? { preset } : {}),
   };
 }
 
-/** The value of each instance key the file leaves out: `saveInstance` writes none of them in its place. */
-const INSTANCE_DEFAULTS: Record<string, unknown> = { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] };
-
 /**
- * Writes the instance keys into `<home>/factory.yml` (ORC-199), for `factory init`: only those whose value changed, a default
- * the file leaves out never written, so the rest of the file and the comments of what did not change stay as they are; `base`
- * is the rest of a file written where there is none. Never its GitHub App, whose key is a reference only a person writes.
- * Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the daemon, which
- * reads its Claude account there at each launch (`claudeAccountReader`), never reads it half-written.
+ * Writes the instance keys into `<home>/factory.yml` (ORC-199), for `factory init`: only those whose value, as the daemon reads
+ * it, changed, so the rest of the file and the comments of what did not change stay as they are; a default the file leaves out is
+ * never written. `base` is the rest of a file written where there is none. Never its GitHub App, whose key is a reference only a
+ * person writes. Validated as the daemon reads it: a value it would refuse is never written. Replaced whole by a rename: the
+ * daemon, which reads its Claude account there at each launch (`claudeAccountReader`), never reads it half-written.
  */
 export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, base?: string): void {
   const text = factoryYmlText(home) ?? base;
   const doc = text === undefined ? new Document({}) : parseDocument(text);
-  if (doc.errors.length > 0) throw new Error(`invalid factory.yml: unreadable YAML: ${doc.errors[0]!.message}`);
-  const values: Record<string, unknown> = {
-    port: cfg.port,
-    host: cfg.host,
-    public_url: cfg.publicUrl,
-    dev: cfg.dev,
-    relay: cfg.relay,
-    projects: cfg.projects.map(projectYml),
-    knowledge: cfg.knowledge && { repo_path: cfg.knowledge.repoPath },
-  };
-  const current = (doc.toJS() ?? {}) as Record<string, unknown>;
-  for (const [key, value] of Object.entries(values)) {
-    const same = (v: unknown) => isDeepStrictEqual(current[key] ?? INSTANCE_DEFAULTS[key], v);
-    if (value === undefined) doc.delete(key);
-    else if (!same(value)) doc.set(key, doc.createNode(value));
+  if (doc.errors.length > 0) throw new FactoryYmlError([`unreadable YAML: ${doc.errors[0]!.message}`]);
+  const before = effectiveInstance(text === undefined ? undefined : parseInstanceKeys(text));
+  const keys: [keyof typeof cfg, string, unknown][] = [
+    ['port', 'port', cfg.port],
+    ['host', 'host', cfg.host],
+    ['publicUrl', 'public_url', cfg.publicUrl],
+    ['dev', 'dev', cfg.dev],
+    ['relay', 'relay', cfg.relay],
+    ['projects', 'projects', cfg.projects.map(projectYml)],
+    ['knowledge', 'knowledge', cfg.knowledge && { repo_path: cfg.knowledge.repoPath }],
+  ];
+  for (const [key, yml, value] of keys) {
+    if (isDeepStrictEqual(before[key], cfg[key])) continue;
+    if (value === undefined) doc.delete(yml);
+    else doc.set(yml, doc.createNode(value));
   }
   const written = doc.toString();
   parseInstanceKeys(written);
@@ -150,7 +145,7 @@ export function saveInstance(home: string, cfg: Omit<InstanceConfig, 'github'>, 
  * The files of the instance before ORC-199, in `home`: never read again, `factory.yml` holds what `config.yaml` held, and the
  * daemon writes neither the run settings (ORC-179) nor logs there.
  */
-export const OLD_INSTANCE_FILES = ['config.yaml', 'run-settings.json', 'logs']; // transition, à retirer
+const OLD_INSTANCE_FILES = ['config.yaml', 'run-settings.json', 'logs']; // transition, à retirer
 
 /**
  * What the start and `factory doctor` say of each file of the instance before ORC-199 still in `home`: not read, its content not

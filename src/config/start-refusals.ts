@@ -14,7 +14,7 @@ export interface StartChecks {
 }
 
 /** Why the daemon does not start without its factory.yml (ORC-199): `config.yaml` is never read in its place. */
-export const NO_FACTORY_YML = 'no factory.yml in FACTORY_HOME: the daemon reads its configuration there alone, never config.yaml (ORC-199). Run factory init, or write it (docs/configuration.md).';
+const NO_FACTORY_YML = 'no factory.yml in FACTORY_HOME: the daemon reads its configuration there alone, never config.yaml (ORC-199). Run factory init, or write it (docs/configuration.md).';
 
 /**
  * The refusals of the daemon's start that factory.yml decides before anything opens, for the start and

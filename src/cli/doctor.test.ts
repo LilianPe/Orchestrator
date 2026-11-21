@@ -989,7 +989,7 @@ describe("the daemon's start refusals, each one doctor's", () => {
   }
   const refusals: Record<string, Refusal> = {
     'no factory.yml': { noFactoryYml: true, reason: /^no factory\.yml in FACTORY_HOME: .*never config\.yaml \(ORC-199\)/ },
-    'an invalid instance key in factory.yml': { factoryYml: 'knowledge: nope\n', reason: /^invalid factory\.yml:\n- knowledge: an object is expected/ },
+    'an invalid instance key in factory.yml': { factoryYml: 'knowledge: nope\n', reason: /^invalid factory\.yml:\n- knowledge: / },
     'an invalid factory.yml': { factoryYml: 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n', reason: /github\.private_key: the environment variable GH_APP_KEY/ },
     'a GitHub App secret its source cannot read': {
       factoryYml: 'secret_sources: { creds: { kind: systemd-creds } }\ngithub: { app_id: 456, private_key: creds:github-key }\n',

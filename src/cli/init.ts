@@ -234,12 +234,6 @@ function factoryYml(withGithub: boolean): { text: string; env: Record<string, st
   return { text: `# Written by factory init: every secret is a reference, read from the daemon's environment.\n${stringify(yml)}`, env };
 }
 
-/** Whether `<home>/factory.yml` declares the factory's GitHub App, its references left unread. */
-function hasGithubApp(home: string): boolean {
-  const text = factoryYmlText(home);
-  return text !== undefined && (parse(text) as Record<string, unknown> | null)?.['github'] != null;
-}
-
 /**
  * Linear's OAuth application: what to create, then its three values, in `secrets.json`. An empty answer keeps the stored value
  * (ORC-83), as long as the client ID is the same: another application's secrets would fail its OAuth and its webhooks.
@@ -283,8 +277,9 @@ export async function runInit(d: InitDeps): Promise<void> {
   const ymlPath = join(d.home, 'factory.yml');
   // Without Linear's application, the instance never ran: its first setup gets the App's steps and references.
   const firstSetup = !secrets.linear;
-  // Before init writes one with its App's references.
-  const appDeclared = hasGithubApp(d.home);
+  // Before init writes one with its App's references, its own left unread.
+  const ymlText = factoryYmlText(d.home);
+  const appDeclared = ymlText !== undefined && (parse(ymlText) as Record<string, unknown> | null)?.['github'] != null;
   const previous = cfg.projects.find((p) => samePath(p.repoPath, repoPath));
   // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
@@ -320,7 +315,7 @@ export async function runInit(d: InitDeps): Promise<void> {
 
   // The daemon reads factory.yml alone (ORC-199): one is written when there is none, then the instance keys go into it, the
   // rest of the file kept.
-  const written = existsSync(ymlPath) ? undefined : factoryYml(firstSetup);
+  const written = ymlText === undefined ? factoryYml(firstSetup) : undefined;
   saveInstance(d.home, cfg, written?.text);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
   // After factory.yml: a database that fails loses none of the answers.

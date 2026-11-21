@@ -34,7 +34,7 @@ export interface ProjectConfig {
 export const FANTOME = 'factory/fantome';
 
 /** Linear's webhook relay: a smee.io channel on a workstation in the development mode (ORC-444), none on a server. */
-export type Relay = { kind: 'smee'; url: string } | { kind: 'none' };
+export type Relay = z.infer<typeof relaySchema>;
 
 /**
  * `<FACTORY_HOME>/factory.yml` (ORC-209, part B): the server's configuration, required since ORC-199, which retired
@@ -269,7 +269,7 @@ const SECTIONS: Record<string, string[]> = {
   dev: [],
   relay: [],
   projects: [],
-  knowledge: ['repo_path'],
+  knowledge: [],
   linear: ['app_client_id', 'client_secret', 'webhook_secret'],
   github: ['app_id', 'private_key', 'installation_id', 'webhook_secret', 'client_id', 'client_secret'],
   dashboard: ['logins', 'org', 'team'],
@@ -290,7 +290,7 @@ const SECTIONS: Record<string, string[]> = {
   spec: ['publish', 'threshold'],
 };
 /** The instance keys (ORC-199): what `loadInstance` reads and `saveInstance` writes, without the rest of the file. */
-export const INSTANCE_KEYS = ['port', 'host', 'public_url', 'dev', 'relay', 'projects', 'knowledge'];
+const INSTANCE_KEYS = ['port', 'host', 'public_url', 'dev', 'relay', 'projects', 'knowledge'];
 const projectSchema = z.strictObject({
   id: z.string().min(1),
   repo_path: z.string().min(1),
@@ -422,10 +422,8 @@ export function parseFactoryYml(
       ...(authz ? { authz: { maintainers: authz.maintainers, validators: authz.validators, githubLogins: authz.github_logins } } : {}),
     }));
   }
-  const knowledge = section('knowledge');
-  if (knowledge && knowledge['repo_path'] == null) violations.push('knowledge.repo_path: required');
-  const knowledgeRepo = leaf('knowledge.repo_path', knowledge?.['repo_path'], z.string().min(1), 'a path is expected');
-  if (knowledgeRepo !== undefined) out.knowledge = { repoPath: knowledgeRepo };
+  const knowledge = shaped('knowledge', r['knowledge'], z.strictObject({ repo_path: z.string().min(1) }));
+  if (knowledge) out.knowledge = { repoPath: knowledge.repo_path };
 
   const secretRefs: Record<string, SecretRef> = {};
   /** An `env:NAME` secret, resolved now as before ORC-398, its reference kept for `doctor` and the masking. */
