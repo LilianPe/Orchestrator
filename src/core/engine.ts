@@ -1531,8 +1531,10 @@ function startPending(out: Decision, event: FactoryEvent, ticket: TicketState, w
  * blockers (ORC-435): the block is kept, the job the lift of the wait (`liftOnWait`), which `blockers.done` starts.
  */
 function resumePending(out: Decision, event: FactoryEvent, ticket: TicketState, workflow: Workflow, pending: PendingJob): Decision {
-  const waits = heldByWait(ticket, workflow.jobs[pending.job]!);
-  if (!waits) return startPending(out, event, ticket, workflow, pending);
+  const job = workflow.jobs[pending.job]!;
+  const waits = heldByWait(ticket, job);
+  // Merged, nothing resumes it: no lift promised (`startPending` refuses it as well).
+  if (!waits || refused(ticket, job)) return startPending(out, event, ticket, workflow, pending);
   liftOnWait(out, event, ticket, pending);
   out.trace.push(`${pending.job} not started, ${waits}`);
   return out;

@@ -168,6 +168,13 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
       expect(after(held, done)).toMatchObject({ blocked: false, pendingJob: undefined });
     });
 
+    it('on a merged ticket, a reply promises no resume and starts nothing, as it would not waiting', () => {
+      const merged = stranded({ prState: 'MERGED' });
+      const out = decide(merged, reply, workflow);
+      expect(out.effects.some((x) => x.kind === 'start_run')).toBe(false);
+      expect(after(merged, reply).waitingOn?.lift).toBeUndefined();
+    });
+
     it('not waiting, a reply still starts the pending job at once (ORC-339)', () => {
       const out = decide(stranded({ waitingOn: null }), reply, workflow);
       expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
