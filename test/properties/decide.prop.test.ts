@@ -91,6 +91,8 @@ function holdsAsync(check: (s: Sequences) => Promise<void>, examples: Sequences[
 
 const run = (s: Sequences): Run => fold(s.withDuplicates, wf);
 
+type Decided = ReturnType<typeof decided>[number];
+
 /** Runs started while handling a step: decided by `decide`, or the pending job started by `settle`. */
 const starts = (step: Step) => stepEffects(step).filter((e) => e.kind === 'start_run');
 /** A mention that answers a block, as a reply does (ORC-415): a human relaunch when the same decision unblocks. */
@@ -485,11 +487,22 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
      * runs; once the bound is reached, a red CI or a conflict whose rule matches, or a review that still finds, starts nothing
      * and blocks the ticket. A green CI is no reset: the review would loop for good between its fix and the CI. The count is
      * the model's, kept from the decisions; the ticket's `ciFixAttempts` must agree with it after every step.
+     *
+     * On a ticket waiting on its blockers (ORC-363), a red CI or a conflict starts nothing and blocks nothing, at the bound or
+     * not: a block would end the wait and lose its start. The wait keeps it, and its round is that of `blockers.done`, which
+     * starts its run under the bound and blocks past it (ORC-464). The bound on runs stays whole: only where a run would
+     * start is the count taken, or the ticket blocked.
      */
     const BY_EVENT: Partial<Record<EventType, string>> = { 'pr.checks_failed': 'fix-ci', 'pr.conflicted': 'rebase' };
     // The lens that publishes the review: its end starts the fix of the review loop.
     const BY_LENS: Partial<Record<string, string>> = { 'review-security': 'fix-review' };
-    const loopJob = (e: FactoryEvent): string | undefined => (e.type === 'run.finished' ? BY_LENS[e.payload.job] : BY_EVENT[e.type]);
+    // The end of a wait that kept a red CI or a conflict (ORC-464) makes its round.
+    const keptRound = (step: Decided): string | undefined => (step.before?.waitingOn?.round ? step.before.waitingOn.lift?.job : undefined);
+    const loopJob = (step: Decided): string | undefined => {
+      const e = step.event;
+      if (e.type === 'blockers.done') return keptRound(step);
+      return e.type === 'run.finished' ? BY_LENS[e.payload.job] : BY_EVENT[e.type];
+    };
     const redCiBounded = (r: Run, bound: number): void => {
       let fixes = 0;
       for (const step of decided(r)) {
@@ -498,14 +511,25 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
           if (!answersBlock(step)) expect(CI_RESETS, 'reset of the review and CI loop').toContain(step.event.type);
           fixes = 0;
         }
-        const job = loopJob(step.event);
+        const job = loopJob(step);
         const runs = job ? step.decision.effects.filter((e) => e.kind === 'start_run' && e.job === job) : [];
         fixes += runs.length;
         expect(fixes, 'runs of the review and CI loop').toBeLessThanOrEqual(bound);
         if (step.after) expect(step.after.ciFixAttempts, 'ciFixAttempts').toBe(fixes);
+        const types = step.decision.events.map((e) => e.type);
+        if (job && step.event.type !== 'run.finished' && step.event.type !== 'blockers.done' && step.before?.waitingOn) {
+          // Kept by the wait, at the bound or not: nothing starts, nothing blocks.
+          expect(runs).toEqual([]);
+          expect(types, 'a red CI or a conflict on a waiting ticket blocks nothing').not.toContain('ticket.blocked');
+          continue;
+        }
         if (!job || (step.before?.ciFixAttempts ?? 0) < bound) continue;
         expect(runs).toEqual([]);
-        const types = step.decision.events.map((e) => e.type);
+        if (step.event.type === 'blockers.done') {
+          // The round the wait kept, past the bound: the ticket blocked, unless it moved on meanwhile (nothing made then).
+          if (step.decision.trace.some((t) => t.endsWith(`bound ${bound} reached`))) expect(types).toContain('ticket.blocked');
+          continue;
+        }
         if (step.event.type === 'run.finished') {
           // The review that publishes with a blocking finding standing, past the bound: published, and the ticket blocked.
           const found = step.decision.effects.some((e) => e.kind === 'review' && e.publish) && blockingTotal(step.after?.reviewBlocking?.counts ?? {}) > 0;
@@ -528,7 +552,7 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
 
     // Found by fast-check (ORC-462): intake ends on a ticket « blocked by » another, which then waits on it (ORC-363); a red
     // CI starts no fix-ci, held by the wait, and still took a round of the loop.
-    const redCiOnWait = seq(
+    const waitInReview: Entry[] = [
       ...delegated(),
       runStarted('intake', 'r2'),
       ext('run.finished', {
@@ -542,15 +566,21 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
         blockedBy: [{ identifier: 'REL-2', stateName: 'In Progress' }],
       }),
       ext('status.changed', { from: 'dev', to: 'human_review' }),
-      ext('pr.checks_failed', { ...pr, failures: ['test'] }),
-    );
+    ];
+    const redCi = (): Entry => ext('pr.checks_failed', { ...pr, failures: ['test'] });
+    const redCiOnWait = seq(...waitInReview, redCi());
+
+    // ORC-464: the red CI the wait kept is its fix once the blockers are done, counted then; past the bound, blocked then.
+    const done = ext('blockers.done', { blockers: ['REL-2'] });
+    const redCiKept = seq(...waitInReview, redCi(), done);
+    const redCiKeptPastBound = [...waitInReview, ...Array.from({ length: ciBound + 1 }, redCi), done];
 
     it(
       'red CI relaunches fix-ci at most ci_fix_attempts times between two resets, and the next red CI blocks (ORC-270)',
       () => {
         fc.assert(
           fc.property(sequences, fc.integer({ min: 0, max: 3 }), (s, bound) => redCiBounded(fold(s.withDuplicates, workflow(2, bound)), bound)),
-          params<[Sequences, number]>([[redCiCounterexample, ciBound], [redCiOnWait, ciBound]]),
+          params<[Sequences, number]>([[redCiCounterexample, ciBound], [redCiOnWait, ciBound], [redCiKept, ciBound], [redCiKept, 0], [seq(...redCiKeptPastBound), 0]]),
         );
       },
       TIMEOUT,
@@ -562,6 +592,18 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       expect(red.before?.waitingOn).toBeDefined();
       expect(red.decision.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
       expect(r.final).toMatchObject({ blocked: false, ciFixAttempts: 0 });
+    });
+
+    it('ORC-464: the red CI the wait kept starts its fix-ci once the blockers are done, one round counted then', () => {
+      const r = run(redCiKept);
+      expect(decided(r).at(-1)!.decision.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'fix-ci', input: 'ci_failures' }));
+      expect(r.final).toMatchObject({ blocked: false, ciFixAttempts: 1 });
+    });
+
+    it(`ORC-464: past the bound, the red CIs the wait kept block nothing while it waits, and block the ticket once the blockers are done`, () => {
+      const r = fold(redCiKeptPastBound, workflow(2, 0));
+      expect(decided(r).slice(0, -1).some((s) => s.decision.events.some((e) => e.type === 'ticket.blocked'))).toBe(false);
+      expect(r.final).toMatchObject({ blocked: true, blockKind: 'ci_bound', ciFixAttempts: 0 });
     });
 
     // A rebase and a red CI on one counter (ORC-146): one of each, then the next conflict blocks.
@@ -1009,7 +1051,6 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
   });
 
   describe('ORC-186 — authorization matrix, checked on the signed actor', () => {
-    type Decided = ReturnType<typeof decided>[number];
     const isRefusal = (step: Decided) => step.decision.trace.some((t) => t.startsWith(AUTHZ_REFUSED));
     // A human's move to Done is a merge decision (ORC-148): refused, the ticket also goes back to Human Review, the
     // reviewed commit kept (no work: Linear shows it in Done, nothing merged); unchecked (no roles), it never merges.
