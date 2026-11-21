@@ -101,7 +101,8 @@ const TEST_AREAS = new Set([...TEST_DIRS, '__tests__', 'spec', 'e2e', 'cypress']
 
 /**
  * The source directories with no test file: those under `src/`, or at the root without one. An area is tested by a test file
- * in it, or in `tests/<area>` (`test/<area>`). Tests a root `tests/` holds loose are named: they cannot be matched to an area.
+ * in it, or in `tests/<area>` (`test/<area>`). Without a source directory, the files of code `src/` (or the root) holds itself
+ * are the area, tested by a test file beside them. Tests a root `tests/` holds loose are named: they cannot be matched to an area.
  */
 function untested(repo: string): string {
   const budget = { left: WALK_LIMIT };
@@ -110,10 +111,13 @@ function untested(repo: string): string {
     .filter((d) => !TEST_AREAS.has(d))
     .filter((d) => hasSource(join(repo, root, d), budget))
     .map((d) => ({ name: d, path: root ? `${root}/${d}` : d }));
-  if (!areas.length) return 'no source directory found';
-  const bare = areas.filter((a) => !hasTest(join(repo, a.path), budget) && !TEST_DIRS.some((t) => hasTest(join(repo, t, a.name), budget)));
+  const own = areas.length ? [] : entries(join(repo, root)).filter((e) => e.isFile() && SOURCE.test(e.name));
+  if (!areas.length && !own.length) return 'no source directory found';
+  const bare = areas.length
+    ? areas.filter((a) => !hasTest(join(repo, a.path), budget) && !TEST_DIRS.some((t) => hasTest(join(repo, t, a.name), budget))).map((a) => a.path)
+    : own.some((e) => TEST_FILE.test(e.name)) ? [] : [`${root || '.'}/ (its own files)`];
   const loose = TEST_DIRS.find((t) => entries(join(repo, t)).some((e) => e.isFile() && TEST_FILE.test(e.name)));
-  const value = bare.length ? bare.map((a) => a.path).join(', ') : 'none: every source directory has a test file';
+  const value = bare.length ? bare.join(', ') : 'none: every source directory has a test file';
   const notes = [...(loose ? [`${loose}/ holds tests not sorted by directory: check those by hand`] : []), ...(budget.left < 0 ? [`stopped after ${WALK_LIMIT} entries: partial`] : [])];
   return [value, ...notes].join('; ');
 }

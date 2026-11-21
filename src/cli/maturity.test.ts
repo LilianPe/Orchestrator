@@ -120,6 +120,13 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
     expect(valueOf(repoOf({ 'src/a/x.ts': '', 'src/a/x.test.ts': '', 'src/__tests__/util.ts': '', 'src/test/helpers.ts': '' }))['untested']).toBe('none: every source directory has a test file');
     expect(valueOf(repoOf({ 'lib/x.ts': '', 'lib/x.test.ts': '', '__tests__/util.ts': '', 'e2e/fixtures.ts': '', 'cypress/support.ts': '', 'spec/helper.py': '' }))['untested']).toBe('none: every source directory has a test file');
   });
+
+  it("files of code with no directory of code are the area: src/'s own, or the root's", () => {
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/util.ts': '' }))['untested']).toBe('src/ (its own files)');
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/index.test.ts': '' }))['untested']).toBe('none: every source directory has a test file');
+    expect(valueOf(repoOf({ 'pyproject.toml': '[project]\nname = "x"\n', 'app.py': '', 'models.py': '' }))['untested']).toBe('./ (its own files)');
+    expect(valueOf(repoOf({ 'app.py': '', 'test_app.py': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
 });
 
 describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
