@@ -62,7 +62,7 @@ describe('the golden tickets replayed on fake runners (ORC-236)', () => {
     const pack = mkdtempSync(join(tmpdir(), 'golden-pack-'));
     try {
       cpSync(packDir, pack, { recursive: true });
-      appendFileSync(join(pack, 'skills/dev/SKILL.md'), '\nAlways write the tests last.\n');
+      appendFileSync(join(pack, 'skills/build/SKILL.md'), '\nAlways write the tests last.\n');
       // The engine runs on the changed pack; one pass each is enough to compare what the runs received.
       const changed = await replayGoldenSet({ ...set, passes: 1 }, fakeGoldenPass({ packDir: pack }));
       const firstPasses = { ...report, passes: 1, tickets: report.tickets.map((t) => ({ ...t, passes: t.passes.slice(0, 1) })) };

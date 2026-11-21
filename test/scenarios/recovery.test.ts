@@ -153,7 +153,7 @@ describe('a restart during a run', () => {
     await h.orch.tick();
     await h.orch.drained();
     // The first attempt, then the relaunch of the one cut before the runner: never the queue item again.
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:feedback']);
     expect(await h.store.listQueue()).toEqual([]);
   });
 
@@ -768,7 +768,7 @@ describe('a pending job through its launch', () => {
     await vi.waitFor(() => expect(cut).toBe(true), { timeout: 10_000 });
     await h.restart({ mode: 'brutal' });
     await h.advance(60_001);
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
     expect(t.pendingJob).toBeUndefined();
@@ -810,7 +810,7 @@ describe('a pending job through its launch', () => {
     await h.orch.drained();
     await h.advance(10);
     expect(thrown).toBe(true);
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
     expect(t.pendingJob).toBeUndefined();
@@ -824,10 +824,10 @@ describe('a pending job through its launch', () => {
     await h.orch.drained();
     const t = await h.ticket();
     expect(t.pendingJob).toBeUndefined();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     h.runner.release(t.activeRunId!);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
   });
 
   it('a launch cut right after the ticket took its run: the step starts again once, the pending job never again', async () => {
@@ -840,11 +840,11 @@ describe('a pending job through its launch', () => {
     await faults.killed;
     await h.restart({ mode: 'brutal' });
     await h.advance(60_001);
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect((await h.ticket()).pendingJob).toBeUndefined();
     h.runner.release((await h.ticket()).activeRunId!);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect((await h.ticket()).pendingJob).toBeUndefined();
   });
 });
@@ -901,12 +901,12 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     // Resumed before the settle's lease expires: the queue launches the job while the ticket still holds it.
     await control(h, 'g2', 'control.resume');
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect((await h.ticket()).pendingJob).toBeUndefined();
     await h.advance(60_001);
     h.runner.release((await h.ticket()).activeRunId!);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect(await h.store.listQueue()).toEqual([]);
   });
 
@@ -924,7 +924,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     for (let i = 0; i < 3; i++) await h.advance(10);
     const blocked = await h.ticket();
     expect(blocked).toMatchObject({ blocked: true, blockReason: 'Error: the pending fix-ci could not be started: connection reset at queuedItems', pendingJob });
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     outage = false;
     // A trusted reply: the restriction the run gets is the pending job's own.
     await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'try again', author: 'L', kind: 'instruction' }, 'REL-1', { taint: 'trusted' });
@@ -932,7 +932,8 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     expect(t).toMatchObject({ blocked: false });
     expect(t.pendingJob).toBeUndefined();
     // That very job, its input and its restrictions: not the reply's own rule.
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:fix-ci']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
+    expect(await h.store.getRun(h.runner.requests[1]!.runId)).toMatchObject({ job: 'fix-ci' });
     expect(h.runner.requests[1]!.prompt).toContain('lint: 3 errors in src/export.ts');
     expect(h.runner.requests[1]!.sensitivePaths).toBeDefined();
   });
@@ -968,7 +969,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     h.runner.enqueue({ hold: true });
     h.runner.release(first);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     const t = await h.ticket();
     expect(t).toMatchObject({ activeRunId: 'other', blocked: false });
     // The winner runs this very job: nothing left pending behind it, and its worktree stays.
@@ -991,7 +992,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     };
     h.runner.release(first);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     const t = await h.ticket();
     // No `workspace.prepared` over the winner's, and its worktree left in place.
     expect(t).toMatchObject({ activeRunId: 'other', worktreePath: '/elsewhere', pendingJob: { job: 'dev-feedback', resume: true } });
@@ -1009,7 +1010,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     };
     h.runner.release(first);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ activeRunId: 'other', pendingJob: { job: 'dev-feedback', resume: true } });
   });
 
@@ -1039,7 +1040,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     h.runner.release(first);
     await h.orch.drained();
     expect(taken).toBe(true);
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ activeRunId: 'other', pendingJob: { job: 'dev-feedback', resume: true } });
   });
 
@@ -1087,7 +1088,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
       await h.orch.tick();
       await h.orch.drained();
     }
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: database down' });
     expect(await h.store.listQueue()).toEqual([]);
     expect(tries()).toBe(4);
@@ -1109,7 +1110,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     };
     h.runner.release(first);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     // Blocked on its own failure, but the other launch's run is still the ticket's, and still running.
     expect(await h.ticket()).toMatchObject({ blocked: true, blockReason: 'Launch error: disk full', activeRunId: 'other' });
     expect((await h.store.getRun('other'))!.status).toBe('running');
@@ -1131,7 +1132,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     };
     await h.orch.tick();
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ activeRunId: 'z', pendingJob: other });
     expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['dev-feedback']);
     // Handed out again while the ticket is busy: still in line, the pending job never replaced.
@@ -1150,11 +1151,11 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     h.runner.enqueue({ hold: true });
     h.runner.release(first);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect((await h.ticket()).pendingJob).toBeUndefined();
     await h.orch.tick();
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect(await h.store.listQueue()).toEqual([]);
   });
 
@@ -1168,7 +1169,7 @@ describe('a pending job: queue, death of its settle, messages and races', () => 
     await h.orch.drained();
     await h.advance(10);
     expect(thrown).toBe(true);
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
     expect(t.pendingJob).toBeUndefined();
@@ -1201,7 +1202,7 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
     expect(await h.ticket()).toMatchObject({ verifyAttempts: 0 });
     await control(h, 'g2', 'control.resume');
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.store.listQueue()).toEqual([]);
     expect(await h.ticket()).toMatchObject({ blocked: false });
   });
@@ -1218,7 +1219,7 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
     h.runner.enqueue({ hold: true });
     await control(h, 'g2', 'control.resume');
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:build']);
     expect(h.runner.requests[1]!.prompt).toContain('1 failed');
   });
 
@@ -1241,19 +1242,21 @@ describe('a relaunch past a green check, a settle stuck on a ticket blocked alre
       // The settle died: the block that was there stays the only one, and the job stays pending for its lift.
       expect(await h.ticket()).toMatchObject({ blocked: true, blockKind: 'ci_bound', blockReason: reason, pendingJob });
       expect(said()).toEqual([]);
-      expect(prompts(h)).toEqual(['/factory:dev']);
+      expect(prompts(h)).toEqual(['/factory:build']);
       outage = false;
       if (lift === 'a green CI') {
         await h.send('pr.checks_passed', { number: 7, url: 'https://forge/pr/7', branch: 'factory/rel-1-export-csv' });
-        expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+        expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
+        expect(await h.store.getRun(h.runner.requests.at(-1)!.runId)).toMatchObject({ job: 'dev-feedback' });
       } else {
         // The reply's own job first: the pending one waits behind its run.
         await h.send('session.prompted', { linearSessionId: 'ls-1', body: 'try again', author: 'L', kind: 'instruction' }, 'REL-1', { taint: 'trusted' });
-        expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+        expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
         expect((await h.ticket()).pendingJob).toEqual(pendingJob);
         h.runner.release((await h.ticket()).activeRunId!);
         await h.orch.drained();
-        expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback', '/factory:fix-ci']);
+        expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback', '/factory:feedback']);
+        expect(await h.store.getRun(h.runner.requests.at(-1)!.runId)).toMatchObject({ job: 'fix-ci' });
         expect(h.runner.requests.at(-1)!.prompt).toContain('lint: 3 errors in src/export.ts');
       }
       const t = await h.ticket();
@@ -1335,7 +1338,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     open();
     await h.orch.drained();
     // The settle's launch had the ticket first: it runs, and the other daemon's start, which found it taken, did nothing.
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect(prepared).toEqual([h.runner.requests[1]!.runId]);
     expect(resets).toHaveLength(1);
     const t = await h.ticket();
@@ -1352,13 +1355,13 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     h.runner.enqueue({ hold: true });
     h.runner.release(first);
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect((await h.ticket()).pendingJob).toBeUndefined();
     expect((await h.store.listQueue()).map((q) => q.job)).toEqual(['dev-feedback']);
     await h.advance(60_001);
     await h.orch.tick();
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     expect(await h.ticket()).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
   });
 
@@ -1372,7 +1375,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     await h.send('ticket.delegated', { linearSessionId: 'ls-1' });
     await h.advance(10);
     expect(w.thrown).toBe(1);
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'dev', activeRunId: h.runner.requests[0]!.runId });
   });
 
@@ -1384,7 +1387,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     await h.send('ticket.delegated', {});
     await h.advance(10);
     expect(w.thrown).toBe(1);
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ blocked: false, activeRunId: h.runner.requests[0]!.runId });
   });
 
@@ -1413,7 +1416,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     await h.advance(2_001);
     await h.orch.tick();
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev']);
+    expect(prompts(h)).toEqual(['/factory:build']);
     expect(await h.ticket()).toMatchObject({ blocked: false, activeRunId: 'z', pendingJob: { job: 'dev-feedback', input: 'feedback' } });
   });
 
@@ -1450,7 +1453,7 @@ describe('a launch: the one that loses, the store errors before its run, a dead 
     expect(await h.ticket()).toMatchObject({ blocked: false, pendingJob: { job: 'dev-feedback', resume: true } });
     await control(h, 'g2', 'control.resume');
     await h.orch.drained();
-    expect(prompts(h)).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(prompts(h)).toEqual(['/factory:build', '/factory:feedback']);
     const t = await h.ticket();
     expect(t).toMatchObject({ blocked: false, activeRunId: h.runner.requests[1]!.runId });
     expect(t.pendingJob).toBeUndefined();

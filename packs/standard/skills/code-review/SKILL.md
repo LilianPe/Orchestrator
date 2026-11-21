@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review a diff at a level proportionate to its risk (quick, standard, thorough), limited to what the diff changes or breaks, with classified and verified defects. Used by factory:review and as a self-review in factory:dev.
+description: Review a diff at a level proportionate to its risk (quick, standard, thorough), limited to what the diff changes or breaks, with classified and verified defects. Used by factory:review and as a self-review in factory:build.
 ---
 
 # factory:code-review

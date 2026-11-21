@@ -593,7 +593,7 @@ describe('Daemon', () => {
       expect((await store.listQueue()).map((q) => q.job)).toEqual(['dev', 'dev-feedback']);
       await reset();
       // The cut step again, then, once it ended, the step that waited behind it.
-      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
+      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:build', '/factory:feedback']);
     });
 
     it('a step deferred behind the cut one is kept, and follows its relaunch (ORC-357)', async () => {
@@ -610,7 +610,7 @@ describe('Daemon', () => {
       clock.set(1_000_000);
       await orch.tick();
       await orch.drained();
-      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:dev', '/factory:feedback']);
+      expect(runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:build', '/factory:feedback']);
     });
 
     it('an operator who lowers the recorded hold lifts it (ORC-357)', async () => {

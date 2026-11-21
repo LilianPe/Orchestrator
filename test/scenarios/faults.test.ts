@@ -133,7 +133,7 @@ describe('fault injection at each point of the chain (ORC-163)', () => {
     expect([...acked]).toEqual(['d1', 'p1']);
     expect(report).toEqual({ violations: [], atLeastOnce: [] });
     expect(await h.ticket()).toMatchObject({ logical: 'human_review', blocked: false });
-    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:dev', '/factory:feedback']);
+    expect(h.runner.requests.map((r) => r.prompt.split('\n')[0])).toEqual(['/factory:build', '/factory:feedback']);
     expect(faults.calls.filter((c) => c.row).map((c) => `${c.kind}:${c.method}`)).toMatchInlineSnapshot(`
       [
         "start_run:moveTo",

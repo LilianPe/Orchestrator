@@ -1,9 +1,9 @@
 ---
-name: spec
+name: spec_draft
 description: Write the spec of a Linear ticket before any code, for a human to approve (the factory's `spec_draft` step).
 ---
 
-# factory:spec
+# factory:spec_draft
 
 You receive a Linear ticket ("Ticket" block) in a git worktree already created on the given branch. Your only job: **write its spec**, the contract the next steps work to, then hand it to the factory. You write nothing in the worktree: no file, no commit. The factory checks the spec (`spec_check`), publishes it in the ticket's session, and a designated human approves it, asks for changes, or rejects it. Once approved, its acceptance criteria become the frozen tests the code must pass, and the review reads the PR against it.
 
