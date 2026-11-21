@@ -3,7 +3,7 @@ import { defaultWorkflow } from '../presets/workflow.js';
 import type { AgentOutput } from './agent-output.js';
 import { decide } from './engine.js';
 import { reduce } from './reduce.js';
-import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type TicketState } from './types.js';
+import { newTicketState, type EventPayloads, type EventType, type FactoryEvent, type PendingJob, type TicketState } from './types.js';
 
 const workflow = defaultWorkflow();
 
@@ -126,6 +126,52 @@ describe('the wait on a « blocked by » ticket not done (ORC-363)', () => {
 
     it('with no reply, the blockers done leave the block and start nothing', () => {
       expect(starts(blocked(), done)).toEqual([]);
+    });
+  });
+
+  describe('on a ticket blocked on a pending job no settle could start (ORC-435)', () => {
+    const pendingJob: PendingJob = { job: 'dev-feedback', input: 'feedback', sensitivePaths: ['.github/**'] };
+    const stranded = (patch: Partial<TicketState> = {}) =>
+      waiting({ logical: 'dev', blocked: true, blockKind: 'stuck', blockReason: 'Error: the pending dev-feedback could not be started', blockedJob: 'dev-feedback', pendingJob, ...patch });
+    const reply = event('session.prompted', { linearSessionId: 's1', body: 'Go on', author: 'L', ack: true, kind: 'instruction' });
+    const fired = event('timer.fired', { kind: 'debounce', payload: { job: 'dev-feedback' } } as EventPayloads['timer.fired']);
+    const done = event('blockers.done', { blockers: ['REL-2'] });
+
+    it('a reply keeps the block and starts nothing: the pending job waits for the blockers, as the lift of the wait', () => {
+      const out = decide(stranded(), reply, workflow);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+      expect(out.effects.some((x) => x.kind === 'start_run')).toBe(false);
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'ack', body: expect.stringContaining('REL-2') }));
+      expect(after(stranded(), reply)).toMatchObject({ blocked: true, pendingJob, waitingOn: { blockers: ['REL-2'], start: { job: 'dev' }, lift: pendingJob } });
+    });
+
+    it('the reply gives the bounds back as it would have starting the job', () => {
+      expect(decide(stranded({ leaseRelaunches: 1 }), reply, workflow).events).toContainEqual({ type: 'ticket.patched', patch: { leaseRelaunches: 0 } });
+    });
+
+    it('a debounce armed before the block, fired, starts nothing either: the pending job waits as the lift', () => {
+      const out = decide(stranded(), fired, workflow);
+      expect(out.effects.some((x) => x.kind === 'start_run')).toBe(false);
+      expect(out.events.map((e) => e.type)).not.toContain('ticket.unblocked');
+      expect(after(stranded(), fired)).toMatchObject({ blocked: true, waitingOn: { lift: pendingJob } });
+    });
+
+    it.each([
+      ['a reply', reply],
+      ['a debounce', fired],
+    ])('after %s, the blockers done lift the block and start the pending job as it was set, taken off the ticket', (_what, e) => {
+      const held = after(stranded(), e);
+      const out = decide(held, done, workflow);
+      expect(out.events.map((x) => x.type)).toContain('ticket.unblocked');
+      expect(out.events).toContainEqual({ type: 'pending.cleared', job: pendingJob });
+      expect(starts(held, done)).toEqual([expect.objectContaining({ job: 'dev-feedback', input: 'feedback', sensitivePaths: ['.github/**'] })]);
+      expect(after(held, done)).toMatchObject({ blocked: false, pendingJob: undefined });
+    });
+
+    it('not waiting, a reply still starts the pending job at once (ORC-339)', () => {
+      const out = decide(stranded({ waitingOn: null }), reply, workflow);
+      expect(out.events.map((e) => e.type)).toContain('ticket.unblocked');
+      expect(out.effects).toContainEqual(expect.objectContaining({ kind: 'start_run', job: 'dev-feedback' }));
     });
   });
 
