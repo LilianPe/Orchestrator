@@ -29,6 +29,13 @@ const POSTGRES_PACKAGES = ['pg', 'postgres', 'psycopg', 'psycopg2', 'psycopg2-bi
 
 const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 
+/** The images of a Postgres, by their name without registry, owner, tag or digest: the official one and its common variants. */
+const POSTGRES_IMAGES = new Set(['postgres', 'postgresql', 'postgis', 'pgvector', 'timescaledb']);
+
+/** Whether a compose file runs a Postgres: an `image:` whose name, its registry and owner, tag and digest put aside, is one. */
+const runsPostgres = (compose: string): boolean =>
+  [...compose.matchAll(/^\s*image:\s*["']?([^\s"'#]+)/gm)].some((m) => POSTGRES_IMAGES.has(m[1]!.split('/').pop()!.split(/[:@]/)[0]!));
+
 /** What the walk never enters: dependencies, builds and dot directories are not the repository's code. */
 const SKIPPED = new Set(['node_modules', 'dist', 'build', 'coverage', '__pycache__', 'venv']);
 
@@ -61,7 +68,7 @@ function commands({ setup, commands, preview }: DetectedChecks): string {
 }
 
 function services(repo: string, deps: Set<string>): string {
-  const compose = COMPOSE_FILES.find((f) => existsSync(join(repo, f)) && /image:\s*["']?postgres\b/.test(readFileSync(join(repo, f), 'utf8')));
+  const compose = COMPOSE_FILES.find((f) => existsSync(join(repo, f)) && runsPostgres(readFileSync(join(repo, f), 'utf8')));
   if (compose) return `postgres (${compose})`;
   const pkg = POSTGRES_PACKAGES.find((p) => deps.has(p));
   return pkg ? `postgres (dependency ${pkg})` : 'none';

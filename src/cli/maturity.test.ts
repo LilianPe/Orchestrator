@@ -127,6 +127,13 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
     expect(valueOf(repoOf({ 'pyproject.toml': '[project]\nname = "x"\n', 'app.py': '', 'models.py': '' }))['untested']).toBe('./ (its own files)');
     expect(valueOf(repoOf({ 'app.py': '', 'test_app.py': '' }))['untested']).toBe('none: every source directory has a test file');
   });
+
+  it('a Postgres image under a registry, an owner or a variant name is a Postgres; an image named after it is not', () => {
+    const compose = (image: string) => repoOf({ 'compose.yaml': `services:\n  db:\n    image: ${image}\n` });
+    for (const image of ['pgvector/pgvector:pg16', 'postgis/postgis:16-3.4', 'docker.io/library/postgres:16', 'bitnami/postgresql:16', 'timescale/timescaledb:latest-pg16', '"postgres"', 'postgres@sha256:abc'])
+      expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
+    for (const image of ['prometheuscommunity/postgres-exporter:v0.15', 'postgres-backup:1', 'redis:7']) expect(valueOf(compose(image))['services'], image).toBe('none');
+  });
 });
 
 describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
