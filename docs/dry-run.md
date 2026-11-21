@@ -27,10 +27,13 @@ result in the store:
 
 What the factory cannot tell anything about rejects, and nothing is recorded: the forge or the container engine not answering,
 a `setup` that fails or runs over its cap with a registry or the egress proxy not answering in its output (a connection refused
-or timed out, the relay's `ECONNREFUSED 127.0.0.1:3128` among them, a 502, pip's or uv's connection or DNS error, pip's
-`ProxyError`), even when it then says a dependency is missing. A setup that exited on a variable, or on a service
-refusing (`connect ECONNREFUSED` on the loopback, `could not connect to server`), is recorded red as such, past an installer's
-retry warning. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+or timed out, a 502, the proxy's 5xx to a `CONNECT` as curl and git say it, pip's or uv's connection or DNS error, pip's
+`ProxyError`), even when it then says a dependency is missing. The relay refusing is read by its address, whatever the tool's
+words: a line that says a connection was refused and names `127.0.0.1:3128` (or `localhost`, `[::1]`, curl's `port 3128`,
+urllib3's `port=3128`) is a breakdown, from npm, curl, git, Go, wget, apt or Maven alike; a line that only names the relay
+(`HTTPS_PROXY=http://127.0.0.1:3128`) is not. A setup that exited on a variable, or on a service refusing (a connection refused
+on another port of the loopback, by any client: Node's `connect ECONNREFUSED`, Python's `requests`, `psycopg`, `redis-py` or
+`asyncpg`, Go's `dial tcp`; or `could not connect to server`), is recorded red as such, past an installer's retry warning. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
 Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
 sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
@@ -41,8 +44,8 @@ command, an excerpt of its output, and a detail line, classified as:
 
 | Kind | Read from | Example |
 |---|---|---|
-| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (403) | `No matching version found for left-pad@9.9.9` |
-| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on the loopback (but a line naming the egress proxy's relay by its address, `127.0.0.1:3128`) | `connect ECONNREFUSED 127.0.0.1:5432` |
+| `dependency` | a dependency missing or too recent: npm, pnpm, Yarn, uv and pip resolution errors, `Cannot find module` of a package (by its npm name, or a path into `node_modules`), `No module named`; in the `setup` only, an installer's 404, `ETARGET`, `ERESOLVE`, a lockfile out of sync, or a registry the egress proxy refuses (a 403, to a `CONNECT` too) | `No matching version found for left-pad@9.9.9` |
+| `service` | a service declared under `services` that no sandbox backend provides (step `config`), or a connection refused on a port of the loopback, whatever the client that says it (but the egress proxy's relay, `3128`) | `connect ECONNREFUSED 127.0.0.1:5432`, `HTTPConnectionPool(host='localhost', port=8000): … Connection refused` |
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |

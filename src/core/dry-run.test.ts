@@ -188,6 +188,9 @@ describe('runDryRun (ORC-408)', () => {
     ['the proxy\'s 502 on a host it could not resolve', 'curl: (22) The requested URL returned error: 502\negress proxy: getaddrinfo ENOTFOUND get.pnpm.io\n'],
     ['the proxy\'s 502 on a request it could not send', 'egress proxy: not sent on: Invalid character in header content\n'],
     ['the proxy down, as npm and git say it', 'npm error connect ECONNREFUSED 127.0.0.1:3128\nfatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
+    ['the relay down, as git alone says it', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to 127.0.0.1 port 3128 after 0 ms: Could not connect to server\n'],
+    ['the relay down, as Go says it', 'go: downloading github.com/acme/x v1.2.0\ngo: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/github.com/acme/x/@v/v1.2.0.zip": proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused\n'],
+    ['the proxy\'s 502 to a CONNECT, as curl says it', 'curl: (56) CONNECT tunnel failed, response 502\n'],
   ])('a breakdown the installer reports as something else still rejects: %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
@@ -205,10 +208,17 @@ describe('runDryRun (ORC-408)', () => {
     ['a host the proxy refuses a CONNECT to, as curl says it', 'curl: (56) CONNECT tunnel failed, response 403\n'],
     ['a host the proxy refuses a CONNECT to, as git says it', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 403 from proxy after CONNECT\n'],
     ['the relay\'s address printed by a setup that then fails', 'HTTPS_PROXY=http://127.0.0.1:3128\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad\n'],
-  ])('what names the proxy without a breakdown is the repository\'s: recorded red, %s', async (_, stderr) => {
+  ])('what names the proxy without a breakdown is the repository\'s: recorded red as a dependency, %s', async (_, stderr) => {
     const { req, sandboxes } = forge();
     sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
-    expect((await runDryRun(req)).ok).toBe(false);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'dependency', step: 'setup' })]);
+  });
+
+  it('a Python client of its own refused on the loopback in the setup is the repository\'s: recorded red, as a service', async () => {
+    const { req, sandboxes } = forge();
+    const stderr = "Traceback (most recent call last):\nrequests.exceptions.ConnectionError: HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /migrate (Caused by NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))\n";
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'service', step: 'setup', detail: expect.stringContaining('8000') })]);
   });
 
   it('a setup over its cap on a registry that no longer answers rejects too', async () => {
@@ -425,6 +435,57 @@ describe('classifyBreak', () => {
     expect(unreachable('error: Request failed after 3 retries\n  Caused by: dns error: failed to lookup address information')).toContain('dns error');
     expect(unreachable('AssertionError: expected 1 to be 2')).toBeUndefined();
     expect(unreachable("Error: connect ECONNREFUSED 127.0.0.1:5432\n  code: 'ECONNREFUSED',")).toBeUndefined();
+  });
+
+  it.each([
+    ['curl', 'curl: (7) Failed to connect to 127.0.0.1 port 3128 after 0 ms: Couldn\'t connect to server'],
+    ['git', 'fatal: unable to access \'https://github.com/acme/sub.git/\': Failed to connect to localhost port 3128 after 1 ms: Connection refused'],
+    ['Go', 'go: github.com/acme/x@v1.2.0: Get "https://proxy.golang.org/...": proxyconnect tcp: dial tcp 127.0.0.1:3128: connect: connection refused'],
+    ['wget', 'Connecting to 127.0.0.1:3128... failed: Connection refused.'],
+    ['apt', 'E: Failed to fetch http://deb.debian.org/debian/x.deb  Could not connect to 127.0.0.1:3128 (127.0.0.1). - connect (111: Connection refused)'],
+    ['Maven', '[ERROR] Connect to 127.0.0.1:3128 [/127.0.0.1] failed: Connection refused'],
+    ['urllib3', "HTTPSConnectionPool(host='127.0.0.1', port=3128): Max retries exceeded (Caused by NewConnectionError('Failed to establish a new connection: [Errno 111] Connection refused'))"],
+    ['IPv6', 'dial tcp [::1]:3128: connect: connection refused'],
+  ])('the relay refusing is a breakdown, whatever the tool that says it: %s', (_, line) => {
+    expect(unreachable(line)).toContain('3128');
+    expect(classifyBreak(line, 'setup', declared).kind).not.toBe('service');
+  });
+
+  it.each([
+    ['curl', 'curl: (56) CONNECT tunnel failed, response 502'],
+    ['git', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 502 from proxy after CONNECT'],
+    ['a gateway timeout', 'curl: (56) CONNECT tunnel failed, response 504'],
+  ])('the proxy\'s 5xx to a CONNECT is a breakdown: %s', (_, line) => {
+    expect(unreachable(line)).toContain('CONNECT');
+  });
+
+  it('a line that only names the relay, or a relay port that is no port, is no breakdown', () => {
+    expect(unreachable('HTTPS_PROXY=http://127.0.0.1:3128')).toBeUndefined();
+    expect(unreachable('npm verb config proxy http://localhost:3128 set, then the install failed')).toBeUndefined();
+    expect(unreachable('Error: connection refused after 3128 ms')).toBeUndefined();
+  });
+
+  it.each([
+    ['curl', 'curl: (56) CONNECT tunnel failed, response 403'],
+    ['git', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 403 from proxy after CONNECT'],
+  ])('a host the egress proxy refuses a CONNECT to is a registry it does not allow: %s', (_, line) => {
+    expect(classifyBreak(line, 'setup', declared)).toMatchObject({ kind: 'dependency', detail: expect.stringContaining('egress proxy does not allow') });
+    expect(classifyBreak(line, 'command', declared).kind).toBe('failure');
+  });
+
+  it.each([
+    ['requests', "requests.exceptions.ConnectionError: HTTPConnectionPool(host='localhost', port=8000): Max retries exceeded with url: /health (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x7f>: Failed to establish a new connection: [Errno 111] Connection refused'))", '8000'],
+    ['psycopg', 'psycopg.OperationalError: connection failed: connection to server at "127.0.0.1", port 5432 failed: Connection refused', '5432'],
+    ['redis-py', 'redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.', '6379'],
+    ['asyncpg', 'ConnectionRefusedError: [Errno 111] Connect call failed (\'127.0.0.1\', 5432)', '5432'],
+    ['Go', 'dial tcp 127.0.0.1:6379: connect: connection refused', '6379'],
+  ])('a Python or Go client refused by a service on the loopback is a service, not a breakdown: %s', (_, line, port) => {
+    for (const step of ['setup', 'command'] as const) expect(classifyBreak(line, step, declared)).toMatchObject({ kind: 'service', detail: expect.stringContaining(port) });
+    expect(unreachable(line)).toBeUndefined();
+  });
+
+  it('a client refused by a host off the loopback is no service of the repository\'s', () => {
+    expect(classifyBreak("HTTPSConnectionPool(host='pypi.org', port=443): Failed to establish a new connection: [Errno 111] Connection refused", 'setup', declared).kind).toBe('failure');
   });
 
   it('anything else is a failure, its first error line said', () => {

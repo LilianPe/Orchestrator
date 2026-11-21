@@ -143,8 +143,11 @@ const INSTALL_LINES = [
   /\b404\b.*Not Found|\bE404\b/,
   /\b(?:ETARGET|notarget|ERESOLVE)\b/,
 ];
-/** The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. */
-const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden/];
+/**
+ * The egress proxy's refusal of a host it does not allow: the repository needs a registry the factory does not let it reach. A
+ * 403 to a CONNECT is the proxy's, as curl (`CONNECT tunnel failed, response 403`) and git (`… 403 from proxy after CONNECT`) say it.
+ */
+const REFUSED_LINES = [/egress proxy:|\b403\b.*Forbidden|\bCONNECT\b.*\b403\b|\b403\b.*\bCONNECT\b/];
 /**
  * Each with the variable's names as its first group, upper case: a lower-case word is not one; the first, a list of them
  * (`Missing environment variables: API_URL, STRIPE_KEY`). Where nothing says it is a variable, its name must hold a `_`:
@@ -157,17 +160,32 @@ const VARIABLE_LINES = [
   /KeyError: '([A-Z][A-Z0-9]*_[A-Z0-9_]+)'/g,
 ];
 const NAME = /[A-Z][A-Z0-9_]{2,}/g;
-/** On the loopback, where the services listen. */
-const SERVICE_LINES = [/ECONNREFUSED (?:127\.0\.0\.1|localhost|::1|\[::1\])(?::\d+)?/, /could not connect to (?:server|database)/i, /Is the server running/];
-/** A line about the egress proxy's relay, by its address, whatever the tool's words (`127.0.0.1 port 3128 …: Could not connect to server`, curl's and git's). */
-const PROXY_RELAY = /(?:127\.0\.0\.1|localhost|::1|\[::1\])(?::| port )3128\b/;
-const serviceLine = (line: string) => !PROXY_RELAY.test(line) && SERVICE_LINES.some((p) => p.test(line));
+/**
+ * A port on the loopback, as the tools write it: `127.0.0.1:5432`, `[::1]:3128`, curl's `127.0.0.1 port 3128`, urllib3's
+ * `host='localhost', port=8000`, libpq's `"127.0.0.1", port 5432`, asyncpg's `('127.0.0.1', 5432)`. The port is the first group.
+ */
+const LOOPBACK_PORT = /(?<![\w.:])(?:127\.0\.0\.1|localhost|::1|\[::1\])['"]?(?::|(?:,\s*|\s+)(?:port[ =]?\s*)?)(\d{1,5})\b/;
+/** A connection refused, whatever the tool's words: Node's, curl's, Go's, wget's, apt's, Maven's, Python's. */
+const REFUSAL = /ECONNREFUSED|connection refused|failed to connect|could(?:n't| not) connect|connect call failed/i;
+/** The egress proxy's relay, where the setup's tools reach the registries. */
+const RELAY_PORT = '3128';
+const refusedOn = (line: string) => (REFUSAL.test(line) ? LOOPBACK_PORT.exec(line)?.[1] : undefined);
+/** The relay refusing, by its address, whatever the tool's words: a line that only names it (`HTTPS_PROXY=…`) is not that. */
+const relayRefused = (line: string) => refusedOn(line) === RELAY_PORT;
+/** On the loopback, where the services listen: a port refusing there that is not the relay's, or what a client of a database says. */
+const SERVICE_LINES = [/could not connect to (?:server|database)/i, /Is the server running/];
+const serviceLine = (line: string) => {
+  const port = refusedOn(line);
+  return port ? port !== RELAY_PORT : SERVICE_LINES.some((p) => p.test(line));
+};
 /**
  * A registry or the egress proxy not answering: nothing of the repository's state, which the dry run then does not record. The
- * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`.
+ * proxy's 502 says so in its body (`egress proxy: getaddrinfo ENOTFOUND …`, `egress proxy: not sent on: …`), pip in a `ProxyError`;
+ * to a CONNECT, curl and git say only its status. The relay refusing is read by its address (`relayRefused`).
  */
 const UNREACHABLE_LINES = [
   /\b(?:ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNRESET|ESOCKETTIMEDOUT)\b|\b50[234]\b.*(?:Bad Gateway|Service Unavailable|Gateway Time-?out)/,
+  /\bCONNECT\b.*\b50[234]\b|\b50[234]\b.*\bCONNECT\b/,
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
   /egress proxy: not sent on|\bProxyError\b|Cannot connect to proxy/,
@@ -241,7 +259,7 @@ export function classifyBreak(output: string, step: DryRunBreak['step'], vars: D
 export function unreachable(output: string): string | undefined {
   const lines = linesOf(output);
   if (lines.some(serviceLine)) return undefined;
-  const line = firstLine(lines, UNREACHABLE_LINES);
+  const line = lines.find(relayRefused) ?? firstLine(lines, UNREACHABLE_LINES);
   return line && brief(line);
 }
 
