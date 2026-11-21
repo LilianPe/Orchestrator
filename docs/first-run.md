@@ -64,6 +64,21 @@ commands:
   test: npm test
 ```
 
+With the proposal comes the maturity report (ORC-410), one card per point, stored in the instance's database for a person to approve on the dashboard's **Maturity** page once `factory up` runs:
+
+```text
+Maturity report, one card per point to approve on the dashboard: http://localhost:4100/#maturity
+  [to approve] Stack: Node (npm)
+  [to approve] Commands:
+    setup: npm ci
+    lint: npm run lint
+    test: npm test
+  [to approve] main green or red: not checked yet: the dry run (ORC-408) runs setup, build and tests on main
+  …
+```
+
+The **main** card says the project's last dry run when the database holds one (`factory dry-run`, step 4): run `factory init` again after it to see it there.
+
 Commit that file on the default branch through a PR, merged: the daemon and `factory doctor` read it there (`origin/HEAD`, as the clone last fetched it), never in a working copy. Then `git pull` on the default branch in the clone: `factory validate` reads the working copy's file. If `init` warns that there is no `commands.test`, add one before going on.
 
 On a first setup (no Linear values yet, no `factory.yml`), it then prints the GitHub App's steps (item 4) and writes `FACTORY_HOME/factory.yml`:

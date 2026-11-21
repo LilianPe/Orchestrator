@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { pyprojectDependencies } from '../checks/deps.js';
+import type { DryRun } from '../core/dry-run.js';
 import type { MaturityPoint } from '../store/types.js';
 
 /** What init detected for the repository's `.factory/config.yml`: its install, its checks by name, what starts the application. */
@@ -38,6 +39,19 @@ const WALK_LIMIT = 20_000;
 
 const MAIN_UNCHECKED = 'not checked yet: the dry run (ORC-408) runs setup, build and tests on main';
 
+/**
+ * The `main` card: the project's last dry run on its default branch (ORC-408), green or red with what breaks, its commit and
+ * when it ended; without one, not checked yet.
+ */
+function main(run: DryRun | undefined): string {
+  if (!run) return MAIN_UNCHECKED;
+  const ended = `${new Date(run.endedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const of = `the dry run of ${run.sha.slice(0, 12)} on ${ended}`;
+  if (run.ok) return `green: ${of}${run.commands.length ? ` (${run.commands.join(' · ')})` : ''}`;
+  const broke = [...new Set(run.breaks.map((b) => `${b.kind} in \`${b.command}\``))].join(', ');
+  return `red: ${of}: ${broke}\nfix it on main, then factory dry-run ${run.projectId}`;
+}
+
 function readJson(file: string): Record<string, unknown> | undefined {
   try {
     const v: unknown = JSON.parse(readFileSync(file, 'utf8'));
@@ -50,7 +64,7 @@ function readJson(file: string): Record<string, unknown> | undefined {
 /** The names of every dependency of the repository's package.json and pyproject.toml. */
 function dependencies(repo: string): Set<string> {
   const pkg = readJson(join(repo, 'package.json'));
-  const node = ['dependencies', 'devDependencies'].flatMap((k) => (pkg && isRecord(pkg[k]) ? Object.keys(pkg[k]) : []));
+  const node = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((k) => (pkg && isRecord(pkg[k]) ? Object.keys(pkg[k]) : []));
   const pyproject = existsSync(join(repo, 'pyproject.toml')) ? readFileSync(join(repo, 'pyproject.toml'), 'utf8') : '';
   const python = pyprojectDependencies(pyproject);
   return new Set([...node, ...python]);
@@ -129,16 +143,19 @@ function untested(repo: string): string {
   return [value, ...notes].join('; ');
 }
 
+/** The report of one repository, its `main` from its last dry run when the store has one. */
+export type MaturityReport = (lastDryRun?: DryRun) => MaturityPoint[];
+
 /**
  * The maturity report of a repository (ORC-410), point by point, each a card a person approves on the dashboard: read from
- * its files only, never by running its code (`main` is the dry run's).
+ * its files only, never by running its code (`main` is the last dry run's, `lastDryRun`, when one is stored).
  */
-export function maturityReport(repo: string, detected: DetectedChecks): MaturityPoint[] {
+export function maturityReport(repo: string, detected: DetectedChecks, lastDryRun?: DryRun): MaturityPoint[] {
   const deps = dependencies(repo);
   return [
     { key: 'stack', title: 'Stack', value: stack(repo, deps) },
     { key: 'commands', title: 'Commands', value: commands(detected) },
-    { key: 'main', title: 'main green or red', value: MAIN_UNCHECKED },
+    { key: 'main', title: 'main green or red', value: main(lastDryRun) },
     { key: 'services', title: 'Services', value: services(repo, deps) },
     { key: 'visual_paths', title: 'Visual paths', value: visualPaths(repo, deps) },
     { key: 'untested', title: 'Areas without tests', value: untested(repo) },

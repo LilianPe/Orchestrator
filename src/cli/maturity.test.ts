@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
+import type { DryRun } from '../core/dry-run.js';
 import { maturityReport } from './maturity.js';
 
 /** A repository of `files`, by path (directories made as needed). */
@@ -94,5 +95,47 @@ describe('the maturity report (ORC-410)', () => {
 
   it('every area tested', () => {
     expect(valueOf(repoOf({ 'src/a/x.ts': '', 'src/a/x.spec.ts': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
+
+  it("Node's peer and optional dependencies count as its dependencies", () => {
+    const pkg = (deps: Record<string, unknown>) => repoOf({ 'package.json': JSON.stringify(deps) });
+    expect(valueOf(pkg({ peerDependencies: { react: '^18.0.0' } }))['stack']).toBe('Node (no lockfile), React');
+    expect(valueOf(pkg({ optionalDependencies: { pg: '^8.0.0' } }))['services']).toBe('postgres (dependency pg)');
+  });
+});
+
+describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
+  const run = (o: Partial<DryRun>): DryRun => ({
+    id: 'dry-1',
+    projectId: 'acme',
+    sha: '0123456789abcdef0123',
+    target: 'main',
+    ok: true,
+    fingerprint: { setup: 's', image: 'i', lockfiles: {}, config: null, hash: 'h' },
+    breaks: [],
+    commands: ['npm test'],
+    startedAt: Date.UTC(2026, 10, 20, 14, 0),
+    endedAt: Date.UTC(2026, 10, 20, 14, 3),
+    ...o,
+  });
+  const mainOf = (dry: DryRun) => maturityReport(repoOf({ 'README.md': '# x' }), { setup: [], commands: {} }, dry).find((p) => p.key === 'main')!.value;
+
+  it('green: the commit and when it ended', () => {
+    expect(mainOf(run({}))).toBe('green: the dry run of 0123456789ab on 2026-11-20 14:03 UTC (npm test)');
+  });
+
+  it('red: what breaks, each kind and command once, and how to run it again', () => {
+    const output = '';
+    const red = run({
+      ok: false,
+      breaks: [
+        { kind: 'dependency', step: 'setup', command: 'npm ci', detail: 'E404', output },
+        { kind: 'failure', step: 'command', command: 'npm test', detail: '2 failed', output },
+        { kind: 'failure', step: 'command', command: 'npm test', detail: 'again', output },
+      ],
+    });
+    expect(mainOf(red)).toBe(
+      'red: the dry run of 0123456789ab on 2026-11-20 14:03 UTC: dependency in `npm ci`, failure in `npm test`\nfix it on main, then factory dry-run acme',
+    );
   });
 });

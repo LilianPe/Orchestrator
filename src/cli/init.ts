@@ -12,8 +12,8 @@ import { slugify } from '../core/naming.js';
 import { SONNET } from '../presets/factory-default.js';
 import { PRODUCT_NAME } from '../product.js';
 import { openStore } from '../store/open.js';
-import type { MaturityCard, MaturityPoint } from '../store/types.js';
-import { maturityReport, type DetectedChecks } from './maturity.js';
+import type { MaturityCard, MaturityPoint, Store } from '../store/types.js';
+import { maturityReport, type DetectedChecks, type MaturityReport } from './maturity.js';
 
 export interface InitIO {
   ask(q: string, def?: string): Promise<string>;
@@ -28,8 +28,11 @@ export interface InitDeps {
   dev?: boolean;
   createSmee: () => Promise<string>;
   exec: Exec;
-  /** Stores the maturity cards of a detection (ORC-410) and gives them back as stored, approvals kept: absent, none is stored. */
-  storeCards?: (projectId: string, points: readonly MaturityPoint[]) => Promise<MaturityCard[]>;
+  /**
+   * Stores the maturity cards of a detection (ORC-410), `main` from the project's last dry run, and gives them back as stored,
+   * approvals kept: absent, none is stored.
+   */
+  storeCards?: (projectId: string, report: MaturityReport) => Promise<MaturityCard[]>;
 }
 
 /**
@@ -118,12 +121,12 @@ function cardLine(c: PrintedCard): string {
 }
 
 /** The maturity report of the repository, stored as cards when it can be: a store that fails leaves init to finish, and says so. */
-async function printMaturity(d: InitDeps, projectId: string, points: MaturityPoint[], dashboard: string): Promise<void> {
-  let cards: PrintedCard[] = points;
+async function printMaturity(d: InitDeps, projectId: string, report: MaturityReport, dashboard: string): Promise<void> {
+  let cards: PrintedCard[] = report();
   let failure: string | undefined;
   if (d.storeCards) {
     try {
-      cards = await d.storeCards(projectId, points);
+      cards = await d.storeCards(projectId, report);
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
     }
@@ -138,15 +141,20 @@ async function printMaturity(d: InitDeps, projectId: string, points: MaturityPoi
  */
 export const instanceCards =
   (home: string) =>
-  async (projectId: string, points: readonly MaturityPoint[]): Promise<MaturityCard[]> => {
+  async (projectId: string, report: MaturityReport): Promise<MaturityCard[]> => {
     const { store } = await openStore({ env: process.env, sqlitePath: homePaths(home).db, migrationsFolder: join(repoRoot(), 'drizzle') });
     try {
-      await store.putMaturityCards(projectId, points, Date.now());
-      return await store.maturityCards(projectId);
+      return await storeReport(store, projectId, report, Date.now());
     } finally {
       await store.close();
     }
   };
+
+/** Stores a project's maturity report, its `main` from the last dry run on its default branch (ORC-408), and reads it back. */
+export async function storeReport(store: Pick<Store, 'lastDryRun' | 'putMaturityCards' | 'maturityCards'>, projectId: string, report: MaturityReport, now: number): Promise<MaturityCard[]> {
+  await store.putMaturityCards(projectId, report(await store.lastDryRun(projectId)), now);
+  return store.maturityCards(projectId);
+}
 
 /** What `init` says, and asks nothing of Linear, without a public URL nor `--dev` (ORC-411): Smee is for a workstation only. */
 export const NO_PUBLIC_URL = [
@@ -286,7 +294,7 @@ export async function runInit(d: InitDeps): Promise<void> {
   for (const warning of testCommandWarnings(commands)) io.print(warning);
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
-  if (detected) await printMaturity(d, id, maturityReport(repoPath, detected), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
+  if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
 
   saveInstance(d.home, cfg);
   if (existsSync(ymlPath)) {

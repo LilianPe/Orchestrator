@@ -1,16 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { copyPythonRepo } from '../../test/helpers/python-repo.js';
 import type { Exec } from '../adapters/exec.js';
 import { loadFactoryLimits, parseFactoryYml } from '../config/factory-yml.js';
 import { loadInstance, loadSecrets, saveInstance, saveSecrets, type InstanceConfig } from '../config/instance.js';
 import { MISSING_TEST_COMMAND, parseRepoConfig, testCommandWarnings } from '../config/repo-config.js';
+import { slugify } from '../core/naming.js';
 import { SqliteStore } from '../store/sqlite-store.js';
-import type { MaturityPoint } from '../store/types.js';
-import { GITHUB_APP_PERMISSIONS, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, type InitIO } from './init.js';
+import { GITHUB_APP_PERMISSIONS, MATURITY_HEADER, NO_PUBLIC_URL, PROPOSAL_HEADER, PYTEST_BESIDE_TEST, runInit, storeReport, type InitIO } from './init.js';
+import type { MaturityReport } from './maturity.js';
 import { runValidateCommand } from './validate.js';
 
 function scriptedIO(answers: string[]): InitIO & { printed: string[] } {
@@ -230,10 +231,7 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
       writeFileSync(join(repo, path), content);
     }
     const io = scriptedIO(['REL', 'cid', 'csecret', 'whsecret']);
-    const storeCards = async (projectId: string, points: readonly MaturityPoint[]) => {
-      await store.putMaturityCards(projectId, points, now);
-      return store.maturityCards(projectId);
-    };
+    const storeCards = (projectId: string, report: MaturityReport) => storeReport(store, projectId, report, now);
     await runInit({ io, home, cwd: repo, createSmee: async () => 'https://smee.io/abc', exec: gitTop(repo), storeCards });
     return { store, repo, projectId: loadInstance(home).projects[0]!.id, out: io.printed.join('\n') };
   }
@@ -258,6 +256,18 @@ describe('factory init: the maturity report, one card per point to approve (ORC-
     const configured = await initCards({ ...NPM, '.factory/config.yml': 'commands: { test: npm test }\n' });
     expect(configured.out).not.toContain(MATURITY_HEADER);
     expect(await configured.store.maturityCards()).toEqual([]);
+  });
+
+  it("the main card says the project's last dry run on main, stored before init ran (ORC-408)", async () => {
+    const store = new SqliteStore(':memory:');
+    const repo = mkdtempSync(join(tmpdir(), 'factory-init-repo-'));
+    const projectId = slugify(basename(repo), 30);
+    const at = Date.UTC(2026, 10, 20, 14, 3);
+    const fingerprint = { setup: 's', image: 'i', lockfiles: {}, config: null, hash: 'h' };
+    await store.putDryRun({ id: 'd1', projectId, sha: 'a'.repeat(40), target: 'main', ok: false, fingerprint, breaks: [{ kind: 'failure', step: 'command', command: 'npm test', detail: '1 failed', output: '' }], commands: ['npm test'], startedAt: at, endedAt: at });
+    const { out } = await initCards(NPM, { store, repo });
+    expect(out).toContain(`  [to approve] main green or red:\n    red: the dry run of aaaaaaaaaaaa on 2026-11-20 14:03 UTC: failure in \`npm test\`\n    fix it on main, then factory dry-run ${projectId}`);
+    expect((await store.maturityCards(projectId)).find((c) => c.key === 'main')?.value).toMatch(/^red: /);
   });
 
   it('a store that cannot be written does not fail init: the cards are printed, and said not stored', async () => {
