@@ -14,7 +14,7 @@ import { TimerService } from '../runtime/timers.js';
 import { oldInstanceFileWarnings, saveInstance, saveSecrets, validatorWarnings } from '../config/instance.js';
 import { defaultWorkflow } from '../presets/workflow.js';
 import { createMissingStatuses, startFactory, type BootOptions } from './bootstrap.js';
-import { runQueueCommand, runStatusCommand } from '../cli/control.js';
+import { runStatusCommand } from '../cli/control.js';
 import { MemoryStore } from '../store/memory-store.js';
 import { oldDatabaseWarnings } from '../store/old-databases.js';
 import { TrackerSwitch } from './tracker-switch.js';
@@ -245,6 +245,26 @@ describe('bootstrap', () => {
     expect(await planned()).toEqual([['a', '_reconcile.a:reconcile'], ['b', '_reconcile.b:reconcile']]);
     await start([a]);
     expect(await planned()).toEqual([['a', '_reconcile.a:reconcile']]);
+  });
+
+  // ORC-200: nothing pauses or resumes the queue any more; a pause left from before would hold every launch for good.
+  it('lifts a pause of the queue left from before the global pause was removed, and says so', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-boot-'));
+    saveInstance(home, { port: 4177, host: '127.0.0.1', relay: { kind: 'none' }, projects: [{ id: 'p', repoPath: mkdtempSync(join(tmpdir(), 'factory-repo-')), linearTeamKey: 'REL' }] });
+    const store = new MemoryStore();
+    await store.setMeta('paused', '1');
+    const logs: string[] = [];
+    const app = await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store });
+    try {
+      await vi.waitFor(async () => expect(await store.getMeta('paused')).toBe('0'), { timeout: 5000, interval: 50 });
+      expect(logs).toContain('The queue was paused, and nothing pauses it any more (ORC-200): it is resumed.');
+    } finally {
+      await app.stop();
+    }
+    // Once only: a queue not paused is left as it is.
+    logs.length = 0;
+    await (await startOnMemory({ home, fakeRunner: true, log: (m) => void logs.push(m), env: {}, store })).stop();
+    expect(logs.join('\n')).not.toContain('ORC-200');
   });
 
   it('starts without a GitHub App, warning that it reads no PR and publishes nothing: no gh fallback (ORC-181)', async () => {
@@ -549,10 +569,8 @@ describe('bootstrap', () => {
         expect(statSync(join(home, 'cli')).mode & 0o777).toBe(0o700);
         const lines: string[] = [];
         const cli = { api: 'http://127.0.0.1:4195', socket, out: (l: string) => void lines.push(l) };
-        expect(await runQueueCommand(cli, 'pause')).toBe(0);
         expect(await runStatusCommand(cli)).toBe(0);
-        expect(lines[0]).toBe('Queue paused.');
-        expect(lines[1]).toMatch(/^Linear: not connected · queue: /);
+        expect(lines[0]).toBe('Linear: not connected · queue: 0 waiting');
       }
       // A page sends the browser to GitHub, to the App's authorization, coming back to the public URL.
       const page = await fetch('http://127.0.0.1:4195/', { headers: { accept: 'text/html' }, redirect: 'manual' });

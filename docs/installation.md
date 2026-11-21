@@ -50,7 +50,6 @@ The wizard is described in [`cli.md`](cli.md#factory-init) and creating the Line
 factory up                # http://localhost:4100, then « Connect Linear »
 ```
 
-To explore the UI without Linear or Claude: `factory up --fake-runner` (runs are simulated and cost nothing).
 
 ## The daemon's home directory
 

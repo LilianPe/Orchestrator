@@ -4,7 +4,7 @@ import { factoryDefault } from '../presets/factory-default.js';
 
 /** What the daemon's start resolved, that decides whether a ticket can reach its end. */
 export interface ConfigFacts {
-  /** `--fake-runner`: no model reached, no token spent, nothing real published. */
+  /** The test harness's fake runner (`fakeRunner`, no `factory up` flag since ORC-200): no model reached, no token spent, nothing real published. */
   fakeRunner: boolean;
   /** The factory can publish: the sandboxes and the GitHub App, or the fake publisher. */
   publisher: boolean;

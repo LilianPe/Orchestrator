@@ -50,7 +50,7 @@ export function hasAcceptanceCriteria(description: string): boolean {
 
 /**
  * The checks of `checks` that fail. `ownWork`: the ticket's own work already on the forge, as the duplicate search found it
- * (`ownWork` of intake-checks, ORC-207), or on origin for `factory plan`: the `not_started` failure when that check is listed.
+ * (`ownWork` of intake-checks, ORC-207): the `not_started` failure when that check is listed.
  */
 export function pickupFailures(checks: PickupCheck[], issue: TrackerIssue, ownWork?: string): string[] {
   const out: string[] = [];

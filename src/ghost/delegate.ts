@@ -12,12 +12,12 @@ import type { GhostReplay } from './replay.js';
  * daemon delegates each ticket to the replay's project itself, on its clone, with its text and its linked tickets as they were.
  */
 
-/** The `meta` key the daemon writes at each start: `1` when its runs have sandboxes, `0` under `--fake-runner`, which has none. */
+/** The `meta` key the daemon writes at each start: `1` when its runs have sandboxes, `0` under the test harness's fake runner, which has none. */
 export const SANDBOXES_META = 'daemon-sandboxes';
 
-/** Why a replay needs the sandboxes: a daemon without them (`--fake-runner`) runs no agent, and no run executes on the host (ORC-179). */
+/** Why a replay needs the sandboxes: a daemon without them (the test harness's fake runner) runs no agent, and no run executes on the host (ORC-179). */
 export const NO_SANDBOXES_REFUSED =
-  'the daemon has no sandboxes (--fake-runner): a replay runs real agents, in sandboxes only (FACTORY_CONTAINER_CLI).';
+  'the daemon has no sandboxes (a fake runner): a replay runs real agents, in sandboxes only (FACTORY_CONTAINER_CLI).';
 
 /** The id of the delegation of a replayed ticket: once per replay and ticket, whatever the passes. */
 export const replayDelegationId = (replayId: string, ticketId: string) => `ghost:${replayId}:${ticketId}`;

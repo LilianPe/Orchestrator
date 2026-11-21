@@ -322,7 +322,6 @@ export function App() {
             <span>Queue {snap.queue.length}</span>
             <span className={s.connected ? 'live on' : 'live'}>{s.connected ? 'live' : 'disconnected'}</span>
             {!snap.linearConnected && <a className="button primary" href="/oauth/start">Connect Linear</a>}
-            <button onClick={() => post(snap.paused ? '/api/control/resume' : '/api/control/pause')}>{snap.paused ? 'Resume' : 'Pause'}</button>
           </div>
         )}
       </header>

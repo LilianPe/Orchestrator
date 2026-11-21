@@ -5,7 +5,7 @@ import type { RunRecord } from '../store/types.js';
 import { holds } from '../core/routing.js';
 import type { TicketState } from '../core/types.js';
 
-/** The daemon's API, as `factory status`, `stop`, `pause` and `resume` reach it. */
+/** The daemon's API, as `factory status`, `stop` and `dry-run` reach it. */
 export interface ControlDeps {
   api: string;
   /**
@@ -65,8 +65,6 @@ const slowFetch = (url: string, init: RequestInit = {}) => {
 /** What `/api/state` answers and these commands read. */
 interface State {
   linearConnected: boolean;
-  paused: boolean;
-  capacity: { dev: { used: number; total: number } };
   queue: unknown[];
   tickets: (TicketState & { title: string })[];
   activeRuns: Omit<RunRecord, 'token'>[];
@@ -80,12 +78,13 @@ const delay = (ms: number) => (ms >= 3_600_000 ? `${ms / 3_600_000} h` : ms >= 6
 /** A run in one line: what it runs, since when, and whether the heartbeat still holds it (ORC-220). */
 function runLine(run: Omit<RunRecord, 'token'>, now: number): string {
   const lease = run.leaseUntil !== undefined && run.leaseUntil < now ? ', lease expired' : '';
-  return `    run ${run.id}: ${run.job}, for ${minutes(now - run.startedAt)} min, ${run.costUsd.toFixed(2)} $${lease}`;
+  return `    run ${run.id}: ${run.job}, for ${minutes(now - run.startedAt)} min${lease}`;
 }
 
 function formatStatus(s: State, now: number): string[] {
   const lines = [
-    `Linear: ${s.linearConnected ? 'connected' : 'not connected'} · queue: ${s.paused ? 'paused' : 'active'} (${s.queue.length} waiting) · dev slots ${s.capacity.dev.used}/${s.capacity.dev.total}`,
+    // Neither the dev slots nor a cost in dollars (ORC-200): the MVP counts tokens, per ticket.
+    `Linear: ${s.linearConnected ? 'connected' : 'not connected'} · queue: ${s.queue.length} waiting`,
   ];
   for (const t of s.tickets) {
     lines.push(`  ${t.ticketId}  ${t.logical}${t.blocked ? ' (blocked)' : ''}${t.verifyingRunId ? ' (check running)' : ''}  ${t.title}`);
@@ -156,18 +155,6 @@ export async function runStatusCommand(d: ControlDeps, now: number = Date.now())
   const s = await readState(d);
   if (!s) return 1;
   for (const line of formatStatus(s, now)) d.out(line);
-  return 0;
-}
-
-/** Pauses or resumes the queue, said done only once the daemon has taken the command (ORC-399: never on a refusal). */
-export async function runQueueCommand(d: ControlDeps, command: 'pause' | 'resume'): Promise<number> {
-  const res = await ask(d, `/api/control/${command}`, { method: 'POST' });
-  if (!res) return 1;
-  if (!res.ok) {
-    d.out(`The daemon refuses to ${command} the queue (${res.status}).`);
-    return 1;
-  }
-  d.out(`Queue ${command === 'pause' ? 'paused' : 'resumed'}.`);
   return 0;
 }
 
