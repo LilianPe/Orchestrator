@@ -1,12 +1,12 @@
 # GitHub
 
-Relais talks to GitHub through **git** and a **factory GitHub App**. The daemon uses the App when it is configured; otherwise it falls back to the **`gh`** CLI (migration fallback). **Only the factory writes to GitHub** (ORC-125, [Publishing](#publishing)): agents commit, and have neither a token nor network access to push. The daemon tracks PRs in two ways, which write the same events to the inbox: **GitHub webhooks** (`POST /webhooks/github`, as soon as their secret is configured, see [GitHub webhooks](#github-webhooks)) and **polling** of PRs every 30 s, kept until GitHub reconciliation (ORC-185) and its removal (ORC-181).
+Relais talks to GitHub through **git** and a **factory GitHub App**, the only way the daemon reads or writes GitHub: the `gh` CLI and `GH_TOKEN` are gone (ORC-181). **Only the factory writes to GitHub** (ORC-125, [Publishing](#publishing)): agents commit, and have neither a token nor network access to push. The daemon tracks PRs in two ways, which write the same events to the inbox: **GitHub webhooks** (`POST /webhooks/github`, as soon as their secret is configured, see [GitHub webhooks](#github-webhooks)) and the **GitHub reconciliation**, every 5 minutes (ORC-185, [What the reconciliation reads](#what-the-reconciliation-reads)), which catches up what the webhooks lost. The 30-second poll is gone (ORC-181): without webhooks, a merge or a CI verdict is seen within 5 minutes.
 
 ## Daemon authentication
 
 ### GitHub App (recommended)
 
-The GitHub App is the identity of the **daemon**, not of the agents. It is used to read PRs, checks and review threads without depending on `GH_TOKEN` or the `gh` CLI, and to publish: push the ticket's branch, open its draft PR, merge.
+The GitHub App is the identity of the **daemon**, not of the agents. It is used to read PRs, checks and review threads, and to publish: push the ticket's branch, open its draft PR, merge.
 
 ```yaml
 # <RELAIS_HOME>/config.yaml
@@ -24,7 +24,7 @@ Environment variables serve as a fallback, for existing installations and Docker
 | `GH_APP_KEY` | PEM private key, or path to the `.pem` file |
 | `GH_APP_INSTALLATION_ID` | installation to use; optional |
 
-A value in `config.yaml` takes precedence over the environment variable. If only one of the two values `appId` / `privateKey` is provided, startup fails with an explicit message rather than silently switching to `gh`.
+A value in `config.yaml` takes precedence over the environment variable. If only one of the two values `appId` / `privateKey` is provided, startup fails with an explicit message rather than silently starting without the App.
 
 #### Creating the App
 
@@ -48,7 +48,7 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 - The daemon signs an **RS256 JWT** with the private key: `iss = appId`, `iat = now - 60 s`, `exp = now + 9 min`.
 - It exchanges this JWT for an **installation token**: `POST /app/installations/{id}/access_tokens` with `{ "repositories": ["<run's repository>"] }`. If `installationId` is not configured, it first calls `GET /repos/{owner}/{repo}/installation`.
 - The token lasts **at most 1 hour**. It is cached **per repository** until it expires, with a 60 s safety margin.
-- It stays **in the daemon's memory**: never written to disk, never logged, never passed to Claude Code runs, any more than `GH_TOKEN` is. A run therefore cannot act on another repository with this token.
+- It stays **in the daemon's memory**: never written to disk, never logged, never passed to Claude Code runs. A run therefore cannot act on another repository with this token.
 - The private key is never logged. The startup message contains only the App ID and, where applicable, the installation ID.
 
 #### Key rotation
@@ -58,14 +58,13 @@ A value in `config.yaml` takes precedence over the environment variable. If only
 3. Restart the daemon; cached installation tokens are discarded and new ones are issued with the new key.
 4. Revoke the old key in GitHub. Already-issued installation tokens expire on their own in less than an hour, but a compromised private key can issue new ones: revoke it without delay.
 
-### `gh` CLI (migration fallback)
+### Without a GitHub App
 
-Without a `github` section, the daemon uses `GhCliForge` and the `gh` CLI, as before:
+There is no fallback any more (ORC-181: the `gh` CLI and `GH_TOKEN` are gone). Without a `github` section nor `GH_APP_*`, the daemon still starts, logs `Warning: no GitHub App (…): the factory reads no PR, publishes nothing and merges nothing.`, and every read of the forge fails with that reason (`NoForge`): no PR, check or permission is read as absent. `/health` names the publication as impossible, and a verified ticket is blocked with that reason. `factory baseline`, `factory doctor` and `factory ghost start` refuse without the App.
 
-- **Workstation**: `gh auth login`, and git configured to read `origin` (SSH or HTTPS). Check `gh auth status` and `git fetch` from the repository.
-- **Docker**: `GH_TOKEN` variable; at startup, the container runs `gh auth setup-git` so that git reads over HTTPS with this token. Mounted repositories must therefore have an **HTTPS** remote. See [`deployment.md`](deployment.md).
+### The daemon's own git
 
-Startup explicitly logs `GitHub forge: gh CLI (migration fallback…)`. This fallback only reads: **without a GitHub App, the factory neither publishes nor merges**, and a verified ticket is blocked with that reason. It will go away with ORC-181.
+The App's token serves the factory's push alone ([Publishing](#publishing)). The daemon's other git commands (`git fetch` of the clones before a launch, the default branch `verify` and `doctor` read, the knowledge base, `factory ghost`'s clones and diffs) use the git credentials of the machine that runs it: an SSH key or agent, or a git credential helper, able to read `origin`. Check with `git fetch` from the repository. The Docker image configures none since ORC-181: see [`deployment.md`](deployment.md#variables).
 
 ### Publishing
 
@@ -76,7 +75,7 @@ The factory publishes (ORC-125), through the outbox's `publish` effect, which `d
 3. checks the diff since the base, blocking: `factory/chemins-interdits` (outgoing symbolic links and `package.json#scripts` included), `factory/binaires`, `factory/anti-triche`, `factory/secrets`;
 4. pushes **forward only**, with `--force-with-lease` on the head it read: if the branch carries a commit absent from the work (a human push, or rewritten history), nothing is pushed, nothing is forced: the agent rebases its work on a human's push (ORC-159), and `verify` refuses a commit that does not carry it (`factory/commits-humains`);
 5. opens the **draft** PR, looked up by branch before creation (a normal PR if the repository's plan has no drafts). It leaves draft when the ticket moves to *Human Review*: GitHub does not merge a draft. At that move the factory also labels it `revue: requise`, `revue: échantillon` or `revue: auto` (ORC-198, [preset](preset.md#the-class-of-the-diff-and-the-review-label-orc-198)), one label of that group at a time, created by GitHub on first use (*Pull requests* write is enough); best effort, like the move out of draft;
-6. publishes on the pushed commit the checks `factory/verify` (the commands that ran; `neutral` with no declared command), `factory/tests-gelés` (`neutral` with no freeze) and `factory/anti-triche` (ORC-151), identified by `external_id` = `<check>@<sha>`: a replay, or a second publication of the same commit, updates them, without duplicates. Best effort: a refused check (App without *Checks* write) is logged and does not block the ticket. A red verdict is never pushed, so it has no check. These `factory/*` checks never count as the commit's CI (check reading, polling, webhook), known by the App that created them, not by their name (ORC-353): another App's check named `factory/…` counts as CI; through `gh`, which reads no App, by their `factory/` prefix: on their own, they do not make a head green.
+6. publishes on the pushed commit the checks `factory/verify` (the commands that ran; `neutral` with no declared command), `factory/tests-gelés` (`neutral` with no freeze) and `factory/anti-triche` (ORC-151), identified by `external_id` = `<check>@<sha>`: a replay, or a second publication of the same commit, updates them, without duplicates. Best effort: a refused check (App without *Checks* write) is logged and does not block the ticket. A red verdict is never pushed, so it has no check. These `factory/*` checks never count as the commit's CI (check reading, reconciliation, webhook), known by the App that created them, not by their name (ORC-353): another App's check named `factory/…` counts as CI; through `gh`, which reads no App, by their `factory/` prefix: on their own, they do not make a head green.
 
 A refusal is an answer: the ticket is blocked with the reason (`publish.refused`), decided once; the retry that publishes takes it where it was meant to go (`owedMove`). A failure is replayed by the outbox, then blocks the ticket. A run with no commit beyond the base ends without a PR.
 
@@ -105,31 +104,22 @@ GitHub shows an image in a PR only from an address its image proxy can fetch: th
 
 On the agent side: `git push` and `gh` writes are refused by the pack and its hook, the proxy refuses `git-receive-pack` at every agent network level, and no token enters a sandbox. On the host, without a sandbox, only the hook holds: ORC-179.
 
-### Permissions required for the `gh` fallback
+### Read access for the daemon's git
 
-On each repository entrusted to Relais, the `gh` account must be able to:
-
-| Action | Used by | Command |
-|---|---|---|
-| Read branches | agents, worktrees | `git fetch`, `git ls-remote` |
-| Read PRs | agents | `gh pr view`, `gh pr diff` |
-| Read checks and CI logs | daemon, agents | `gh pr checks`, `gh run view --log-failed` |
-| Read review threads | daemon | `gh api graphql` (`reviewThreads`) |
-
-With a fine-grained token: *Contents*, *Pull requests*, *Actions* and *Checks* read, *Metadata* read. With a classic token: `repo` scope.
+On each repository entrusted to Relais, the daemon's git credentials ([above](#the-daemons-own-git)) must read its branches (`git fetch`, `git ls-remote`): with a deploy key, read-only is enough. The PRs, checks and review threads are read by the App.
 
 ## Human permissions
 
-The [authorization matrix](linear.md#authorizations-who-can-do-what) (ORC-186) reads a user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), through the GitHub App (*Metadata* read permission, already requested) or, as a fallback, through `gh api`. The GitHub login of each Linear user is declared in `config.yaml` (`projects[].authz.githubLogins`, see [configuration](configuration.md#authorization)). A permission once read is kept for 60 s.
+The [authorization matrix](linear.md#authorizations-who-can-do-what) (ORC-186) reads a user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), through the GitHub App (*Metadata* read permission, already requested); without the App, the read fails and the delegation is refused. The GitHub login of each Linear user is declared in `config.yaml` (`projects[].authz.githubLogins`, see [configuration](configuration.md#authorization)). A permission once read is kept for 60 s.
 
-## What Relais polls
+## What the reconciliation reads
 
-Every 5 minutes with reconciliation (ORC-185), and every 30 s when GitHub webhooks are refused for lack of a secret (without them, a merge would wait 5 minutes), for each tracked ticket that has a branch and is not `done` (a ticket moved to `done` before polling sees the merge of its known PR keeps being polled, only for the merge or closing of that PR, until it sees them: Linear may move it to *Done* first, and only `pr.merged` stops the code work):
+Every 5 minutes, with Linear's reconciliation (ORC-185, `GithubReconciler`), whether GitHub webhooks are configured or not (the 30-second poll is gone, ORC-181), for each tracked ticket that has a branch and is not `done` (a ticket moved to `done` before the reconciliation sees the merge of its known PR keeps being read, only for the merge or closing of that PR, until it sees them: Linear may move it to *Done* first, and only `pr.merged` stops the code work):
 
 - `GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=all`: the branch's PR (open, merged, closed);
 - if it is open, `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and `GET /repos/{owner}/{repo}/commits/{sha}/status`: aggregated CI state (`fail` if a check fails or is cancelled, `pending` if a check is running, `pass` otherwise, `none` with no check).
 
-A **human push** whose webhook got lost is caught up (ORC-281): polling reads the head of the open PR and compares it with the heads the factory knows. The factory's own heads are the last commit it pushed and the one before (each `publish.done` that pushed something, a commit published twice in a row counted once, in the ticket's journal; an `empty` one pushed nothing, ORC-402: just after a push, the forge may still read the PR on the one before), and the commit `verify` found green last, which a publication may have pushed before its `publish.done` is read (the ticket is read again after the PR, for that); a human push already received is the ticket's `humanHead` until a publication carries it. Any other head is a `push.human` (untrusted), with the webhook's unknown author, `inconnu` (the PR names no pusher) and as `before` the head last known, under the webhook's id, `push:<ticket>:<sha>`: whichever of the webhook and polling comes second, the inbox drops it, and the push has its effects once (pause, `verify` on the pushed commit, ORC-159). A ticket the factory has not published on yet (no `publish.done`) has no head to compare with: the head read then is not caught up, even when the forge still reads the PR on it just after the first publication. A taken-over ticket's head waits for the take-over's end: its bundle is pushed before its `push.human`, which names the human (ORC-234). A head is judged at each pass that reads it, against the ticket's journal then, so a branch put back on an earlier head is judged again, even when no poll read the PR in between: on the last two commits the factory pushed, or on a human push already received, it is not caught up; on an older commit of the factory's, it is, as the webhook reports it, unless that commit was already caught as a human push once: the inbox holds its id and drops it, as it would drop the webhook's. A failed judgement holds back no CI verdict: it is tried again at the next pass. The PR does not say who pushed either: where the webhook leaves out a bot's push (a CI job's autofix, Dependabot), polling takes it for a human's, and the agent pauses while `verify` checks it. Without GitHub webhooks, this is how a human push is seen at all, within 30 s. Publishing over such a push is refused: see [Publishing](#publishing).
+A **human push** whose webhook got lost is caught up (ORC-281): the reconciliation reads the head of the open PR and compares it with the heads the factory knows. The factory's own heads are the last commit it pushed and the one before (each `publish.done` that pushed something, a commit published twice in a row counted once, in the ticket's journal; an `empty` one pushed nothing, ORC-402: just after a push, the forge may still read the PR on the one before), and the commit `verify` found green last, which a publication may have pushed before its `publish.done` is read (the ticket is read again after the PR, for that); a human push already received is the ticket's `humanHead` until a publication carries it. Any other head is a `push.human` (untrusted), with the webhook's unknown author, `inconnu` (the PR names no pusher) and as `before` the head last known, under the webhook's id, `push:<ticket>:<sha>`: whichever of the webhook and the reconciliation comes second, the inbox drops it, and the push has its effects once (pause, `verify` on the pushed commit, ORC-159). A ticket the factory has not published on yet (no `publish.done`) has no head to compare with: the head read then is not caught up, even when the forge still reads the PR on it just after the first publication. A taken-over ticket's head waits for the take-over's end: its bundle is pushed before its `push.human`, which names the human (ORC-234). A head is judged at each pass that reads it, against the ticket's journal then, so a branch put back on an earlier head is judged again, even when no pass read the PR in between: on the last two commits the factory pushed, or on a human push already received, it is not caught up; on an older commit of the factory's, it is, as the webhook reports it, unless that commit was already caught as a human push once: the inbox holds its id and drops it, as it would drop the webhook's. A failed judgement holds back no CI verdict: it is tried again at the next pass. The PR does not say who pushed either: where the webhook leaves out a bot's push (a CI job's autofix, Dependabot), the reconciliation takes it for a human's, and the agent pauses while `verify` checks it. Without GitHub webhooks, this is how a human push is seen at all, within 5 minutes. Publishing over such a push is refused: see [Publishing](#publishing).
 
 At the time of a `dev-feedback` or `fix-human` run, **unresolved** review threads are read via GraphQL (`reviewThreads`) and turned into feedback for the agent: every comment of each thread, a reviewer's reply included, as its own item (ORC-347). A comment by a bot account (GitHub types an App, the CI or Dependabot as `Bot`) is dropped; the factory's own reviewer will be let through once ORC-183 exists. The feedback is capped at `REVIEW_FEEDBACK_MAX` characters as the prompt writes it (`review-threads.ts`): past it, the most recently active threads are kept whole, none older than one cut; the newest thread over the cap alone keeps its latest comments, the last one cut short if it is over on its own. A last item tells the agent what was left out and that it is still on the PR (ORC-366). A comment whose date does not parse fails the read. Every page of threads and of an unresolved thread's comments is read; a list GitHub answers without saying where it ends, or longer than 10 pages of 100, fails the read rather than reach the agent cut short. Linear lists follow the same rule: delegated tickets (10 pages of 100), a team's states, labels and members (10 pages of 250), and an issue's labels past Linear's default page.
 
@@ -144,22 +134,22 @@ Events produced (see [`preset.md`](preset.md#reactions)):
 | Factory merge refused (ORC-148) | `pr.merge_refused` | push during review: back to *AI Review*, AI review relaunched on the new commits; other refusal (PR not mergeable…): back to *Human Review* with the reason |
 | PR closed without merge | `pr.closed` | the ticket's work is cancelled (see [`preset.md`](preset.md#configurable-events)) |
 
-A CI state change is reported only once (not on every poll). The PR's **unresolved** review comments are re-read at the time of a `dev-feedback` or `fix-human` run (`feedback` input): resolve a thread on GitHub so it is no longer sent back to the agent. An inline comment that started a round of human feedback (ORC-190) reaches the agent through its thread only.
+A CI state change is reported only once (not at every pass). The PR's **unresolved** review comments are re-read at the time of a `dev-feedback` or `fix-human` run (`feedback` input): resolve a thread on GitHub so it is no longer sent back to the agent. An inline comment that started a round of human feedback (ORC-190) reaches the agent through its thread only.
 
-Without a GitHub webhook, it takes up to 30 s for a merge or CI to be taken into account. A CI verdict is named by the PR head (`pr:<ticket>:<n>:checks:<fail|pass>:<sha>`): polling and the webhook seeing the same verdict on the same commit write it only once to the inbox, and a red verdict seen again on the same commit after a green one (CI rerun) is not reported a second time. With the `gh` CLI, the head is read from `headRefOid`.
+Without a GitHub webhook, it takes up to 5 minutes for a merge or CI to be taken into account. A CI verdict is named by the PR head (`pr:<ticket>:<n>:checks:<fail|pass>:<sha>`): the reconciliation and the webhook seeing the same verdict on the same commit write it only once to the inbox, and a red verdict seen again on the same commit after a green one (CI rerun) is not reported a second time.
 
 ## GitHub webhooks
 
 `POST /webhooks/github` receives the App's webhooks (ORC-134), at `<publicUrl>/webhooks/github`. In production GitHub calls the server directly in HTTPS, through the host's reverse proxy or the optional `caddy` service (`--profile tls`), which pass the body unchanged to `factoryd` in plain HTTP: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221). On a workstation, a tunnel in `publicUrl` stands in for it.
 
 - **signature**: `X-Hub-Signature-256` must equal `sha256=` followed by the HMAC-SHA256 of the raw body with the secret, compared in constant time; otherwise refused (401) and **nothing is written**. The secret comes from `github.webhookSecret` in `config.yaml`, otherwise from the `GH_WEBHOOK_SECRET` variable. Without a secret (or with a secret made of whitespace), **all** GitHub webhooks are refused, and `relais up` reports it at startup;
-- **inbox written before the response** (ORC-147): a 200 means "written"; if the daemon goes down right after, even with `kill -9`, the event is processed at the next startup. If the write fails, the response is 500: GitHub does not resend a failed delivery on its own; redeliver it from the App's *Advanced* tab, or let polling catch it up;
-- **deduplication and replay**: each event's id comes from the signed body (PR number, SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does not cover (it is only used for the log). A redelivery, a replayed body, or the same fact seen by polling carries an id the inbox already has: it is not reprocessed. GitHub does not sign a timestamp: there is no freshness check; deduplication in the database stands in for it;
-- **linking to the ticket**: by the PR's (or push's) branch, like polling, and by repository: `repository.full_name` must be the `origin` repository of the ticket's project (read once via `git remote get-url origin`). Only a branch of a tracked ticket, in its project's repository, produces an event; everything else (another repository where the App is installed, another branch, a body of another shape) is accepted (200) and ignored. An older PR of the branch, already closed, is ignored too.
+- **inbox written before the response** (ORC-147): a 200 means "written"; if the daemon goes down right after, even with `kill -9`, the event is processed at the next startup. If the write fails, the response is 500: GitHub does not resend a failed delivery on its own; redeliver it from the App's *Advanced* tab, or let the reconciliation catch it up;
+- **deduplication and replay**: each event's id comes from the signed body (PR number, SHA, review or comment id), never from `X-GitHub-Delivery`, which the signature does not cover (it is only used for the log). A redelivery, a replayed body, or the same fact seen by the reconciliation carries an id the inbox already has: it is not reprocessed. GitHub does not sign a timestamp: there is no freshness check; deduplication in the database stands in for it;
+- **linking to the ticket**: by the PR's (or push's) branch, like the reconciliation, and by repository: `repository.full_name` must be the `origin` repository of the ticket's project (read once via `git remote get-url origin`). Only a branch of a tracked ticket, in its project's repository, produces an event; everything else (another repository where the App is installed, another branch, a body of another shape) is accepted (200) and ignored. An older PR of the branch, already closed, is ignored too.
 
 | Webhook | Event in the inbox | Reaction |
 |---|---|---|
-| `pull_request` closed with `merged: true` | `pr.merged` (preceded by `pr.opened` if the ticket does not know the PR), with the merge commit (`mergeSha`, `merge_commit_sha`), the merged head (`headSha`) and the merge time on GitHub (`mergedAt`, `merged_at`); polling provides them too when the forge reads them | same as for polling |
+| `pull_request` closed with `merged: true` | `pr.merged` (preceded by `pr.opened` if the ticket does not know the PR), with the merge commit (`mergeSha`, `merge_commit_sha`), the merged head (`headSha`) and the merge time on GitHub (`mergedAt`, `merged_at`); the reconciliation provides them too when the forge reads them | same as for the reconciliation |
 | `pull_request` closed without merge | `pr.closed`, one per closing | ticket's work cancelled |
 | `pull_request` reopened (the ticket's PR) | `pr.opened`, one per reopening | the PR is open again; the ticket stays blocked until a human retry |
 | `pull_request` open with `mergeable_state: dirty` | `pr.conflicted` (head and base) | the pack's: the rebase step, on the counter of red CI (ORC-146, [preset](preset.md#rebase-step-orc-146)) |
@@ -170,7 +160,7 @@ Without a GitHub webhook, it takes up to 30 s for a merge or CI to be taken into
 | `push` on the repository's default branch (`repository.default_branch`) where a commit merges a PR of a tracked ticket, or reverts a merged PR of a ticket | `default_branch.pushed` (untrusted), one per ticket concerned, with only its relevant commits (SHA, message, author, `merges` or `reverts`: PR number) and the push time (`repository.pushed_at`) | none: read by the measurements (14-day revert, ORC-278) |
 | `workflow_run` completed (`completed`) on a tracked ticket's branch, in the project's repository (not a fork) | `ci.run_completed` (untrusted), one per run and per attempt (`ci:<ticket>:<run id>:<run_attempt>`), with the PR, the head, the conclusion and the duration | none: read by the measurements (CI cost, ORC-278) |
 
-A check on a commit the PR has moved away from is ignored. A forge read lagging behind the webhook (check still read as "in progress") lets nothing through: polling catches up the verdict. Webhooks are processed one at a time, in order of arrival: a slow forge read delays the following responses. Commit statuses (`status`) only go through polling. A conflict only appears on a `pull_request` webhook where GitHub has already computed mergeability: a conflict created by a push to the default branch, with no event on the PR, waits for reconciliation (ORC-185). Since ORC-125 the agents never push: the factory's own pushes come from its App, a bot, and are no `push.human`; a push of the commit `verify` last found green is the factory's own whatever account the forge names (a version whose agents still push themselves gets no reaction to `push.human`, ORC-159). `pr.reviewed`, `default_branch.pushed` and `ci.run_completed` are not accepted keys under `on`: the engine records them without reacting. `pr.conflicted` is one since ORC-146.
+A check on a commit the PR has moved away from is ignored. A forge read lagging behind the webhook (check still read as "in progress") lets nothing through: the reconciliation catches up the verdict. Webhooks are processed one at a time, in order of arrival: a slow forge read delays the following responses. Commit statuses (`status`) only go through the reconciliation. A conflict only appears on a `pull_request` webhook where GitHub has already computed mergeability: a conflict created by a push to the default branch, with no event on the PR, waits for reconciliation (ORC-185). Since ORC-125 the agents never push: the factory's own pushes come from its App, a bot, and are no `push.human`; a push of the commit `verify` last found green is the factory's own whatever account the forge names (a version whose agents still push themselves gets no reaction to `push.human`, ORC-159). `pr.reviewed`, `default_branch.pushed` and `ci.run_completed` are not accepted keys under `on`: the engine records them without reacting. `pr.conflicted` is one since ORC-146.
 
 **Default branch pushes and CI runs (ORC-278).** A push to the default branch has no ticket branch: each commit is linked by what GitHub writes about it, never by an agent's text read as a claim:
 
@@ -224,7 +214,7 @@ The command resolves `owner/name` with `git remote get-url origin`, then reads w
 
 It reads the repository's branch naming in `.factory/config.yml` on the default branch, as the local clone last fetched it (`origin/HEAD`, no `fetch`); an invalid file makes `doctor` refuse.
 
-It requires the GitHub App (`github.*` or `GH_APP_*`): no `gh` fallback for this check. Exit code `0` if the repository is accepted, `1` if it is refused or if a read fails.
+It requires the GitHub App (`github.*` or `GH_APP_*`). Exit code `0` if the repository is accepted, `1` if it is refused or if a read fails.
 
 ### Rule
 

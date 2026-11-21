@@ -1399,3 +1399,40 @@ describe('GitHubAppForge artifacts (ORC-407)', () => {
     expect(writes(calls)).toEqual([]);
   });
 });
+
+describe('GitHubAppForge.pullRequest, for factory ghost (ORC-181)', () => {
+  const pull = (pr: Record<string, unknown>): Route => (url, init) => (url.pathname === '/repos/acme/app/pulls/12' && init.method === 'GET' ? { body: pr } : undefined);
+  const commits = (headlines: string[]): Route => (url) =>
+    url.pathname === '/repos/acme/app/pulls/12/commits' ? { body: url.searchParams.get('page') === '1' ? headlines.map((h, i) => ({ sha: `c${i}`, commit: { message: h } })) : [] } : undefined;
+
+  it("reads a merged PR's author, merge commit and commits' headlines, oldest first", async () => {
+    const merged = openPr({ number: 12, html_url: 'https://github.com/acme/app/pull/12', state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
+    const { forge } = makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['feat: a\n\nbody', 'fix: b'])]);
+    expect(await forge.pullRequest('/repo', 12)).toEqual({ number: 12, url: 'https://github.com/acme/app/pull/12', author: 'lilian', mergeSha: 'm12', commits: ['feat: a', 'fix: b'] });
+  });
+
+  it('gives no merge commit to a PR not merged, whatever test merge GitHub names', async () => {
+    const open = openPr({ number: 12, merge_commit_sha: 'test-merge', user: { login: 'lilian' } });
+    const { forge } = makeForge([installationRoute(42), tokenRoute(42), pull(open), commits(['wip'])]);
+    expect(await forge.pullRequest('/repo', 12)).toEqual({ number: 12, url: 'https://github.com/acme/app/pull/7', author: 'lilian', commits: ['wip'] });
+  });
+
+  it("gives each commit's headline as git's %s does: its first paragraph on one line, CRLF or not", async () => {
+    const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
+    const { forge } = makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['feat: a long subject\nthat wraps\n\nbody', 'fix: b\r\n\r\nbody\r\n'])]);
+    expect((await forge.pullRequest('/repo', 12)).commits).toEqual(['feat: a long subject that wraps', 'fix: b']);
+  });
+
+  it('throws on a list of commits shorter than the PR says, as GitHub cuts it at 250', async () => {
+    const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' }, commits: 3 });
+    await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), commits(['a', 'b'])]).forge.pullRequest('/repo', 12)).rejects.toThrow(/2 commits of 3/);
+  });
+
+  it('throws on a PR GitHub does not have, and on commits it cannot read', async () => {
+    const gone: Route = (url) => (url.pathname === '/repos/acme/app/pulls/12' ? { status: 404, body: { message: 'Not Found' } } : undefined);
+    await expect(makeForge([installationRoute(42), tokenRoute(42), gone]).forge.pullRequest('/repo', 12)).rejects.toThrow(/404 Not Found/);
+    const odd: Route = (url) => (url.pathname === '/repos/acme/app/pulls/12/commits' ? { body: [{ sha: 'c0' }] } : undefined);
+    const merged = openPr({ number: 12, state: 'closed', merged_at: '2026-10-01T10:00:00Z', merge_commit_sha: 'm12', user: { login: 'lilian' } });
+    await expect(makeForge([installationRoute(42), tokenRoute(42), pull(merged), odd]).forge.pullRequest('/repo', 12)).rejects.toThrow(/unreadable answer/);
+  });
+});

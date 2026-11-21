@@ -597,7 +597,7 @@ Events about a ticket that Relais does not follow yet are ignored, except `ticke
 
 ### From an event to a run
 
-1. Linear or GitHub sends an event (webhook, the 5-minute reconciliation, the PR polling), or a timer of the database fires: its source writes it to the **inbox** and answers once the row is committed (ORC-147).
+1. Linear or GitHub sends an event (webhook, the 5-minute reconciliation), or a timer of the database fires: its source writes it to the **inbox** and answers once the row is committed (ORC-147).
 2. The **worker** takes the event under its ticket's lock and, in one transaction, has `decide` apply the event's built-in behavior, then its reaction, if it has one ([default reactions](#default-reactions-orc-227-orc-392)); `reduce` writes the new projection, and the decision's effects and timers go to the **outbox** and the `timers` table in the same transaction (ORC-149, `planDecision`).
 3. A reaction that starts a job produces a "launch a run" effect (`start_run`) that carries the job's name, or arms a regrouping timer (the preset's `regroup`).
 4. An outbox executor then carries out `start_run` (ORC-150) and the daemon reads the job:

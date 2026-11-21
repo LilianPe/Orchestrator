@@ -42,7 +42,7 @@ describe('verifyGithubSignature', () => {
 });
 
 describe('mapGithubWebhook', () => {
-  it('maps a merge, preceded by pr.opened for a PR the ticket does not know, with the ids of PrPoller', async () => {
+  it('maps a merge, preceded by pr.opened for a PR the ticket does not know, with the ids of GithubReconciler', async () => {
     const out = await mapGithubWebhook('pull_request', pullRequestBody('closed', { merged: true }), ctx());
     expect(out).toEqual([
       { id: 'pr:REL-1:3:opened', type: 'pr.opened', at: 5, projectId: 'p', ticketId: 'REL-1', schemaVersion: SCHEMA_VERSION, taint: 'trusted', payload: { number: 3, url: 'https://github.com/acme/app/pull/3', branch: BRANCH } },
@@ -58,7 +58,7 @@ describe('mapGithubWebhook', () => {
     const onNew = tracked({ prNumber: 4 });
     expect(await mapGithubWebhook('pull_request', pullRequestBody('closed'), ctx(onNew))).toEqual([]);
     expect(await mapGithubWebhook('pull_request', pullRequestBody('labeled', { state: 'closed' }), ctx(onNew))).toEqual([]);
-    // A new open PR on the branch is taken, as PrPoller takes the branch's latest PR.
+    // A new open PR on the branch is taken, as GithubReconciler takes the branch's latest PR.
     expect(ids(await mapGithubWebhook('pull_request', pullRequestBody('opened'), ctx(onNew)))).toEqual(['pr:REL-1:3:opened']);
   });
 
@@ -86,7 +86,7 @@ describe('mapGithubWebhook', () => {
     expect(await mapGithubWebhook('pull_request', pullRequestBody('synchronize', { mergeable_state: 'unknown' }), ctx(tracked({ prNumber: 3 })))).toEqual([]);
   });
 
-  it('maps a failed check on the PR head to red CI at once, named per head as PrPoller names it', async () => {
+  it('maps a failed check on the PR head to red CI at once, named per head as GithubReconciler names it', async () => {
     for (const conclusion of ['failure', 'timed_out', 'cancelled', 'action_required']) {
       const out = await mapGithubWebhook('check_run', checkRunBody(conclusion), ctx(tracked({ prNumber: 3 })));
       expect(out).toMatchObject([{ id: checksEventId('REL-1', 3, 'fail', 'head1'), type: 'pr.checks_failed', payload: { number: 3, failures: ['test'] } }]);

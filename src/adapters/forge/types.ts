@@ -52,6 +52,15 @@ export interface Forge {
   recentBranches(repoPath: string): Promise<ForgeBranch[]>;
 }
 
+/** A PR read by its number, as a replay compares with it (`factory ghost`): its author's login, its merge commit once merged, its commits' headlines oldest first. */
+export interface PullRequestView {
+  number: number;
+  url: string;
+  author: string;
+  mergeSha?: string;
+  commits: string[];
+}
+
 /** A PR the factory opens for its branch (ORC-162), by its Publisher (ORC-125). */
 export interface PrRequest {
   branch: string;
@@ -75,7 +84,7 @@ export interface GitAccess {
  * The factory's own checks (ORC-151): its verdict, published once it pushed, never the repository's CI. Read as CI, a head
  * with them alone would pass for green, and merge before the real CI ran. Known by the GitHub App that created them when both
  * Apps are known (ORC-353): another App may name a check as the factory names its own. By their `factory/` prefix otherwise,
- * as the `gh` fallback, which reads no App, knows them.
+ * when the factory's App id is not given.
  */
 export const isFactoryCheck = (check: { name: string; app?: { id?: unknown } | null }, factoryAppId?: string): boolean =>
   factoryAppId !== undefined && typeof check.app?.id === 'number' ? String(check.app.id) === factoryAppId : check.name.startsWith('factory/');
@@ -97,7 +106,7 @@ export type CheckRunRequest = {
 /**
  * What the factory itself writes on the forge, each write idempotent (ORC-162, docs/idempotency.md):
  * a replay finds what the first one wrote and says so (`deduplicated`). Only the GitHub App adapter
- * writes: GitHub lets only an app create check runs, so `gh` and its user token cannot.
+ * writes: GitHub lets only an app create check runs, so a user token cannot.
  */
 /**
  * The outcome of a merge (ORC-148). A refusal GitHub gives for a reason the human must hear (the head moved since

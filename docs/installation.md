@@ -11,7 +11,7 @@ To take a first real ticket from delegation to its PR on your machine, follow [`
 | Node.js | **24.22.1 or later** (`engines.node: ">=24.22.1"`) | The daemon uses `node:sqlite`, built into Node 24; 24.22.1 is the patched minimum from the October 2026 security release. |
 | npm | the one shipped with Node 24 | Install and build. |
 | git | recent (worktrees) | One git worktree per ticket. |
-| GitHub CLI `gh` | **2.50 or later**, logged in (`gh auth login`) | Without a GitHub App, Relais reads through `gh pr …`, `gh api graphql`; pushing and opening PRs requires the GitHub App. Relais reads a PR's checks through `gh pr checks --json`, which appeared in 2.50: before that, it cannot read any open PR (the `gh` in the Ubuntu 24.04 repositories is 2.45, take the one from [cli.github.com](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)). See [`github.md`](github.md). |
+| A GitHub App | installed on the repository ([`github.md`](github.md#creating-the-app)) | The daemon reads and publishes on GitHub by its App alone: the `gh` CLI is no longer used (ORC-181). |
 | Claude Code CLI `claude` | logged in (subscription or `ANTHROPIC_API_KEY`) | Each run is a `claude -p … --output-format stream-json`. It must be on the daemon's `PATH`. |
 | bash | — | The `workspace.setup` and `verify` commands are run via `bash -c`, without a login profile: the `PATH` is the daemon's (or the sandbox image's). A tool that only your profile puts on the `PATH` (nvm, asdf, volta, `~/.local/bin`) must be on the daemon's: `Environment=PATH=…` in the systemd unit, for example. |
 

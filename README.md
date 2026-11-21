@@ -4,7 +4,7 @@
 
 Coding agent orchestrator: a Linear ticket delegated to the agent becomes a PR, reviewed by a human and then by an AI review loop, ready to merge. Public prototype, under the [Elastic 2.0 license](#license).
 
-- Relais runs as a daemon (`relais up`) connected to **Linear** (OAuth agent application + webhooks) and to **GitHub** (`gh` CLI).
+- Relais runs as a daemon (`relais up`) connected to **Linear** (OAuth agent application + webhooks) and to **GitHub** (the factory's GitHub App).
 - Each delegated ticket gets its own git worktree and a headless **Claude Code** session, resumed from run to run (feedback, CI, review).
 - Behavior (events, jobs, models, limits, checks) is described in YAML per repository (`.relais/workflow.yml`); the agents' instructions live in a skills pack, not in the core.
 - Humans stay in control: only they merge, the agent asks its questions in Linear, and a shared knowledge base grows through reviewed PRs.
@@ -41,7 +41,7 @@ Without tokens, to try the interface: `relais up --fake-runner`.
 - [First run](docs/first-run.md): **start here** for a first real ticket on your machine: what to create (GitHub App, Linear application, Claude token, Podman, validators), `factory init`, `factory doctor`, `factory up`, then each step from delegation to the PR and its AI review.
 - [Installation](docs/installation.md): prerequisites, installation, the daemon's home directory.
 - [Linear](docs/linear.md): OAuth application, agent connection, webhooks, delegation, statuses and labels.
-- [GitHub](docs/github.md): account and permissions, PR polling, branches, branch protection, CI.
+- [GitHub](docs/github.md): the App and its permissions, the reconciliation of PRs, branches, branch protection, CI.
 - [Deployment](docs/deployment.md): Docker, long-running service, clean shutdown and updates.
 
 ### Configure

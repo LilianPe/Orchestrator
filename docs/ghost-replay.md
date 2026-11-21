@@ -118,12 +118,12 @@ factory ghost list
 ```
 
 `start` refuses a project not on `factory/fantome`, a daemon without sandboxes, and a PR that is not merged, before writing
-anything. It reads each human PR with `gh` in the project's checkout, and rebuilds each ticket under
+anything. It reads each human PR with the daemon's GitHub App (refused without it, ORC-181), and rebuilds each ticket under
 `<FACTORY_HOME>/ghost/<replay>/<ticket>/` (`repo/`, `knowledge/`; `ticket.json` once delegated). An environment that cannot be
 rebuilt is counted apart, with why. `collect` reads what each ticket ran to on the project, within
 the replay's time (from its start to the next replay of the same ticket): its last kept PR, its runs' cost, the assumptions of its
-spec; a ticket whose run has not ended stays `pending`, and a PR already graded stays the one graded. The human diffs are read
-from GitHub when judged.
+spec; a ticket whose run has not ended stays `pending`, and a PR already graded stays the one graded. The human diff is read
+when judged, by git in the project's checkout: from the ticket's start to its PR's merge commit, fetched from `origin`.
 
 ## Not yet
 

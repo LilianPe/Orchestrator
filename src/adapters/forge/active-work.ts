@@ -12,7 +12,7 @@ export const OPEN_PRS_QUERY = `query($owner: String!, $name: String!, $after: St
   repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 50, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) { ${PAGE_INFO} nodes {
     number url title headRefName isCrossRepository files(first: ${PR_FILES}) { totalCount nodes { path } } } } } }`;
 
-/** The branches whose name matches `$filter`, a page at a time (named so: `gh api graphql` takes `query` for the document). */
+/** The branches whose name matches `$filter`, a page at a time. */
 export const BRANCHES_QUERY = `query($owner: String!, $name: String!, $after: String, $filter: String!) {
   repository(owner: $owner, name: $name) { url refs(refPrefix: "refs/heads/", first: 100, after: $after, query: $filter) { ${PAGE_INFO} nodes { name } } } }`;
 

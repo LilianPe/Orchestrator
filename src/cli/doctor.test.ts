@@ -436,7 +436,7 @@ jobs:
     const code = await runDoctorCommand({ repoPath: '/repo', home, env: {}, out: (line) => lines.push(line) });
     expect(code).toBe(1);
     expect(lines.join('\n')).toContain('GitHub App not configured');
-    expect(lines.join('\n')).toContain('No `gh` fallback');
+    expect(lines.join('\n')).not.toMatch(/\bgh\b/);
   });
 
   it('runs the CLI adapter with the configured App and the git remote', async () => {

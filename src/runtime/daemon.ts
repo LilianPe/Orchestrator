@@ -66,7 +66,7 @@ export interface DaemonDeps {
   reconcile?: (project: ProjectRuntime) => Promise<void>;
   /** Records the factory's own label write in the labels the reconciliation compares Linear with (ORC-346). */
   labelsWritten?: (projectId: string, ticketId: string, written: LabelsWritten) => Promise<void>;
-  /** The factory's writes on the forge (ORC-148: the merge); absent with the `gh` CLI, which merges nothing. */
+  /** The factory's writes on the forge (ORC-148: the merge); absent without the GitHub App, which alone merges. */
   forgeWriter?: ForgeWriter;
   /**
    * Where the visual proof's captures are shown from in a PR (ORC-407): the repository's `factory/artifacts` branch, by the GitHub

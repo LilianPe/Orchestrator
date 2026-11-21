@@ -18,7 +18,7 @@ export interface TeamDirectory {
 export const REPO_PERMISSIONS = ['admin', 'maintain', 'write', 'triage', 'read', 'none'] as const;
 export type RepoPermission = (typeof REPO_PERMISSIONS)[number];
 
-/** Reads a user's permission on the repo of `repoPath` (the GitHub App forge, the `gh` forge, `FakeForge`). */
+/** Reads a user's permission on the repo of `repoPath` (the GitHub App forge, `FakeForge`). */
 export interface RepoPermissions {
   repoPermission(repoPath: string, login: string): Promise<RepoPermission>;
 }

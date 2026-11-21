@@ -42,7 +42,7 @@ function withGhost(o: { sandboxes?: boolean } = {}) {
     // What the daemon last said of its runs (ORC-376): with sandboxes, unless a test says otherwise.
     sandboxes: async () => ('sandboxes' in o ? o.sandboxes : true),
     humanPr: async (_repo, n) => PRS[n] ?? Promise.reject(new Error(`no PR #${n}`)),
-    humanDiff: async (_repo, n) => `diff --git a/x${n}`,
+    humanDiff: async (_repo, { start, mergeSha }) => `diff --git a/x b/x ${start}..${mergeSha}`,
     environment: async ({ ticketId, mergeSha, prCommits, memory }) => {
       environments.push({ ticketId, prCommits });
       if (ticketId === 'REL-3') throw new Error('fetch refused');
@@ -215,6 +215,8 @@ describe('factory ghost collect, judge and report (ORC-231)', () => {
     // Nothing tells the factory's from the human's: no side, no branch, no description, no author.
     for (const tell of ['factory', 'human', 'lilian', 'factory body']) expect(screen.toLowerCase()).not.toContain(tell);
     expect(screen).toContain('diff --git a/');
+    // The human's side: from the replay's start to the PR's merge commit (ORC-181).
+    expect(screen).toContain('parent-of-merge12..merge12');
     const judgments = await store.ghostJudgments('g1');
     expect(judgments).toHaveLength(4);
     expect(new Set(judgments.map((j) => `${j.ticketId}:${j.side}`))).toEqual(new Set(['REL-1:factory', 'REL-1:human', 'REL-2:factory', 'REL-2:human']));
