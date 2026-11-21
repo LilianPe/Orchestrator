@@ -110,8 +110,8 @@ export async function checkHost(env: NodeJS.ProcessEnv, run: Exec = execCmd): Pr
   const { cgroupV2, controllers, rootless, manager } = cgroups;
   const linger = 'sudo loginctl enable-linger <user>, docs/tests.md';
   const reasons = [...refused];
-  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed one, refused
-  // above, leaves them unread: every controller stays required.
+  // Only the limits set (ORC-451): one at `none` is the way out of a host without its controller. A malformed or too small one
+  // (ORC-452), refused above, leaves them unread: every controller stays required.
   const limits = sandboxLimits(env);
   const required = Object.entries(LIMIT_CONTROLLERS)
     .filter(([limit]) => 'refused' in limits || limits[limit as keyof SandboxLimits] !== undefined)
