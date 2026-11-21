@@ -50,6 +50,8 @@ const instanceSchema = z.object({
   host: z.string().default('127.0.0.1'),
   publicUrl: z.string().url().optional(),
   relay: z.discriminatedUnion('kind', [z.object({ kind: z.literal('smee'), url: z.string().url() }), z.object({ kind: z.literal('none') })]).default({ kind: 'none' }),
+  /** The development mode (ORC-444), written by `factory init --dev` alone: the daemon starts the Smee relay only in it. */
+  dev: z.boolean().optional(),
   projects: z.array(projectSchema).default([]),
   // The daily budget in dollars is gone (ORC-216, ORC-194): a config.yaml that still has its key loads without it.
   limits: z.object({}).default({}),
