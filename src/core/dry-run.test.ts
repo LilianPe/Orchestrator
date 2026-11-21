@@ -204,6 +204,16 @@ describe('runDryRun (ORC-408)', () => {
     expect((await runDryRun(req)).breaks).toEqual([expect.objectContaining({ kind: 'variable', step: 'setup' })]);
   });
 
+  it.each([
+    ['a host the proxy refuses a CONNECT to, as curl says it', 'curl: (56) CONNECT tunnel failed, response 403\n'],
+    ['a host the proxy refuses a CONNECT to, as git says it', 'fatal: unable to access \'https://get.example.com/\': Received HTTP code 403 from proxy after CONNECT\n'],
+    ['the relay\'s address printed by a setup that then fails', 'HTTPS_PROXY=http://127.0.0.1:3128\nnpm error 404 Not Found - GET https://registry.npmjs.org/left-pad\n'],
+  ])('what names the proxy without a breakdown is the repository\'s: recorded red, %s', async (_, stderr) => {
+    const { req, sandboxes } = forge();
+    sandboxes.answer = (command) => (command === 'npm ci' ? { stdout: '', stderr, code: 1 } : undefined);
+    expect((await runDryRun(req)).ok).toBe(false);
+  });
+
   it('a setup over its cap on a registry that no longer answers rejects too', async () => {
     const { req, sandboxes } = forge();
     let now = Date.now();

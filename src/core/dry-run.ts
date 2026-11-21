@@ -171,9 +171,9 @@ const UNREACHABLE_LINES = [
   // pip's and uv's.
   /Failed to establish a new connection|Temporary failure in name resolution|\bdns error\b/,
   /egress proxy: not sent on|\bProxyError\b|Cannot connect to proxy/,
-  // The relay itself, and the proxy's 502 to a CONNECT, as curl and git say them.
-  PROXY_RELAY,
-  /CONNECT tunnel failed|from proxy after CONNECT/,
+  // The relay refusing, and the proxy's 502 to a CONNECT, as curl and git say them: never a line that only names the relay.
+  /Failed to connect to (?:127\.0\.0\.1|localhost|::1|\[::1\]) port 3128\b/,
+  /CONNECT tunnel failed, response 502|Received HTTP code 502 from proxy after CONNECT/,
 ];
 const ERROR_LINE = /\b(?:error|fail(?:ed|ure)?|assert\w*|exception|traceback|panic)\b/i;
 
