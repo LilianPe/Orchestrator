@@ -57,7 +57,7 @@ import { startSmeeRelay } from '../relay/smee.js';
 import { agentOnly, createApp, GITHUB_CALLBACK_PATH, type ServerDeps } from '../server/app.js';
 import { listenCliSocket } from '../server/cli-socket.js';
 import { EventBus } from '../server/live-feed.js';
-import { oldDatabaseWarnings, openStore } from '../store/open.js';
+import { openStore } from '../store/open.js';
 import type { Store } from '../store/types.js';
 import { RUN_BEAT_MS } from '../store/types.js';
 import { repoRoot } from './root.js';
@@ -130,7 +130,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const { yml, sealed, reader: repoSecrets } = await loadSealedFactoryYml(o.home, env);
   const instance = effectiveInstance(o.home, yml);
   // Before secrets.json is touched; `factory doctor` says them alike (ORC-448).
-  const { warnings, oauthClient, signIn } = startRefusals(instance, yml, env);
+  const { warnings, oauthClient, signIn } = startRefusals(o.home, instance, yml, env);
   for (const line of warnings) log(line);
   const githubLogin = dashboardLogin(signIn);
   // The tokens the daemon writes itself, encrypted at rest from now on when factory.yml names a key (ORC-398).
@@ -172,8 +172,6 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
   const replaying = instance.projects.filter(isFantome).map((p) => p.id);
   const fromLinear = projects.filter((p) => !replaying.includes(p.id));
 
-  // A SQLite file left from before Postgres is named, never opened (ORC-178).
-  for (const line of oldDatabaseWarnings(o.home)) log(line);
   let store = o.store;
   if (!store) {
     store = await openStore({ env, migrationsFolder: join(root, 'drizzle'), log });

@@ -239,18 +239,22 @@ export interface DoctorOptions {
   serverSecrets?: SecretReport[];
   /** The projects whose spec gate no validator can pass (ORC-421), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says them first. */
   validatorWarnings?: string[];
-  /** The Smee relay of a config.yaml without the development mode's marker (ORC-446), for the JSON report; never part of the verdict (its refusals stop doctor first, exit 1). In text, `runDoctorCommand` says it first. */
-  relayWarnings?: string[];
+  /**
+   * The warnings of the daemon's start (`startRefusals`), for the JSON report: the Smee relay of a config.yaml without the development
+   * mode's marker (ORC-446), a SQLite file left from before Postgres (ORC-463). Never part of the verdict (the refusals stop doctor
+   * first, exit 1). In text, `runDoctorCommand` says them first.
+   */
+  startWarnings?: string[];
 }
 
-type InstanceReport = Pick<DoctorOptions, 'visualProof' | 'serverSecrets' | 'validatorWarnings' | 'relayWarnings'>;
+type InstanceReport = Pick<DoctorOptions, 'visualProof' | 'serverSecrets' | 'validatorWarnings' | 'startWarnings'>;
 
-/** The visual proof (ORC-404), the server secrets (ORC-398), the validators (ORC-421) and the Smee relay (ORC-446) in the JSON report. */
+/** The visual proof (ORC-404), the server secrets (ORC-398), the validators (ORC-421) and the start's warnings (ORC-446, ORC-463) in the JSON report. */
 const instanceReportOf = (o: InstanceReport) => ({
   ...(o.visualProof ? { visualProof: { available: !!o.visualProof.image, detail: o.visualProof.detail } } : {}),
   ...(o.serverSecrets ? { serverSecrets: o.serverSecrets } : {}),
   ...(o.validatorWarnings?.length ? { validatorWarnings: o.validatorWarnings } : {}),
-  ...(o.relayWarnings?.length ? { relayWarnings: o.relayWarnings } : {}),
+  ...(o.startWarnings?.length ? { startWarnings: o.startWarnings } : {}),
 });
 
 export interface WorkflowReport {
@@ -978,18 +982,18 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   if (!options.json && serverSecrets) for (const line of serverSecretLines(serverSecrets)) out(line);
   let githubApp;
   let validators: string[] = [];
-  let relay: string[] = [];
+  let startWarnings: string[] = [];
   // What every failure from here reports, the warnings said so far included: `--json` keeps its form whatever stops the check (ORC-449).
-  const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, relayWarnings: relay, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
+  const reportOf = () => ({ repoPath: options.repoPath, out, visualProof, validatorWarnings: validators, startWarnings, ...(serverSecrets ? { serverSecrets } : {}), ...(options.json ? { json: true } : {}) });
   let projects;
   let states;
   try {
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
-    // host's sign-in and secrets_key, the Smee relay (ORC-446), whose warning is said here.
+    // host's sign-in and secrets_key, the Smee relay (ORC-446). Its warnings are said here: the relay's, an old SQLite file's (ORC-463).
     const instance = effectiveInstance(options.home, yml);
-    relay = startRefusals(instance, yml, env).warnings;
-    if (!options.json) for (const line of relay) out(line);
+    startWarnings = startRefusals(options.home, instance, yml, env).warnings;
+    if (!options.json) for (const line of startWarnings) out(line);
     projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
     validators = validatorWarnings(projects);
