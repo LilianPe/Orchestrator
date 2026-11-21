@@ -101,9 +101,14 @@ export function readCapsOf(yml: Pick<FactoryYml, 'egress'> | undefined): ReadCap
 /** The ack of a human message (ORC-380): the comment « Got it. », or a reaction on the comment the message was written in. */
 export type AckMode = 'comment' | 'reaction';
 
+/** The account `claude.active` names. */
+export function activeClaudeAccount(yml: FactoryYml | undefined): { name: string; token: string } | undefined {
+  return yml?.claude?.accounts.find((a) => a.name === yml.claude?.active);
+}
+
 /** The token of the account `claude.active` names: the only credential a runner gets (ORC-211). */
 export function activeClaudeToken(yml: FactoryYml | undefined): string | undefined {
-  return claudeToken(yml?.claude?.accounts.find((a) => a.name === yml.claude?.active)?.token, 'claude.active in factory.yml');
+  return claudeToken(activeClaudeAccount(yml)?.token, 'claude.active in factory.yml');
 }
 
 /** The account runs use (ORC-215): `name` absent when it is the daemon's own `CLAUDE_CODE_OAUTH_TOKEN`, `token` absent when none is set. */

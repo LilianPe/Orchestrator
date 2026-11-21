@@ -65,7 +65,7 @@ export const DEFAULT_STATES: Workflow['states'] = { todo: 'Todo', dev: 'In Progr
  * `factory/default` gives it, so that two steps of one status name the same, and one Linear status names one logical state
  * (a ticket read in it must be in one). Refused at load otherwise, as a step the preset does not have.
  */
-export function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['states'] {
+function statesOf(statuses: Readonly<Record<string, string>> = {}): Workflow['states'] {
   const states: Workflow['states'] = { ...DEFAULT_STATES };
   const namedBy = new Map<string, string>();
   for (const [step, name] of Object.entries(statuses)) {

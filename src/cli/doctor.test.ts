@@ -10,6 +10,8 @@ import type { BranchNaming } from '../core/naming.js';
 import { MISSING_TEST_COMMAND } from '../config/repo-config.js';
 import { checkHost, runDoctor, runDoctorCommand, type DoctorApi, type HostReport } from './doctor.js';
 import { GITHUB_APP_PERMISSIONS } from './init.js';
+import { startFactory } from '../app/bootstrap.js';
+import { saveInstance, type InstanceConfig } from '../config/instance.js';
 
 interface FakeOptions {
   failWorkflows?: boolean;
@@ -910,6 +912,75 @@ jobs:
       expect(await report([])).not.toHaveProperty('relayWarnings');
       expect((await cli(homeWith(''), true)).lines.filter((l) => l.startsWith('Warning: relay'))).toEqual([]);
     });
+  });
+});
+
+// ORC-448: every refusal of the daemon's start that its configuration decides, said by doctor, which fails with the same message.
+describe("the daemon's start refusals, each one doctor's", () => {
+  const local: InstanceConfig = { port: 4160, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} };
+  const exposed: InstanceConfig = { ...local, host: '0.0.0.0', publicUrl: 'https://factory.example' };
+  const smee = { kind: 'smee' as const, url: 'https://smee.io/abc' };
+  const client = { GH_APP_CLIENT_ID: 'Iv1.client', GH_APP_CLIENT_SECRET: 'client-secret' };
+  const signIn = 'dashboard: { logins: [armand] }\n';
+  interface Refusal {
+    instance?: InstanceConfig;
+    configYaml?: string;
+    factoryYml?: string;
+    env?: NodeJS.ProcessEnv;
+    /** What identifies the refusal in the start's message: the start refuses for this reason, not another. */
+    reason: RegExp;
+  }
+  const refusals: Record<string, Refusal> = {
+    'an invalid config.yaml': { configYaml: 'port: nope\n', reason: /^invalid config\.yaml: port/ },
+    'an invalid factory.yml': { factoryYml: 'github: { app_id: 456, private_key: env:GH_APP_KEY }\n', reason: /github\.private_key: the environment variable GH_APP_KEY/ },
+    'a GitHub App secret its source cannot read': {
+      factoryYml: 'secret_sources: { creds: { kind: systemd-creds } }\ngithub: { app_id: 456, private_key: creds:github-key }\n',
+      reason: /github\.private_key \(creds:github-key\) could not be read/,
+    },
+    'half the OAuth client': { env: { GH_APP_CLIENT_ID: 'Iv1.client' }, reason: /^Incomplete GitHub sign-in/ },
+    'exposed without the OAuth client': { instance: exposed, reason: /^host: 0\.0\.0\.0 exposes .*github\.client_id/ },
+    'exposed without who may sign in': { instance: exposed, env: client, reason: /^host: 0\.0\.0\.0 exposes .*dashboard: \{ logins, org, team \}/ },
+    'exposed without an HTTPS publicUrl': { instance: { ...exposed, publicUrl: 'http://factory.example' }, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*set publicUrl to its https:\/\/ address/ },
+    'exposed without secrets_key': { instance: exposed, factoryYml: signIn, env: client, reason: /^host: 0\.0\.0\.0 exposes .*: set secrets_key in factory\.yml/ },
+    'the Smee relay with dev: false': { instance: { ...local, relay: smee, dev: false }, reason: /^relay: \{ kind: smee \}.*\(dev: false\)/ },
+    'the Smee relay beside a publicUrl in the development mode': { instance: { ...local, relay: smee, dev: true, publicUrl: 'https://f.example.com' }, reason: /^relay: \{ kind: smee \} in config\.yaml beside publicUrl/ },
+    'half the GitHub App': { env: { GH_APP_ID: '456' }, reason: /^Incomplete GitHub App configuration/ },
+    'a status no step shows': { factoryYml: 'statuses: { nope: Todo }\n', reason: /^factory\.yml: statuses\.nope: is not a step/ },
+    'a step setting of no agent step': { factoryYml: 'budgets: { max_turns: { nope: 3 } }\n', reason: /^factory\.yml: budgets\.max_turns\.nope: not an agent step/ },
+    'a Claude token a header cannot carry': { env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, reason: /^CLAUDE_CODE_OAUTH_TOKEN: the Claude token holds a character/ },
+  };
+
+  it('fails doctor with the message the start refuses with, exit 1, for each refusal', async () => {
+    for (const [name, r] of Object.entries(refusals)) {
+      const home = tempHome();
+      if (r.configYaml !== undefined) writeFileSync(join(home, 'config.yaml'), r.configYaml);
+      else saveInstance(home, r.instance ?? local);
+      if (r.factoryYml !== undefined) writeFileSync(join(home, 'factory.yml'), r.factoryYml);
+      const env = r.env ?? {};
+      const started = await startFactory({ home, fakeRunner: true, log: () => {}, env }).then(
+        async (app) => {
+          await app.stop();
+          return undefined;
+        },
+        (error: Error) => error.message,
+      );
+      expect(started, name).toMatch(r.reason);
+      const lines: string[] = [];
+      const code = await runDoctorCommand({ repoPath: '/repo', home, env, out: (line) => lines.push(line) });
+      expect({ name, code, refused: lines.includes(started!) }).toEqual({ name, code: 1, refused: true });
+    }
+  });
+
+  it('takes the secrets it does not read, of a source other than env, as the start takes them read', async () => {
+    const home = tempHome();
+    saveInstance(home, exposed);
+    const claude = 'claude: { runtime: claude-code, default_model: claude-opus-5-5, active: main, accounts: [{ name: main, token: creds:claude }] }\n';
+    writeFileSync(join(home, 'factory.yml'), `secret_sources: { creds: { kind: systemd-creds } }\nsecrets_key: creds:secrets-key\n${claude}${signIn}`);
+    const lines: string[] = [];
+    // The daemon would take the active account's token, never this one.
+    await runDoctorCommand({ repoPath: '/repo', home, env: { ...client, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x\r\nX-Injected: 1' }, out: (line) => lines.push(line) });
+    expect(lines.filter((l) => l.startsWith('host: 0.0.0.0') || l.startsWith('CLAUDE_CODE_OAUTH_TOKEN'))).toEqual([]);
+    expect(lines).toContain('GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) to read the workflows and the environments.');
   });
 });
 

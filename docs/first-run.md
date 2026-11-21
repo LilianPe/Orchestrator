@@ -204,6 +204,7 @@ then each GitHub Actions workflow with its verdict (or `No GitHub Actions workfl
 |---|---|---|
 | `invalid factory.yml:` then `github.app_id: the environment variable GH_APP_ID is not set` (or `claude.accounts[0].token: …`) | a variable `factory.yml` references is not in this shell (`factory plan` says the same) | run it in the daemon's environment (step 2) |
 | `invalid factory.yml:` then `claude.default_model: required` or `` claude.runtime: only `claude-code` exists `` | the `claude` section | as in step 2 |
+| any message `factory up` refuses to start with (`factory.yml: statuses.…`, `host: … exposes …`) | the same as at the start: `doctor` runs the start's checks of `config.yaml` and `factory.yml` | as the message says |
 | `` GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) … `` | no `github` in `factory.yml` nor in `config.yaml`, and no `GH_APP_*` | item 4 |
 | `Cannot read the repository's branch naming: unreadable default branch (origin/main): origin/HEAD is not set …` | clone without `origin/HEAD` | `git remote set-head origin --auto` |
 | `Host: refused — no container engine (FACTORY_CONTAINER_CLI is not set): nothing limits the sandbox` | item 8 | export `FACTORY_CONTAINER_CLI=podman` |
