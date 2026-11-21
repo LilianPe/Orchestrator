@@ -38,8 +38,8 @@ urllib3's `port=3128`) is a breakdown, from npm, curl, git, Go, wget, apt or Mav
 (`HTTPS_PROXY=http://127.0.0.1:3128`) is not. A setup that exited on a variable, or on a service refusing (a connection refused
 or timed out on another port of the loopback, by any client: Node's `connect ECONNREFUSED` or `ETIMEDOUT`, Python's `requests`,
 `psycopg`, `redis-py` or `asyncpg`, Go's `dial tcp`, Prisma's `Can't reach database server`, MySQL's `Can't connect to MySQL server`; or libpq's `could not connect to server` with the loopback in its message, as its `Is the server running on host "localhost"` line says it, or its Unix socket, local whatever the host), is recorded red as such,
-past an installer's retry warning. A connection refused by a host off the loopback is no service: a `failure`, or in the setup a
-breakdown. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
+past an installer's retry warning. A connection refused by a host off the loopback is no service: a breakdown in the setup when said in the words above
+(Node's `ECONNREFUSED`, pip's), a `failure` otherwise. A setup over its cap is a `failure`: a breakdown in its output rejects it, unless a service refusing is there too.
 Reading the repository's variables failing (its entry in `factory.yml` not looked up) rejects too, and so does a factory without
 sandboxes (`FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE` are required). `sha`, when given, must be a full commit id: a branch name or a short sha is refused.
 
@@ -55,7 +55,7 @@ command, an excerpt of its output, and a detail line, classified as:
 | `variable` | a variable the code asks for and does not get: one `.factory/config.yml` does not declare under `env`, or one it declares that `factory.yml` gives no value (no entry for the repository there, or none for that name), said apart. Each name of the line is read; a secret declared under `setup_secrets` is never one of them, so a line that names only secrets is no variable's cause. Without the word *variable* in the line, only a name with a `_` counts: `URL is not defined` is a global | `Missing environment variable: STRIPE_KEY` |
 | `flaky` | a test that failed, then passed on its rerun. A test on the repository's known flaky list does not count | `src/a.test.ts > races failed, then passed on its rerun` |
 | `failure` | anything else: a `.factory/config.yml` refused, a `setup` command over its cap with no breakdown in its output, a test that fails again | its first error line |
-| `secret` | a `setup` that fails when `.factory/config.yml` declares `setup_secrets`, on anything but a `variable`, a `service`, or a `dependency` no token changes (a version too recent, a lockfile out of sync, a host the egress proxy refuses): its first error line, after the secrets it lacks. Kept apart, as the dry run's `unverified`, never among its breaks | `failed without its secrets (NPM_TOKEN), which a dry run's setup does not get: npm error code E404` |
+| `secret` | a `setup` that fails when `.factory/config.yml` declares `setup_secrets`, on anything but a `variable`, a `service`, or a `dependency` no token changes (a version too recent, a lockfile out of sync, a host the egress proxy refuses): its first error line (over its cap, what the cap says), after the secrets it lacks. Kept apart, as the dry run's `unverified`, never among its breaks | `failed without its secrets (NPM_TOKEN), which a dry run's setup does not get: npm error code E404` |
 
 The classification reads text: what a tool prints in another form is a `failure`, with its first error line. A build or test
 command over its cap is classified by what it printed, as any other. A command that failed on its flaky tests alone has only
