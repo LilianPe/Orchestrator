@@ -1,32 +1,32 @@
-# Relais acceptance run (test Linear)
+# Acceptance run (test Linear)
 
-Prerequisites: Node 24, `gh` logged in, `claude` logged in, a test Linear workspace you are an admin of, a small GitHub repository with tests, with **branch protection on the default branch** (PR required, force-push forbidden): the pack's refusals are only a first barrier, GitHub is what guarantees that only humans merge.
+Prerequisites: Node 24.22.1+, `claude` logged in (no `gh`: the factory reads and publishes on GitHub by its App alone, ORC-181), a test Linear workspace you are an admin of, a small GitHub repository with tests and a `.factory/config.yml` with `commands.test`, with **branch protection on the default branch** (PR required, force-push forbidden): the pack's refusals are only a first barrier, GitHub is what guarantees that only humans merge. Also a test GitHub App installed on that repository, a container engine with the runner image, and two Linear users who can validate a spec: the full list is [`first-run.md`](first-run.md#0-what-you-must-create-first).
 
 ## 0. Installation
 ```bash
-git clone git@github.com:lilianperthuis/relais.git && cd relais
+git clone https://github.com/LilianPe/Orchestrator.git && cd Orchestrator
 npm ci && npm run build && npm link
 ```
 
 ## 1. init (criterion 1, < 15 min)
-In the test repository: `relais init`. Follow the instructions (Linear OAuth app, webhook = displayed smee URL, categories Agent session events + Issues + Comments). Check `~/.relais/config.yaml`, `~/.relais/secrets.json` (mode 600), `.relais/workflow.yml`.
+In the test repository: `factory init --dev` on a workstation (it creates the smee.io development relay), or `factory init` with a `publicUrl` in `config.yaml`. Follow the instructions (Linear OAuth app named `Orchestrator`, webhook = displayed URL, categories Agent session events + Issues + Comments; then the GitHub App's steps). Check `~/.factory/config.yaml`, `~/.factory/secrets.json` (mode 600), `~/.factory/factory.yml`. `init` writes nothing in the repository: commit the `.factory/config.yml` it proposes on the default branch. Add the validators and the delegators' GitHub logins in `config.yaml` (`projects[].authz`, [`first-run.md`](first-run.md#2-factory-init---dev-in-the-pilot-repository)).
 
 ## 2. up and connection (criterion 2)
-`relais up` (with `FACTORY_CONTAINER_CLI` and `FACTORY_RUNNER_IMAGE`, or `FACTORY_ALLOW_HOST_RUNS=1` for runs on the host, ORC-349), open http://localhost:4100, click « Connect Linear ». Expected: page « Linear is connected », statuses Human Review / AI Review and label Bloqué created in the team (no Ready to Merge, no agent:* label, ORC-201), button replaced by the « live » state.
+`factory up` (with `FACTORY_CONTAINER_CLI`, `FACTORY_RUNNER_IMAGE` and the GitHub App's variables: without sandboxes or the App, the daemon starts but launches no run, ORC-350), open http://localhost:4100, click « Connect Linear ». Expected: page « Linear is connected », the missing statuses among Todo, In Progress, Human Review, AI Review and Done, and the label `Bloqué` (no `agent:*` label, ORC-201), created in the team, button replaced by the « live » state.
 If Linear refuses the localhost callback URL: note the error, use `cloudflared tunnel --url http://localhost:4100` for the duration of the installation and put the public URL in `publicUrl`.
 
 ## 3. Delegation (criterion 3)
-Create a clear ticket (≥ 30 characters of description), delegate it to @relais. Expected in < 10 s: the comment « Got it. » on the ticket, then the plan in the session (`Understand · Questions · Spec · Tests · Build · Verify · PR`). Then: status In Progress, live output in the UI, PR opened, status Human Review, summary in French in the session.
-Check in `~/.relais/relais.db` that no event was rejected for its signature (otherwise: the smee relay modifies the body → switch to `publicUrl` via a tunnel).
+Create a clear ticket (≥ 30 characters of description), delegate it to `Orchestrator`, as a user mapped in `githubLogins`. Expected in < 10 s: the comment « Got it. » on the ticket, then the plan in the session (`Understand · Questions · Spec · Tests · Build · Verify · PR`). Then the spec in a comment; a validator who did not delegate replies `/approve` in the session. Then: status In Progress, live output in the UI, draft PR, AI Review, status Human Review, the recap in the session ([`first-run.md`](first-run.md#5-delegate-the-ticket) step by step).
+Check in the daemon's log that no webhook was rejected (`relay: webhook rejected with 401 (…)`; rejected webhooks are not recorded in the database). Otherwise, with the secret and the clock right: the smee development relay modifies the body → switch to `publicUrl` via a tunnel.
 
 ## 4. Grouped feedback (criterion 4)
 Write two remarks in the thread less than a minute apart. Expected: a single resume 3 minutes after the last one, same Claude session (same id in the UI), reply with the commit.
 
 ## 5. AI review then merge (criterion 5)
-Move the ticket to AI Review. Expected: fresh session, summary, status Human Review. Merge the PR on GitHub. Expected in < 1 min: status Done, worktree removed from `~/.relais/workspaces`, no run started (ORC-193).
+Move the ticket to AI Review. Expected: fresh session, summary, status Human Review. Merge the PR on GitHub. Expected: status Done, at once with the App's webhook, otherwise at the next reconciliation pass (5 min), worktree removed from `~/.factory/workspaces`, no run started (ORC-193).
 
 ## 6. Questions and memory (criterion 6)
-On another ticket: `@relais où est géré X ?` → read-only answer. `@relais retiens <fait>` → no run and no PR: the message is kept in the ticket's inbox as any other (ORC-193).
+On another ticket: `@Orchestrator où est géré X ?` → read-only answer. `@Orchestrator retiens <fait>` → no run and no PR: the message is kept in the ticket's inbox as any other (ORC-193).
 
 ## 7. Stop (criterion 7)
 Delegate a ticket, during the run click "Send stop request" in Linear. Expected in < 10 s: « Stopped… », ticket blocked, run `stopped`.
@@ -44,7 +44,7 @@ Expected: the 4 services started on a rootless engine, `caddy` under its `tls` p
 
 `FACTORY_ALLOW_ROOTFUL_ENGINE=1` lets this test run on a workstation (Docker Desktop): it then skips the "rootless" check and checks the refusal. This result proves nothing for the server.
 
-Claude Code authentication is required: `ANTHROPIC_API_KEY`, or `CLAUDE_TOKEN_1` with an active account in `factory.yml`.
+Claude Code authentication is required: `CLAUDE_TOKEN_1` with an active account in `factory.yml` (`token: env:CLAUDE_TOKEN_1`, [`deployment.md`](deployment.md#variables)).
 
 Then, by hand: `docker compose up -d` behind the host's reverse proxy ([`deployment.md`](deployment.md#tls-and-webhooks)), or `docker compose --profile tls up -d`, UI at `https://<domain>`, same behavior as 3; a Linear webhook and a GitHub webhook delivered with a 200 (ORC-221). With `concurrency: 1`, delegate two tickets: only one runner runs (`docker ps --filter label=factory.attempt`).
 
@@ -56,19 +56,19 @@ With `host` other than `127.0.0.1`, the daemon refuses to start without the GitH
 
 ## Points to check during the acceptance run
 1. Does Claude Code `stream-json` repeat `message.id` on the `assistant` lines of the same message (the turn cap counts distinct `id`s, ORC-136)? Observe: the number of turns displayed for a run matches the number of real assistant messages.
-2. Does the signature of webhooks relayed by smee match the raw body (HMAC check)? Observe: no event rejected for its signature in `~/.relais/relais.db`.
+2. Does the signature of webhooks relayed by smee (development) match the raw body (HMAC check)? Observe: no `relay: webhook rejected with 401` line in the daemon's log.
 3. Does Linear accept an OAuth callback URL on `http://localhost` (otherwise the cloudflared procedure already described)? Observe: the connection in step 2 succeeds, or Linear's error.
 4. The daemon announces `http://localhost:4100` but listens on `127.0.0.1`: if `localhost` resolves to `::1` first, the link does not answer. Observe: if the link does not answer, use `http://127.0.0.1:4100`.
-5. The knowledge base repository (`knowledge.repoPath`) must stay on its default branch: Relais does a `fetch` + `merge --ff-only` there before each run. Observe: no `merge --ff-only` failure and no `Knowledge base: …` line (no remote, another branch, a failed pull) in the daemon's logs.
-6. Does the installed Claude Code version apply wildcards at the start of a pattern? Observe: in a test worktree, a session launched with `--settings ~/.relais/run-settings.json`: same check for the leading wildcard of `Bash(*secrets.json*)`: `cat ~/.relais/secrets.json` must be refused.
-7. In `--permission-mode plan` (`trunk-readonly` runs), does Claude Code allow calling `mcp__factory__submit_result`, permitted by the pack's `allow`? Observe: a question (`@Relais …`) that calls `submit_result` has no permission refusal in its transcript. Otherwise, these runs answer with their last message only.
+5. The knowledge base repository (`knowledge.repoPath`) must stay on its default branch: the factory does a `fetch` + `merge --ff-only` there before each run. Observe: no `merge --ff-only` failure and no `Knowledge base: …` line (no remote, another branch, a failed pull) in the daemon's logs.
+6. Does the installed Claude Code version apply wildcards at the start of a pattern? Observe: in a test worktree, a session launched with `--settings ~/.factory/run-settings.json`: same check for the leading wildcard of `Bash(*secrets.json*)`: `cat ~/.factory/secrets.json` must be refused.
+7. In `--permission-mode plan` (`trunk-readonly` runs), does Claude Code allow calling `mcp__factory__submit_result`, permitted by the pack's `allow`? Observe: a question (`@Orchestrator …`) that calls `submit_result` has no permission refusal in its transcript. Otherwise, these runs answer with their last message only.
 8. Does `claude -p --effort <low|medium|high>` accept these values, also with `--resume` (ORC-136)? Observe: a `dev` run starts, and the `init` event reports no refused option. Tested only on a fake `claude`; `--effort` was only read in `claude --help` (2.1.318).
 9. Does a failed `Bash` call arrive in `stream-json` with `is_error: true`, `tool_use_id` and its output in `content` (ORC-136)? Observe: an agent made to rerun a failing command 3 times, without changing anything, ends up Bloqué on « Loop: ». Otherwise the loop detector sees nothing, and only turns and duration bound it.
 10. Does a real `dev` run call `mcp__factory__submit_result` from its sandbox (ORC-136)? Observe: the run ends in success. The pack requires it for `dev`: without that call, or if the factory's MCP is not reachable, every build ends up Bloqué on « The run dev failed. ».
 11. Do the `assistant` lines of `stream-json` carry the message's real `output_tokens`, or a provisional value (ORC-136)? Observe: on a real run, the sum per `message.id` compared with the `usage` of the `result` line. If it undercounts, the `budgets.per_step_tokens` cap triggers too late, and it must be calibrated on what is counted.
-12. With `acknowledge: reaction` in `factory.yml` (ORC-380), does Linear take `reactionCreate` with the emoji's name `eyes` and a client id on a comment, from the app? Observe: a mention `@Relais …` gets 👀 on its comment, no « Got it. » comment, and no `refused … a comment instead` line in the log. If Linear wants the character (`👀`) instead, change it in `reactOnce` (`src/runtime/effects.ts`): until then every ack falls back on the comment.
+12. With `acknowledge: reaction` in `factory.yml` (ORC-380), does Linear take `reactionCreate` with the emoji's name `eyes` and a client id on a comment, from the app? Observe: a mention `@Orchestrator …` gets 👀 on its comment, no « Got it. » comment, and no `refused … a comment instead` line in the log. If Linear wants the character (`👀`) instead, change it in `reactOnce` (`src/runtime/effects.ts`): until then every ack falls back on the comment.
 
 ## Security: known limits
-- At startup, Relais writes `<RELAIS_HOME>/run-settings.json` (the pack's settings + read refusals on `secrets.json`, `relais.db`, `transcripts/` and `logs/` of the real `RELAIS_HOME`) and passes it to each run via `--settings`. Check: the file exists and contains the real path (`/data/...` in Docker).
-- A run's environment contains neither `LINEAR_*` nor the daemon's `RELAIS_*` (of the factory's, only `RELAIS_API`, `RELAIS_RUN_TOKEN`, `RELAIS_TICKET` and the pack hook's settings, see [`configuration.md`](configuration.md#environment-variables)).
-- Residual risk: the pack allows `Bash(node:*)`, `Bash(npx:*)`, `Bash(npm:*)`. An agent (or an injection in a ticket) can therefore read `secrets.json` through a script (`node -e "…readFileSync(…)"`): Claude Code's deny lists are advisory, not a security boundary. The agent runs as the same user as the daemon. Do not deploy Relais on tickets coming from untrusted people as long as runs do not run under a separate user.
+- At startup, the factory writes `<FACTORY_HOME>/run-settings.json` (the pack's settings + read refusals on `secrets.json`, `factory.db`, `transcripts/` and `logs/` of the real `FACTORY_HOME`) and passes it to each run via `--settings`. Check: the file exists and contains the real path (`/data/...` in Docker).
+- A run's environment contains neither `LINEAR_*` nor the daemon's `FACTORY_*` (of the factory's, only `FACTORY_API`, `FACTORY_RUN_TOKEN`, `FACTORY_TICKET` and the pack hook's settings, see [`configuration.md`](configuration.md#environment-variables)).
+- Residual risk: the pack allows `Bash(node:*)`, `Bash(npx:*)`, `Bash(npm:*)`. On a run on the host (`FACTORY_ALLOW_HOST_RUNS=1`, development only), the agent runs as the same user as the daemon and can therefore read `secrets.json` through a script (`node -e "…readFileSync(…)"`), itself or through an injection in a ticket: Claude Code's deny lists are advisory, not a security boundary. Do not run tickets coming from untrusted people on the host. A sandboxed run holds no credential but its own run token (isolation no. 7, `test/isolation/isolation-07-secrets.test.ts`).

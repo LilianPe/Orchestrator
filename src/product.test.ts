@@ -10,9 +10,11 @@ const MARK = 'transition, à retirer';
 describe('product name', () => {
   it('leaves no trace of the old name in tracked files outside docs/ and README.md, except lines marked « transition, à retirer » (docs/transition.md, « Renaming »)', () => {
     const self = relative(root, import.meta.filename).split(sep).join('/'); // git ls-files lists with `/`
+    // The docs' guard (ORC-202) names the old name it forbids there, as this test does.
+    const guards = [self, 'src/docs-terms.test.ts'];
     const hits = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
       .split('\0')
-      .filter((f) => f && f !== self && !f.startsWith('docs/') && f !== 'README.md' && existsSync(join(root, f)))
+      .filter((f) => f && !guards.includes(f) && !f.startsWith('docs/') && f !== 'README.md' && existsSync(join(root, f)))
       .filter((f) => readFileSync(join(root, f), 'utf8').split('\n').some((l) => /relais/i.test(l) && !l.includes(MARK)));
     expect(hits).toEqual([]);
   });
