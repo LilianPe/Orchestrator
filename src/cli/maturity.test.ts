@@ -115,6 +115,37 @@ describe('the maturity report: what it must not mistake (ORC-410)', () => {
   it("Django's tests.py tests its area", () => {
     expect(valueOf(repoOf({ 'shop/models.py': '', 'shop/tests.py': '' }))['untested']).toBe('none: every source directory has a test file');
   });
+
+  it('a directory of tests is no area without tests, under src/ or at the root', () => {
+    expect(valueOf(repoOf({ 'src/a/x.ts': '', 'src/a/x.test.ts': '', 'src/__tests__/util.ts': '', 'src/test/helpers.ts': '' }))['untested']).toBe('none: every source directory has a test file');
+    expect(valueOf(repoOf({ 'lib/x.ts': '', 'lib/x.test.ts': '', '__tests__/util.ts': '', 'e2e/fixtures.ts': '', 'cypress/support.ts': '', 'spec/helper.py': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
+
+  it("files of code with no directory of code are the area: src/'s own, or the root's", () => {
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/util.ts': '' }))['untested']).toBe('src/ (its own files)');
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/index.test.ts': '' }))['untested']).toBe('none: every source directory has a test file');
+    expect(valueOf(repoOf({ 'pyproject.toml': '[project]\nname = "x"\n', 'app.py': '', 'models.py': '' }))['untested']).toBe('./ (its own files)');
+    expect(valueOf(repoOf({ 'app.py': '', 'test_app.py': '' }))['untested']).toBe('none: every source directory has a test file');
+  });
+
+  it('files of code with no directory of code are tested by any test file of the repository', () => {
+    const none = 'none: every source directory has a test file';
+    expect(valueOf(repoOf({ 'src/index.ts': '', '__tests__/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'spec/index.spec.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'tests/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/__tests__/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'src/test/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'test/index.test.ts': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'app.py': '', 'tests/test_app.py': '' }))['untested']).toBe(none);
+    expect(valueOf(repoOf({ 'src/index.ts': '', 'docs/index.md': '', 'scripts/build.sh': '' }))['untested']).toBe('src/ (its own files)');
+  });
+
+  it('a Postgres image under a registry, an owner or a variant name is a Postgres; an image named after it is not', () => {
+    const compose = (image: string) => repoOf({ 'compose.yaml': `services:\n  db:\n    image: ${image}\n` });
+    for (const image of ['pgvector/pgvector:pg16', 'postgis/postgis:16-3.4', 'docker.io/library/postgres:16', 'bitnami/postgresql:16', 'timescale/timescaledb:latest-pg16', '"postgres"', 'postgres@sha256:abc'])
+      expect(valueOf(compose(image))['services'], image).toBe('postgres (compose.yaml)');
+    for (const image of ['prometheuscommunity/postgres-exporter:v0.15', 'postgres-backup:1', 'redis:7']) expect(valueOf(compose(image))['services'], image).toBe('none');
+  });
 });
 
 describe('the main card from the last dry run (ORC-410, ORC-408)', () => {
