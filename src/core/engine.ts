@@ -2667,16 +2667,17 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
       out.trace.push(`${event.type}: recorded for the measures`);
       return out;
     case 'pr.checks_failed':
-    case 'pr.checks_passed':
+    case 'pr.checks_passed': {
       // A CI verdict of the ticket's open PR only (ORC-466, ORC-469): another PR's, a merged or closed one's, starts no fix,
       // counts no round and lifts no block; nor one of a head a push, the factory's or a human's, left behind since. A head the
       // ticket never heard of may be a newer one whose push is not decided yet: it is read, as a verdict with no head is.
-      if (!isOpenPr(ticket, event.payload.number)) {
-        out.trace.push(`${event.type}: PR #${event.payload.number} is not the open PR of the ticket, ignored`);
+      const { number, headSha } = event.payload;
+      if (!isOpenPr(ticket, number)) {
+        out.trace.push(`${event.type}: PR #${number} is not the open PR of the ticket, ignored`);
         return out;
       }
-      if (isLeftHead(ticket, event.payload.headSha)) {
-        out.trace.push(`${event.type}: head ${event.payload.headSha} of PR #${event.payload.number} was left behind by a push since, ignored`);
+      if (isLeftHead(ticket, headSha)) {
+        out.trace.push(`${event.type}: head ${headSha} of PR #${number} was left behind by a push since, ignored`);
         return out;
       }
       if (event.type === 'pr.checks_failed') break;
@@ -2692,6 +2693,7 @@ function decideEvent(state: TicketState | undefined, event: FactoryEvent, workfl
         out.events.push({ type: 'ticket.patched', patch: { waitingOn: waitStart(ticket.waitingOn) } });
       }
       break;
+    }
     case 'pr.opened': {
       // A new PR (another number) reopens a delivered ticket; the same PR seen again leaves it as it is,
       // unless it was closed: reopened, it is open again (ORC-134).

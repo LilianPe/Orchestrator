@@ -68,7 +68,7 @@ export function prStateEventId(t: TicketState, prNumber: number, fact: 'reopened
  * `pr.opened` first when the ticket does not know this PR yet, as `GithubReconciler` does; or, read open, when the ticket
  * recorded it closed: reopened, its webhook lost, the verdict after it counts (ORC-469).
  */
-function opened(t: TicketState, payload: PrPayload, open: boolean): Draft[] {
+export function opened(t: TicketState, payload: PrPayload, open: boolean): { id: string; type: 'pr.opened'; payload: PrPayload }[] {
   if (t.prNumber !== payload.number) return [{ id: prEventId(t.ticketId, payload.number, 'opened'), type: 'pr.opened', payload }];
   return open && t.prState === 'CLOSED' ? [{ id: prStateEventId(t, payload.number, 'reopened'), type: 'pr.opened', payload }] : [];
 }
@@ -83,7 +83,7 @@ function pullRequest(body: any, t: TicketState): Draft[] {
     // Same PR, open again: `pr.opened` takes it back from `CLOSED`; the id is per reopening.
     return [{ id: `${prEventId(t.ticketId, n, 'reopened')}:${pr.updated_at ?? body.action}`, type: 'pr.opened', payload }];
   }
-  const out = opened(t, payload, pr.state === 'open');
+  const out: Draft[] = opened(t, payload, pr.state === 'open');
   if (body.action === 'closed') {
     // Per closing, so that a PR reopened then closed again is cancelled again; `GithubReconciler`'s is per state of the ticket (ORC-469).
     // The merge commit and the head merged, what a revert on the default branch names, and when GitHub merged it (ORC-278).
