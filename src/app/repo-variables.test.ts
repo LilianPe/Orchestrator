@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TIMED_OUT, type Exec, type ExecOpts } from '../adapters/exec.js';
 import { parseRepoConfig, RepoConfigError } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES } from '../config/repo-variables.js';
-import { makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
+import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint, pyprojectStart } from './repo-variables.js';
 
 const YML = { repos: [{ linearTeam: 'REL', github: 'Org/App', env: { NODE_ENV: 'test' }, secrets: { REGISTRY_TOKEN: { source: 'env', path: 'ORG_REGISTRY_TOKEN' } } }] };
 const CONFIG = 'env: [NODE_ENV]\nsetup_secrets: [REGISTRY_TOKEN]\n';
@@ -395,5 +395,38 @@ describe('pyprojectStart (ORC-406)', () => {
   it('reads the whole file where it does not parse', () => {
     const broken = `${base}[project.scripts\nshop = "shop.cli:main"\n`;
     expect(pyprojectStart(broken)).toBe(broken);
+  });
+});
+
+describe('makeDryRunFiles (ORC-409)', () => {
+  it("reads the default branch's head, its lockfiles at the root and .factory/config.yml by their blobs, never the worktree", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'factory-dry-files-'));
+    try {
+      const { run, repo } = forgeAndClone(root, 'network: { level: none }\n');
+      writeFileSync(join(repo, 'uv.lock'), 'version = 1\n');
+      mkdirSync(join(repo, 'web'));
+      writeFileSync(join(repo, 'web', 'yarn.lock'), '# not at the root\n');
+      run(repo, 'add', '.');
+      run(repo, 'commit', '--quiet', '-m', 'locks');
+      run(repo, 'push', '--quiet', 'origin', 'main');
+      run(repo, 'fetch', '--quiet', 'origin');
+      const blob = (path: string) => run(repo, 'rev-parse', `origin/main:${path}`).trim();
+      // Not on the default branch: not read.
+      writeFileSync(join(repo, '.factory', 'config.yml'), 'env: [X]\n');
+      expect(await makeDryRunFiles()({ repoPath: repo })).toEqual({
+        sha: run(repo, 'rev-parse', 'origin/main').trim(),
+        lockfiles: { 'uv.lock': blob('uv.lock') },
+        config: blob('.factory/config.yml'),
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a default branch git cannot read rejects, without the server path in what reaches the ticket', async () => {
+    const logs: string[] = [];
+    const { exec } = git({ head: 'origin/main' });
+    await expect(makeDryRunFiles({ exec, log: (m) => logs.push(m) })({ repoPath: '/srv/secret/repo' })).rejects.toThrow(/^the dry run's fingerprint: unreadable default branch \(origin\/main\)$/);
+    expect(logs.join('\n')).toContain('/srv/secret/repo');
   });
 });

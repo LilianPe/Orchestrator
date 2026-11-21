@@ -6,6 +6,7 @@ import type { FactoryYml } from '../config/factory-yml.js';
 import { parseRepoConfig, REPO_CONFIG_DIR, REPO_CONFIG_PATH, RepoConfigError, type RepoConfig, type RepoConfigRead } from '../config/repo-config.js';
 import { NO_REPO_VARIABLES, repoVariables, type RepoVariables } from '../config/repo-variables.js';
 import { zFields } from '../core/clean-verify.js';
+import { fingerprintFiles, type FingerprintFiles } from '../core/dry-run.js';
 import { START_FILES } from '../knowledge/preview-recipe.js';
 import { canonical } from '../runtime/workflow-version.js';
 import { isTable, parseToml, type TomlTable, type TomlValue } from '../checks/toml.js';
@@ -84,6 +85,26 @@ export function makeStartFingerprint(o: { exec?: Exec; log?: (message: string) =
     );
     if (parts.includes(undefined)) return undefined;
     return createHash('sha256').update(parts.sort().join('\n')).digest('hex');
+  };
+}
+
+/**
+ * The default branch's head and the files of the dry run's fingerprint there (ORC-409), as `makeRepoConfig` reads the branch, with
+ * no fetch of its own: a delegated ticket's launch fetched it just before. A branch git cannot read rejects, as the config's read.
+ */
+export function makeDryRunFiles(o: { exec?: Exec; log?: (message: string) => void } = {}): (project: { repoPath: string }) => Promise<FingerprintFiles & { sha: string }> {
+  const exec = o.exec ?? execCmd;
+  return async ({ repoPath }) => {
+    const { ref, name } = await originHeadOf(exec, repoPath);
+    // A failure's message reaches the ticket (Linear): never the server's path nor the command, which go to the daemon's log.
+    const git = async (...args: string[]): Promise<string> => {
+      const r = await exec('git', ['-C', repoPath, ...args]);
+      if (r.code === 0) return r.stdout;
+      o.log?.(`dry run fingerprint: ${execFailure('git', ['-C', repoPath, ...args], r).message}`);
+      throw new Error(`the dry run's fingerprint: unreadable default branch (${name})`);
+    };
+    const [sha, files] = await Promise.all([git('rev-parse', '--verify', `${ref}^{commit}`), fingerprintFiles((...args) => git('ls-tree', ...args), ref)]);
+    return { sha: sha.trim(), ...files };
   };
 }
 

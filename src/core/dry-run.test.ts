@@ -8,7 +8,7 @@ import { FakeSandboxProvider } from '../adapters/sandbox/fake.js';
 import type { SandboxExecOptions, SandboxRequest } from '../adapters/sandbox/types.js';
 import type { CommandRun } from '../checks/flaky.js';
 import { VERIFY_TIMEOUT_MS } from './verify.js';
-import { breaksOfRuns, classifyBreak, dryRunFingerprint, runDryRun, unreachable, type DryRunRequest } from './dry-run.js';
+import { breaksOfRuns, classifyBreak, dryRunFingerprint, dryRunHolds, dryRunRefusal, runDryRun, unreachable, type DryRun, type DryRunRequest } from './dry-run.js';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -102,6 +102,7 @@ describe('runDryRun (ORC-408)', () => {
       setup: expect.stringMatching(/^[0-9a-f]{64}$/),
       image: 'ghcr.io/factory/runner@sha256:aaa',
       lockfiles: { 'package-lock.json': git(origin, 'rev-parse', `${head}:package-lock.json`) },
+      config: git(origin, 'rev-parse', `${head}:.factory/config.yml`),
       hash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     // The setup at N2 (`limited`: the registries the proxy allows), sealed; the commands at `none`.
@@ -222,14 +223,75 @@ describe('runDryRun (ORC-408)', () => {
 });
 
 describe('dryRunFingerprint', () => {
-  const base = { setup: ['npm ci'], image: 'img@sha256:1', lockfiles: { 'package-lock.json': 'b1' } };
-  it('changes with the setup, the image or a lockfile, and only with them', () => {
+  const base = { setup: ['npm ci'], image: 'img@sha256:1', lockfiles: { 'package-lock.json': 'b1' }, config: 'c1' as string | null };
+  it('changes with the setup, the image, a lockfile or .factory/config.yml, and only with them', () => {
     const fp = dryRunFingerprint(base);
     expect(dryRunFingerprint({ ...base })).toEqual(fp);
     expect(dryRunFingerprint({ ...base, setup: ['npm ci --legacy-peer-deps'] }).hash).not.toBe(fp.hash);
     expect(dryRunFingerprint({ ...base, image: 'img@sha256:2' }).hash).not.toBe(fp.hash);
     expect(dryRunFingerprint({ ...base, lockfiles: { 'package-lock.json': 'b2' } }).hash).not.toBe(fp.hash);
     expect(dryRunFingerprint({ ...base, lockfiles: { ...base.lockfiles, 'uv.lock': 'u1' } }).hash).not.toBe(fp.hash);
+    // ORC-409: a red dry run fixed in the config runs again.
+    expect(dryRunFingerprint({ ...base, config: 'c2' }).hash).not.toBe(fp.hash);
+    expect(dryRunFingerprint({ ...base, config: null }).hash).not.toBe(fp.hash);
+  });
+});
+
+describe('the fingerprint of a dry run (ORC-409)', () => {
+  it('reads every lockfile at the root as max_diff knows them, deno.lock and pylock.<name>.toml included, and the blob of .factory/config.yml', async () => {
+    const { req, head, origin } = forge({}, { 'deno.lock': '{}\n', 'pylock.dev.toml': 'lock-version = "1.0"\n', 'web/yarn.lock': '# not at the root\n' });
+    const run = await runDryRun(req);
+    const blob = (path: string) => git(origin, 'rev-parse', `${head}:${path}`);
+    expect(run.fingerprint.lockfiles).toEqual({ 'deno.lock': blob('deno.lock'), 'package-lock.json': blob('package-lock.json'), 'pylock.dev.toml': blob('pylock.dev.toml') });
+    expect(run.fingerprint.config).toBe(blob('.factory/config.yml'));
+  });
+
+  it('a .factory/config.yml refused still has its blob in the fingerprint: fixing it runs the dry run again', async () => {
+    const { req, head, origin } = forge({}, { '.factory/config.yml': 'setup: [\n' });
+    const run = await runDryRun(req);
+    expect(run.breaks).toMatchObject([{ step: 'config' }]);
+    expect(run.fingerprint.config).toBe(git(origin, 'rev-parse', `${head}:.factory/config.yml`));
+  });
+
+  it('without .factory/config.yml, its part is null', async () => {
+    const { req, origin } = forge();
+    git(origin, 'rm', '-q', '.factory/config.yml');
+    git(origin, 'commit', '-q', '-m', 'no config');
+    expect((await runDryRun(req)).fingerprint.config).toBeNull();
+  });
+});
+
+describe('dryRunHolds (ORC-409)', () => {
+  const fingerprint = dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null });
+  const other = dryRunFingerprint({ setup: [], image: 'img', lockfiles: { 'uv.lock': 'u' }, config: null });
+  const run = (ok: boolean, sha = 'a'.repeat(40)): DryRun => ({ id: 'd', projectId: 'p', sha, target: 'main', ok, fingerprint, breaks: [], commands: [], startedAt: 0, endedAt: 0 });
+  it('a green one holds on the same inputs, wherever the branch went; a red one on the same commit only', () => {
+    expect(dryRunHolds(run(true), { sha: 'b'.repeat(40), fingerprint })).toBe(true);
+    expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint })).toBe(true);
+    expect(dryRunHolds(run(false), { sha: 'b'.repeat(40), fingerprint })).toBe(false);
+  });
+  it('none holds once an input changed', () => {
+    expect(dryRunHolds(run(true), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
+    expect(dryRunHolds(run(false), { sha: 'a'.repeat(40), fingerprint: other })).toBe(false);
+  });
+});
+
+describe('dryRunRefusal (ORC-409)', () => {
+  it('says what breaks, each break with its step, command and cause, and how the dry run runs again', () => {
+    const run: DryRun = {
+      id: 'd', projectId: 'app', sha: 'c'.repeat(40), target: 'main', ok: false, fingerprint: dryRunFingerprint({ setup: [], image: 'img', lockfiles: {}, config: null }), commands: [], startedAt: 0, endedAt: 0,
+      breaks: [
+        { kind: 'variable', step: 'command', command: 'npm test', detail: 'a variable the repository does not declare under `env`: Missing environment variable: STRIPE_KEY', output: '' },
+        { kind: 'flaky', step: 'command', command: 'npm test', detail: 'a.test.ts > races failed, then passed on its rerun', output: '' },
+      ],
+    };
+    const r = dryRunRefusal(run);
+    expect(r.reason).toBe(`The dry run of the repository is red on its default branch (${'c'.repeat(12)}): variable in \`npm test\`, flaky in \`npm test\`. No ticket of the repository starts until it is green.`);
+    expect(r.tried).toEqual([
+      "The dry run's command, `npm test`: variable, a variable the repository does not declare under `env`: Missing environment variable: STRIPE_KEY",
+      "The dry run's command, `npm test`: flaky, a.test.ts > races failed, then passed on its rerun",
+    ]);
+    expect(r.question).toContain('`factory dry-run app`');
   });
 });
 
