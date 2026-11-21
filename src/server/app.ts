@@ -519,10 +519,17 @@ export function createApp(d: ServerDeps): Hono {
   // The maturity cards `factory init` stored (ORC-410), every project's, and the approval of one by an operator, of the value
   // it was shown at: a detection that changes the value drops it, and an approval of a value no longer stored is refused.
   const approvalLimit = bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'approval over 64 KB' }, 413) });
-  const configured = (projectId: string) => d.projects === undefined || d.projects().includes(projectId);
-  app.get('/api/maturity', async (c) => c.json({ cards: (await d.store.maturityCards()).filter((card) => configured(card.projectId)) }));
+  // config.yaml read once per request (ORC-454): every card of a response judged against one version of the file.
+  const configured = () => {
+    const ids = d.projects?.();
+    return (projectId: string) => ids === undefined || ids.includes(projectId);
+  };
+  app.get('/api/maturity', async (c) => {
+    const inConfig = configured();
+    return c.json({ cards: (await d.store.maturityCards()).filter((card) => inConfig(card.projectId)) });
+  });
   app.post('/api/maturity/:projectId/:key/approve', approvalLimit, async (c) => {
-    if (!configured(c.req.param('projectId'))) return c.json({ error: `no project ${c.req.param('projectId')} in the configuration` }, 404);
+    if (!configured()(c.req.param('projectId'))) return c.json({ error: `no project ${c.req.param('projectId')} in the configuration` }, 404);
     const parsed = approvalEntry.safeParse(await c.req.json().catch(() => undefined));
     if (!parsed.success) return c.json({ error: 'expected { value }: the value approved' }, 400);
     const { value } = parsed.data;
