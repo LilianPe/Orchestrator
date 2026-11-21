@@ -286,7 +286,7 @@ describe('PrPoller', () => {
       expect(s.events.filter((e) => e.type === 'push.human')).toEqual([]);
     });
 
-    it('writes the head read before the first publication once, and forgets it past the first publication', async () => {
+    it('writes the head read before the first publication once', async () => {
       const s = setup();
       const setMeta = vi.spyOn(s.store, 'setMeta');
       const writes = () => setMeta.mock.calls.filter(([key]) => key.startsWith('lost-push:')).map(([, value]) => value);
@@ -295,11 +295,6 @@ describe('PrPoller', () => {
       await s.poller.pollOnce('p');
       await s.poller.pollOnce('p');
       expect(writes()).toEqual([OTHER]);
-      await s.store.recordEvent(published(PUBLISHED, 1));
-      await s.store.recordEvent(published(VERIFIED, 2));
-      await s.poller.pollOnce('p');
-      await s.poller.pollOnce('p');
-      expect(writes()).toEqual([OTHER, '']);
     });
 
     it("holds back no CI verdict when the head's judgement fails", async () => {

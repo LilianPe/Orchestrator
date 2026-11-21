@@ -1,5 +1,5 @@
 import type { Clock } from "../../core/clock.js";
-import { pushedPublications } from "../../core/changelog.js";
+import { pushedHeads } from "../../core/changelog.js";
 import type { ProjectRuntime } from "../../runtime/daemon.js";
 import { TRUSTED, type FactoryEvent, type TicketState } from "../../core/types.js";
 import { isTakenOver } from "../../core/block-cause.js";
@@ -112,19 +112,19 @@ export class PrPoller {
     // A take-over's bundle is pushed before its `push.human`, under the human's name, is accepted (ORC-234): read once it ends.
     if (isTakenOver(t)) return;
     if (head === t.verifiedSha || head === t.humanHead) return;
-    // One head per commit: a commit published twice in a row is pushed once.
-    const heads = pushedPublications((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)))
-      .map((p) => p.sha)
-      .filter((sha, i, all) => sha !== all[i - 1]);
+    const heads = pushedHeads((await this.d.store.ticketJournal(t.projectId, t.ticketId)).map((j) => upcast(j.event)));
     const published = heads.at(-1);
     // With no publication, there is nothing to compare with: the head read then is kept, and the forge may still read the PR
     // on it just after the first publication.
-    const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
-    const unpublished = await this.d.store.getMeta(unpublishedKey);
-    if (!published) return unpublished === head ? undefined : this.d.store.setMeta(unpublishedKey, head);
-    if (heads.length === 1 && unpublished === head) return;
-    // Past the first publication, the head read before it is no longer looked at.
-    if (heads.length > 1 && unpublished) await this.d.store.setMeta(unpublishedKey, "");
+    if (heads.length <= 1) {
+      const unpublishedKey = `lost-push:${t.projectId}:${t.ticketId}`;
+      const unpublished = await this.d.store.getMeta(unpublishedKey);
+      if (!published) {
+        if (unpublished !== head) await this.d.store.setMeta(unpublishedKey, head);
+        return;
+      }
+      if (unpublished === head) return;
+    }
     // The last commit it pushed, and the one before, which the forge may still read just after a push. A branch put back on
     // an older one is a human's push, as the webhook reports it.
     if (heads.slice(-2).includes(head)) return;
