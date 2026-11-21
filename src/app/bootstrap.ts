@@ -468,6 +468,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       heldRows: (ticketId) => daemon.heldRows(ticketId),
       // `factory dry-run`: a new one, after any under way, which reads what changed meanwhile (a known flaky test, a variable).
       dryRun: (projectId) => daemon.dryRun(projectId, { fresh: true }),
+      projects: projects.map((p) => p.id),
       secrets: () => transcriptSecrets(env, daemonSecrets()),
       oauth: linearSettings(o.home, yml)
         ? {
