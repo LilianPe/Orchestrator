@@ -51,6 +51,9 @@ describe('instance config', () => {
     expect(currentProjectIds(home, ['x'])).toEqual(['b']);
     writeFileSync(homePaths(home).factoryYml, 'port: [\n');
     expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    writeFileSync(homePaths(home).factoryYml, '');
+    expect(currentProjectIds(home, ['x'])).toEqual(['x']);
+    expect(currentProjectIds(mkdtempSync(join(tmpdir(), 'factory-home-')), ['x'])).toEqual(['x']);
   });
 
   it('never reads config.yaml: its keys are not the instance (ORC-199)', () => {
