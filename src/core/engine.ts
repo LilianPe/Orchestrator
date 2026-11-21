@@ -183,7 +183,7 @@ function intakeEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState
     // Complete, but « blocked by » a ticket not done (ORC-363): what it would start waits for it.
     const { run: next, post } = nextOf(at.workflow, job);
     if (!next || !p.blockedBy?.length) return success(out, at, job, p.runId);
-    // Its assessment is posted now. The status of what it starts (the spec's, when factory.yml names one, ORC-382) waits for its start.
+    // Its assessment is posted now. The status of what it starts (the spec's, unless factory.yml turns it off, ORC-382, ORC-457) waits for its start.
     if (post && post !== 'review') out.effects.push({ kind: 'post_output', style: post, runId: p.runId, ...(p.output ? { output: p.output } : {}) });
     return waitFor(out, p.blockedBy, pendingOf({ job: next.name, input: next.input }));
   }

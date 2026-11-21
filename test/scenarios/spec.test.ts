@@ -41,7 +41,7 @@ describe('the spec and its human gate (ORC-212)', () => {
     expect(skills(h)).toEqual(['/factory:intake', '/factory:spec']);
     expect(h.runner.requests[1]!.effort).toBe('high');
     expect(said(h)).toContainEqual(expect.stringMatching(/^Spec published \(risk: low\)\. 1 acceptance criterion → tests\./));
-    expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'todo', spec: { version: 1 } });
+    expect(await h.ticket()).toMatchObject({ blocked: false, logical: 'spec', spec: { version: 1 } });
 
     // Criterion 2: the run's initiator is refused, even though a team member; nothing starts.
     await command(h, '/approve', REQUESTER);
@@ -136,10 +136,24 @@ describe('the spec in a comment of the ticket (ORC-382)', () => {
     expect(said(h)).toContainEqual(expect.stringContaining('Read it in its document: https://linear.test/document/REL-1-1'));
   });
 
-  it('criterion 1: with a Spec status in the table, the ticket shows it while its spec is drafted and reviewed, then In Progress', async () => {
-    const h = await delegatedOn(chainHarness({ statuses: { spec_draft: 'Spec' } }), SPEC);
+  it('ORC-457 criterion 1: with no setting, the ticket shows Spec while its spec is drafted and reviewed, then In Progress once approved', async () => {
+    const h = await delegated(SPEC);
     expect(h.tracker.issues.get('REL-1')!.stateName).toBe('Spec');
     expect(await h.ticket()).toMatchObject({ logical: 'spec', spec: { version: 1 } });
+    h.checks.failNext(RED_ASSERTION);
+    h.runner.enqueue({}, { hold: true });
+    await command(h, '/approve', VALIDATOR);
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec', '/factory:tests', '/factory:dev']);
+    expect(h.tracker.issues.get('REL-1')!.stateName).toBe('In Progress');
+    h.runner.release(h.runner.requests[3]!.runId);
+    await h.orch.drained();
+  });
+
+  it('ORC-457 criterion 2: `statuses: { spec_draft: off }` keeps the ticket in Todo through its spec, which still waits for /approve', async () => {
+    const h = await delegatedOn(chainHarness({ statuses: { spec_draft: 'off' } }), SPEC);
+    expect(h.tracker.issues.get('REL-1')!.stateName).toBe('Todo');
+    expect(await h.ticket()).toMatchObject({ logical: 'todo', spec: { version: 1 } });
+    expect(skills(h)).toEqual(['/factory:intake', '/factory:spec']);
     h.checks.failNext(RED_ASSERTION);
     h.runner.enqueue({}, { hold: true });
     await command(h, '/approve', VALIDATOR);

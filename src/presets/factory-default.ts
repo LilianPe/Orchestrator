@@ -34,8 +34,8 @@ export const factoryDefault: Preset = {
   // The approvers of each diff class (ORC-198): a human's Done for every one; the verification configuration also waits,
   // before publication, for a designated maintainer's `/refreeze`.
   approvers: { normal: ['done_merge'], sensitive: ['done_merge'], 'verification-config': ['refreeze', 'done_merge'] },
-  // ORC-170's statuses (ORC-382). `intake` shows Todo, the delegation's own; the spec shows a status only when `factory.yml`
-  // names one (`statuses.spec_draft`): otherwise the ticket stays in Todo until `build`, as ORC-212 left it.
+  // ORC-170's statuses (ORC-382). `intake` shows Todo, the delegation's own; the spec shows Spec (ORC-457), unless `factory.yml`
+  // turns it off (`statuses.spec_draft: off`): then the ticket stays in Todo until `build`, as ORC-212 left it.
   statuses: { intake: 'todo', spec_draft: 'spec', build: 'dev', review: 'ai_review', human_review: 'human_review' },
   // The build's summary, a fix's reply, the review (published by its last lens).
   posts: { build: 'summary', fix: 'reply', review: 'review' },

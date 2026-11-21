@@ -793,8 +793,8 @@ jobs:
     };
 
     it('criterion 4: warns of a status the team does not have, before it needs the GitHub App', async () => {
-      expect(await cli(homeWith('statuses:\n  spec_draft: Spec\n'))).toEqual([
-        'Warning: app: the Linear team APP has no status « Spec », which the factory moves tickets to (ORC-170\'s, or as `statuses` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has.',
+      expect(await cli(homeWith('statuses:\n  spec_draft: Drafting\n'), [...ORC_170, 'Spec'])).toEqual([
+        'Warning: app: the Linear team APP has no status « Drafting », which the factory moves tickets to (ORC-170\'s, or as `statuses` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has. A ticket in its spec stays in Todo with `statuses: { spec_draft: off }` in factory.yml.',
       ]);
     });
 
@@ -805,8 +805,15 @@ jobs:
       expect(lines).toContainEqual(expect.stringMatching(/« Todo » would name both todo and dev/));
     });
 
+    it('ORC-457 criterion 3: warns of a team without « Spec » with no setting, and not once `spec_draft: off` turns it off', async () => {
+      expect(await cli(homeWith())).toEqual([
+        'Warning: app: the Linear team APP has no status « Spec », which the factory moves tickets to (ORC-170\'s, or as `statuses` in factory.yml names them): a move to it fails. Connect Linear again to create it, or name a status the team has. A ticket in its spec stays in Todo with `statuses: { spec_draft: off }` in factory.yml.',
+      ]);
+      expect(await cli(homeWith('statuses:\n  spec_draft: off\n'))).toEqual([]);
+    });
+
     it('says nothing when the team has every status, and that it could not read them otherwise', async () => {
-      expect(await cli(homeWith())).toEqual([]);
+      expect(await cli(homeWith(), [...ORC_170, 'Spec'])).toEqual([]);
       expect(await cli(homeWith('statuses:\n  spec_draft: Spec\n'), [...ORC_170, 'Spec'])).toEqual([]);
       expect(await cli(homeWith(), new Error('Linear answered 401'))).toEqual(['Linear statuses of app not checked: Linear answered 401']);
     });
