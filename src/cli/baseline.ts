@@ -97,7 +97,7 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     console.log(`${err.message}\n(baseline reads the Linear and GitHub credentials from factory.yml: run it with the daemon's environment.)`);
     return 1;
   }
-  const instance = effectiveInstance(home, yml);
+  const instance = effectiveInstance(yml);
   const project = instance.projects.find((p) => p.id === positionals[0]);
   if (!project) {
     console.log(`No project ${positionals[0]}: one of ${instance.projects.map((p) => p.id).join(', ') || '(none)'}.`);
@@ -109,7 +109,7 @@ export async function runBaselineCommand(home: string, args: readonly string[]):
     return 1;
   }
   // The forge the daemon uses: the GitHub App, without which nothing is read on GitHub (ORC-181).
-  const forge = cliGithubForge(home, yml, 'baseline');
+  const forge = cliGithubForge(yml, 'baseline');
   if (typeof forge === 'string') {
     console.log(forge);
     return 1;

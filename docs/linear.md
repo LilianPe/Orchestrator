@@ -9,8 +9,8 @@ The factory acts in Linear as an **agent**: an OAuth application installed with 
 | Field | Value |
 |---|---|
 | Name | `Orchestrator`: this is the name that will be mentioned with `@`. |
-| Callback URL | `http://localhost:4100/oauth/callback`, or `<publicUrl>/oauth/callback` if `publicUrl` is set. The port follows `port` in `config.yaml`. |
-| Webhooks | Checked. URL: `<publicUrl>/webhooks/linear` on the server; on a workstation, the smee channel created by `factory init --dev` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
+| Callback URL | `http://localhost:4100/oauth/callback`, or `<public_url>/oauth/callback` if `public_url` is set. The port follows `port` in `factory.yml`. |
+| Webhooks | Checked. URL: `<public_url>/webhooks/linear` on the server; on a workstation, the smee channel created by `factory init --dev` (`https://smee.io/…`). See [Webhooks](#3-webhooks-production-and-development). |
 | Webhook categories | **Agent session events**, **Issues**, **Comments**. |
 
 Create the application, then copy into `factory init`:
@@ -21,7 +21,7 @@ Create the application, then copy into `factory init`:
 
 They are saved in `<FACTORY_HOME>/secrets.json` (mode `0600`, see [`configuration.md`](configuration.md#secretsjson)).
 
-Linear may refuse a callback URL on `http://localhost`: in that case, temporarily expose the factory through a tunnel (`cloudflared tunnel --url http://localhost:4100`), put the tunnel URL in `publicUrl` in `config.yaml`, update the application's Callback URL and restart `factory up` for the duration of the connection. This point is to be checked during the acceptance run ([`acceptance.md`](acceptance.md)).
+Linear may refuse a callback URL on `http://localhost`: in that case, temporarily expose the factory through a tunnel (`cloudflared tunnel --url http://localhost:4100`), put the tunnel URL in `public_url` in `factory.yml`, update the application's Callback URL and restart `factory up` for the duration of the connection. This point is to be checked during the acceptance run ([`acceptance.md`](acceptance.md)).
 
 ## 2. Connect Linear (install the agent)
 
@@ -40,12 +40,12 @@ The token is refreshed automatically. On later startups, the factory reconnects 
 
 ## 3. Webhooks: production and development
 
-Linear must be able to reach the factory. Set in `config.yaml`:
+Linear must be able to reach the factory. Set in `factory.yml`:
 
-- **Production, on the server**: `publicUrl: https://factory.exemple.fr` and `relay: { kind: none }`. Linear calls `POST <publicUrl>/webhooks/linear` directly, in HTTPS, through the server's reverse proxy: the host's own (nginx, Caddy…), or the optional `caddy` service of `compose.yaml` (`--profile tls`). `factoryd` listens in plain HTTP behind it. Setup and examples: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221).
+- **Production, on the server**: `public_url: https://factory.exemple.fr` and `relay: { kind: none }`. Linear calls `POST <public_url>/webhooks/linear` directly, in HTTPS, through the server's reverse proxy: the host's own (nginx, Caddy…), or the optional `caddy` service of `compose.yaml` (`--profile tls`). `factoryd` listens in plain HTTP behind it. Setup and examples: [`deployment.md`](deployment.md#tls-and-webhooks) (ORC-221).
 - **Development, on a workstation only** (never the server):
-  - **smee relay** (`factory init --dev`, ORC-411: without `--dev`, `init` creates no channel): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `factory up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `factory init --dev`, which writes `dev: true` beside it: the development mode, without which `factory up` warns of the relay, and refuses it with `dev: false` or with `dev: true` beside a `publicUrl` (ORC-444, ORC-446), as `factory doctor` does;
-  - **a tunnel** (ngrok, `cloudflared tunnel`): `publicUrl: <the tunnel's HTTPS URL>` and `relay: { kind: none }`, as on the server; the tunnel stands in for the reverse proxy, towards `http://localhost:4100`. Its URL changes with each tunnel unless it is reserved: update the application's webhook and callback URLs then.
+  - **smee relay** (`factory init --dev`, ORC-411: without `--dev`, `init` creates no channel): `relay: { kind: smee, url: https://smee.io/… }`. Linear sends the webhooks to the public smee.io channel; `factory up` subscribes to it (SSE stream) and replays them locally. Nothing to open on the machine. The channel is created by `factory init --dev`, which writes `dev: true` beside it: the development mode, without which `factory up` warns of the relay, and refuses it with `dev: false` or with `dev: true` beside a `public_url` (ORC-444, ORC-446), as `factory doctor` does;
+  - **a tunnel** (ngrok, `cloudflared tunnel`): `public_url: <the tunnel's HTTPS URL>` and `relay: { kind: none }`, as on the server; the tunnel stands in for the reverse proxy, towards `http://localhost:4100`. Its URL changes with each tunnel unless it is reserved: update the application's webhook and callback URLs then.
 
 Every webhook is verified, whatever the mode:
 
@@ -60,7 +60,7 @@ Every webhook is verified, whatever the mode:
 
 A smee channel is public: anyone who knows the URL can read the events on it (ticket contents) and write to it. The signature prevents injecting fake events, not reading. It is a development option: in production, the server's public URL.
 
-**Limit of the smee relay (development only): it does not forward the original bytes.** smee.io decodes the JSON received from Linear and only relays the decoded object; the factory re-encodes it (`JSON.stringify`) before verifying the signature. The result is identical to the signed bytes as long as Linear sends compact JSON produced by `JSON.stringify`, which is the case today (validated during the 11/10 acceptance run): accents, emojis, `\n`, quotes and ordinary numbers go through. It differs, and the webhook is refused with 401, if the body contains spaces or indentation, optional escapes (`\/`, `\u00e9`), numbers written differently from how `JSON.stringify` would write them (for example `1.0`, `1e3`, `-0`, `0.30000000000000001` instead of `0.3`, `9007199254740993`, `1000000000000000000000` instead of `1e+21`), duplicate keys or numeric keys out of `JSON.stringify` order. In that case, the log shows `relay: webhook rejected with 401 (…)` with the three possible causes (wrong secret, clock offset, non-reproducible body); if the secret and the clock are correct, switch to `publicUrl`.
+**Limit of the smee relay (development only): it does not forward the original bytes.** smee.io decodes the JSON received from Linear and only relays the decoded object; the factory re-encodes it (`JSON.stringify`) before verifying the signature. The result is identical to the signed bytes as long as Linear sends compact JSON produced by `JSON.stringify`, which is the case today (validated during the 11/10 acceptance run): accents, emojis, `\n`, quotes and ordinary numbers go through. It differs, and the webhook is refused with 401, if the body contains spaces or indentation, optional escapes (`\/`, `\u00e9`), numbers written differently from how `JSON.stringify` would write them (for example `1.0`, `1e3`, `-0`, `0.30000000000000001` instead of `0.3`, `9007199254740993`, `1000000000000000000000` instead of `1e+21`), duplicate keys or numeric keys out of `JSON.stringify` order. In that case, the log shows `relay: webhook rejected with 401 (…)` with the three possible causes (wrong secret, clock offset, non-reproducible body); if the secret and the clock are correct, switch to `public_url`.
 
 **Reconciliation** rereads every 5 minutes the delegated tickets of each team (all of them, page after page, excluding completed or canceled statuses; ORC-347), then, one by one, those the factory still tracks that drop out of that list. It catches up on:
 
@@ -170,7 +170,7 @@ A message (reply in a session, mention, command) goes through ingestion, then th
 
 **A single active run per ticket.** A new delegation on a ticket that has a run or a verification in progress launches nothing, queues nothing, keeps the initiator and replies in its session; after a restart, this holds for the resumed run as well as the relaunched one. Two delegations of a queued ticket give a single queue row, but `decide` does not see the queue: the second is acknowledged too, and its author becomes the initiator.
 
-**Team without a repository.** A delegation on a Linear team that no project in `config.yaml` takes goes to Blocked (`Bloqué` label, reason in the blocking comment), whoever its author: without a repository, there is no role to check. The ticket waits under the **first** project in the configuration, and no work starts. To fix it: add a project for that team and restart, the next reconciliation pass lifts the block and the label, then delegate again. A delegation that arrives before that pass already goes to the new repository, and removes the label. Everything else on that team (mention, reply, ticket change) stays ignored, as before. Attachment by Linear *project* does not exist yet: routing is done by team, and `repos` in `factory.yml` is not read for routing yet (ORC-204).
+**Team without a repository.** A delegation on a Linear team that no project in `factory.yml` takes goes to Blocked (`Bloqué` label, reason in the blocking comment), whoever its author: without a repository, there is no role to check. The ticket waits under the **first** project in the configuration, and no work starts. To fix it: add a project for that team and restart, the next reconciliation pass lifts the block and the label, then delegate again. A delegation that arrives before that pass already goes to the new repository, and removes the label. Everything else on that team (mention, reply, ticket change) stays ignored, as before. Attachment by Linear *project* does not exist yet: routing is done by team, and `repos` in `factory.yml` is not read for routing yet (ORC-204).
 
 ### Authorizations: who can do what
 
@@ -194,8 +194,8 @@ A refusal launches nothing, does not keep the refused reply for the next run and
 **Where roles come from.** Before deciding a human event that the matrix can check, the daemon resolves its actor's roles and **journals them with the event**: a replay of the journal decides on the same roles, and `decide` stays pure: replaying the journal (`npm run test:replay`, ORC-174) makes the same decision, refusals included, and the refusal trace is kept in `decision_trace`. An event that the matrix does not check (a label, a status change no reaction starts a run on, untracked ticket) waits for neither Linear nor GitHub.
 
 - *Team member*: active members of the project's Linear team (`teams { members }`).
-- *Write access* and *merge rights*: the user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), read by the GitHub App (a login GitHub does not know has no rights; any other error makes the event wait; without the App, every read fails, ORC-181); `write`, `maintain` and `admin` grant both (GitHub allows merging with write access, branch protections aside). Linear provides no GitHub login that the factory can read: each Linear user whose GitHub rights matter is linked to their login in `config.yaml` (`projects[].authz.githubLogins`). Without a login, no GitHub rights: that user cannot trigger.
-- *Maintainer* and *approver*: lists of Linear ids in `config.yaml` (`projects[].authz.maintainers`, `validators`), until `.factory/config.yml` (ORC-209). See [configuration](configuration.md#authorization).
+- *Write access* and *merge rights*: the user's permission on the repository (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`), read by the GitHub App (a login GitHub does not know has no rights; any other error makes the event wait; without the App, every read fails, ORC-181); `write`, `maintain` and `admin` grant both (GitHub allows merging with write access, branch protections aside). Linear provides no GitHub login that the factory can read: each Linear user whose GitHub rights matter is linked to their login in `factory.yml` (`projects[].authz.github_logins`). Without a login, no GitHub rights: that user cannot trigger.
+- *Maintainer* and *approver*: lists of Linear ids in `factory.yml` (`projects[].authz.maintainers`, `validators`), until `.factory/config.yml` (ORC-209). See [configuration](configuration.md#authorization).
 - *Requester*, *initiator*: the signed author of the ticket's last authorized delegation.
 - *Operator*: whoever passed the dashboard's guard (its GitHub sign-in, as `github:<login>`, or the loopback, as `dashboard:local`, ORC-399), given by the server with the event, never resolved from Linear or GitHub (see [interface and security](interface-and-security.md)).
 
@@ -226,7 +226,7 @@ As long as a ticket is **blocked** (the factory is waiting for a reply), the `Bl
 
 ## 6. Teams and projects
 
-A project = one repository + **one** Linear team (`linearTeamKey` in `config.yaml`). A single instance can track several teams (one project each); see [`projects-and-workspaces.md`](projects-and-workspaces.md). Webhooks from an unconfigured team are ignored.
+A project = one repository + **one** Linear team (`linear_team_key` in `factory.yml`). A single instance can track several teams (one project each); see [`projects-and-workspaces.md`](projects-and-workspaces.md). Webhooks from an unconfigured team are ignored.
 
 ## Troubleshooting
 

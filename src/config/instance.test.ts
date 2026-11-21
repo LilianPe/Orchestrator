@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -12,6 +12,7 @@ import {
   loadInstance,
   loadSecrets,
   factoryHome,
+  oldInstanceFileWarnings,
   relayWarnings,
   saveInstance,
   saveLinearTokens,
@@ -27,32 +28,40 @@ describe('instance config', () => {
     expect(factoryHome({ HOME: '/home/u' } as NodeJS.ProcessEnv)).toBe(join('/home/u', '.factory'));
   });
 
-  it('returns defaults, then round-trips', () => {
+  it('returns defaults without factory.yml, then round-trips its instance keys (ORC-199)', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    expect(loadInstance(home)).toEqual({ port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [], limits: {} });
+    expect(loadInstance(home)).toEqual({ port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
     const cfg = {
-      port: 4100, host: '127.0.0.1', relay: { kind: 'smee' as const, url: 'https://smee.io/abc' },
-      projects: [{ id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL' }], limits: {},
+      port: 4100, host: '127.0.0.1', relay: { kind: 'smee' as const, url: 'https://smee.io/abc' }, dev: true,
+      projects: [{ id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL', effects: 'none' as const }],
       knowledge: { repoPath: join(home, 'knowledge') },
     };
     saveInstance(home, cfg);
     expect(loadInstance(home)).toEqual(cfg);
+    expect(readFileSync(homePaths(home).factoryYml, 'utf8')).toContain('repo_path: /code/perso\n    linear_team_key: REL');
   });
 
-  it('loads a config.yaml that still has the daily budget in dollars, without it: no queue waits on dollars (ORC-216)', () => {
+  it('never reads config.yaml: its keys are not the instance (ORC-199)', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    writeFileSync(join(home, 'config.yaml'), 'limits:\n  perDayUsd: 20\n');
-    expect(loadInstance(home).limits).toEqual({});
+    writeFileSync(join(home, 'config.yaml'), 'port: 4555\nprojects: [{ id: old, repoPath: /old, linearTeamKey: OLD }]\n');
+    expect(loadInstance(home)).toEqual({ port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+  });
+
+  it('writes its instance keys into factory.yml, leaving the rest of the file and its comments as they are (ORC-199)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
+    writeFileSync(join(home, 'factory.yml'), '# the budgets\nbudgets: { per_ticket_tokens: 1000 } # per ticket\nconcurrency: 2\n');
+    saveInstance(home, { port: 4101, host: '127.0.0.1', relay: { kind: 'none' }, projects: [] });
+    const text = readFileSync(homePaths(home).factoryYml, 'utf8');
+    expect(text).toContain('# the budgets\nbudgets: { per_ticket_tokens: 1000 } # per ticket\nconcurrency: 2\n');
+    expect(loadFactoryYml(home, {})).toMatchObject({ port: 4101, concurrency: 2, budgets: { perTicketTokens: 1000 } });
   });
 
   it("reads a project's authorization designations and its Linear → GitHub logins (ORC-186), with defaults for what is left out", () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    const project = { id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL', authz: { validators: ['user-v'], githubLogins: { 'user-v': 'v-gh' } } };
-    saveInstance(home, { port: 4100, host: '127.0.0.1', relay: { kind: 'none' }, projects: [project as never], limits: {} });
+    writeFileSync(join(home, 'factory.yml'), 'projects:\n  - { id: perso, repo_path: /code/perso, linear_team_key: REL, authz: { validators: [user-v], github_logins: { user-v: v-gh } } }\n');
     expect(loadInstance(home).projects[0]!.authz).toEqual({ maintainers: [], validators: ['user-v'], githubLogins: { 'user-v': 'v-gh' } });
-    expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [{ ...project, authz: { maintainers: [''] } } as never], limits: {} })).toThrow(
-      /projects\.0\.authz\.maintainers\.0/,
-    );
+    const project = { id: 'perso', repoPath: '/code/perso', linearTeamKey: 'REL', authz: { maintainers: [''], validators: [], githubLogins: {} } };
+    expect(() => saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [project] })).toThrow(/projects\[0\]\.authz\.maintainers\[0\]/);
   });
 
   // Windows has no POSIX mode bits: Node reports 0o666 whatever chmod asked. The file takes its folder's ACL there,
@@ -71,10 +80,29 @@ describe('instance config', () => {
     expect(secretValues({ linear })).toEqual(['s', 'w', 'a', 'r']);
   });
 
-  it('rejects an invalid config with the key path', () => {
+  it('rejects an invalid instance key with its path, and an unknown one', () => {
+    expect(() => parseFactoryYml('port: -1\n')).toThrow(/port: a positive integer is expected/);
+    expect(() => parseFactoryYml('projects: [{ id: a, repoPath: /a, linear_team_key: A }]\n')).toThrow(/projects\[0\]\.repo_path: .*\n- projects\[0\]: .*repoPath/s);
+    expect(() => parseFactoryYml('relay: { kind: smee }\n')).toThrow(/relay\.url/);
+    expect(() => parseFactoryYml('limits: {}\n')).toThrow(/limits: unknown key/);
+  });
+});
+
+describe('the files of the instance before factory.yml (ORC-199)', () => {
+  it('names each one left in the home, never reading it, and does not create logs/', () => {
     const home = mkdtempSync(join(tmpdir(), 'factory-home-'));
-    saveInstance(home, { port: 4100, host: 'h', relay: { kind: 'none' }, projects: [], limits: {} });
-    expect(() => saveInstance(home, { port: -1 } as never)).toThrow(/port/);
+    saveSecrets(home, {});
+    saveInstance(home, loadInstance(home));
+    expect(existsSync(join(home, 'logs'))).toBe(false);
+    expect(oldInstanceFileWarnings(home)).toEqual([]);
+    writeFileSync(join(home, 'config.yaml'), 'github: { appId: 1, privateKey: /k.pem }\n');
+    writeFileSync(join(home, 'run-settings.json'), '{}');
+    mkdirSync(join(home, 'logs'));
+    expect(oldInstanceFileWarnings(home)).toEqual([
+      expect.stringMatching(/^config\.yaml: left from before factory\.yml, not read \(ORC-199\).*then delete it; it may hold the GitHub App's key in clear$/),
+      'run-settings.json: left from before ORC-199, not read: delete it',
+      'logs: left from before ORC-199, not read: delete it',
+    ]);
   });
 });
 
@@ -92,22 +120,22 @@ describe('the Smee relay outside the development mode', () => {
     expect(relayWarnings({ relay: smee })).toEqual([expect.stringMatching(/^Warning: relay: \{ kind: smee \}.*dev: true.*factory init --dev/)]);
   });
 
-  it('refuses dev: false, naming publicUrl and factory init --dev', () => {
-    expect(() => relayWarnings({ relay: smee, dev: false })).toThrow(/relay: \{ kind: smee \}.*dev: false.*publicUrl.*factory init --dev/);
+  it('refuses dev: false, naming public_url and factory init --dev', () => {
+    expect(() => relayWarnings({ relay: smee, dev: false })).toThrow(/relay: \{ kind: smee \}.*dev: false.*public_url.*factory init --dev/);
   });
 
   it('names relay: { kind: none } alone to a config that has a publicUrl, where factory init --dev writes nothing', () => {
     const server = { relay: smee, publicUrl: 'https://f.example.com' };
-    expect(relayWarnings(server)).toEqual([expect.stringMatching(/publicUrl: https:\/\/f\.example\.com brings Linear's webhooks already, set relay: \{ kind: none \}\.$/)]);
+    expect(relayWarnings(server)).toEqual([expect.stringMatching(/public_url: https:\/\/f\.example\.com brings Linear's webhooks already, set relay: \{ kind: none \}\.$/)]);
     expect(() => relayWarnings({ ...server, dev: false })).toThrow(/dev: false.*set relay: \{ kind: none \}\.$/);
   });
 
   it('refuses a publicUrl beside the relay in the development mode, naming relay: { kind: none }', () => {
-    expect(() => relayWarnings({ relay: smee, dev: true, publicUrl: 'https://f.example.com' })).toThrow(/publicUrl: https:\/\/f\.example\.com.*relay: \{ kind: none \}/);
+    expect(() => relayWarnings({ relay: smee, dev: true, publicUrl: 'https://f.example.com' })).toThrow(/public_url: https:\/\/f\.example\.com.*relay: \{ kind: none \}/);
   });
 });
 
-describe('factory.yml over the instance files (ORC-209, part B)', () => {
+describe('factory.yml and secrets.json (ORC-209, part B)', () => {
   const env = { LINEAR_CLIENT_ID: 'yml-client', LINEAR_CLIENT_SECRET: 'yml-secret', LINEAR_WEBHOOK_SECRET: 'yml-webhook-secret-1', GH_APP_KEY: '-----BEGIN RSA PRIVATE KEY-----\nk\n-----END RSA PRIVATE KEY-----' };
   function home(yml?: string): string {
     const h = mkdtempSync(join(tmpdir(), 'factory-yml-'));
@@ -115,18 +143,12 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
     return h;
   }
 
-  it('takes the GitHub App from factory.yml, and never writes it to config.yaml', () => {
+  it('takes the GitHub App from factory.yml, and never writes it back with the instance keys', () => {
     const h = home('github: { app_id: 42, private_key: env:GH_APP_KEY }\n');
-    saveInstance(h, loadInstance(h));
-    expect(effectiveInstance(h, loadFactoryYml(h, env)).github).toMatchObject({ appId: '42', privateKey: env.GH_APP_KEY });
+    saveInstance(h, effectiveInstance(loadFactoryYml(h, env)));
+    expect(effectiveInstance(loadFactoryYml(h, env)).github).toMatchObject({ appId: '42', privateKey: env.GH_APP_KEY });
     expect(loadInstance(h).github).toBeUndefined();
-    expect(readFileSync(homePaths(h).config, 'utf8')).not.toContain('PRIVATE KEY');
-  });
-
-  it('keeps the GitHub fields of config.yaml that factory.yml leaves out', () => {
-    const h = home('github: { app_id: 42, private_key: env:GH_APP_KEY }\n');
-    saveInstance(h, { ...loadInstance(h), github: { appId: '1', privateKey: '/k.pem', installationId: '77', webhookSecret: 'gh-webhook-secret-xyz' } });
-    expect(effectiveInstance(h, loadFactoryYml(h, env)).github).toEqual({ appId: '42', privateKey: env.GH_APP_KEY, installationId: '77', webhookSecret: 'gh-webhook-secret-xyz' });
+    expect(readFileSync(homePaths(h).factoryYml, 'utf8')).not.toContain('PRIVATE KEY');
   });
 
   it('takes the static Linear values from factory.yml, the OAuth tokens from secrets.json', () => {

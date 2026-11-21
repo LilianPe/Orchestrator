@@ -75,8 +75,8 @@ describe('factory.yml (ORC-209, part B)', () => {
   });
 
   it('refuses an unknown key with its path', () => {
-    expect(violations('relay: { kind: smee }\nclaude: { runtime: claude-code, accounts: [{ name: x, token: env:CLAUDE_TOKEN_1 }], active: x, default_model: m, color: red }\n')).toEqual([
-      'relay: unknown key',
+    expect(violations('limits: {}\nclaude: { runtime: claude-code, accounts: [{ name: x, token: env:CLAUDE_TOKEN_1 }], active: x, default_model: m, color: red }\n')).toEqual([
+      'limits: unknown key',
       'claude.color: unknown key',
     ]);
   });

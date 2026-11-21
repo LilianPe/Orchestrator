@@ -240,8 +240,8 @@ export interface DoctorOptions {
   /** The projects whose spec gate no validator can pass (ORC-421), for the JSON report; never part of the verdict. In text, `runDoctorCommand` says them first. */
   validatorWarnings?: string[];
   /**
-   * The warnings of the daemon's start (`startRefusals`), for the JSON report: the Smee relay of a config.yaml without the development
-   * mode's marker (ORC-446), a SQLite file left from before Postgres (ORC-463). Never part of the verdict (the refusals stop doctor
+   * The warnings of the daemon's start (`startRefusals`), for the JSON report: the Smee relay of a factory.yml without the development
+   * mode's marker (ORC-446), a SQLite file left from before Postgres (ORC-463), a file of the instance from before factory.yml (ORC-199). Never part of the verdict (the refusals stop doctor
    * first, exit 1). In text, `runDoctorCommand` says them first.
    */
   startWarnings?: string[];
@@ -991,7 +991,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
     const { yml, sealed } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
     // Each refusal of the daemon's start, in its order and by the function it calls, with its message (ORC-448): the exposed
     // host's sign-in and secrets_key, the Smee relay (ORC-446). Its warnings are said here: the relay's, an old SQLite file's (ORC-463).
-    const instance = effectiveInstance(options.home, yml);
+    const instance = effectiveInstance(yml);
     startWarnings = startRefusals(options.home, instance, yml, env).warnings;
     if (!options.json) for (const line of startWarnings) out(line);
     projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
@@ -1015,7 +1015,7 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   if (!githubApp) {
     return doctorFailure(
       report,
-      'GitHub App not configured: `factory doctor` needs github.appId and github.privateKey (or GH_APP_ID and GH_APP_KEY) ' +
+      'GitHub App not configured: `factory doctor` needs github.app_id and github.private_key in factory.yml (or GH_APP_ID and GH_APP_KEY) ' +
         'to read the workflows and the environments.',
     );
   }

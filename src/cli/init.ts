@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { stringify } from 'yaml';
+import { parse, stringify } from 'yaml';
 import type { Exec } from '../adapters/exec.js';
 import { isRecord } from '../adapters/graphql-pages.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
+import { factoryYmlText } from '../config/factory-yml.js';
 import { loadInstance, loadSecrets, samePath, saveInstance, saveSecrets } from '../config/instance.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, REPO_CONFIG_PATH, testCommandWarnings } from '../config/repo-config.js';
@@ -167,7 +168,7 @@ export async function storeReport(store: Pick<Store, 'lastDryRun' | 'putMaturity
 /** What `init` says, and asks nothing of Linear, without a public URL nor `--dev` (ORC-411): Smee is for a workstation only. */
 export const NO_PUBLIC_URL = [
   '',
-  "No public URL for Linear's webhooks: set publicUrl in config.yaml (the server's HTTPS URL, or a tunnel's) and run init again,",
+  "No public URL for Linear's webhooks: set public_url in factory.yml (the server's HTTPS URL, or a tunnel's) and run init again,",
   'or, on a workstation, `factory init --dev` for a smee.io relay. The Linear application is asked then.',
   '',
 ].join('\n');
@@ -215,21 +216,26 @@ function githubAppSteps(publicUrl: string | undefined, home: string): string {
 }
 
 /**
- * The `factory.yml` `init` writes on a first setup (ORC-411): every secret an `env:NAME` reference, the budgets `factory
- * validate` accepts for a first run (docs/first-run.md), to tune afterwards. No `github` when config.yaml has its App: the
- * file's would replace it, field by field (`effectiveInstance`). No GitHub webhook secret: the App's webhook is optional, and
- * an unset variable would stop the daemon.
+ * The `factory.yml` `init` writes when there is none (ORC-411), before its instance keys (ORC-199): every secret an `env:NAME`
+ * reference, the budgets `factory validate` accepts for a first run (docs/first-run.md), to tune afterwards. No GitHub webhook
+ * secret: the App's webhook is optional, and an unset variable would stop the daemon.
  */
-function factoryYml(withGithub: boolean): { text: string; env: Record<string, string> } {
+function factoryYml(): { text: string; env: Record<string, string> } {
   // Each variable the file references, with what it is to hold: the references and the `export` lines from one list.
   const env: Record<string, string> = {};
   const ref = (name: string, holds: string) => ((env[name] = holds), `env:${name}`);
   const yml = {
-    ...(withGithub ? { github: { app_id: ref('GH_APP_ID', '<App ID>'), private_key: ref('GH_APP_KEY', '<path of the .pem>') } } : {}),
+    github: { app_id: ref('GH_APP_ID', '<App ID>'), private_key: ref('GH_APP_KEY', '<path of the .pem>') },
     claude: { runtime: 'claude-code', accounts: [{ name: 'main', token: ref('CLAUDE_CODE_OAUTH_TOKEN', '<token of claude setup-token>') }], active: 'main', default_model: SONNET },
     budgets: { per_step_tokens: 'off', per_ticket_tokens: 5_000_000 },
   };
   return { text: `# Written by factory init: every secret is a reference, read from the daemon's environment.\n${stringify(yml)}`, env };
+}
+
+/** Whether `<home>/factory.yml` declares the factory's GitHub App, its references left unread. */
+function hasGithubApp(home: string): boolean {
+  const text = factoryYmlText(home);
+  return text !== undefined && (parse(text) as Record<string, unknown> | null)?.['github'] != null;
 }
 
 /**
@@ -273,9 +279,8 @@ export async function runInit(d: InitDeps): Promise<void> {
   const secrets = loadSecrets(d.home);
   const cfg = loadInstance(d.home);
   const ymlPath = join(d.home, 'factory.yml');
-  // A first setup gets its factory.yml; an instance that runs without one keeps running as it does (ORC-411). Without Linear's
-  // application it never ran.
-  const firstSetup = !secrets.linear;
+  // Before init writes one with its App's references.
+  const appDeclared = hasGithubApp(d.home);
   const previous = cfg.projects.find((p) => samePath(p.repoPath, repoPath));
   // An empty answer keeps what is there (ORC-83): the project's team key, the stored Linear values.
   const teamKey = (await io.ask('Linear team key (e.g. REL)', previous?.linearTeamKey)).toUpperCase();
@@ -309,17 +314,18 @@ export async function runInit(d: InitDeps): Promise<void> {
   for (const warning of testCommandWarnings(commands)) io.print(warning);
   if (detected?.commands['pytest']) io.print(PYTEST_BESIDE_TEST);
 
-  saveInstance(d.home, cfg);
+  // The daemon reads factory.yml alone (ORC-199): one is written when there is none, then the instance keys go into it, the
+  // rest of the file kept.
+  const written = existsSync(ymlPath) ? undefined : factoryYml();
+  saveInstance(d.home, cfg, written?.text);
   // The maturity report (ORC-410): each point the same detection read, as a card to approve, over a repository `init` proposes.
-  // After config.yaml: a database that fails loses none of the answers.
+  // After factory.yml: a database that fails loses none of the answers.
   if (detected) await printMaturity(d, id, (run) => maturityReport(repoPath, detected, run), cfg.publicUrl ?? `http://localhost:${cfg.port}`);
-  if (existsSync(ymlPath)) {
-    io.print(`${ymlPath} kept as it is.`);
-  } else if (firstSetup) {
-    // An App config.yaml already has is set up: its steps would only add noise.
-    if (!cfg.github) io.print(githubAppSteps(cfg.publicUrl, d.home));
-    const written = factoryYml(!cfg.github);
-    writeFileSync(ymlPath, written.text, { flag: 'wx' });
+  // An App factory.yml already has is set up: its steps would only add noise.
+  if (!appDeclared) io.print(githubAppSteps(cfg.publicUrl, d.home));
+  if (!written) {
+    io.print(`${ymlPath}: its projects and webhook relay written, the rest kept as it is.`);
+  } else {
     io.print(
       [
         `Wrote ${ymlPath}: its secrets are references; export them in the shell of \`factory up\` and \`factory doctor\`, which refuse to start without them:`,
