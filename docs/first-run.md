@@ -191,7 +191,7 @@ These warnings are expected on a workstation. Two other warnings must not be the
 - `Warning: pilot: no spec validator (authz.validators in config.yaml): …`, or `one spec validator`: item 11. With none, every ticket stops at the spec gate; with one, the tickets they delegate.
 - `` Warning: .factory/config.yml has no `commands.test`: … ``: item 2, or the file is not yet on `origin/HEAD` (`git fetch`).
 
-`Warning: pilot: the Linear team … has no status « Spec », …` shows only on a connected factory whose team lacks that status and could not get it: the spec shows it by default (ORC-457), « Connect Linear » and the daemon's start create it, and the start logs why when Linear refuses. Before « Connect Linear », `doctor` says `Linear statuses not checked: Linear not connected: …` instead. To keep tickets in Todo through their spec instead, set `statuses: { spec_draft: off }` in `factory.yml`.
+`Warning: pilot: the Linear team … has no status « Spec », …` shows on a connected factory whose team lacks that status: the spec shows it by default (ORC-457), and « Connect Linear » and the daemon's start create it, so it goes once the daemon has started after the upgrade, unless Linear refused (the start logs why). Before « Connect Linear », `doctor` says `Linear statuses not checked: Linear not connected: …` instead. To keep tickets in Todo through their spec instead, set `statuses: { spec_draft: off }` in `factory.yml`.
 
 Then the verdicts. Expected:
 
