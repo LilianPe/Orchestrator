@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadFactoryYml } from './factory-yml.js';
+import { SECRET_SOURCE_KINDS } from '../adapters/secrets/registry.js';
+import { loadFactoryYml, parseFactoryYml } from './factory-yml.js';
 import {
   daemonSecretValues,
   effectiveInstance,
@@ -116,6 +117,11 @@ describe('factory.yml over the instance files (ORC-209, part B)', () => {
   it('masks the secrets of factory.yml in run transcripts too', () => {
     const h = home('linear: { app_client_id: env:LINEAR_CLIENT_ID, client_secret: env:LINEAR_CLIENT_SECRET, webhook_secret: env:LINEAR_WEBHOOK_SECRET }\n');
     expect(daemonSecretValues(h, loadFactoryYml(h, env))).toEqual(expect.arrayContaining(['yml-secret', 'yml-webhook-secret-1']));
+  });
+
+  it('masks the API key of the small model of messages, whatever its source (ORC-445)', () => {
+    const yml = parseFactoryYml('message_model: { api_key: vault:message }\nsecret_sources: { vault: { kind: env } }\n', env, SECRET_SOURCE_KINDS, new Map([['vault:message', 'sk-message-value']]));
+    expect(daemonSecretValues(home(''), yml)).toContain('sk-message-value');
   });
 
   it("masks a repository's env secrets from the start, a restart included, never its plain variables (ORC-211, ORC-308)", () => {

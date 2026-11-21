@@ -108,14 +108,15 @@ An instruction and a question are distinguished by the classification journaled 
 
 ## The small model of messages
 
-A human message that is not a command is classified `instruction` or `question` by `claude-haiku-5-5` at ingestion (ORC-336, [rules](linear.md#human-messages-during-a-run)). It reaches Claude by the runners' credential, with no new setting:
+A human message that is not a command is classified `instruction` or `question` by `claude-haiku-5-5` at ingestion (ORC-336, [rules](linear.md#human-messages-during-a-run)). It reaches Claude by the runners' credential, or by an API key of its own (ORC-445):
 
 | What the daemon has | Runs on the host | Runs in sandboxes (`FACTORY_CONTAINER_CLI`) |
 |---|---|---|
-| A Claude account (`claude.active` in `factory.yml`) or `CLAUDE_CODE_OAUTH_TOKEN` | `claude -p` with that token, as a run on the host would | None |
+| A Claude account (`claude.active` in `factory.yml`) or `CLAUDE_CODE_OAUTH_TOKEN` | `claude -p` with that token, as a run on the host would | The API key below, else none |
+| An API key, `message_model.api_key` in `factory.yml`, and no Claude account | The Messages API with that key | The Messages API with that key |
 | Neither | `claude -p` with the host's Claude Code login; without one it fails | None |
 
-> **Transition note**: an Anthropic API key in the daemon's environment (`ANTHROPIC_API_KEY`, a transition until the host runs go, ORC-179) is still read: with sandboxes, or on the host with no Claude account, the classification goes through the Messages API with it (`classifierBackend`, `src/adapters/runner/message-classifier.ts`). `claude -p` never gets it: it uses the Claude account.
+The key is a server secret, written as a reference (`env:NAME`, or a declared source, [server secrets](configuration.md#server-secrets-orc-398)), masked in transcripts and listed by `factory doctor`; `claude -p` never gets it (`classifierBackend`, `src/adapters/runner/message-classifier.ts`). The variable read before it is still read in its place, with a warning at the start, until host runs go ([transition](configuration.md#environment-variables)).
 
 `claude -p` runs with no tool, no MCP server, no settings, no session kept, out of any repository, the message on stdin. The daemon image holds no `claude` (no agent runs in it, ORC-204), hence no Claude account backend with sandboxes. The Messages API call has `max_tokens` 16, thinking off, low effort: Claude Haiku 5.5 takes `output_config.effort`, and `thinking: {"type": "disabled"}` at `high` effort or below ([effort](https://platform.claude.com/docs/en/build-with-claude/effort)). With no backend, or one that fails, the fallback rule classifies.
 
