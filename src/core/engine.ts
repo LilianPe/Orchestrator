@@ -18,7 +18,7 @@ import { heldByOther, isOwnMoveEcho, pendingOf, reduce } from './reduce.js';
 import { blockingTotal, isBlocking } from './review.js';
 import { holds, isNoRepo, isUnrouted, repoLabel, unroutedReason } from './routing.js';
 import { guardFindings } from './intake-checks.js';
-import { CHANGES, formatSpec, publishedSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
+import { CHANGES, formatSpec, REJECT, SPEC_COMMANDS, specCheck, type SpecVersion } from './spec.js';
 import { higherRisk, type Blocker, type ClarifyQuestion, type DecidedEvent, type EventPayloads, type EventType, type FactoryEvent, type FeedbackItem, type InputKind, type LogicalState, type MessageKind, type PendingJob, type RunOutcome, type Taint, type TicketState, type VerifyFailure } from './types.js';
 
 type StartRun = Extract<Effect, { kind: 'start_run' }>;
@@ -387,7 +387,7 @@ function specEnd(out: Decision, at: { event: FactoryEvent; ticket: TicketState |
     out.trace.push(`spec_review: version ${version} approved by ${FANTOME_APPROVER} (level rapide), ${written.spec.assumed!.length} assumption(s)`);
     return success(out, at, job, p.runId);
   }
-  out.effects.push({ kind: 'activity', type: 'response', body: publishedSpec(spec, { version, risk: ticket?.risk ?? undefined }) });
+  out.effects.push({ kind: 'publish_spec', version, spec, ...(ticket?.risk ? { risk: ticket.risk } : {}) });
   out.trace.push(`spec_review: version ${version} published, waiting for a validator`);
   return out;
 }
@@ -870,7 +870,7 @@ function blockersDone(out: Decision, event: FactoryEvent<'blockers.done'>, ticke
   const wait = ticket?.waitingOn;
   const job = wait && workflow.jobs[wait.start.job];
   if (wait) out.events.push({ type: 'ticket.patched', patch: { waitingOn: null } });
-  const startable = ticket?.logical === 'todo' || ticket?.logical === 'dev';
+  const startable = ticket?.logical === 'todo' || ticket?.logical === 'spec' || ticket?.logical === 'dev';
   if (!ticket || !wait || !job || !startable || refusesDevWork(ticket, job) || ticket.blocked || ticket.activeRunId || ticket.verifyingRunId) {
     out.trace.push('blockers.done: the ticket no longer waits, nothing started');
     return out;
@@ -1036,10 +1036,10 @@ function reaction(index: number, job: JobSpec, event: FactoryEvent, ticket: Tick
   return { index, job, debounceMs };
 }
 
-/** The delegation, on a ticket not blocked, in Todo or In Progress (any status at the Rapide level): the chain's entry job. */
+/** The delegation, on a ticket not blocked, in Todo, Spec or In Progress (any status at the Rapide level): the chain's entry job. */
 function onDelegated(event: FactoryEvent, ticket: TicketState | undefined, workflow: Workflow): Reaction | undefined {
   const state = ticket?.logical ?? 'todo';
-  if (ticket?.blocked || (!rapide(workflow) && state !== 'todo' && state !== 'dev')) return undefined;
+  if (ticket?.blocked || (!rapide(workflow) && state !== 'todo' && state !== 'spec' && state !== 'dev')) return undefined;
   const job = delegatedJob(workflow);
   return job ? reaction(0, job, event, ticket) : undefined;
 }

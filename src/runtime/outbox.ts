@@ -36,6 +36,7 @@ export const EFFECT_REACH: Record<OutboxEffect['kind'], 'inside' | 'outside'> = 
   block_comment: 'outside',
   ack: 'outside',
   activity: 'outside',
+  publish_spec: 'outside',
   post_output: 'outside',
   review: 'outside',
   link_pr: 'outside',

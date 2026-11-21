@@ -95,3 +95,16 @@ describe('the preset drives where the review ends (ORC-391, criterion 2)', () =>
     expect(decide(reviewing, finished, presetWorkflow(elsewhere, {}, 'build')).effects).toEqual([published]);
   });
 });
+
+describe('a version frozen before ORC-382', () => {
+  it('reads the former step → status and step → post tables, its preset having neither', () => {
+    const now = defaultWorkflow();
+    const { statuses: _s, posts: _p, ...before } = now.preset;
+    const frozen = { ...now, preset: before } as unknown as Workflow;
+    for (const job of ['intake', 'spec', 'tests', 'dev', 'review', 'review-security', 'fix-review']) {
+      expect(nextOf(frozen, frozen.jobs[job]!), job).toEqual(nextOf(now, now.jobs[job]!));
+    }
+    expect(nextOf(frozen, frozen.jobs['dev']!)).toMatchObject({ post: 'summary' });
+    expect(nextOf(frozen, frozen.jobs['review-security']!)).toMatchObject({ move: 'human_review', post: 'review' });
+  });
+});

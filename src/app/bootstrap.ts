@@ -32,7 +32,7 @@ import { LinearTracker } from '../adapters/tracker/linear/tracker.js';
 import { isUsableWebhookSecret } from '../adapters/tracker/linear/webhook.js';
 import { GitWorkspaces } from '../adapters/workspace/git-workspaces.js';
 import { saveAgentOutput, type AgentOutput } from '../core/agent-output.js';
-import { claudeAccountReader, disabledControls, readCapsOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
+import { claudeAccountReader, disabledControls, readCapsOf, specPublicationOf, stepSettings, ticketCapOf, type FactoryYml } from '../config/factory-yml.js';
 import { loadSealedFactoryYml, SECRETS_KEY_REQUIRED } from '../config/server-secrets.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning } from '../config/repo-config.js';
 import { makeDryRunFiles, makeOriginUrl, makeRepoConfig, makeRepoVariables, makeStartFingerprint } from './repo-variables.js';
@@ -40,7 +40,7 @@ import { daemonSecretValues, effectiveInstance, homePaths, isLoopbackHost, linea
 import { githubOAuthClient, githubWebhookSecret, resolveGithubApp } from '../config/github-app.js';
 import { writeRunSettings } from '../config/run-settings.js';
 import { fantome, isFantome, projectEffects } from '../presets/fantome.js';
-import { defaultWorkflow, presetWorkflow } from '../presets/workflow.js';
+import { defaultWorkflow, missingStatusWarning, presetWorkflow } from '../presets/workflow.js';
 import { Replays, SANDBOXES_META } from '../ghost/delegate.js';
 import { startTime } from '../ghost/history.js';
 import { BLOCKED_LABEL, STOP_LABEL } from '../core/engine.js';
@@ -185,6 +185,12 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       const api = new LinearApi(() => tm.get());
       linearTracker = new LinearTracker(api, appUserId);
       for (const p of projects) await linearTracker.warm(p.teamKey).catch((e: Error) => log(`warm ${p.teamKey}: ${e.message}`));
+      // The team's statuses are known from here on (ORC-382): one factory.yml names that the team lacks is said, as `doctor` says it.
+      for (const p of fromLinear) {
+        const team = await linearTracker.teamStatuses(p.teamKey).catch(() => undefined);
+        const warning = team && missingStatusWarning(p, p.workflow.states, team);
+        if (warning) log(warning);
+      }
       trackerSwitch.set(linearTracker);
       return true;
     };
@@ -329,6 +335,7 @@ export async function startFactory(o: BootOptions): Promise<{ url: string; stop(
       ...(ticketCap ? { perTicketTokens: ticketCap } : {}),
       ...(yml?.budgets?.onUsageLimit ? { onUsageLimit: yml.budgets.onUsageLimit } : {}),
       ...(yml?.acknowledge ? { acknowledge: yml.acknowledge } : {}),
+      specPublication: specPublicationOf(yml),
       // The account whose token the runner and the proxy use (`claudeAccount` above): `claude.active` when its token is the one resolved,
       // else the daemon's CLAUDE_CODE_OAUTH_TOKEN, held as `default`. A usage limit holds the launches of that account only (ORC-340).
       claudeAccount: () => claudeAccount().name,

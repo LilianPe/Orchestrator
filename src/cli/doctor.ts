@@ -9,7 +9,11 @@ import {
 import type { HttpClient } from '../adapters/forge/github-app.js';
 import { resolveGithubApp } from '../config/github-app.js';
 import { GITHUB_APP_SECRETS, loadSealedFactoryYml, serverSecretLines, serverSecretReport, type SecretReport } from '../config/server-secrets.js';
-import { effectiveInstance, samePath, validatorWarnings } from '../config/instance.js';
+import { effectiveInstance, samePath, validatorWarnings, type ProjectConfig } from '../config/instance.js';
+import type { FactoryYml } from '../config/factory-yml.js';
+import { isFantome } from '../presets/fantome.js';
+import { missingStatusWarning, statesOf } from '../presets/workflow.js';
+import { cliLinearTracker } from './linear.js';
 import { makeRepoConfig } from '../app/repo-variables.js';
 import { browserImage, containerCli, visualProofLine } from '../app/sandbox-wiring.js';
 import { ignoredWorkflowFiles, ignoredWorkflowWarning, testCommandWarnings, type RepoConfig } from '../config/repo-config.js';
@@ -739,6 +743,36 @@ export interface DoctorCommandOptions {
   http?: HttpClient;
   exec?: Exec;
   now?: () => number;
+  /** The statuses of a Linear team (ORC-382); the daemon's Linear connection by default (`cliLinearTracker`). */
+  teamStatuses?: (teamKey: string) => Promise<string[]>;
+}
+
+/**
+ * The statuses factory.yml names that the Linear team of each project lacks (ORC-382): a warning, never the verdict. The daemon
+ * cannot refuse them at load, before it reads the team: `doctor` reads it, through the daemon's Linear connection.
+ */
+async function statusWarnings(projects: readonly Pick<ProjectConfig, 'id' | 'linearTeamKey' | 'preset'>[], home: string, yml: FactoryYml | undefined, read?: (teamKey: string) => Promise<string[]>): Promise<string[]> {
+  const mine = projects.filter((p) => !isFantome(p));
+  if (!mine.length) return [];
+  let states;
+  try {
+    states = statesOf(yml?.statuses);
+  } catch (error) {
+    return [`Warning: ${errorMessage(error)}`];
+  }
+  const tracker = read ? undefined : cliLinearTracker(home, yml);
+  if (typeof tracker === 'string') return [`Linear statuses not checked: ${tracker}`];
+  const teamStatuses = read ?? ((teamKey: string) => tracker!.teamStatuses(teamKey));
+  const lines: string[] = [];
+  for (const p of mine) {
+    try {
+      const warning = missingStatusWarning({ id: p.id, teamKey: p.linearTeamKey }, states, await teamStatuses(p.linearTeamKey));
+      if (warning) lines.push(warning);
+    } catch (error) {
+      lines.push(`Linear statuses of ${p.id} not checked: ${errorMessage(error)}`);
+    }
+  }
+  return lines;
 }
 
 /**
@@ -763,10 +797,14 @@ export async function runDoctorCommand(options: DoctorCommandOptions): Promise<n
   let githubApp;
   let validators: string[];
   try {
-    const instance = effectiveInstance(options.home, (await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS })).yml);
+    const { yml } = await loadSealedFactoryYml(options.home, env, { only: GITHUB_APP_SECRETS });
+    const instance = effectiveInstance(options.home, yml);
+    const projects = instance.projects.filter((p) => samePath(p.repoPath, options.repoPath));
     // The project of this repository whose spec gate no validator can pass (ORC-421): a warning, never the verdict.
-    validators = validatorWarnings(instance.projects.filter((p) => samePath(p.repoPath, options.repoPath)));
+    validators = validatorWarnings(projects);
     if (!options.json) for (const line of validators) out(line);
+    // Its Linear team's statuses against factory.yml's (ORC-382): a warning too.
+    if (!options.json) for (const line of await statusWarnings(projects, options.home, yml, options.teamStatuses)) out(line);
     githubApp = resolveGithubApp(instance, env);
   } catch (error) {
     out(errorMessage(error));

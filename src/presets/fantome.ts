@@ -25,6 +25,9 @@ export const fantome: Preset = {
   // Never reached: nothing is pushed, so no CI turns red and no conflict arises. Required by the preset's shape.
   redCi: { goto: 'build', counter: 'verify' },
   conflict: { goto: 'build', counter: 'verify' },
+  // Nothing moves nor is posted at the Rapide level: a replayed ticket is closed, nobody reads it.
+  statuses: {},
+  posts: {},
   steps: [
     stepOf('intake', { next: 'spec_draft' }),
     stepOf('spec_draft'),

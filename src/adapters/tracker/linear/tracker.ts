@@ -56,6 +56,7 @@ const STATE_TYPES: Record<LogicalState, string> = {
   ready: 'started',
   done: 'completed',
   cancelled: 'canceled',
+  spec: 'started',
 };
 
 export { teamOf };
@@ -76,7 +77,7 @@ const version = (updatedAt: string | undefined): number => (updatedAt && Number.
  * always gets the same id.
  */
 
-export function effectUuid(kind: 'comment' | 'activity' | 'reaction', effectId: string): string {
+export function effectUuid(kind: 'comment' | 'activity' | 'reaction' | 'document', effectId: string): string {
   const h = createHash('sha256').update(`factory:${kind}:${effectId}`).digest();
   h[6] = (h[6]! & 0x0f) | 0x40;
   h[8] = (h[8]! & 0x3f) | 0x80;
@@ -234,6 +235,11 @@ export class LinearTracker implements Tracker, TeamDirectory {
     return map;
   }
 
+  /** The names of the team's statuses, read again (ORC-382): what `doctor` checks factory.yml's `statuses` against. */
+  async teamStatuses(teamKey: string): Promise<string[]> {
+    return (await this.teamStates(teamKey, true)).map((s) => s.name);
+  }
+
   async warm(teamKey: string): Promise<void> {
     await this.teamStates(teamKey, true);
     await this.teamLabels(teamKey, true);
@@ -371,6 +377,18 @@ export class LinearTracker implements Tracker, TeamDirectory {
       marker: effectMarker(effectId),
     });
     return comments.nodes[0]?.id;
+  }
+
+  async document(identifier: string, title: string, body: string, effectId?: string): Promise<string> {
+    const input: Record<string, unknown> = { issueId: await this.issueId(identifier), title, content: body };
+    if (effectId !== undefined) input['id'] = effectUuid('document', effectId);
+    const { documentCreate } = await this.api.gql<{ documentCreate: { document: { url: string } } }>(Q.documentCreate, { input });
+    return documentCreate.document.url;
+  }
+
+  async findDocument(_identifier: string, effectId: string): Promise<string | undefined> {
+    const { documents } = await this.api.gql<{ documents: { nodes: { url: string }[] } }>(Q.effectDocument, { id: effectUuid('document', effectId) });
+    return documents.nodes[0]?.url;
   }
 
   async react(commentId: string, emoji: string, effectId?: string): Promise<void> {
