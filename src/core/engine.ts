@@ -1635,32 +1635,36 @@ function humanRound(out: Decision, ticket: TicketState | undefined, workflow: Wo
  * review with a blocking finding (ORC-184) all count on it. Only another PR or a human relaunch (`unblock`) starts it over: a
  * green CI does not, or a review that keeps finding would loop for good between its fix and the CI. `humanReviewRounds`, the
  * human review loop (ORC-190, `humanRound`). `start` runs and is counted while the count is under the bound, `past` decides
- * otherwise. The count is the one this decision leaves: a human relaunch in it gave the bound back.
+ * otherwise; a `start` that runs nothing (`counts` false) is not counted. The count is the one this decision leaves: a human
+ * relaunch in it gave the bound back.
  */
-function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, key: 'ciFixAttempts' | 'humanReviewRounds', start: () => void, past: (bound: number) => Decision): Decision {
+function loopRound(out: Decision, ticket: TicketState | undefined, workflow: Workflow, key: 'ciFixAttempts' | 'humanReviewRounds', start: () => void, past: (bound: number) => Decision, counts = true): Decision {
   const patched = out.events.findLast((e): e is Extract<DecidedEvent, { type: 'ticket.patched' }> => e.type === 'ticket.patched' && e.patch[key] !== undefined);
   const used = patched?.patch[key] ?? ticket?.[key] ?? 0;
   const bound = workflow.limits[key];
   if (used >= bound) return past(bound);
   start();
-  out.events.push({ type: 'ticket.patched', patch: { [key]: used + 1 } });
+  if (counts) out.events.push({ type: 'ticket.patched', patch: { [key]: used + 1 } });
   return out;
 }
 
 /**
  * The reaction to red CI or to a conflict with the default branch (`prFailed`): a round of the review and CI loop
  * (`loopRound`). Once the count reaches the bound, the next red CI or conflict blocks the ticket instead of starting its
- * job. A run that would not start anyway (merged PR, I8 b) is neither counted nor blocked.
+ * job. A run that would not start anyway (merged PR, I8 b) is neither counted nor blocked. One held by the wait on the
+ * ticket's blockers (ORC-363) is not counted either (ORC-462), and past the bound still blocks.
  */
 function reviewCiLoop(out: Decision, r: Reaction, event: FactoryEvent<'pr.checks_failed' | 'pr.conflicted'>, ticket: TicketState | undefined, workflow: Workflow): Decision {
   const { job } = r;
   if (refused(ticket, job)) return startReaction(out, event, ticket, workflow, r);
+  // `startReaction` runs the job a red CI or a conflict names: on a blocked ticket none reaches here (`prFailed`).
+  const counts = !heldByWait(ticket, job);
   return loopRound(out, ticket, workflow, 'ciFixAttempts', () => startReaction(out, event, ticket, workflow, r), (bound) => {
     const conflict = event.type === 'pr.conflicted';
     out.trace.push(`${conflict ? 'conflict' : 'red CI'}: ${job.name} bound ${bound} reached`);
     const past = event.type === 'pr.conflicted' ? conflictBound(event, bound) : redCiBound(event, job, bound);
     return block(out, workflow, { ...past, job: job.name, attempts: bound });
-  });
+  }, counts);
 }
 
 /** Red CI past the bound: `ci_bound`, which a green CI lifts. */

@@ -526,16 +526,43 @@ describe('decide — properties over generated sequences (ORC-173)', () => {
       ...Array.from({ length: ciBound + 2 }, () => ext('pr.checks_failed', { ...pr, failures: ['test'] })),
     );
 
+    // Found by fast-check (ORC-462): intake ends on a ticket « blocked by » another, which then waits on it (ORC-363); a red
+    // CI starts no fix-ci, held by the wait, and still took a round of the loop.
+    const redCiOnWait = seq(
+      ...delegated(),
+      runStarted('intake', 'r2'),
+      ext('run.finished', {
+        runId: 'r2',
+        job: 'intake',
+        outcome: 'success',
+        costUsd: 0.5,
+        turns: 3,
+        lastText: 'fini',
+        ...handedBack({ intake: { size: 'xs', risk: 'low', complete: true, screen: false, missing: [] } }),
+        blockedBy: [{ identifier: 'REL-2', stateName: 'In Progress' }],
+      }),
+      ext('status.changed', { from: 'dev', to: 'human_review' }),
+      ext('pr.checks_failed', { ...pr, failures: ['test'] }),
+    );
+
     it(
       'red CI relaunches fix-ci at most ci_fix_attempts times between two resets, and the next red CI blocks (ORC-270)',
       () => {
         fc.assert(
           fc.property(sequences, fc.integer({ min: 0, max: 3 }), (s, bound) => redCiBounded(fold(s.withDuplicates, workflow(2, bound)), bound)),
-          params<[Sequences, number]>([[redCiCounterexample, ciBound]]),
+          params<[Sequences, number]>([[redCiCounterexample, ciBound], [redCiOnWait, ciBound]]),
         );
       },
       TIMEOUT,
     );
+
+    it('the counterexample of ORC-462: a red CI on a ticket waiting on its blockers starts no fix-ci and counts no round', () => {
+      const r = run(redCiOnWait);
+      const red = decided(r).find((s) => s.event.type === 'pr.checks_failed')!;
+      expect(red.before?.waitingOn).toBeDefined();
+      expect(red.decision.effects.filter((e) => e.kind === 'start_run')).toEqual([]);
+      expect(r.final).toMatchObject({ blocked: false, ciFixAttempts: 0 });
+    });
 
     // A rebase and a red CI on one counter (ORC-146): one of each, then the next conflict blocks.
     const sharedCounterexample = seq(
