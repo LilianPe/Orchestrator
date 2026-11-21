@@ -156,7 +156,21 @@ function podmanCgroups(info: unknown): EngineCgroups {
 export interface BranchProtectionReport extends Partial<BranchProtection> {
   verdict: Verdict;
   reasons: string[];
+  /** What `doctor` cannot check and a human must: told with an accepted verdict, never part of it. */
+  warnings?: string[];
 }
+
+/**
+ * Told with every accepted protection (ORC-428): GitHub shows a ruleset's `bypass_actors` only with the Administration
+ * permission the App must not have, so a credential of the daemon's user that bypasses goes unread (docs/github.md).
+ */
+const BYPASS_ACTORS_WARNING =
+  'Warning: bypass actors not read: GitHub shows them only with the Administration permission, which the App is not given (docs/github-app-manifest.json). ' +
+  "Check by hand that no git credential of the daemon's user (SSH keys or agent, HTTPS credential helper, gh token) bypasses this branch's rules: " +
+  'in each ruleset that requires a pull request, the repository\'s and the organization\'s, no bypass actor its account holds ' +
+  '(Repository admin or another role, Organization admin, its team, its user, or Deploy key for a deploy key); ' +
+  'on a classic protection, "Do not allow bypassing the above settings" checked and no allowed bypass for it. ' +
+  'Otherwise a run on the host (FACTORY_ALLOW_HOST_RUNS=1) pushes to the default branch without a pull request (docs/github.md).';
 
 /**
  * Whether GitHub keeps the default branch for humans (ORC-208): a ruleset rule that requires a pull request, which the
@@ -164,7 +178,12 @@ export interface BranchProtectionReport extends Partial<BranchProtection> {
  * says what it must hold).
  */
 function judgeProtection(protection: BranchProtection): BranchProtectionReport {
-  const report = (verdict: Verdict, reason: string): BranchProtectionReport => ({ ...protection, verdict, reasons: [reason] });
+  const report = (verdict: Verdict, reason: string): BranchProtectionReport => ({
+    ...protection,
+    verdict,
+    reasons: [reason],
+    ...(verdict === 'accepted' ? { warnings: [BYPASS_ACTORS_WARNING] } : {}),
+  });
   const rules = protection.rules.join(', ');
   if (protection.pullRequestRulesets.some((ruleset) => ruleset.bypass === 'never')) {
     return report('accepted', `a ruleset the App cannot bypass requires a pull request (rules: ${rules})`);
@@ -697,7 +716,7 @@ export async function runDoctor(options: DoctorOptions): Promise<number> {
     }
     out(
       accepted
-        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches."
+        ? "Result: accepted — a cgroup v2 host, a protected default branch, and no workflow can expose a secret or a writable GITHUB_TOKEN to the factory's branches. Check by hand what the warning under the default branch names."
         : `Result: refused — ${refusals.join('; ')}.`,
     );
   }
@@ -715,7 +734,12 @@ interface Verdicts {
 /** The host's and the default branch's verdicts, in text, then a blank line. */
 function verdictLines({ host, branchProtection: protection }: Verdicts): string[] {
   const branch = protection.branch ? ` ${protection.branch}` : '';
-  return [`Host: ${host.verdict} — ${host.reasons.join(' ')}`, `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`, ''];
+  return [
+    `Host: ${host.verdict} — ${host.reasons.join(' ')}`,
+    `Default branch${branch}: ${protection.verdict} — ${protection.reasons.join(' ')}`,
+    ...(protection.warnings ?? []).map((warning) => `  ${warning}`),
+    '',
+  ];
 }
 
 function doctorFailure(

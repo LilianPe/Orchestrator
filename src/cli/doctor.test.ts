@@ -1007,6 +1007,29 @@ describe("the default branch's protection (ORC-208, criterion 2)", () => {
     expect(result.text).not.toContain('is not protected');
   });
 
+  // GitHub returns a ruleset's bypass actors only to an account that can edit it (Administration write), which the App lacks.
+  it('accepts a protection with a warning naming the manual check of the bypass actors, which it cannot read (ORC-428)', async () => {
+    for (const options of [pullRequest('never'), protection({ classic: true })]) {
+      const result = await doctor([], [], options);
+      expect(result.code).toBe(0);
+      const warning = result.lines.find((line) => line.startsWith('  Warning: bypass actors not read'));
+      expect(warning).toBeDefined();
+      expect(result.text).toContain('Check by hand what the warning under the default branch names.');
+      for (const named of ['Administration', 'Repository admin', 'Organization admin', 'Deploy key', 'gh token', 'Do not allow bypassing the above settings', 'FACTORY_ALLOW_HOST_RUNS=1']) {
+        expect(warning).toContain(named);
+      }
+      const json = JSON.parse((await doctor([], [], { json: true, ...options })).text) as { branchProtection: { verdict: string; warnings: string[] } };
+      expect(json.branchProtection).toMatchObject({ verdict: 'accepted', warnings: [warning?.trim()] });
+    }
+  });
+
+  it('adds no bypass warning to a refused protection: the refusal already blocks', async () => {
+    const result = await doctor([], [], pullRequest('always'));
+    expect(result.code).toBe(1);
+    expect(result.text).not.toContain('bypass actors not read');
+    expect(result.text).not.toContain('Check by hand what the warning');
+  });
+
   it('puts the protection in the JSON report', async () => {
     const result = await doctor([], [], { json: true, ...protection({ rules: ['deletion'] }) });
     const report = JSON.parse(result.text) as { accepted: boolean; branchProtection: { branch: string; verdict: string } };
